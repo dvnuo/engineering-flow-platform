@@ -1,6 +1,8 @@
 """Gateway server for OpenClaw Mini."""
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 from typing import Any, Dict
@@ -11,8 +13,23 @@ from aiohttp.web import Request
 from openclaw_mini.agent.core import agent
 from openclaw_mini.channel.discord import discord_channel
 from openclaw_mini.config import config
+from openclaw_mini.session.manager import DISCORD_SESSION_PREFIX
 
 logger = logging.getLogger(__name__)
+
+
+def verify_discord_signature(payload: bytes, signature: str, secret: str) -> bool:
+    """Verify Discord webhook signature."""
+    if not signature or not secret:
+        return True  # Skip verification if secret not configured
+    
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+    
+    return hmac.compare_digest(signature, f"sha256={expected}")
 
 
 class Gateway:
@@ -38,8 +55,18 @@ class Gateway:
     async def handle_discord_webhook(self, request: Request) -> web.Response:
         """Handle Discord webhook events."""
         try:
-            # Verify request (optional - add verification for production)
-            payload = await request.json()
+            # Read raw body for signature verification
+            body = await request.read()
+            
+            # Verify Discord signature
+            signature = request.headers.get("X-Signature-SHA256", "")
+            webhook_secret = config.discord.get("webhook_secret", "")
+            
+            if not verify_discord_signature(body, signature, webhook_secret):
+                logger.warning("Invalid Discord webhook signature")
+                return web.json_response({"status": "error", "message": "Invalid signature"}, status=401)
+
+            payload = json.loads(body)
 
             # Handle different event types
             event_type = payload.get("type", 0)
@@ -65,8 +92,8 @@ class Gateway:
                 if not content:
                     return web.json_response({"status": "ignored", "reason": "empty_message"})
 
-                # Create session ID (use guild_id + channel_id for group chats)
-                session_id = f"discord:{guild_id}:{channel_id}"
+                # Create session ID with consistent prefix
+                session_id = f"{DISCORD_SESSION_PREFIX}{guild_id}:{channel_id}"
 
                 # Get username
                 username = data.get("author", {}).get("username", "unknown")

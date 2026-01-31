@@ -4,6 +4,9 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+# Session ID prefix for Discord channels
+DISCORD_SESSION_PREFIX = "discord:"
+
 
 class SessionManager:
     """Simple in-memory session manager."""
