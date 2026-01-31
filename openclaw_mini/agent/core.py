@@ -1,6 +1,6 @@
 """Agent core for OpenClaw Mini."""
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from openclaw_mini.agent.llm import llm_client
 from openclaw_mini.session.manager import session_manager

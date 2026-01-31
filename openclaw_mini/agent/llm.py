@@ -59,10 +59,14 @@ class LLMClient:
                         json=payload,
                     )
                     response.raise_for_status()
-                    data = response.json()
+                    data = await response.json()
 
                 # Extract response content
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                choices = data.get("choices", [])
+                if choices:
+                    content = choices[0].get("message", {}).get("content", "")
+                else:
+                    content = ""
                 return content.strip()
 
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
@@ -100,7 +104,7 @@ class LLMClient:
                         json=payload,
                     )
                     response.raise_for_status()
-                    data = response.json()
+                    data = await response.json()
 
                 content = data.get("choices", [{}])[0].get("text", "")
                 return content.strip()
