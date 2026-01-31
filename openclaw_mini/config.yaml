@@ -1,0 +1,24 @@
+# OpenClaw Mini Configuration
+
+# Discord Channel
+discord:
+  bot_token: "YOUR_DISCORD_BOT_TOKEN"
+  channel_id: "YOUR_CHANNEL_ID"
+
+# LLM Configuration
+llm:
+  provider: "openai"  # openai, anthropic, custom
+  api_base: "https://api.openai.com/v1"
+  api_key: "YOUR_OPENAI_API_KEY"
+  model: "gpt-3.5-turbo"
+  max_tokens: 1000
+  temperature: 0.7
+
+# Session Configuration
+session:
+  max_history: 5  # 保留最近5轮对话
+
+# Server Configuration
+server:
+  host: "0.0.0.0"
+  port: 8000
