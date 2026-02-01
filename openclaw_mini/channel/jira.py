@@ -152,6 +152,56 @@ class JiraChannel:
             "POST", f"/rest/api/3/issue/{issue_key}/comment", json=payload
         )
 
+    async def add_comment_code_block(
+        self,
+        issue_key: str,
+        code: str,
+        language: str = "python",
+    ) -> Dict[str, Any]:
+        """Add a comment with a code block in ADF format.
+        
+        Args:
+            issue_key: The issue key (e.g., PROJ-123)
+            code: The code to display
+            language: Programming language for syntax highlighting
+        """
+        # Escape special ADF characters
+        escaped_code = code.replace("{", "\\{").replace("}", "\\}")
+        
+        payload = {
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "测试用例代码："
+                            }
+                        ]
+                    },
+                    {
+                        "type": "codeBlock",
+                        "attrs": {
+                            "language": language
+                        },
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": code
+                            }
+                        ]
+                    }
+                ],
+            }
+        }
+        
+        return await self._request(
+            "POST", f"/rest/api/3/issue/{issue_key}/comment", json=payload
+        )
+
     async def add_comment_long(
         self,
         issue_key: str,
@@ -278,6 +328,32 @@ class JiraChannel:
     def create_session_id(self, issue_key: str) -> str:
         """Create a session ID for an issue."""
         return f"jira:{issue_key}"
+
+    async def get_issue_description(self, issue_key: str) -> str:
+        """Get issue description as requirements text.
+        
+        Parses ADF format if needed.
+        """
+        issue = await self.get_issue(issue_key)
+        description = issue.get("fields", {}).get("description", "")
+        return parse_adf_body(description)
+
+    def is_test_case_command(self, comment_body: str) -> bool:
+        """Check if comment is a test case generation command.
+        
+        Commands:
+        - "@bot 创建测试用例"
+        - "@bot 生成测试"
+        - "@bot create test cases"
+        """
+        patterns = [
+            r"创建测试用例",
+            r"生成测试",
+            r"create\s+test\s+cases?",
+            r"generate\s+test",
+            r"create\s+tests\b",
+        ]
+        return any(re.search(p, comment_body, re.IGNORECASE) for p in patterns)
 
 
 # Global Jira channel instance
