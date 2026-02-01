@@ -19,6 +19,7 @@ class MockResponse:
     def __init__(self, json_data, status_code=200):
         self.json_data = json_data
         self.status_code = status_code
+        self.text = str(json_data)
     
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -28,7 +29,7 @@ class MockResponse:
                 response=self
             )
     
-    async def json(self):
+    def json(self):  # httpx response.json() is sync
         return self.json_data
 
 
