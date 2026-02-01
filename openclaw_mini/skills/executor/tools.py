@@ -53,13 +53,22 @@ class Tool:
         return ToolResult(success=False, error="Not implemented")
 
     def get_schema(self) -> Dict[str, Any]:
-        """Get the tool schema for LLM."""
+        """Get the tool schema for LLM (OpenAI format)."""
+        # Extract required fields from parameters
+        required = [k for k, v in self.parameters.items() 
+                   if v.get("required", False) or 
+                   (k == "path" or k == "command" or k == "url" or k == "query")]
+        
         return {
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.parameters,
+                "parameters": {
+                    "type": "object",
+                    "properties": self.parameters,
+                    "required": required if required else ["path"],
+                },
             },
         }
 
