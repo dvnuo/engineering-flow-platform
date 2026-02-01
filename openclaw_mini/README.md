@@ -279,9 +279,114 @@ OPENAI_API_KEY=sk-your-api-key
 
 ---
 
-## Discord Setup
+## 新手完全指南 (5分钟上手)
 
-### Step 1: Create Discord Application
+### 第一步：准备 Discord 机器人 🤖
+
+#### 1.1 创建 Discord 应用
+
+1. 打开浏览器，访问 https://discord.com/developers/applications
+2. 点击右上角 **"New Application"**（新应用）
+3. 输入应用名称（例如：`OpenClaw-Bot`）
+4. 点击 **"Create"**
+
+#### 1.2 创建机器人
+
+1. 点击左侧菜单 **"Bot"**（机器人）
+2. 点击 **"Add Bot"**（添加机器人）
+3. 点击 **"Yes, do it!"** 确认
+
+#### 1.3 获取 Bot Token（非常重要！）
+
+1. 在 Bot 页面，找到 **"Token"** 部分
+2. 点击 **"Reset Token"**（重置令牌）
+3. 点击 **"Copy"**（复制）
+4. **保存到安全的地方**，不要分享给他人！
+
+#### 1.4 启用必要权限
+
+1. 在 Bot 页面，找到 **"Privileged Gateway Intents"**
+2. 启用 **"Message Content Intent"**（必须开启，否则收不到消息）
+3. 点击 **"Save Changes"**
+
+#### 1.5 邀请机器人到服务器
+
+1. 点击左侧菜单 **"OAuth2"** → **"URL Generator"**
+2. 在 **"Scopes"**（范围）中，勾选 `bot`
+3. 在 **"Bot Permissions"**（机器人权限）中，勾选：
+   - ✅ `Send Messages`（发送消息）
+   - ✅ `Read Message History`（读取消息历史）
+   - ✅ `View Channel`（查看频道）
+4. 滚动到页面底部，复制 **"Generated URL"**
+5. 在浏览器中打开链接，选择你的 Discord 服务器，点击 **"授权"**
+
+### 第二步：获取频道 ID 📺
+
+1. 打开 Discord
+2. 点击左下角 **齿轮图标**（用户设置）
+3. 选择 **"Advanced"**（高级）
+4. 开启 **"Developer Mode"**（开发者模式）
+5. 右键点击你想要机器人发言的频道
+6. 选择 **"Copy ID"**（复制 ID）
+
+### 第三步：获取 OpenAI API Key 🔑
+
+1. 打开 https://platform.openai.com/api-keys
+2. 登录/注册 OpenAI 账号
+3. 点击 **"Create new secret key"**
+4. 复制 API Key（格式：`sk-...`）
+
+**注意**：
+- 使用 ChatGPT Plus 账号可以直接使用
+- 需要先充值或绑定支付方式
+- 有免费额度（$5）
+
+### 第四步：配置项目 📝
+
+#### 4.1 编辑配置文件
+
+```bash
+cd openclaw_mini
+nano config.yaml
+```
+
+#### 4.2 填入配置
+
+```yaml
+discord:
+  bot_token: "刚才复制的 Bot Token"
+  channel_id: "刚才复制的频道 ID"
+
+llm:
+  provider: "openai"
+  api_key: "刚才复制的 OpenAI API Key"
+  model: "gpt-3.5-turbo"  # 推荐用这个，便宜好用
+```
+
+#### 4.3 验证配置
+
+```bash
+# 测试配置文件是否正确
+python main.py --help
+```
+
+### 第五步：运行机器人 🚀
+
+```bash
+# 方式一：前台运行（测试用）
+python main.py
+
+# 看到 "Gateway started on http://0.0.0.0:8000" 就是成功了！
+```
+
+### 第六步：测试 🤝
+
+1. 在 Discord 频道中发送：`你好`
+2. 机器人应该会回复你！
+
+---
+
+## 常见问题 FAQ
 
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
 2. Click "New Application" and name it
@@ -521,75 +626,171 @@ class TelegramChannel:
 
 ---
 
-## Troubleshooting
+## 故障排除 Troubleshooting
 
-### Bot not responding?
+### ❌ 机器人不回复消息
 
-1. ✅ Check bot has correct permissions (Message Content Intent)
-2. ✅ Verify `config.yaml` has correct `bot_token` and `channel_id`
-3. ✅ Check bot is online in Discord server
-4. ✅ Review logs for error messages
-5. ✅ Ensure port 8000 is accessible
+**按以下顺序检查**：
 
+1. ✅ **Bot 是否在线？**
+   - 查看 Discord 服务器成员列表，机器人头像应该在线且显示绿色
+
+2. ✅ **Message Content Intent 是否开启？**
+   - 访问 Discord Developer Portal → Bot
+   - 确认 **"Message Content Intent"** 已启用
+   - 点击 **"Save Changes"**
+
+3. ✅ **config.yaml 配置是否正确？**
+   ```bash
+   cat config.yaml
+   ```
+   确认 `bot_token` 和 `channel_id` 正确且没有多余空格
+
+4. ✅ **Bot Token 是否正确？**
+   - Token 格式：一串字符如 `MTIzNDU2Nzg5MC5xyz...`
+   - 不要包含引号或额外字符
+
+5. ✅ **频道 ID 是否正确？**
+   - 必须是纯数字，如 `123456789012345678`
+   - 不要包含 `<` `>` 等符号
+
+6. ✅ **检查控制台日志**
+   ```bash
+   python main.py
+   ```
+   查看是否有错误信息
+
+### ❌ 报错 "401 Unauthorized"
+
+**原因**：API Key 错误
+
+**解决方法**：
 ```bash
-# Check bot permissions
-# Go to Discord Developer Portal → Bot → Server Members Intent, Message Content Intent enabled
+# 1. 重新获取 API Key
+# 访问 https://platform.openai.com/api-keys
+
+# 2. 确认格式正确（以 sk- 开头）
+# 3. 更新 config.yaml
 ```
 
-### LLM API errors?
+### ❌ 报错 "429 Too Many Requests"
 
-1. ✅ Verify API key is valid
-2. ✅ Check `api_base` URL is correct
-3. ✅ Ensure model name is supported
-4. ✅ Check rate limits or quota
-5. ✅ Check network connectivity
+**原因**：API 调用频率超限
 
+**解决方法**：
 ```bash
-# Test API key
-curl -H "Authorization: Bearer YOUR_API_KEY" \
-  https://api.openai.com/v1/models
+# 1. 等待 1 分钟后再试
+# 2. 或降低 config.yaml 中的 max_tokens
+# 3. 或提高 temperature 值
 ```
 
-### Session issues?
+### ❌ 报错 "Connection Error" 或 "Failed to connect"
 
-1. ✅ Sessions are in-memory (restart clears history)
-2. ✅ Check `/api/sessions` endpoint for active sessions
-3. ✅ Use `/api/sessions/{id}/clear` to reset a session
-4. ✅ Configure `session.max_history` in config.yaml
+**原因**：网络问题
 
-### Port already in use?
+**解决方法**：
+```bash
+# 1. 检查网络连接
+ping api.openai.com
+
+# 2. 确认能访问 OpenAI
+curl https://api.openai.com/v1/models
+
+# 3. 尝试使用代理
+```
+
+### ❌ 机器人回复很慢
+
+**可能原因**：
+1. 网络延迟
+2. API 服务器繁忙
+3. 使用了 `gpt-4`（比 gpt-3.5-turbo 慢）
+
+**解决方法**：
+```yaml
+# config.yaml 中使用更快的模型
+llm:
+  model: "gpt-3.5-turbo"  # 比 gpt-4 快且便宜
+  max_tokens: 500         # 减少响应长度
+```
+
+### ❌ 端口 8000 被占用
 
 ```bash
-# Find process using port 8000
+# 1. 查看占用端口的进程
 lsof -i :8000
 
-# Kill the process
+# 2. 杀掉进程
 kill <PID>
 
-# Or use a different port
-python main.py --config config.yaml  # Edit config.yaml port
+# 3. 或修改 config.yaml 中的端口
+server:
+  port: 8080  # 改用其他端口
 ```
 
-### Permission denied (Docker)?
+### ❌ Docker 权限被拒绝
 
 ```bash
-# Add user to docker group
-sudo usermod -aG docker $USER
-
-# Or run with sudo (not recommended)
+# 方法一：使用 sudo（不推荐）
 sudo docker-compose up -d
+
+# 方法二：将用户添加到 docker 组（推荐）
+sudo usermod -aG docker $USER
+# 重新登录后生效
 ```
 
-### Logs not showing?
+### ❌ 看不到日志输出
 
 ```bash
-# Enable verbose logging
-# Edit main.py and change logging level
+# 1. 确保在前台运行
+python main.py
+
+# 2. 查看详细日志（修改 main.py）
+# 找到 logging.basicConfig，修改为：
 logging.basicConfig(level=logging.DEBUG)
 
-# Check systemd logs
-journalctl -u openclaw-mini -f
+# 3. 重启程序
 ```
+
+### ❌ Bot 回复 "我遇到了错误"
+
+**可能原因**：
+1. OpenAI 账号余额不足
+2. API Key 过期
+3. 网络超时
+
+**解决方法**：
+```bash
+# 1. 检查 OpenAI 账号余额
+# 访问 https://platform.openai.com/account/usage
+
+# 2. 检查控制台具体错误信息
+python main.py
+```
+
+---
+
+## 快速检查清单 ✅
+
+运行机器人前，确认以下所有项：
+
+- [ ] Discord Bot 创建完成
+- [ ] Message Content Intent 已启用
+- [ ] Bot Token 已复制并保存
+- [ ] Bot 已邀请到服务器
+- [ ] 频道 ID 已获取（纯数字格式）
+- [ ] OpenAI API Key 已获取（以 sk- 开头）
+- [ ] config.yaml 配置正确
+- [ ] 依赖已安装：`pip install -r requirements.txt`
+- [ ] 机器人在线且能发送消息
+
+---
+
+## 获得帮助 🤝
+
+1. **查看日志**：控制台的错误信息通常能说明问题
+2. **搜索错误**：把错误信息粘贴到搜索引擎
+3. **提 Issue**：在 GitHub 仓库提交问题
 
 ---
 
