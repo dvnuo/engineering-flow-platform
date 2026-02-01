@@ -166,22 +166,116 @@ llm:
 
 ### Configuration Options
 
-| Section | Key | Type | Default | Description |
-|---------|-----|------|---------|-------------|
-| discord | bot_token | string | - | Discord Bot Token |
-| discord | channel_id | int/string | - | Target Channel ID |
-| discord | webhook_url | string | - | Discord Webhook URL |
-| llm | provider | string | "openai" | LLM provider (openai, github_copilot) |
-| llm | api_base | string | OpenAI URL | API base URL |
-| llm | api_key | string | - | API Key |
-| llm | model | string | "gpt-3.5-turbo" | Model name |
-| llm | max_tokens | int | 1000 | Max tokens in response |
-| llm | temperature | float | 0.7 | Response creativity (0.0-1.0) |
-| llm | max_retries | int | 3 | Retry attempts on failure |
-| llm | retry_delay | float | 1 | Base delay between retries (seconds) |
-| session | max_history | int | 5 | Number of conversation turns to remember |
-| server | host | string | "0.0.0.0" | Server host |
-| server | port | int | 8000 | Server port |
+#### Discord 配置
+
+| Key | Type | Required | Default | Description | Example |
+|-----|------|----------|---------|-------------|---------|
+| `discord.bot_token` | string | Yes* | - | Discord Bot Token，从 Discord Developer Portal 获取 | `MTIzNDU2Nzg5MC5xyz...` |
+| `discord.channel_id` | int/string | Yes* | - | 目标频道 ID，启用开发者模式后右键频道复制 | `123456789012345678` |
+| `discord.webhook_url` | string | No | - | Discord Webhook URL，用于接收消息（可选，与 bot_token 二选一） | `https://discord.com/api/webhooks/...` |
+
+**注意**: `bot_token` 和 `Webhook_url` 至少需要一个
+
+**获取 bot_token**:
+1. 访问 [Discord Developer Portal](https://discord.com/developers/applications)
+2. 创建应用 → Bot → Reset Token → 复制
+
+**获取 channel_id**:
+1. Discord 设置 → 高级 → 启用开发者模式
+2. 右键频道 → 复制 ID
+
+#### LLM 配置
+
+| Key | Type | Required | Default | Description | Example |
+|-----|------|----------|---------|-------------|---------|
+| `llm.provider` | string | No | `openai` | LLM 提供商 | `openai` / `github_copilot` |
+| `llm.api_base` | string | No | OpenAI URL | API 基础 URL | `https://api.openai.com/v1` |
+| `llm.api_key` | string | Yes | - | API 密钥 | `sk-...` |
+| `llm.model` | string | No | `gpt-3.5-turbo` | 模型名称 | `gpt-3.5-turbo` / `gpt-4` |
+| `llm.max_tokens` | int | No | 1000 | 响应最大 token 数 | 500 / 2000 |
+| `llm.temperature` | float | No | 0.7 | 响应随机性 (0.0-1.0) | 0.5 / 0.9 |
+| `llm.max_retries` | int | No | 3 | API 失败重试次数 | 3 / 5 |
+| `llm.retry_delay` | float | No | 1 | 重试间隔秒数（指数退避） | 1 / 2 |
+
+**Provider 说明**:
+- `openai`: OpenAI 官方 API (ChatGPT)
+- `github_copilot`: GitHub Copilot API
+
+**模型推荐**:
+- `gpt-3.5-turbo`: 便宜快速，适合日常对话
+- `gpt-4`: 更强推理能力，适合复杂任务
+
+**Temperature 说明**:
+- `0.0`: 最确定性输出
+- `0.7`: 平衡创造力
+- `1.0`: 最高随机性
+
+#### Session 配置
+
+| Key | Type | Required | Default | Description | Example |
+|-----|------|----------|---------|-------------|---------|
+| `session.max_history` | int | No | 5 | 保留的对话轮数（每轮包含用户和助手消息） | 5 / 10 |
+
+**说明**: 会话历史存储在内存中，服务器重启后清零
+
+#### Server 配置
+
+| Key | Type | Required | Default | Description | Example |
+|-----|------|----------|---------|-------------|---------|
+| `server.host` | string | No | `0.0.0.0` | 监听地址 | `0.0.0.0` / `127.0.0.1` |
+| `server.port` | int | No | 8000 | 监听端口 | 8000 / 8080 |
+
+**说明**:
+- `0.0.0.0`: 监听所有网络接口
+- `127.0.0.1`: 仅本地访问（更安全）
+
+#### 完整配置示例
+
+```yaml
+# 基础配置
+discord:
+  bot_token: "YOUR_BOT_TOKEN"
+  channel_id: "1234567890"
+
+# OpenAI 配置
+llm:
+  provider: "openai"
+  api_base: "https://api.openai.com/v1"
+  api_key: "sk-..."
+  model: "gpt-3.5-turbo"
+  max_tokens: 1000
+  temperature: 0.7
+  max_retries: 3
+  retry_delay: 1
+
+# 会话配置
+session:
+  max_history: 5
+
+# 服务器配置
+server:
+  host: "0.0.0.0"
+  port: 8000
+```
+
+#### Docker 环境变量配置
+
+```yaml
+# docker-compose.yml
+services:
+  openclaw-mini:
+    environment:
+      - OPENCLAW_DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - OPENCLAW_DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
+      - OPENCLAW_LLM_API_KEY=${OPENAI_API_KEY}
+```
+
+```bash
+# .env 文件
+DISCORD_BOT_TOKEN=your_bot_token
+DISCORD_CHANNEL_ID=your_channel_id
+OPENAI_API_KEY=sk-your-api-key
+```
 
 ---
 
