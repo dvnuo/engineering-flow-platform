@@ -28,6 +28,7 @@ class LLMClient:
         self.temperature = config.llm.get("temperature", 0.7)
         self.max_retries = config.llm.get("max_retries", 3)
         self.retry_delay = config.llm.get("retry_delay", 1)
+        logger.info(f"LLMClient initialized with model: {self.model}")
 
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for API request based on provider."""
@@ -59,12 +60,12 @@ class LLMClient:
     def _supports_tools(self) -> bool:
         """Check if current model supports tool calling."""
         # gpt-3.5-turbo (without version suffix) doesn't support tools
-        # gpt-3.5-turbo-1106+ and gpt-4+ support tools
         if self.model == "gpt-3.5-turbo":
             return False
-        # Check for old versioned models
+        # Old versioned models
         if "-0301" in self.model or "-0314" in self.model:
             return False
+        # All other models (gpt-4, gpt-4o, gpt-4-turbo, etc.) support tools
         return True
 
     async def chat(
@@ -73,11 +74,7 @@ class LLMClient:
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:
-        """Send a chat request to the LLM with retry logic.
-        
-        Returns:
-            Dict with 'content' (text response) and 'tool_calls' (list of tool calls if any)
-        """
+        """Send a chat request to the LLM with retry logic."""
         # Build messages
         all_messages = []
         if system_prompt:
@@ -96,6 +93,7 @@ class LLMClient:
         use_tools = tools and self._supports_tools()
         if use_tools:
             payload["tools"] = tools
+            logger.debug(f"Using tools with model {self.model}: {len(tools)} tools")
 
         # Add GitHub Copilot specific headers and parameters
         headers = self._get_headers()
@@ -130,20 +128,26 @@ class LLMClient:
                 }
 
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                error_body = ""
+                if hasattr(e, "response") and e.response is not None:
+                    error_body = e.response.text[:200]
+                
                 # If tools failed with older model, retry without tools
                 if use_tools and "400" in str(e):
-                    logger.warning(f"Tool call not supported, retrying without tools: {e}")
+                    logger.warning(f"Tool call failed with model {self.model}, retrying without tools: {e}")
+                    logger.debug(f"Error details: {error_body}")
                     payload.pop("tools", None)
                     use_tools = False
                     continue
                 
                 last_error = e
                 if attempt < self.max_retries - 1:
-                    delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
+                    delay = self.retry_delay * (2 ** attempt)
                     logger.warning(f"API request failed, retrying in {delay}s: {e}")
                     await asyncio.sleep(delay)
                 else:
                     logger.error(f"API request failed after {self.max_retries} attempts: {e}")
+                    logger.error(f"Error response: {error_body}")
                     raise
 
         raise last_error
@@ -160,7 +164,6 @@ class LLMClient:
         headers = self._get_headers()
         endpoint = self._get_completions_endpoint()
 
-        # Make API request with retry
         last_error = None
         for attempt in range(self.max_retries):
             try:
@@ -179,7 +182,7 @@ class LLMClient:
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
                 last_error = e
                 if attempt < self.max_retries - 1:
-                    delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
+                    delay = self.retry_delay * (2 ** attempt)
                     logger.warning(f"API request failed, retrying in {delay}s: {e}")
                     await asyncio.sleep(delay)
                 else:

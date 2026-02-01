@@ -20,20 +20,39 @@ class Agent:
     """Agent for processing messages and executing tools."""
 
     def __init__(self, system_prompt: Optional[str] = None):
-        default_prompt = """You are a helpful AI assistant. You can use tools to help answer questions and perform tasks.
+        default_prompt = """You are a helpful AI assistant with access to tools that can execute commands, read/write files, search the web, and more.
 
-Available tools:
-- exec: Execute shell commands
-- read: Read file contents
-- write: Create or overwrite files
-- edit: Make precise edits to files
-- web_search: Search the web
-- web_fetch: Fetch webpage content
-- image: Analyze images
+## TOOL USAGE RULES (CRITICAL)
 
-When you need to use a tool, respond with a tool call in the specified format."""
+When a user asks you to:
+- Run a command → Use the `exec` tool
+- Read a file → Use the `read` tool
+- Write a file → Use the `write` tool
+- Edit a file → Use the `edit` tool
+- Search the web → Use the `web_search` tool
+- Fetch a webpage → Use the `web_fetch` tool
+
+You MUST use the appropriate tool. Do NOT explain how to do something—DO IT.
+
+## AVAILABLE TOOLS
+{tools}
+
+## WORKFLOW
+1. Identify what the user wants
+2. Select the right tool
+3. Call the tool with correct arguments
+4. Report the result to the user
+
+Remember: Use tools proactively. Don't just talk about actions—execute them!"""
+
+        # Insert tool descriptions
+        tools = get_tools_schemas()
+        tools_desc = "\n".join([
+            f"- **{t['function']['name']}**: {t['function']['description']}"
+            for t in tools
+        ])
         
-        self.system_prompt = system_prompt or default_prompt
+        self.system_prompt = (system_prompt or default_prompt).format(tools=tools_desc)
 
     async def process(
         self,
@@ -45,7 +64,7 @@ When you need to use a tool, respond with a tool call in the specified format.""
         # Check if message matches a skill
         skill_name = skills_executor.match_skill(message)
         if skill_name:
-            logger.info(f"Matched skill: {skill_name} for message: {message[:50]}...")
+            logger.info(f"Matched skill: {skill_name}")
             return await self._execute_skill(skill_name, message, session_id)
 
         # Add user message to history
@@ -84,6 +103,7 @@ When you need to use a tool, respond with a tool call in the specified format.""
                 # Add tool result to messages
                 messages.append({
                     "role": "tool",
+                    "tool_call_id": tool_call_id,
                     "content": str(tool_result),
                 })
 
