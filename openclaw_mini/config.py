@@ -58,6 +58,11 @@ class Config:
         """Get server configuration."""
         return self._config.get("server", {})
 
+    @property
+    def jira(self) -> Dict[str, Any]:
+        """Get Jira configuration."""
+        return self._config.get("jira", {})
+
 
 # Global config instance
 config = Config()

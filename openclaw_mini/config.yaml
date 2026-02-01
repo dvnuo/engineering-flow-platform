@@ -7,6 +7,15 @@ discord:
   channel_id: "YOUR_CHANNEL_ID"
   # webhook_url: "https://discord.com/api/webhooks/..."  # Only needed for webhook mode
 
+# Jira Channel (optional)
+jira:
+  enabled: false  # Set to true to enable Jira integration
+  base_url: "https://your-domain.atlassian.net"
+  email: "your@email.com"
+  api_token: "YOUR_JIRA_API_TOKEN"
+  project_key: ""  # Optional: filter to specific project key
+  webhook_secret: ""  # Optional: for webhook signature verification
+
 # LLM Configuration
 llm:
   provider: "openai"  # openai, anthropic, github_copilot, custom

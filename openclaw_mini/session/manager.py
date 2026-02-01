@@ -7,6 +7,9 @@ from typing import Any, Dict, List, Optional
 # Session ID prefix for Discord channels
 DISCORD_SESSION_PREFIX = "discord:"
 
+# Session ID prefix for Jira issues
+JIRA_SESSION_PREFIX = "jira:"
+
 
 class SessionManager:
     """Simple in-memory session manager."""
