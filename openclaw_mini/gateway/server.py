@@ -123,12 +123,15 @@ class Gateway:
         self.runner: web.AppRunner = None
         self.site: web.TCPSite = None
 
-        # Register routes (only for webhook mode or API endpoints)
+        # Register routes (always available for API endpoints)
         self.app.router.add_get("/health", self.handle_health)
         self.app.router.add_get("/api/sessions", self.handle_list_sessions)
         self.app.router.add_post("/api/sessions/{session_id}/clear", self.handle_clear_session)
+        
+        # Test endpoint for curl debugging (always available)
+        self.app.router.add_post("/api/test", self.handle_test_message)
 
-        # Webhook routes
+        # Webhook routes (only in webhook mode)
         if self.mode == "webhook":
             self.app.router.add_post("/webhook/discord", self.handle_discord_webhook)
         
@@ -142,6 +145,46 @@ class Gateway:
             "service": "openclaw-mini",
             "mode": self.mode
         })
+
+    async def handle_test_message(self, request: Request) -> web.Response:
+        """Test endpoint for debugging via curl.
+        
+        Usage:
+        curl -X POST http://localhost:8000/api/test \
+          -H "Content-Type: application/json" \
+          -d '{"message": "运行 ls -la /"}'
+        """
+        try:
+            data = await request.json()
+            message = data.get("message", "").strip()
+            session_id = data.get("session_id", "test-session")
+            user_name = data.get("user_name", "test-user")
+            
+            if not message:
+                return web.json_response({
+                    "status": "error", 
+                    "message": "message field is required"
+                }, status=400)
+            
+            # Process message through agent
+            response = await handle_discord_message(message, session_id, user_name)
+            
+            return web.json_response({
+                "status": "ok",
+                "response": response
+            })
+            
+        except json.JSONDecodeError:
+            return web.json_response({
+                "status": "error",
+                "message": "Invalid JSON body"
+            }, status=400)
+        except Exception as e:
+            logger.error(f"Test endpoint error: {e}")
+            return web.json_response({
+                "status": "error",
+                "message": str(e)
+            }, status=500)
 
     async def handle_discord_webhook(self, request: Request) -> web.Response:
         """Handle Discord webhook events."""
@@ -269,9 +312,16 @@ class Gateway:
     async def start(self) -> None:
         """Start the gateway server."""
         if self.mode == "bot":
-            # Bot API mode - start Discord bot (which runs its own asyncio loop)
+            # Bot API mode - start Discord bot and HTTP server for API endpoints
             await discord_channel.start(message_callback=handle_discord_message)
-            logger.info(f"Gateway started in Bot API mode (listening for Discord messages)")
+            
+            # Start HTTP server for API endpoints (including test endpoint)
+            self.runner = web.AppRunner(self.app)
+            await self.runner.setup()
+            self.site = web.TCPSite(self.runner, self.host, self.port)
+            await self.site.start()
+            
+            logger.info(f"Gateway started in Bot API mode on http://{self.host}:{self.port}")
         else:
             # Webhook mode - start HTTP server and Discord session
             await discord_channel.start()
