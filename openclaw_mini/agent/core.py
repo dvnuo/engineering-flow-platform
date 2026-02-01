@@ -23,9 +23,6 @@ class Agent:
         # Build OpenClaw-style system prompt
         tools = get_tools_schemas()
         
-        # OpenAI API tool schema format
-        tools_schema = json.dumps(tools, indent=2)
-        
         # Human-readable tool list (following OpenClaw's Tooling section)
         tools_list = "\n".join([
             f"- **{t['function']['name']}**: {t['function'].get('description', '')}"
@@ -113,8 +110,18 @@ When you use a tool, use this format:
         logger.info(f"LLM requested {len(tool_calls)} tool calls")
         
         # Step 2-4: Execute each tool and collect results
-        messages.append({"role": "assistant", "content": content})
+        # IMPORTANT: assistant message must contain tool_calls for OpenAI API
+        assistant_msg = {"role": "assistant"}
         
+        # If LLM returned tool_calls, include them in the assistant message
+        if tool_calls:
+            assistant_msg["tool_calls"] = tool_calls
+            # Content can be empty when using tool_calls
+            assistant_msg["content"] = content if content else None
+        
+        messages.append(assistant_msg)
+        
+        # Execute each tool call
         for tool_call in tool_calls:
             tool_call_id = tool_call.get("id", "unknown")
             function = tool_call.get("function", {})
@@ -130,7 +137,7 @@ When you use a tool, use this format:
             # Execute the tool
             tool_result = await execute_tool_by_name(tool_name, **args)
             
-            # Add result to messages
+            # Add tool result - MUST follow the assistant message with tool_calls
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call_id,
