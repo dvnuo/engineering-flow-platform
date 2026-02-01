@@ -427,11 +427,34 @@ curl -X POST \
 
 ## Running
 
+### 重要：确保在正确目录 ⚠️
+
+**必须进入 `openclaw_mini` 目录运行**：
+
+```bash
+cd /root/codew/openclaw_mini
+```
+
+如果出现以下错误：
+```
+ModuleNotFoundError: No module named 'openclaw_mini'
+```
+说明当前目录不对，请先执行：
+```bash
+cd openclaw_mini
+```
+
 ### Basic Run
 
 ```bash
+# 1. 进入目录
 cd openclaw_mini
+
+# 2. 运行程序
 python main.py
+
+# 看到以下输出表示成功：
+# Gateway started on http://0.0.0.0:8000
 ```
 
 ### Run with Custom Config
@@ -443,10 +466,17 @@ python main.py --config /path/to/config.yaml
 ### Run in Background (Linux/macOS)
 
 ```bash
-# Using nohup
+# 创建日志目录
+mkdir -p logs
+
+# 使用 nohup 后台运行
 nohup python main.py > logs/app.log 2>&1 &
 
-# Using systemd (see below)
+# 查看日志
+tail -f logs/app.log
+
+# 停止服务
+pkill -f "python main.py"
 ```
 
 ### Run as a Service (systemd)
@@ -465,6 +495,8 @@ WorkingDirectory=/path/to/openclaw_mini
 ExecStart=/path/to/venv/bin/python main.py
 Restart=on-failure
 RestartSec=5
+
+[368 more lines in file. Use offset=468 continues]
 Environment=OPENCLAW_LLM_API_KEY=your_api_key
 
 [Install]
