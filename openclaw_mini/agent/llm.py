@@ -61,8 +61,13 @@ class LLMClient:
         self,
         messages: List[Dict[str, str]],
         system_prompt: Optional[str] = None,
-    ) -> str:
-        """Send a chat request to the LLM with retry logic."""
+        tools: Optional[List[Dict]] = None,
+    ) -> Dict[str, Any]:
+        """Send a chat request to the LLM with retry logic.
+        
+        Returns:
+            Dict with 'content' (text response) and 'tool_calls' (list of tool calls if any)
+        """
         # Build messages
         all_messages = []
         if system_prompt:
@@ -76,6 +81,22 @@ class LLMClient:
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
         }
+
+        # Add tools if provided (for function calling)
+        if tools:
+            payload["tools"] = tools
+            # Tell model it can use tools
+            if not system_prompt:
+                payload["system"] = "You are a helpful AI assistant. You have access to tools that can help you answer questions and perform tasks."
+            else:
+                # Append to existing system prompt
+                payload["messages"][0]["content"] += (
+                    "\n\nYou have access to the following tools that you can call when needed:\n"
+                    + "\n".join(
+                        f"- {t.get('function', {}).get('name')}: {t.get('function', {}).get('description')}"
+                        for t in tools
+                    )
+                )
 
         # Add GitHub Copilot specific headers and parameters
         headers = self._get_headers()
@@ -97,10 +118,17 @@ class LLMClient:
                 # Extract response content
                 choices = data.get("choices", [])
                 if choices:
-                    content = choices[0].get("message", {}).get("content", "")
+                    message = choices[0].get("message", {})
+                    content = message.get("content", "")
+                    tool_calls = message.get("tool_calls", [])
                 else:
                     content = ""
-                return content.strip()
+                    tool_calls = []
+
+                return {
+                    "content": content.strip() if content else "",
+                    "tool_calls": tool_calls,
+                }
 
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
                 last_error = e

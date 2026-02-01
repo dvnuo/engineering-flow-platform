@@ -1,5 +1,6 @@
 """Skills package for OpenClaw Mini."""
 
-from .test_case_generator.skill import test_case_skill
+# Lazy import to avoid circular dependencies
+# Skills are loaded by the SkillsExecutor when needed
 
-__all__ = ["test_case_skill"]
+__all__ = []

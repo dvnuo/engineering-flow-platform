@@ -6,19 +6,34 @@ from typing import Any, Dict, List, Optional
 
 from openclaw_mini.agent.llm import llm_client
 from openclaw_mini.session.manager import session_manager
-from openclaw_mini.skills.executor import skills_executor, SkillResult
+from openclaw_mini.skills.executor import (
+    skills_executor,
+    SkillResult,
+    get_tools_schemas,
+    execute_tool_by_name,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class Agent:
-    """Simple agent for processing messages and generating responses."""
+    """Agent for processing messages and executing tools."""
 
     def __init__(self, system_prompt: Optional[str] = None):
-        self.system_prompt = system_prompt or (
-            "You are a helpful AI assistant. "
-            "Keep your responses concise and helpful."
-        )
+        default_prompt = """You are a helpful AI assistant. You can use tools to help answer questions and perform tasks.
+
+Available tools:
+- exec: Execute shell commands
+- read: Read file contents
+- write: Create or overwrite files
+- edit: Make precise edits to files
+- web_search: Search the web
+- web_fetch: Fetch webpage content
+- image: Analyze images
+
+When you need to use a tool, respond with a tool call in the specified format."""
+        
+        self.system_prompt = system_prompt or default_prompt
 
     async def process(
         self,
@@ -33,22 +48,53 @@ class Agent:
             logger.info(f"Matched skill: {skill_name} for message: {message[:50]}...")
             return await self._execute_skill(skill_name, message, session_id)
 
-        # Get conversation history
-        history = session_manager.get_history(session_id)
-
         # Add user message to history
         session_manager.add_message(session_id, "user", message)
 
-        # Get context from history
+        # Get conversation history
         messages = session_manager.get_history(session_id)
 
-        # Call LLM
-        response = await llm_client.chat(messages, self.system_prompt)
+        # Get tool schemas
+        tools = get_tools_schemas()
+
+        # Call LLM with tools
+        result = await llm_client.chat(messages, self.system_prompt, tools=tools)
+        content = result.get("content", "")
+        tool_calls = result.get("tool_calls", [])
+
+        # If LLM wants to use a tool, execute it
+        if tool_calls:
+            logger.info(f"LLM requested {len(tool_calls)} tool calls")
+            
+            # Build messages for tool execution
+            messages.append({"role": "assistant", "content": content})
+            
+            # Execute each tool call
+            for tool_call in tool_calls:
+                tool_call_id = tool_call.get("id", "")
+                function = tool_call.get("function", {})
+                tool_name = function.get("name", "")
+                args = json.loads(function.get("arguments", "{}"))
+                
+                logger.info(f"Executing tool: {tool_name} with args: {args}")
+                
+                # Execute tool
+                tool_result = await execute_tool_by_name(tool_name, **args)
+                
+                # Add tool result to messages
+                messages.append({
+                    "role": "tool",
+                    "content": str(tool_result),
+                })
+
+            # Get final response from LLM
+            final_result = await llm_client.chat(messages, self.system_prompt, tools=tools)
+            content = final_result.get("content", "")
 
         # Add assistant response to history
-        session_manager.add_message(session_id, "assistant", response)
+        session_manager.add_message(session_id, "assistant", content)
 
-        return response
+        return content
 
     async def _execute_skill(
         self,
@@ -58,7 +104,6 @@ class Agent:
     ) -> str:
         """Execute a skill and return the result."""
         try:
-            # Parse skill parameters from message (simplified)
             result = await skills_executor.execute_skill(
                 skill_name,
                 message=message,
@@ -66,7 +111,6 @@ class Agent:
             )
 
             if result.success:
-                # Format the output
                 if result.data:
                     return f"✅ {result.output}\n\n```\n{json.dumps(result.data, indent=2, ensure_ascii=False)}\n```"
                 return f"✅ {result.output}"
@@ -83,7 +127,6 @@ class Agent:
         context: Dict[str, Any],
     ) -> str:
         """Process a message with additional context."""
-        # Build full message with context
         full_message = f"Context: {context}\n\nUser: {message}"
         return await self.process(full_message, context.get("session_id", "default"))
 

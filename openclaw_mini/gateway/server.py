@@ -15,7 +15,12 @@ from openclaw_mini.channel.discord import discord_channel
 from openclaw_mini.channel.jira import jira_channel
 from openclaw_mini.config import config
 from openclaw_mini.session.manager import DISCORD_SESSION_PREFIX, JIRA_SESSION_PREFIX
-from openclaw_mini.skills import test_case_skill
+
+# Lazy import test_case_skill to avoid circular dependency
+try:
+    from openclaw_mini.skills.test_case_generator.skill import test_case_skill
+except ImportError:
+    test_case_skill = None
 
 logger = logging.getLogger(__name__)
 

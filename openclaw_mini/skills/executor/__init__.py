@@ -1,6 +1,6 @@
-"""Skills executor for OpenClaw Mini.
+"""Skills and Tools executor for OpenClaw Mini.
 
-This module provides the ability to execute skills based on user requests.
+This module provides the ability to execute skills and tools based on user requests.
 """
 
 import asyncio
@@ -12,6 +12,17 @@ from typing import Any, Dict, List, Optional
 from openclaw_mini.config import config
 
 logger = logging.getLogger(__name__)
+
+# Import tools
+from .tools import (
+    ToolResult,
+    Tool,
+    TOOLS,
+    get_tool_names,
+    get_tool,
+    get_tools_schema,
+    execute_tool,
+)
 
 
 class SkillResult:
@@ -56,10 +67,11 @@ class Skill:
 
 
 class SkillsExecutor:
-    """Execute skills based on user requests."""
+    """Execute skills and tools based on user requests."""
 
     def __init__(self):
         self.skills: Dict[str, Skill] = {}
+        self.tools: Dict[str, Tool] = TOOLS
         self._load_skills()
 
     def _load_skills(self):
@@ -96,6 +108,10 @@ class SkillsExecutor:
         """List all available skills."""
         return list(self.skills.keys())
 
+    def list_tools(self) -> List[str]:
+        """List all available tools."""
+        return list(self.tools.keys())
+
     def get_skill_info(self, skill_name: str) -> Optional[Dict]:
         """Get information about a skill."""
         skill = self.skills.get(skill_name)
@@ -115,7 +131,6 @@ class SkillsExecutor:
         if "测试用例" in request or "create test" in request_lower:
             return "test_case_generator"
 
-        # Add more skill matching patterns here
         return None
 
     async def execute_skill(
@@ -136,6 +151,13 @@ class SkillsExecutor:
             logger.error(f"Skill {skill_name} failed: {e}")
             return SkillResult(success=False, error=str(e))
 
+    def get_all_capabilities(self) -> Dict[str, Any]:
+        """Get all skills and tools for LLM context."""
+        return {
+            "skills": [self.get_skill_info(name) for name in self.skills],
+            "tools": get_tools_schema(),
+        }
+
 
 # Global executor instance
 skills_executor = SkillsExecutor()
@@ -146,6 +168,11 @@ def list_available_skills() -> List[str]:
     return skills_executor.list_skills()
 
 
+def list_available_tools() -> List[str]:
+    """List all available tools."""
+    return skills_executor.list_tools()
+
+
 def get_skill_info(skill_name: str) -> Optional[Dict]:
     """Get skill information."""
     return skills_executor.get_skill_info(skill_name)
@@ -154,3 +181,13 @@ def get_skill_info(skill_name: str) -> Optional[Dict]:
 async def execute_skill(skill_name: str, **kwargs) -> SkillResult:
     """Execute a skill by name."""
     return await skills_executor.execute_skill(skill_name, **kwargs)
+
+
+def get_tools_schemas() -> List[Dict]:
+    """Get all tool schemas for LLM."""
+    return get_tools_schema()
+
+
+async def execute_tool_by_name(name: str, **kwargs) -> ToolResult:
+    """Execute a tool by name."""
+    return await execute_tool(name, **kwargs)
