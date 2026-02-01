@@ -53,9 +53,19 @@ class LLMClient:
     def _get_completions_endpoint(self) -> str:
         """Get the completions endpoint URL."""
         if self.provider == "github_copilot":
-            # GitHub Copilot uses chat completions primarily
             return f"{self.COPILOT_API_BASE}{self.COPILOT_SUFFIX}"
         return f"{self.api_base}/completions"
+
+    def _supports_tools(self) -> bool:
+        """Check if current model supports tool calling."""
+        # gpt-3.5-turbo (without version suffix) doesn't support tools
+        # gpt-3.5-turbo-1106+ and gpt-4+ support tools
+        if self.model == "gpt-3.5-turbo":
+            return False
+        # Check for old versioned models
+        if "-0301" in self.model or "-0314" in self.model:
+            return False
+        return True
 
     async def chat(
         self,
@@ -82,21 +92,10 @@ class LLMClient:
             "temperature": self.temperature,
         }
 
-        # Add tools if provided (for function calling)
-        if tools:
+        # Add tools if supported and provided
+        use_tools = tools and self._supports_tools()
+        if use_tools:
             payload["tools"] = tools
-            # Tell model it can use tools
-            if not system_prompt:
-                payload["system"] = "You are a helpful AI assistant. You have access to tools that can help you answer questions and perform tasks."
-            else:
-                # Append to existing system prompt
-                payload["messages"][0]["content"] += (
-                    "\n\nYou have access to the following tools that you can call when needed:\n"
-                    + "\n".join(
-                        f"- {t.get('function', {}).get('name')}: {t.get('function', {}).get('description')}"
-                        for t in tools
-                    )
-                )
 
         # Add GitHub Copilot specific headers and parameters
         headers = self._get_headers()
@@ -131,6 +130,13 @@ class LLMClient:
                 }
 
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                # If tools failed with older model, retry without tools
+                if use_tools and "400" in str(e):
+                    logger.warning(f"Tool call not supported, retrying without tools: {e}")
+                    payload.pop("tools", None)
+                    use_tools = False
+                    continue
+                
                 last_error = e
                 if attempt < self.max_retries - 1:
                     delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
