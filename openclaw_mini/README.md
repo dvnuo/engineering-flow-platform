@@ -1,12 +1,16 @@
 # OpenClaw Mini
 
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![pytest](https://img.shields.io/badge/pytest-62%20tests-green.svg)](tests/)
+[![MIT License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+
 A simple version of [OpenClaw](https://github.com/openclaw/openclaw) written in Python.
 
 ## Features
 
 - 🎯 **Simple Architecture** - Core components: Gateway, Agent, Channel, Session
 - 💬 **Discord Support** - Receive and respond to messages via Discord Bot
-- 🧠 **LLM Integration** - Supports OpenAI-compatible APIs
+- 🧠 **LLM Integration** - Supports OpenAI and GitHub Copilot APIs
 - 💾 **Session Management** - Maintain conversation history per user/channel
 - 🔌 **Extensible** - Easy to add new channels or tools
 
@@ -29,10 +33,41 @@ discord:
   channel_id: "YOUR_CHANNEL_ID"
 
 llm:
-  provider: "openai"
+  provider: "openai"  # or "github_copilot"
   api_base: "https://api.openai.com/v1"
-  api_key: "YOUR_OPENAI_API_KEY"
+  api_key: "YOUR_API_KEY"
   model: "gpt-3.5-turbo"
+```
+
+#### Environment Variables (Recommended)
+
+For sensitive data, use environment variables instead:
+
+```bash
+export OPENCLAW_DISCORD_BOT_TOKEN="your_bot_token"
+export OPENCLAW_DISCORD_CHANNEL_ID="your_channel_id"
+export OPENCLAW_LLM_API_KEY="your_api_key"
+```
+
+Then in `config.yaml`:
+
+```yaml
+discord:
+  bot_token: "${OPENCLAW_DISCORD_BOT_TOKEN}"
+  channel_id: "${OPENCLAW_DISCORD_CHANNEL_ID}"
+
+llm:
+  api_key: "${OPENCLAW_LLM_API_KEY}"
+```
+
+#### GitHub Copilot Configuration
+
+```yaml
+llm:
+  provider: "github_copilot"
+  api_key: "ghp_YOUR_GITHUB_TOKEN"
+  model: "gpt-4"
+  # GitHub Copilot uses: https://api.github.com/copilot/chat/completions
 ```
 
 ### 3. Set Up Discord Bot
@@ -76,6 +111,24 @@ python main.py
 
 Send a message in your Discord channel. The bot should respond!
 
+## Configuration Options
+
+| Section | Key | Type | Description | Required |
+|---------|-----|------|-------------|----------|
+| discord | bot_token | string | Discord Bot Token | Yes* |
+| discord | channel_id | int/string | Target Channel ID | Yes* |
+| discord | webhook_url | string | Discord Webhook URL | No |
+| llm | provider | string | LLM provider (openai, github_copilot) | No |
+| llm | api_base | string | API base URL | No |
+| llm | api_key | string | API Key | Yes |
+| llm | model | string | Model name (gpt-3.5-turbo, gpt-4, etc.) | No |
+| llm | max_tokens | int | Max tokens in response | No |
+| llm | temperature | float | Response creativity (0.0-1.0) | No |
+| llm | max_retries | int | Retry attempts on failure | No |
+| llm | retry_delay | float | Base delay between retries (seconds) | No |
+
+* Either `bot_token` or `webhook_url` required for Discord integration
+
 ## Architecture
 
 ```
@@ -104,13 +157,18 @@ openclaw_mini/
 ├── agent/
 │   ├── __init__.py
 │   ├── core.py          # Agent logic
-│   └── llm.py           # LLM client
+│   └── llm.py           # LLM client (OpenAI + GitHub Copilot)
 ├── channel/
 │   ├── __init__.py
 │   └── discord.py       # Discord adapter
-└── session/
-    ├── __init__.py
-    └── manager.py       # Session management
+├── session/
+│   ├── __init__.py
+│   └── manager.py       # Session management
+└── tests/
+    ├── test_config.py
+    ├── test_gateway.py
+    ├── test_llm_client.py
+    └── test_session_manager.py
 ```
 
 ## API Endpoints
@@ -121,13 +179,15 @@ openclaw_mini/
 | POST | `/webhook/discord` | Discord webhook receiver |
 | GET | `/api/sessions` | List active sessions |
 | POST | `/api/sessions/{id}/clear` | Clear a session |
+| GET | `/api/sessions/{id}` | Get session info |
 
 ## Development
 
 ### Run Tests
 
 ```bash
-# TBD
+cd openclaw_mini
+pytest tests/ -v
 ```
 
 ### Add New Channel
@@ -141,6 +201,37 @@ openclaw_mini/
 1. Create a new file in `tools/`
 2. Implement the tool logic
 3. Register in `agent/core.py`
+
+## Troubleshooting
+
+### Bot not responding?
+
+1. Check bot has correct permissions (Message Content Intent)
+2. Verify `config.yaml` has correct bot_token and channel_id
+3. Check bot is online in Discord server
+4. Review logs for error messages
+
+### LLM API errors?
+
+1. Verify API key is valid
+2. Check `api_base` URL is correct
+3. Ensure model name is supported
+4. Check rate limits or quota
+
+### Session issues?
+
+1. Sessions are in-memory (restart clears history)
+2. Check `/api/sessions` endpoint for active sessions
+3. Use `/api/sessions/{id}/clear` to reset a session
+
+## Contributing
+
+1. Create a feature branch: `git checkout -b feature/xxx`
+2. Make changes and add tests
+3. Run tests: `pytest tests/ -v`
+4. Commit: `git commit -m "feat: description"`
+5. Push: `git push origin feature/xxx`
+6. Create PR and request review
 
 ## License
 
