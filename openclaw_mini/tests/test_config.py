@@ -27,7 +27,7 @@ class TestConfigBasic:
             
             config = Config(f.name)
             assert config.get("discord.bot_token") == "test_token"
-            # YAML 解析数字为整数，所以这里应该检查整数
+            # YAML parses numbers as integers, so we check for integer type
             assert config.get("discord.channel_id") == 123
             assert config.get("discord.channel_id", "0") == 123
             assert config.get("discord.nonexistent", "default") == "default"

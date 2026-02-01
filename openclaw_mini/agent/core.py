@@ -176,14 +176,14 @@ When you use a tool, use this format:
 
             if result.success:
                 if result.data:
-                    return f"✅ {result.output}\n\n```\n{json.dumps(result.data, indent=2, ensure_ascii=False)}\n```"
-                return f"✅ {result.output}"
+                    return f"Done! {result.output}\n\n```\n{json.dumps(result.data, indent=2, ensure_ascii=False)}\n```"
+                return f"Done! {result.output}"
             else:
-                return f"❌ {result.error}"
+                return f"Error: {result.error}"
 
         except Exception as e:
             logger.error(f"Skill execution failed: {e}")
-            return f"❌ 执行失败: {str(e)}"
+            return f"Execution failed: {str(e)}"
 
     async def process_with_context(
         self,

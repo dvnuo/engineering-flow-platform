@@ -84,7 +84,7 @@ async def handle_test_case_generation(issue_key: str, user_name: str) -> str:
         requirements = await jira_channel.get_issue_description(issue_key)
         
         if not requirements:
-            return "我无法获取该 issue 的描述。请确保 issue 有需求描述。"
+            return f"I could not retrieve the description for issue {issue_key}. Please ensure the issue has a requirements description."
         
         # Generate test cases using the skill
         logger.info(f"Generating test cases for {issue_key} based on requirements")
@@ -97,18 +97,18 @@ async def handle_test_case_generation(issue_key: str, user_name: str) -> str:
         )
         
         # Send intro comment
-        intro = f"## 测试用例已生成 ✅\n\n基于 **{issue_key}** 的需求描述，我已为您生成自动化测试用例。"
+        intro = f"## Test Cases Generated ✅\n\nBased on the requirements description for **{issue_key}**, I have generated automated test cases for you."
         await jira_channel.add_comment_text_only(issue_key, intro)
         
         # Send code block as separate comment
         await jira_channel.add_comment_code_block(issue_key, test_cases, language="python")
         
         # Confirmation
-        return f"已为 {issue_key} 生成测试用例并添加到 issue 评论中。"
+        return f"Test cases for {issue_key} have been generated and added to the issue comments."
         
     except Exception as e:
         logger.error(f"Error generating test cases: {e}")
-        return f"生成测试用例时出错: {str(e)}"
+        return f"Error generating test cases: {str(e)}"
 
 
 class Gateway:
@@ -123,15 +123,13 @@ class Gateway:
         self.runner: web.AppRunner = None
         self.site: web.TCPSite = None
 
-        # Register routes (always available for API endpoints)
+        # Register routes (only for webhook mode or API endpoints)
         self.app.router.add_get("/health", self.handle_health)
         self.app.router.add_get("/api/sessions", self.handle_list_sessions)
         self.app.router.add_post("/api/sessions/{session_id}/clear", self.handle_clear_session)
-        
-        # Test endpoint for curl debugging (always available)
         self.app.router.add_post("/api/test", self.handle_test_message)
 
-        # Webhook routes (only in webhook mode)
+        # Webhook routes
         if self.mode == "webhook":
             self.app.router.add_post("/webhook/discord", self.handle_discord_webhook)
         
@@ -145,46 +143,6 @@ class Gateway:
             "service": "openclaw-mini",
             "mode": self.mode
         })
-
-    async def handle_test_message(self, request: Request) -> web.Response:
-        """Test endpoint for debugging via curl.
-        
-        Usage:
-        curl -X POST http://localhost:8000/api/test \
-          -H "Content-Type: application/json" \
-          -d '{"message": "运行 ls -la /"}'
-        """
-        try:
-            data = await request.json()
-            message = data.get("message", "").strip()
-            session_id = data.get("session_id", "test-session")
-            user_name = data.get("user_name", "test-user")
-            
-            if not message:
-                return web.json_response({
-                    "status": "error", 
-                    "message": "message field is required"
-                }, status=400)
-            
-            # Process message through agent
-            response = await handle_discord_message(message, session_id, user_name)
-            
-            return web.json_response({
-                "status": "ok",
-                "response": response
-            })
-            
-        except json.JSONDecodeError:
-            return web.json_response({
-                "status": "error",
-                "message": "Invalid JSON body"
-            }, status=400)
-        except Exception as e:
-            logger.error(f"Test endpoint error: {e}")
-            return web.json_response({
-                "status": "error",
-                "message": str(e)
-            }, status=500)
 
     async def handle_discord_webhook(self, request: Request) -> web.Response:
         """Handle Discord webhook events."""
@@ -268,6 +226,38 @@ class Gateway:
         else:
             return web.json_response({"status": "error", "message": "session_id required"}, status=400)
 
+    async def handle_test_message(self, request: Request) -> web.Response:
+        """Test endpoint for sending a message to the agent via HTTP.
+        
+        POST /api/test
+        Body: {"message": "your message here", "session_id": "optional-session-id"}
+        """
+        try:
+            data = await request.json()
+            message = data.get("message", "")
+            session_id = data.get("session_id", "test-session")
+            
+            if not message:
+                return web.json_response({"status": "error", "message": "message required"}, status=400)
+            
+            # Process message through agent
+            response = await agent.process(
+                message=message,
+                session_id=session_id,
+                user_name="http-tester",
+            )
+            
+            return web.json_response({
+                "status": "ok",
+                "message": message,
+                "response": response,
+                "session_id": session_id,
+            })
+            
+        except Exception as e:
+            logger.error(f"Test message error: {e}")
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
     async def handle_jira_webhook(self, request: Request) -> web.Response:
         """Handle Jira webhook events."""
         try:
@@ -312,20 +302,9 @@ class Gateway:
     async def start(self) -> None:
         """Start the gateway server."""
         if self.mode == "bot":
-            # Bot API mode - start Discord bot and HTTP server in parallel
-            # Use create_task because discord_channel.start() blocks
-            bot_task = asyncio.create_task(discord_channel.start(message_callback=handle_discord_message))
-            
-            # Small delay to let bot start
-            await asyncio.sleep(2)
-            
-            # Start HTTP server for API endpoints (including test endpoint)
-            self.runner = web.AppRunner(self.app)
-            await self.runner.setup()
-            self.site = web.TCPSite(self.runner, self.host, self.port)
-            await self.site.start()
-            
-            logger.info(f"Gateway started in Bot API mode on http://{self.host}:{self.port}")
+            # Bot API mode - start Discord bot (which runs its own asyncio loop)
+            await discord_channel.start(message_callback=handle_discord_message)
+            logger.info(f"Gateway started in Bot API mode (listening for Discord messages)")
         else:
             # Webhook mode - start HTTP server and Discord session
             await discord_channel.start()
