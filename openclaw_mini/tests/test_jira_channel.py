@@ -306,5 +306,74 @@ class TestJiraAPIEndpoints:
             assert result[0]["key"] == "PROJ-123"
 
 
+class TestJiraSecurity:
+    """Tests for Jira security features."""
+
+    def test_jql_injection_blocked_semicolon(self):
+        """Test that JQL injection with semicolon is blocked."""
+        from openclaw_mini.channel.jira import validate_jql
+        
+        # These should be blocked
+        assert validate_jql("project = PROJ; DELETE FROM issues") == False
+        assert validate_jql("project = PROJ--") == False
+        assert validate_jql("project = PROJ/*comment*/") == False
+        assert validate_jql("project = PROJ xp_cmd") == False
+
+    def test_jql_injection_blocked_exec(self):
+        """Test that JQL injection with EXEC is blocked."""
+        from openclaw_mini.channel.jira import validate_jql
+        
+        assert validate_jql("project = PROJ; exec xp_shell") == False
+        assert validate_jql("project = PROJ; execute whatever") == False
+
+    def test_valid_jql_allowed(self):
+        """Test that valid JQL queries are allowed."""
+        from openclaw_mini.channel.jira import validate_jql
+        
+        # These should be allowed
+        assert validate_jql("project = PROJ AND status = Open") == True
+        assert validate_jql("assignee = currentUser() ORDER BY updated DESC") == True
+        assert validate_jql("fixVersion = '1.0.0'") == True
+
+    def test_long_comment_split(self):
+        """Test that long comments are split correctly."""
+        with patch('openclaw_mini.channel.jira.config') as mock_config:
+            mock_config.jira = {
+                'base_url': 'https://test.atlassian.net',
+                'email': 'test@example.com',
+                'api_token': 'test_token',
+            }
+            
+            from openclaw_mini.channel.jira import JiraChannel, JIRA_MAX_COMMENT_LENGTH
+            
+            channel = JiraChannel()
+            channel.session = AsyncMock()
+            channel.session.request = AsyncMock(return_value=MagicMock(
+                status_code=201,
+                json=MagicMock(return_value={"id": "10001"})
+            ))
+            
+            # Create a long message (longer than max length)
+            long_message = "A" * (JIRA_MAX_COMMENT_LENGTH * 2 + 100)
+            
+            # Mock add_comment_text_only to track calls
+            original_add = channel.add_comment_text_only
+            call_count = 0
+            
+            async def mock_add(key, body):
+                nonlocal call_count
+                call_count += 1
+                return {"id": str(call_count)}
+            
+            channel.add_comment_text_only = mock_add
+            
+            import asyncio
+            result = asyncio.run(channel.add_comment_long("PROJ-123", long_message))
+            
+            # Should be split into 3 comments
+            assert call_count == 3
+            assert len(result) == 3
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

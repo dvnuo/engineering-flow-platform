@@ -2,6 +2,7 @@
 
 import base64
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -9,6 +10,27 @@ import httpx
 from openclaw_mini.config import config
 
 logger = logging.getLogger(__name__)
+
+# JQL injection patterns to block
+JQL_DANGEROUS_PATTERNS = [
+    r";",           # Statement separator
+    r"--",          # SQL comment
+    r"/\*",         # Block comment start
+    r"\*/",         # Block comment end
+    r"xp_",         # Extended stored procedures
+    r"exec\s",      # EXEC command
+    r"execute\s",   # EXECUTE command
+]
+
+
+def validate_jql(jql: str) -> bool:
+    """Validate JQL query to prevent injection attacks."""
+    jql_lower = jql.lower()
+    for pattern in JQL_DANGEROUS_PATTERNS:
+        if re.search(pattern, jql_lower):
+            logger.warning(f"Potential JQL injection detected: {jql}")
+            return False
+    return True
 
 
 def parse_adf_body(body: Any) -> str:
@@ -36,6 +58,10 @@ def parse_adf_body(body: Any) -> str:
                     text_parts.append(item.get("attrs", {}).get("shortName", ""))
     
     return "".join(text_parts)
+
+
+# Maximum comment length in Jira
+JIRA_MAX_COMMENT_LENGTH = 32767
 
 
 class JiraChannel:
@@ -126,6 +152,40 @@ class JiraChannel:
             "POST", f"/rest/api/3/issue/{issue_key}/comment", json=payload
         )
 
+    async def add_comment_long(
+        self,
+        issue_key: str,
+        body: str,
+        max_length: int = JIRA_MAX_COMMENT_LENGTH,
+    ) -> List[Dict[str, Any]]:
+        """Add a long comment by splitting into multiple comments if needed.
+        
+        Jira has a maximum comment length, so this method splits long messages.
+        Returns a list of all created comment IDs.
+        """
+        if len(body) <= max_length:
+            # Single comment
+            result = await self.add_comment_text_only(issue_key, body)
+            return [result.get("id", "")]
+        
+        # Split into multiple comments
+        results = []
+        for i in range(0, len(body), max_length):
+            chunk = body[i : i + max_length]
+            # Add continuation indicator
+            if i > 0:
+                chunk = f"(continued) {chunk}"
+            if i + max_length < len(body):
+                chunk = f"{chunk} ..."
+            
+            result = await self.add_comment_text_only(issue_key, chunk)
+            results.append(result.get("id", ""))
+        
+        logger.info(
+            f"Split long comment into {len(results)} parts for {issue_key}"
+        )
+        return results
+
     async def update_comment(self, issue_key: str, comment_id: str, body: str) -> Dict[str, Any]:
         """Update a comment."""
         payload = {
@@ -158,7 +218,12 @@ class JiraChannel:
         limit: int = 50,
         fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Search issues using JQL."""
+        """Search issues using JQL with injection protection."""
+        # Validate JQL to prevent injection
+        if not validate_jql(jql):
+            logger.error(f"Invalid JQL query rejected: {jql}")
+            raise ValueError("Invalid JQL query: potentially dangerous characters detected")
+        
         params = {
             "jql": jql,
             "maxResults": limit,

@@ -206,8 +206,8 @@ class Gateway:
             # Process message through agent
             response = await handle_jira_message(comment_body, session_id, username, issue_key)
 
-            # Send response back to Jira as a comment
-            await jira_channel.add_comment_text_only(issue_key, response)
+            # Send response back to Jira as a comment (handles long responses)
+            await jira_channel.add_comment_long(issue_key, response)
 
             logger.info(f"Processed Jira comment for {issue_key} from {username}")
 
