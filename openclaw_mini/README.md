@@ -14,20 +14,100 @@ A simple version of [OpenClaw](https://github.com/openclaw/openclaw) written in 
 - 💾 **Session Management** - Maintain conversation history per user/channel
 - 🔌 **Extensible** - Easy to add new channels or tools
 
-## Quick Start
+## Table of Contents
 
-### 1. Install Dependencies
+- [Installation](#installation)
+  - [Virtual Environment (Recommended)](#1-virtual-environment-recommended)
+  - [Docker](#2-docker)
+  - [System-wide](#3-system-wide)
+- [Configuration](#configuration)
+- [Discord Setup](#discord-setup)
+- [Running](#running)
+- [API Reference](#api-reference)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Installation
+
+### 1. Virtual Environment (Recommended)
+
+Create an isolated Python environment:
+
+```bash
+# Create virtual environment
+cd openclaw_mini
+python -m venv venv
+
+# Activate (Linux/macOS)
+source venv/bin/activate
+
+# Activate (Windows)
+venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+To deactivate the environment when done:
+```bash
+deactivate
+```
+
+### 2. Docker
+
+```bash
+# Build the image
+cd openclaw_mini
+docker build -t openclaw-mini .
+
+# Run the container
+docker run -d \
+  --name openclaw-mini \
+  -p 8000:8000 \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  openclaw-mini
+```
+
+**Docker Compose (recommended)**:
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  openclaw-mini:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.yaml:/app/config.yaml
+    environment:
+      - OPENCLAW_LLM_API_KEY=${OPENCLAW_LLM_API_KEY}
+    restart: unless-stopped
+```
+
+```bash
+docker-compose up -d
+```
+
+### 3. System-wide
 
 ```bash
 cd openclaw_mini
 pip install -r requirements.txt
 ```
 
-### 2. Configure
+---
+
+## Configuration
+
+### Basic Configuration
 
 Edit `config.yaml` with your settings:
 
 ```yaml
+# config.yaml
 discord:
   bot_token: "YOUR_DISCORD_BOT_TOKEN"
   channel_id: "YOUR_CHANNEL_ID"
@@ -37,16 +117,30 @@ llm:
   api_base: "https://api.openai.com/v1"
   api_key: "YOUR_API_KEY"
   model: "gpt-3.5-turbo"
+  max_tokens: 1000
+  temperature: 0.7
+  max_retries: 3
+  retry_delay: 1
+
+server:
+  host: "0.0.0.0"
+  port: 8000
 ```
 
-#### Environment Variables (Recommended)
+### Environment Variables (Recommended)
 
-For sensitive data, use environment variables instead:
+For sensitive data, use environment variables:
 
 ```bash
+# Linux/macOS
 export OPENCLAW_DISCORD_BOT_TOKEN="your_bot_token"
 export OPENCLAW_DISCORD_CHANNEL_ID="your_channel_id"
 export OPENCLAW_LLM_API_KEY="your_api_key"
+
+# Windows (PowerShell)
+$env:OPENCLAW_DISCORD_BOT_TOKEN="your_bot_token"
+$env:OPENCLAW_DISCORD_CHANNEL_ID="your_channel_id"
+$env:OPENCLAW_LLM_API_KEY="your_api_key"
 ```
 
 Then in `config.yaml`:
@@ -60,7 +154,7 @@ llm:
   api_key: "${OPENCLAW_LLM_API_KEY}"
 ```
 
-#### GitHub Copilot Configuration
+### GitHub Copilot Configuration
 
 ```yaml
 llm:
@@ -70,21 +164,59 @@ llm:
   # GitHub Copilot uses: https://api.github.com/copilot/chat/completions
 ```
 
-### 3. Set Up Discord Bot
+### Configuration Options
+
+| Section | Key | Type | Default | Description |
+|---------|-----|------|---------|-------------|
+| discord | bot_token | string | - | Discord Bot Token |
+| discord | channel_id | int/string | - | Target Channel ID |
+| discord | webhook_url | string | - | Discord Webhook URL |
+| llm | provider | string | "openai" | LLM provider (openai, github_copilot) |
+| llm | api_base | string | OpenAI URL | API base URL |
+| llm | api_key | string | - | API Key |
+| llm | model | string | "gpt-3.5-turbo" | Model name |
+| llm | max_tokens | int | 1000 | Max tokens in response |
+| llm | temperature | float | 0.7 | Response creativity (0.0-1.0) |
+| llm | max_retries | int | 3 | Retry attempts on failure |
+| llm | retry_delay | float | 1 | Base delay between retries (seconds) |
+| session | max_history | int | 5 | Number of conversation turns to remember |
+| server | host | string | "0.0.0.0" | Server host |
+| server | port | int | 8000 | Server port |
+
+---
+
+## Discord Setup
+
+### Step 1: Create Discord Application
 
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Create a new application and bot
-3. Get the Bot Token
-4. Enable Message Content Intent
-5. Invite the bot to your server
-6. Create a channel and get the Channel ID
+2. Click "New Application" and name it
+3. Go to "Bot" section and click "Add Bot"
+4. Copy the Bot Token (keep it secret!)
 
-### 4. Set Up Discord Webhook
+### Step 2: Enable Privileged Intents
 
-Create a webhook in your channel:
+In the Bot settings, enable:
+- **Message Content Intent** (Required for reading messages)
+
+### Step 3: Invite Bot to Server
+
+1. Go to OAuth2 → URL Generator
+2. Select scopes: `bot`
+3. Select permissions:
+   - `Send Messages`
+   - `Read Message History`
+   - `View Channel`
+4. Copy the generated URL and open it
+
+### Step 4: Get Channel ID
+
+1. Enable Developer Mode in Discord (Settings → Advanced → Developer Mode)
+2. Right-click the channel → Copy ID
+
+### Step 5: Create Webhook (Optional)
 
 ```bash
-# Using Discord API (replace with your token and channel ID)
 curl -X POST \
   -H "Authorization: Bot YOUR_BOT_TOKEN" \
   -H "Content-Type: application/json" \
@@ -92,42 +224,104 @@ curl -X POST \
   -d '{"name": "openclaw-mini"}'
 ```
 
-Copy the webhook URL and update `config.yaml`:
+---
 
-```yaml
-discord:
-  bot_token: "YOUR_BOT_TOKEN"
-  channel_id: "YOUR_CHANNEL_ID"
-  webhook_url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
-```
+## Running
 
-### 5. Run
+### Basic Run
 
 ```bash
+cd openclaw_mini
 python main.py
 ```
 
-### 6. Test
+### Run with Custom Config
 
-Send a message in your Discord channel. The bot should respond!
+```bash
+python main.py --config /path/to/config.yaml
+```
 
-## Configuration Options
+### Run in Background (Linux/macOS)
 
-| Section | Key | Type | Description | Required |
-|---------|-----|------|-------------|----------|
-| discord | bot_token | string | Discord Bot Token | Yes* |
-| discord | channel_id | int/string | Target Channel ID | Yes* |
-| discord | webhook_url | string | Discord Webhook URL | No |
-| llm | provider | string | LLM provider (openai, github_copilot) | No |
-| llm | api_base | string | API base URL | No |
-| llm | api_key | string | API Key | Yes |
-| llm | model | string | Model name (gpt-3.5-turbo, gpt-4, etc.) | No |
-| llm | max_tokens | int | Max tokens in response | No |
-| llm | temperature | float | Response creativity (0.0-1.0) | No |
-| llm | max_retries | int | Retry attempts on failure | No |
-| llm | retry_delay | float | Base delay between retries (seconds) | No |
+```bash
+# Using nohup
+nohup python main.py > logs/app.log 2>&1 &
 
-* Either `bot_token` or `webhook_url` required for Discord integration
+# Using systemd (see below)
+```
+
+### Run as a Service (systemd)
+
+Create `/etc/systemd/system/openclaw-mini.service`:
+
+```ini
+[Unit]
+Description=OpenClaw Mini - Discord Bot
+After=network.target
+
+[Service]
+Type=simple
+User=your_user
+WorkingDirectory=/path/to/openclaw_mini
+ExecStart=/path/to/venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+Environment=OPENCLAW_LLM_API_KEY=your_api_key
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable openclaw-mini
+sudo systemctl start openclaw-mini
+sudo systemctl status openclaw-mini
+```
+
+---
+
+## API Reference
+
+### HTTP Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Health check |
+| POST | `/webhook/discord` | Discord webhook receiver |
+| GET | `/api/sessions` | List all active sessions |
+| GET | `/api/sessions/{id}` | Get session info |
+| POST | `/api/sessions/{id}/clear` | Clear session history |
+
+### Health Check
+
+```bash
+curl http://localhost:8000/health
+
+# Response
+{"status": "ok", "service": "openclaw-mini"}
+```
+
+### List Sessions
+
+```bash
+curl http://localhost:8000/api/sessions
+
+# Response
+{"sessions": ["discord:123:456"], "count": 1}
+```
+
+### Clear Session
+
+```bash
+curl -X POST http://localhost:8000/api/sessions/discord:123:456/clear
+
+# Response
+{"status": "cleared", "session_id": "discord:123:456"}
+```
+
+---
 
 ## Architecture
 
@@ -151,6 +345,8 @@ openclaw_mini/
 ├── main.py              # Entry point
 ├── config.yaml          # Configuration
 ├── config.py            # Config loader
+├── requirements.txt     # Python dependencies
+├── pytest.ini           # pytest configuration
 ├── gateway/
 │   ├── __init__.py
 │   └── server.py        # HTTP/WebSocket server
@@ -171,58 +367,137 @@ openclaw_mini/
     └── test_session_manager.py
 ```
 
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Health check |
-| POST | `/webhook/discord` | Discord webhook receiver |
-| GET | `/api/sessions` | List active sessions |
-| POST | `/api/sessions/{id}/clear` | Clear a session |
-| GET | `/api/sessions/{id}` | Get session info |
+---
 
 ## Development
 
-### Run Tests
+### Setup Development Environment
 
 ```bash
+# Clone and setup
+git clone https://github.com/itwake/codew.git
+cd codew
+git checkout -b feature/your-feature
+
+# Create virtual environment
 cd openclaw_mini
+python -m venv venv
+source venv/bin/activate
+
+# Install dev dependencies
+pip install -r requirements.txt
+pip install pytest pytest-asyncio httpx
+
+# Run tests
 pytest tests/ -v
+
+# Run with hot reload (requires entr or similar)
+echo "*.py" | entr -r python main.py
 ```
 
 ### Add New Channel
 
 1. Create a new file in `channel/`
-2. Implement `send_message()` and `handle_payload()` methods
-3. Register in `gateway/server.py`
+2. Implement the channel adapter class
+3. Register routes in `gateway/server.py`
 
-### Add New Tool
+Example:
+```python
+# channel/telegram.py
+from typing import Dict, Any
 
-1. Create a new file in `tools/`
-2. Implement the tool logic
-3. Register in `agent/core.py`
+class TelegramChannel:
+    async def send_message(self, content: str, channel_id: str) -> Dict[str, Any]:
+        # Implementation
+        pass
+```
+
+### Add New LLM Provider
+
+1. Add provider detection in `agent/llm.py`
+2. Implement provider-specific request handling
+3. Add configuration examples in `config.yaml`
+
+### Code Style
+
+- Follow PEP 8
+- Use type hints
+- Add docstrings
+- Write tests for new features
+
+---
 
 ## Troubleshooting
 
 ### Bot not responding?
 
-1. Check bot has correct permissions (Message Content Intent)
-2. Verify `config.yaml` has correct bot_token and channel_id
-3. Check bot is online in Discord server
-4. Review logs for error messages
+1. ✅ Check bot has correct permissions (Message Content Intent)
+2. ✅ Verify `config.yaml` has correct `bot_token` and `channel_id`
+3. ✅ Check bot is online in Discord server
+4. ✅ Review logs for error messages
+5. ✅ Ensure port 8000 is accessible
+
+```bash
+# Check bot permissions
+# Go to Discord Developer Portal → Bot → Server Members Intent, Message Content Intent enabled
+```
 
 ### LLM API errors?
 
-1. Verify API key is valid
-2. Check `api_base` URL is correct
-3. Ensure model name is supported
-4. Check rate limits or quota
+1. ✅ Verify API key is valid
+2. ✅ Check `api_base` URL is correct
+3. ✅ Ensure model name is supported
+4. ✅ Check rate limits or quota
+5. ✅ Check network connectivity
+
+```bash
+# Test API key
+curl -H "Authorization: Bearer YOUR_API_KEY" \
+  https://api.openai.com/v1/models
+```
 
 ### Session issues?
 
-1. Sessions are in-memory (restart clears history)
-2. Check `/api/sessions` endpoint for active sessions
-3. Use `/api/sessions/{id}/clear` to reset a session
+1. ✅ Sessions are in-memory (restart clears history)
+2. ✅ Check `/api/sessions` endpoint for active sessions
+3. ✅ Use `/api/sessions/{id}/clear` to reset a session
+4. ✅ Configure `session.max_history` in config.yaml
+
+### Port already in use?
+
+```bash
+# Find process using port 8000
+lsof -i :8000
+
+# Kill the process
+kill <PID>
+
+# Or use a different port
+python main.py --config config.yaml  # Edit config.yaml port
+```
+
+### Permission denied (Docker)?
+
+```bash
+# Add user to docker group
+sudo usermod -aG docker $USER
+
+# Or run with sudo (not recommended)
+sudo docker-compose up -d
+```
+
+### Logs not showing?
+
+```bash
+# Enable verbose logging
+# Edit main.py and change logging level
+logging.basicConfig(level=logging.DEBUG)
+
+# Check systemd logs
+journalctl -u openclaw-mini -f
+```
+
+---
 
 ## Contributing
 
@@ -233,6 +508,32 @@ pytest tests/ -v
 5. Push: `git push origin feature/xxx`
 6. Create PR and request review
 
+### Pull Request Template
+
+```markdown
+## Summary
+Brief description of changes
+
+## Testing
+- [ ] Tests pass
+- [ ] Manual testing completed
+
+## Checklist
+- [ ] Code follows style guide
+- [ ] Self-review completed
+- [ ] Documentation updated (if needed)
+```
+
+---
+
 ## License
 
-MIT License
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+## Support
+
+- 📧 Create an issue for bugs
+- 💬 Join our Discord community
+- 📖 Read the full documentation
