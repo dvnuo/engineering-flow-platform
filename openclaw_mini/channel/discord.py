@@ -182,9 +182,21 @@ class DiscordChannel:
     async def send_message(self, content: str, channel_id: Optional[str] = None) -> Dict[str, Any]:
         """Send a message to a Discord channel."""
         if self.mode == "bot" and self.bot:
-            return await self.bot.send_message(content, channel_id)
+            # Bot API mode - use channel.send() directly
+            target_id = channel_id or self.target_channel_id
+            if not target_id:
+                raise ValueError("No channel ID specified")
+            
+            channel = await self.bot.fetch_channel(int(target_id))
+            sent_message = await channel.send(content)
+            
+            return {
+                "id": str(sent_message.id),
+                "content": content,
+                "channel_id": target_id,
+            }
         else:
-            # Fallback to HTTP API for webhook mode
+            # Webhook mode - use HTTP API
             channel = channel_id or self.channel_id
             url = f"{self.base_url}/channels/{channel}/messages"
             payload = {"content": content}
