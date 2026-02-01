@@ -155,6 +155,50 @@ class TestJiraChannel:
             assert result is not None
             assert result["issue_key"] == "PROJ-456"
 
+    def test_add_comment_code_block(self):
+        """Test adding a comment with code block."""
+        with patch('openclaw_mini.channel.jira.config') as mock_config:
+            mock_config.jira = {
+                'base_url': 'https://test.atlassian.net',
+                'email': 'test@example.com',
+                'api_token': 'test_token',
+            }
+            
+            from openclaw_mini.channel.jira import JiraChannel
+            
+            channel = JiraChannel()
+            channel.session = AsyncMock()
+            channel.session.request = AsyncMock(return_value=MagicMock(
+                status_code=201,
+                json=MagicMock(return_value={"id": "10001"})
+            ))
+            
+            import asyncio
+            
+            code = "def test_example():\n    pass"
+            result = asyncio.get_event_loop().run_until_complete(
+                channel.add_comment_code_block("PROJ-123", code, language="python")
+            )
+            
+            channel.session.request.assert_called_once()
+            call_args = channel.session.request.call_args
+            assert call_args[0][0] == "POST"
+            assert "PROJ-123" in call_args[0][1]
+            
+            # Verify ADF format with codeBlock
+            json_body = call_args.kwargs['json']
+            assert json_body['body']['type'] == 'doc'
+            assert json_body['body']['version'] == 1
+            
+            # Check for codeBlock
+            content = json_body['body']['content']
+            assert len(content) == 2  # paragraph + codeBlock
+            
+            code_block = content[1]
+            assert code_block['type'] == 'codeBlock'
+            assert code_block['attrs']['language'] == 'python'
+            assert code_block['content'][0]['text'] == code
+
     def test_handle_webhook_payload_adf_format(self):
         """Test handling ADF format comment body."""
         with patch('openclaw_mini.channel.jira.config') as mock_config:

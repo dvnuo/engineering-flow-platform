@@ -15,6 +15,7 @@ from openclaw_mini.channel.discord import discord_channel
 from openclaw_mini.channel.jira import jira_channel
 from openclaw_mini.config import config
 from openclaw_mini.session.manager import DISCORD_SESSION_PREFIX, JIRA_SESSION_PREFIX
+from openclaw_mini.skills import test_case_skill
 
 logger = logging.getLogger(__name__)
 
@@ -73,16 +74,12 @@ async def handle_jira_message(
 
 async def handle_test_case_generation(issue_key: str, user_name: str) -> str:
     """Handle test case generation request for a Jira issue."""
-    from openclaw_mini.skills import test_case_skill
-    
     try:
         # Get issue requirements from description
         requirements = await jira_channel.get_issue_description(issue_key)
         
         if not requirements:
-            return (
-                "我无法获取该 issue 的描述。请确保 issue 有需求描述。"
-            )
+            return "我无法获取该 issue 的描述。请确保 issue 有需求描述。"
         
         # Generate test cases using the skill
         logger.info(f"Generating test cases for {issue_key} based on requirements")
@@ -94,13 +91,15 @@ async def handle_test_case_generation(issue_key: str, user_name: str) -> str:
             test_type="unit",
         )
         
-        # Format response with code block
-        response = f"## 测试用例已生成 ✅\n\n基于 **{issue_key}** 的需求描述，以下是自动化测试用例：\n\n"
-        response += f"```python\n{test_cases}\n```\n\n"
-        response += "---\n"
-        response += f"_由 {user_name} 请求生成_"
+        # Send intro comment
+        intro = f"## 测试用例已生成 ✅\n\n基于 **{issue_key}** 的需求描述，我已为您生成自动化测试用例。"
+        await jira_channel.add_comment_text_only(issue_key, intro)
         
-        return response
+        # Send code block as separate comment
+        await jira_channel.add_comment_code_block(issue_key, test_cases, language="python")
+        
+        # Confirmation
+        return f"已为 {issue_key} 生成测试用例并添加到 issue 评论中。"
         
     except Exception as e:
         logger.error(f"Error generating test cases: {e}")

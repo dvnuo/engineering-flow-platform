@@ -152,6 +152,56 @@ class JiraChannel:
             "POST", f"/rest/api/3/issue/{issue_key}/comment", json=payload
         )
 
+    async def add_comment_code_block(
+        self,
+        issue_key: str,
+        code: str,
+        language: str = "python",
+    ) -> Dict[str, Any]:
+        """Add a comment with a code block in ADF format.
+        
+        Args:
+            issue_key: The issue key (e.g., PROJ-123)
+            code: The code to display
+            language: Programming language for syntax highlighting
+        """
+        # Escape special ADF characters
+        escaped_code = code.replace("{", "\\{").replace("}", "\\}")
+        
+        payload = {
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "测试用例代码："
+                            }
+                        ]
+                    },
+                    {
+                        "type": "codeBlock",
+                        "attrs": {
+                            "language": language
+                        },
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": code
+                            }
+                        ]
+                    }
+                ],
+            }
+        }
+        
+        return await self._request(
+            "POST", f"/rest/api/3/issue/{issue_key}/comment", json=payload
+        )
+
     async def add_comment_long(
         self,
         issue_key: str,
