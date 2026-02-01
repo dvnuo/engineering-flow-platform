@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from aiohttp import web
 from aiohttp.web import Request
@@ -32,25 +32,47 @@ def verify_discord_signature(payload: bytes, signature: str, secret: str) -> boo
     return hmac.compare_digest(signature, f"sha256={expected}")
 
 
+async def handle_discord_message(message: str, session_id: str, user_name: str) -> str:
+    """Handle a Discord message and return response."""
+    try:
+        response = await agent.process(
+            message=message,
+            session_id=session_id,
+            user_name=user_name,
+        )
+        return response
+    except Exception as e:
+        logger.error(f"Error processing message: {e}")
+        return f"Sorry, I encountered an error: {str(e)}"
+
+
 class Gateway:
     """Simple HTTP/WebSocket gateway for OpenClaw Mini."""
 
     def __init__(self):
+        self.mode = config.discord.get("mode", "bot")  # 'bot' or 'webhook'
         self.host = config.server.get("host", "0.0.0.0")
         self.port = config.server.get("port", 8000)
         self.app = web.Application()
         self.runner: web.AppRunner = None
         self.site: web.TCPSite = None
 
-        # Register routes
-        self.app.router.add_post("/webhook/discord", self.handle_discord_webhook)
+        # Register routes (only for webhook mode or API endpoints)
         self.app.router.add_get("/health", self.handle_health)
         self.app.router.add_get("/api/sessions", self.handle_list_sessions)
         self.app.router.add_post("/api/sessions/{session_id}/clear", self.handle_clear_session)
 
+        # Webhook route only needed for webhook mode
+        if self.mode == "webhook":
+            self.app.router.add_post("/webhook/discord", self.handle_discord_webhook)
+
     async def handle_health(self, request: Request) -> web.Response:
         """Health check endpoint."""
-        return web.json_response({"status": "ok", "service": "openclaw-mini"})
+        return web.json_response({
+            "status": "ok", 
+            "service": "openclaw-mini",
+            "mode": self.mode
+        })
 
     async def handle_discord_webhook(self, request: Request) -> web.Response:
         """Handle Discord webhook events."""
@@ -99,30 +121,17 @@ class Gateway:
                 username = data.get("author", {}).get("username", "unknown")
 
                 # Process message through agent
-                try:
-                    response = await agent.process(
-                        message=content,
-                        session_id=session_id,
-                        user_name=username,
-                    )
+                response = await handle_discord_message(content, session_id, username)
 
-                    # Send response to Discord
-                    await discord_channel.send_message(response, channel_id)
+                # Send response to Discord
+                await discord_channel.send_message(response, channel_id)
 
-                    logger.info(f"Processed message {message_id} from {username}")
+                logger.info(f"Processed message {message_id} from {username}")
 
-                    return web.json_response({
-                        "status": "processed",
-                        "message_id": message_id,
-                    })
-
-                except Exception as e:
-                    logger.error(f"Error processing message: {e}")
-                    await discord_channel.send_message(
-                        f"Sorry, I encountered an error: {str(e)}",
-                        channel_id,
-                    )
-                    return web.json_response({"status": "error", "message": str(e)}, status=500)
+                return web.json_response({
+                    "status": "processed",
+                    "message_id": message_id,
+                })
 
             return web.json_response({"status": "ok"})
 
@@ -149,27 +158,29 @@ class Gateway:
 
     async def start(self) -> None:
         """Start the gateway server."""
-        # Start Discord session
-        await discord_channel.start_session()
+        if self.mode == "bot":
+            # Bot API mode - start Discord bot (which runs its own asyncio loop)
+            await discord_channel.start(message_callback=handle_discord_message)
+            logger.info(f"Gateway started in Bot API mode (listening for Discord messages)")
+        else:
+            # Webhook mode - start HTTP server and Discord session
+            await discord_channel.start()
+            
+            # Start HTTP server
+            self.runner = web.AppRunner(self.app)
+            await self.runner.setup()
+            self.site = web.TCPSite(self.runner, self.host, self.port)
+            await self.site.start()
 
-        # Start HTTP server
-        self.runner = web.AppRunner(self.app)
-        await self.runner.setup()
-        self.site = web.TCPSite(self.runner, self.host, self.port)
-        await self.site.start()
-
-        logger.info(f"Gateway started on http://{self.host}:{self.port}")
+            logger.info(f"Gateway started on http://{self.host}:{self.port} (Webhook mode)")
 
     async def stop(self) -> None:
         """Stop the gateway server."""
-        # Stop HTTP server
+        await discord_channel.stop()
+        
         if self.runner:
             await self.runner.cleanup()
-
-        # Close Discord session
-        await discord_channel.close_session()
-
-        logger.info("Gateway stopped")
+            logger.info("Gateway stopped")
 
 
 # Global gateway instance

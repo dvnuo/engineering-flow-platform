@@ -2,8 +2,10 @@
 
 # Discord Channel
 discord:
+  mode: "bot"  # "bot" for Bot API mode (recommended), "webhook" for Webhook mode
   bot_token: "YOUR_DISCORD_BOT_TOKEN"
   channel_id: "YOUR_CHANNEL_ID"
+  # webhook_url: "https://discord.com/api/webhooks/..."  # Only needed for webhook mode
 
 # LLM Configuration
 llm:
@@ -29,7 +31,7 @@ llm:
 session:
   max_history: 5  # 保留最近5轮对话
 
-# Server Configuration
+# Server Configuration (only used in webhook mode)
 server:
   host: "0.0.0.0"
   port: 8000
