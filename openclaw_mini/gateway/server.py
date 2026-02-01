@@ -84,7 +84,7 @@ async def handle_test_case_generation(issue_key: str, user_name: str) -> str:
         requirements = await jira_channel.get_issue_description(issue_key)
         
         if not requirements:
-            return "我无法获取该 issue 的描述。请确保 issue 有需求描述。"
+            return f"I could not retrieve the description for issue {issue_key}. Please ensure the issue has a requirements description."
         
         # Generate test cases using the skill
         logger.info(f"Generating test cases for {issue_key} based on requirements")
@@ -97,18 +97,18 @@ async def handle_test_case_generation(issue_key: str, user_name: str) -> str:
         )
         
         # Send intro comment
-        intro = f"## 测试用例已生成 ✅\n\n基于 **{issue_key}** 的需求描述，我已为您生成自动化测试用例。"
+        intro = f"## Test Cases Generated ✅\n\nBased on the requirements description for **{issue_key}**, I have generated automated test cases for you."
         await jira_channel.add_comment_text_only(issue_key, intro)
         
         # Send code block as separate comment
         await jira_channel.add_comment_code_block(issue_key, test_cases, language="python")
         
         # Confirmation
-        return f"已为 {issue_key} 生成测试用例并添加到 issue 评论中。"
+        return f"Test cases for {issue_key} have been generated and added to the issue comments."
         
     except Exception as e:
         logger.error(f"Error generating test cases: {e}")
-        return f"生成测试用例时出错: {str(e)}"
+        return f"Error generating test cases: {str(e)}"
 
 
 class Gateway:

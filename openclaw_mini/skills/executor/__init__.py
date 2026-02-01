@@ -128,7 +128,7 @@ class SkillsExecutor:
         request_lower = request.lower()
 
         # Direct skill mentions
-        if "测试用例" in request or "create test" in request_lower:
+        if "create test" in request_lower:
             return "test_case_generator"
 
         return None
