@@ -12,8 +12,9 @@ from aiohttp.web import Request
 
 from openclaw_mini.agent.core import agent
 from openclaw_mini.channel.discord import discord_channel
+from openclaw_mini.channel.jira import jira_channel
 from openclaw_mini.config import config
-from openclaw_mini.session.manager import DISCORD_SESSION_PREFIX
+from openclaw_mini.session.manager import DISCORD_SESSION_PREFIX, JIRA_SESSION_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +47,31 @@ async def handle_discord_message(message: str, session_id: str, user_name: str) 
         return f"Sorry, I encountered an error: {str(e)}"
 
 
+async def handle_jira_message(
+    message: str,
+    session_id: str,
+    user_name: str,
+    issue_key: str,
+) -> str:
+    """Handle a Jira comment and return response."""
+    try:
+        response = await agent.process(
+            message=message,
+            session_id=session_id,
+            user_name=user_name,
+        )
+        return response
+    except Exception as e:
+        logger.error(f"Error processing Jira comment: {e}")
+        return f"Sorry, I encountered an error: {str(e)}"
+
+
 class Gateway:
     """Simple HTTP/WebSocket gateway for OpenClaw Mini."""
 
     def __init__(self):
         self.mode = config.discord.get("mode", "bot")  # 'bot' or 'webhook'
+        self.jira_enabled = config.jira.get("enabled", False)
         self.host = config.server.get("host", "0.0.0.0")
         self.port = config.server.get("port", 8000)
         self.app = web.Application()
@@ -62,9 +83,12 @@ class Gateway:
         self.app.router.add_get("/api/sessions", self.handle_list_sessions)
         self.app.router.add_post("/api/sessions/{session_id}/clear", self.handle_clear_session)
 
-        # Webhook route only needed for webhook mode
+        # Webhook routes
         if self.mode == "webhook":
             self.app.router.add_post("/webhook/discord", self.handle_discord_webhook)
+        
+        if self.jira_enabled:
+            self.app.router.add_post("/webhook/jira", self.handle_jira_webhook)
 
     async def handle_health(self, request: Request) -> web.Response:
         """Health check endpoint."""
@@ -156,6 +180,47 @@ class Gateway:
         else:
             return web.json_response({"status": "error", "message": "session_id required"}, status=400)
 
+    async def handle_jira_webhook(self, request: Request) -> web.Response:
+        """Handle Jira webhook events."""
+        try:
+            payload = await request.json()
+
+            # Handle Jira webhook
+            result = jira_channel.handle_webhook_payload(payload)
+            
+            if not result:
+                # Not a comment event or filtered out
+                return web.json_response({"status": "ignored", "reason": "not_comment_event"})
+
+            issue_key = result.get("issue_key", "")
+            comment_body = result.get("body", "").strip()
+            username = result.get("username", "unknown")
+            comment_id = result.get("comment_id", "")
+
+            if not comment_body:
+                return web.json_response({"status": "ignored", "reason": "empty_comment"})
+
+            # Create session ID
+            session_id = f"{JIRA_SESSION_PREFIX}{issue_key}"
+
+            # Process message through agent
+            response = await handle_jira_message(comment_body, session_id, username, issue_key)
+
+            # Send response back to Jira as a comment
+            await jira_channel.add_comment_text_only(issue_key, response)
+
+            logger.info(f"Processed Jira comment for {issue_key} from {username}")
+
+            return web.json_response({
+                "status": "processed",
+                "issue_key": issue_key,
+                "comment_id": comment_id,
+            })
+
+        except Exception as e:
+            logger.error(f"Jira webhook error: {e}")
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
     async def start(self) -> None:
         """Start the gateway server."""
         if self.mode == "bot":
@@ -174,13 +239,21 @@ class Gateway:
 
             logger.info(f"Gateway started on http://{self.host}:{self.port} (Webhook mode)")
 
+        # Start Jira channel if enabled
+        if self.jira_enabled:
+            await jira_channel.start_session()
+            logger.info("Jira channel enabled and ready")
+
     async def stop(self) -> None:
         """Stop the gateway server."""
         await discord_channel.stop()
         
+        if self.jira_enabled:
+            await jira_channel.close_session()
+        
         if self.runner:
             await self.runner.cleanup()
-            logger.info("Gateway stopped")
+        logger.info("Gateway stopped")
 
 
 # Global gateway instance
