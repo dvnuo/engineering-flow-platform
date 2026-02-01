@@ -55,6 +55,11 @@ async def handle_jira_message(
 ) -> str:
     """Handle a Jira comment and return response."""
     try:
+        # Check for test case generation command
+        if jira_channel.is_test_case_command(message):
+            return await handle_test_case_generation(issue_key, user_name)
+        
+        # Normal conversation
         response = await agent.process(
             message=message,
             session_id=session_id,
@@ -64,6 +69,42 @@ async def handle_jira_message(
     except Exception as e:
         logger.error(f"Error processing Jira comment: {e}")
         return f"Sorry, I encountered an error: {str(e)}"
+
+
+async def handle_test_case_generation(issue_key: str, user_name: str) -> str:
+    """Handle test case generation request for a Jira issue."""
+    from openclaw_mini.skills import test_case_skill
+    
+    try:
+        # Get issue requirements from description
+        requirements = await jira_channel.get_issue_description(issue_key)
+        
+        if not requirements:
+            return (
+                "我无法获取该 issue 的描述。请确保 issue 有需求描述。"
+            )
+        
+        # Generate test cases using the skill
+        logger.info(f"Generating test cases for {issue_key} based on requirements")
+        
+        test_cases = await test_case_skill.generate(
+            requirements=requirements,
+            framework="pytest",
+            language="python",
+            test_type="unit",
+        )
+        
+        # Format response with code block
+        response = f"## 测试用例已生成 ✅\n\n基于 **{issue_key}** 的需求描述，以下是自动化测试用例：\n\n"
+        response += f"```python\n{test_cases}\n```\n\n"
+        response += "---\n"
+        response += f"_由 {user_name} 请求生成_"
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error generating test cases: {e}")
+        return f"生成测试用例时出错: {str(e)}"
 
 
 class Gateway:
