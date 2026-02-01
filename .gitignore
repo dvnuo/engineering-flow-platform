@@ -137,3 +137,7 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Local config - NEVER commit
+config.yaml
+*.log
