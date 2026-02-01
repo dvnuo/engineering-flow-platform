@@ -115,6 +115,46 @@ class TestJiraChannel:
             result = channel.handle_webhook_payload(payload)
             assert result is None
 
+    def test_handle_webhook_payload_project_filter(self):
+        """Test project key filtering."""
+        with patch('openclaw_mini.channel.jira.config') as mock_config:
+            mock_config.jira = {'project_key': 'PROJ'}
+            
+            from openclaw_mini.channel.jira import JiraChannel
+            
+            channel = JiraChannel()
+            
+            # Should be filtered out (wrong project)
+            payload_wrong_project = {
+                "webhookEvent": {
+                    "name": "issue_comment_created",
+                    "issue": {"key": "OTHER-123"},
+                    "comment": {
+                        "id": "10001",
+                        "body": "Test comment",
+                        "author": {"displayName": "Test User"}
+                    }
+                }
+            }
+            result = channel.handle_webhook_payload(payload_wrong_project)
+            assert result is None
+            
+            # Should pass (correct project)
+            payload_correct_project = {
+                "webhookEvent": {
+                    "name": "issue_comment_created",
+                    "issue": {"key": "PROJ-456"},
+                    "comment": {
+                        "id": "10002",
+                        "body": "Test comment",
+                        "author": {"displayName": "Test User"}
+                    }
+                }
+            }
+            result = channel.handle_webhook_payload(payload_correct_project)
+            assert result is not None
+            assert result["issue_key"] == "PROJ-456"
+
     def test_handle_webhook_payload_adf_format(self):
         """Test handling ADF format comment body."""
         with patch('openclaw_mini.channel.jira.config') as mock_config:

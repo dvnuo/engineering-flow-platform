@@ -1,8 +1,6 @@
 """Jira channel adapter for OpenClaw Mini."""
 
-import asyncio
 import base64
-import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -11,6 +9,33 @@ import httpx
 from openclaw_mini.config import config
 
 logger = logging.getLogger(__name__)
+
+
+def parse_adf_body(body: Any) -> str:
+    """Extract text from Atlassian Document Format (ADF)."""
+    if isinstance(body, str):
+        return body
+    
+    if not isinstance(body, dict):
+        return ""
+    
+    # Handle ADF format
+    content = body.get("content", [])
+    if not content:
+        return ""
+    
+    # Extract text from all blocks
+    text_parts = []
+    for block in content:
+        if block.get("type") == "paragraph":
+            paragraph_content = block.get("content", [])
+            for item in paragraph_content:
+                if item.get("type") == "text":
+                    text_parts.append(item.get("text", ""))
+                elif item.get("type") == "emoji":
+                    text_parts.append(item.get("attrs", {}).get("shortName", ""))
+    
+    return "".join(text_parts)
 
 
 class JiraChannel:
@@ -165,19 +190,14 @@ class JiraChannel:
         username = author.get("displayName", author.get("accountId", "unknown"))
 
         # Get comment body (handle ADF format)
-        body = comment.get("body", "")
-        if isinstance(body, dict):
-            # Extract text from ADF format
-            content = body.get("content", [])
-            if content:
-                first_block = content[0]
-                if first_block.get("type") == "paragraph":
-                    text_content = first_block.get("content", [])
-                    if text_content and text_content[0].get("type") == "text":
-                        body = text_content[0].get("text", "")
+        body = parse_adf_body(comment.get("body", ""))
         
         # Extract issue key
         issue_key = issue.get("key", "")
+        
+        # Filter by project if configured
+        if self.project_key and issue_key and not issue_key.startswith(self.project_key):
+            return None
         
         return {
             "event_type": event_name,
