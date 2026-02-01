@@ -312,8 +312,12 @@ class Gateway:
     async def start(self) -> None:
         """Start the gateway server."""
         if self.mode == "bot":
-            # Bot API mode - start Discord bot and HTTP server for API endpoints
-            await discord_channel.start(message_callback=handle_discord_message)
+            # Bot API mode - start Discord bot and HTTP server in parallel
+            # Use create_task because discord_channel.start() blocks
+            bot_task = asyncio.create_task(discord_channel.start(message_callback=handle_discord_message))
+            
+            # Small delay to let bot start
+            await asyncio.sleep(2)
             
             # Start HTTP server for API endpoints (including test endpoint)
             self.runner = web.AppRunner(self.app)
