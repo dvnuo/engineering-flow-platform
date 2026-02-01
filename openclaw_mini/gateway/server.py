@@ -127,6 +127,7 @@ class Gateway:
         self.app.router.add_get("/health", self.handle_health)
         self.app.router.add_get("/api/sessions", self.handle_list_sessions)
         self.app.router.add_post("/api/sessions/{session_id}/clear", self.handle_clear_session)
+        self.app.router.add_post("/api/test", self.handle_test_message)
 
         # Webhook routes
         if self.mode == "webhook":
@@ -224,6 +225,38 @@ class Gateway:
             return web.json_response({"status": "cleared", "session_id": session_id})
         else:
             return web.json_response({"status": "error", "message": "session_id required"}, status=400)
+
+    async def handle_test_message(self, request: Request) -> web.Response:
+        """Test endpoint for sending a message to the agent via HTTP.
+        
+        POST /api/test
+        Body: {"message": "your message here", "session_id": "optional-session-id"}
+        """
+        try:
+            data = await request.json()
+            message = data.get("message", "")
+            session_id = data.get("session_id", "test-session")
+            
+            if not message:
+                return web.json_response({"status": "error", "message": "message required"}, status=400)
+            
+            # Process message through agent
+            response = await agent.process(
+                message=message,
+                session_id=session_id,
+                user_name="http-tester",
+            )
+            
+            return web.json_response({
+                "status": "ok",
+                "message": message,
+                "response": response,
+                "session_id": session_id,
+            })
+            
+        except Exception as e:
+            logger.error(f"Test message error: {e}")
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def handle_jira_webhook(self, request: Request) -> web.Response:
         """Handle Jira webhook events."""
