@@ -92,7 +92,7 @@ class LLMClient:
                         json=payload,
                     )
                     response.raise_for_status()
-                    data = await response.json()
+                    data = response.json()
 
                 # Extract response content
                 choices = data.get("choices", [])
@@ -137,7 +137,7 @@ class LLMClient:
                         json=payload,
                     )
                     response.raise_for_status()
-                    data = await response.json()
+                    data = response.json()
 
                 content = data.get("choices", [{}])[0].get("text", "")
                 return content.strip()
