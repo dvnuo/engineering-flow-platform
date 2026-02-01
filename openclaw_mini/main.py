@@ -6,8 +6,15 @@ import logging
 import sys
 from pathlib import Path
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Get the directory containing this script
+script_dir = Path(__file__).resolve().parent
+project_root = script_dir.parent
+
+# Add both script directory and project root to Python path
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+if str(script_dir) not in sys.path:
+    sys.path.insert(0, str(script_dir))
 
 from openclaw_mini.gateway.server import gateway
 from openclaw_mini.config import config
