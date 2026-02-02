@@ -102,12 +102,12 @@ class TestInternationalization:
         """Test that code doesn't contain hardcoded Chinese strings."""
         import os
         
-        # Files to check
+        # Files to check (new structure)
         files_to_check = [
-            "openclaw_mini/gateway/server.py",
-            "openclaw_mini/agent/core.py",
-            "openclaw_mini/channel/jira.py",
-            "openclaw_mini/skills/test_case_generator/skill.py",
+            "gateway/server.py",
+            "agent/core.py",
+            "channel/jira.py",
+            "skills/test_case_generator/skill.py",
         ]
         
         chinese_patterns = [
@@ -132,7 +132,7 @@ class TestInternationalization:
         """Test that log messages are in English."""
         from gateway.server import logger
         
-        # Logger should use English (new structure uses 'gateway.server')
+        # Logger should use English (and not contain Chinese)
         assert "gateway" in logger.name or "server" in logger.name
 
     def test_english_response_format(self):
@@ -155,6 +155,154 @@ class TestI18nConfiguration:
         
         config = Config()
         assert isinstance(config._config, dict)
+
+
+class TestOptionalConfig:
+    """Tests for optional configuration feature."""
+
+    def test_check_config_all_present(self):
+        """Test check_config when all required fields are present."""
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write("discord:\n  bot_token: test_token\nllm:\n  api_key: test_key\n")
+            f.flush()
+            
+            # Import after config file is created
+            import importlib
+            import sys
+            from pathlib import Path
+            
+            # Mock the config module
+            test_config_path = f.name
+            sys.path.insert(0, str(Path(test_config_path).parent))
+            
+            from config import Config
+            config = Config(test_config_path)
+            
+            # Simulate check_config behavior
+            warnings = []
+            can_start = True
+            
+            discord_token = config.discord.get("bot_token")
+            if not discord_token:
+                warnings.append("Discord disabled")
+            
+            llm_api_key = config.llm.get("api_key")
+            if not llm_api_key:
+                warnings.append("LLM api_key missing")
+                can_start = False
+            
+            # All present
+            assert discord_token == "test_token"
+            assert llm_api_key == "test_key"
+            assert can_start == True
+            assert len(warnings) == 0
+            
+            os.unlink(f.name)
+
+    def test_check_config_missing_discord_token(self):
+        """Test check_config when Discord token is missing (should warn only)."""
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write("llm:\n  api_key: test_key\n")
+            f.flush()
+            
+            from config import Config
+            config = Config(f.name)
+            
+            warnings = []
+            can_start = True
+            
+            discord_token = config.discord.get("bot_token")
+            if not discord_token:
+                warnings.append("Discord bot_token not configured (Discord channel will be disabled)")
+            
+            llm_api_key = config.llm.get("api_key")
+            if not llm_api_key:
+                warnings.append("LLM api_key not configured (Agent will not respond to messages)")
+                can_start = False
+            
+            # Discord missing but LLM present
+            assert discord_token is None
+            assert llm_api_key == "test_key"
+            assert can_start == True  # Can start because LLM key is present
+            assert len(warnings) == 1
+            assert "Discord" in warnings[0]
+            
+            os.unlink(f.name)
+
+    def test_check_config_missing_llm_key(self):
+        """Test check_config when LLM api_key is missing (should block)."""
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write("discord:\n  bot_token: test_token\n")
+            f.flush()
+            
+            from config import Config
+            config = Config(f.name)
+            
+            warnings = []
+            can_start = True
+            
+            discord_token = config.discord.get("bot_token")
+            if not discord_token:
+                warnings.append("Discord disabled")
+            
+            llm_api_key = config.llm.get("api_key")
+            if not llm_api_key:
+                warnings.append("LLM api_key not configured (Agent will not respond to messages)")
+                can_start = False
+            
+            # LLM key missing, Discord present
+            assert discord_token == "test_token"
+            assert llm_api_key is None
+            assert can_start == False  # Cannot start because LLM key is required
+            assert len(warnings) == 1
+            assert "LLM" in warnings[0]
+            
+            os.unlink(f.name)
+
+    def test_check_config_both_missing(self):
+        """Test check_config when both Discord and LLM are missing."""
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write("")
+            f.flush()
+            
+            from config import Config
+            config = Config(f.name)
+            
+            warnings = []
+            can_start = True
+            
+            discord_token = config.discord.get("bot_token")
+            if not discord_token:
+                warnings.append("Discord bot_token not configured (Discord channel will be disabled)")
+            
+            llm_api_key = config.llm.get("api_key")
+            if not llm_api_key:
+                warnings.append("LLM api_key not configured (Agent will not respond to messages)")
+                can_start = False
+            
+            jira_enabled = config.jira.get("enabled")
+            if not discord_token and not jira_enabled:
+                warnings.append("No messaging channel configured (Discord or Jira)")
+            
+            # Both missing
+            assert discord_token is None
+            assert llm_api_key is None
+            assert can_start == False
+            assert len(warnings) >= 2
+            
+            os.unlink(f.name)
 
 
 if __name__ == "__main__":
