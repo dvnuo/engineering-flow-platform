@@ -8,7 +8,7 @@ import json
 import subprocess
 from typing import Any, Dict, Optional
 
-from skills.executor import SkillResult, skill
+from skills.decorator import skill, SkillResult
 
 # Skill metadata
 SKILL_NAME = "summarize"
@@ -17,6 +17,7 @@ SKILL_DESCRIPTION = "Summarize URLs, files, and text content"
 
 @skill(name=SKILL_NAME, description=SKILL_DESCRIPTION)
 async def summarize(
+    message: str = "",
     url: Optional[str] = None,
     text: Optional[str] = None,
     file_path: Optional[str] = None,
@@ -35,6 +36,20 @@ async def summarize(
     Returns:
         SkillResult with summary
     """
+    # Extract parameters from message if not provided
+    if not url and not text and not file_path:
+        import re
+        url_match = re.search(r'(https?://[^\s]+)', message)
+        if url_match:
+            url = url_match.group(1)
+        file_match = re.search(r'(/[^\s]+)', message)
+        if file_match and not url_match:
+            file_path = file_match.group(1)
+        if not url and not file_path:
+            text = message
+            text = re.sub(r'(summarize|summary of|summary)\s*:?\s*', '', text, flags=re.IGNORECASE)
+            text = text.strip()
+    
     try:
         content = ""
         

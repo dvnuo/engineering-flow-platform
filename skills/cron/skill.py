@@ -15,7 +15,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from skills.executor import SkillResult, skill
+from skills.decorator import skill, SkillResult
 
 # Skill metadata
 SKILL_NAME = "cron"
@@ -29,6 +29,7 @@ _cron_jobs_counter = 0
 
 @skill(name=SKILL_NAME, description=SKILL_DESCRIPTION)
 async def cron(
+    message: str = "",
     action: str = "list",
     name: Optional[str] = None,
     schedule: Optional[str] = None,

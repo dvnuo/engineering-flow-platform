@@ -465,17 +465,22 @@ class Gateway:
 
             logger.info(f"Gateway started on http://{self.host}:{self.port} (Webhook mode)")
 
-        # Start Jira channel if enabled
-        if self.jira_enabled:
-            await jira_channel.start_session()
+        # Jira channel is initialized in __init__ with HTTP client ready
+        # No explicit start_session needed since client is created on import
+        if self.jira_enabled and jira_channel.is_configured():
             logger.info("Jira channel enabled and ready")
 
     async def stop(self) -> None:
         """Stop the gateway server."""
         await discord_channel.stop()
         
+        # Close Jira client if it was initialized
         if self.jira_enabled:
-            await jira_channel.close_session()
+            try:
+                await jira_channel.close()
+                logger.info("Jira channel closed")
+            except Exception as e:
+                logger.warning(f"Error closing Jira channel: {e}")
         
         if self.runner:
             await self.runner.cleanup()
