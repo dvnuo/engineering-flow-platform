@@ -438,6 +438,29 @@ class JiraChannel:
         result = await self.search_issues(jql, max_results=50)
         return result.get("issues", [])
     
+    async def start_session(self):
+        """Start/initialize the Jira session.
+        
+        This method validates the configuration and ensures the client is ready.
+        The HTTP client is already initialized in __init__, so this is primarily
+        for validation and any setup needed.
+        """
+        if not self.is_configured():
+            raise RuntimeError("Jira is not configured. Check your config.yaml")
+        
+        # Validate connection by making a lightweight request
+        try:
+            await self._request("GET", "/myself")
+            logger.info("Jira session started and validated")
+        except Exception as e:
+            logger.warning(f"Jira session validation failed: {e}")
+            raise
+    
+    async def close_session(self):
+        """Close the Jira session and HTTP client."""
+        await self.close()
+        logger.info("Jira session closed")
+    
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()
