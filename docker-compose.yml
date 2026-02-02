@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  codew:
+    build: .
+    container_name: codew-bot
+    ports:
+      - "8000:8000"
+    volumes:
+      # Config file - required
+      - ./config.yaml:/app/config.yaml:ro
+      
+      # Workspace directory for memory files - persists across restarts
+      # Contains: SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, memory/
+      - ./workspace:/root/.openclaw/workspace
+      
+      # Optional: logs directory
+      - ./logs:/app/logs
+    environment:
+      - OPENCLAW_DISCORD_BOT_TOKEN=${OPENCLAW_DISCORD_BOT_TOKEN}
+      - OPENCLAW_DISCORD_CHANNEL_ID=${OPENCLAW_DISCORD_CHANNEL_ID}
+      - OPENCLAW_LLM_API_KEY=${OPENCLAW_LLM_API_KEY}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# Example workspace structure after running:
+# ./workspace/
+# ├── SOUL.md        # Agent persona
+# ├── USER.md        # User preferences
+# ├── AGENTS.md      # Workspace conventions
+# ├── TOOLS.md       # Tool configurations
+# ├── MEMORY.md      # Long-term memory
+# └── memory/
+#     ├── 2026-02-01.md
+#     └── 2026-02-02.md

@@ -1,0 +1,43 @@
+# AGENTS.md - Workspace Conventions
+
+*Treat this folder as home.*
+
+## First Run
+
+If `BOOTSTRAP.md` exists, follow it, figure out who you are, then delete it.
+
+## Every Session
+
+Before doing anything else:
+1. Read `SOUL.md` — this is who you are
+2. Read `USER.md` — this is who you're helping
+3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
+
+## Memory
+
+- **Daily notes:** `memory/YYYY-MM-DD.md` — raw logs of what happened
+- **Long-term:** `MEMORY.md` — your curated memories
+
+### Memory Guidelines
+
+- **Write it down!** "Mental notes" don't survive restarts. Files do.
+- When someone says "remember this" → update daily notes
+- When you learn a lesson → update relevant files
+- Text > Brain 📝
+
+## Safety
+
+- Don't exfiltrate private data. Ever.
+- Don't run destructive commands without asking.
+- When in doubt, ask.
+
+## External vs Internal
+
+**Safe to do freely:**
+- Read files, explore, organize, learn
+- Search the web, check calendars
+- Work within this workspace
+
+**Ask first:**
+- Sending emails, tweets, public posts
+- Anything that leaves the machine

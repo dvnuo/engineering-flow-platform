@@ -1,7 +1,7 @@
 # OpenClaw Mini
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![pytest](https://img.shields.io/badge/pytest-62%20tests-green.svg)](tests/)
+[![pytest](https://img.shields.io/badge/pytest-76%20tests-green.svg)](tests/)
 [![MIT License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
 A simple version of [OpenClaw](https://github.com/openclaw/openclaw) written in Python.
@@ -12,6 +12,7 @@ A simple version of [OpenClaw](https://github.com/openclaw/openclaw) written in 
 - 💬 **Discord Support** - Receive and respond to messages via Discord Bot
 - 🧠 **LLM Integration** - Supports OpenAI and GitHub Copilot APIs
 - 💾 **Session Management** - Maintain conversation history per user/channel
+- 📝 **Memory System** - Load context from workspace MD files (SOUL.md, USER.md, etc.)
 - 🔌 **Extensible** - Easy to add new channels or tools
 
 ## Table of Contents
@@ -60,35 +61,65 @@ deactivate
 ```bash
 # Build the image
 # Run from project root
-docker build -t openclaw-mini .
-
-# Run the container
-docker run -d \
-  --name openclaw-mini \
-  -p 8000:8000 \
-  -v $(pwd)/config.yaml:/app/config.yaml \
-  openclaw-mini
+docker build -t codew .
 ```
 
 **Docker Compose (recommended)**:
 
+Create `docker-compose.yml`:
+
 ```yaml
-# docker-compose.yml
 version: '3.8'
+
 services:
-  openclaw-mini:
+  codew:
     build: .
+    container_name: codew-bot
     ports:
       - "8000:8000"
     volumes:
-      - ./config.yaml:/app/config.yaml
+      # Config file - required
+      - ./config.yaml:/app/config.yaml:ro
+      
+      # Workspace directory for memory files - persists across restarts
+      # Contains: SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, memory/
+      - ./workspace:/root/.openclaw/workspace
+      
+      # Optional: logs directory
+      - ./logs:/app/logs
     environment:
+      - OPENCLAW_DISCORD_BOT_TOKEN=${OPENCLAW_DISCORD_BOT_TOKEN}
+      - OPENCLAW_DISCORD_CHANNEL_ID=${OPENCLAW_DISCORD_CHANNEL_ID}
       - OPENCLAW_LLM_API_KEY=${OPENCLAW_LLM_API_KEY}
     restart: unless-stopped
 ```
 
 ```bash
+# Create workspace directory with template files
+mkdir -p workspace/memory
+cp workspace/*.example workspace/
+
+# Start the container
 docker-compose up -d
+```
+
+**⚠️ Important: Workspace Volume**
+
+Without the `./workspace:/root/.openclaw/workspace` volume mount:
+- Memory files (SOUL.md, USER.md, MEMORY.md, etc.) will be lost on restart
+- Conversation context and learned preferences won't persist
+
+**Directory Structure After Setup**:
+
+```
+./workspace/
+├── SOUL.md        # Agent persona (copy from SOUL.md.example)
+├── USER.md        # User preferences (copy from USER.md.example)
+├── AGENTS.md      # Workspace conventions (copy from AGENTS.md.example)
+├── TOOLS.md       # Tool configurations (optional)
+├── MEMORY.md      # Long-term memory (copy from MEMORY.md.example)
+└── memory/
+    └── 2026-02-02.md  # Daily notes (auto-created)
 ```
 
 ### 3. System-wide
@@ -584,18 +615,78 @@ openclaw_mini/
 ├── agent/
 │   ├── __init__.py
 │   ├── core.py          # Agent logic
-│   └── llm.py           # LLM client (OpenAI + GitHub Copilot)
+│   ├── llm.py           # LLM client (OpenAI + GitHub Copilot)
+│   └── memory.py        # Memory system for MD files
 ├── channel/
 │   ├── __init__.py
 │   └── discord.py       # Discord adapter
 ├── session/
 │   ├── __init__.py
 │   └── manager.py       # Session management
+├── skills/
+│   └── ...              # Skill executors
 └── tests/
     ├── test_config.py
     ├── test_gateway.py
     ├── test_llm_client.py
-    └── test_session_manager.py
+    ├── test_session_manager.py
+    └── test_memory.py   # Memory system tests
+```
+
+---
+
+## Memory System
+
+CodeW loads context from workspace MD files, similar to OpenClaw's memory system.
+
+### Workspace Files
+
+| File | Description | Required |
+|------|-------------|----------|
+| `SOUL.md` | Agent persona and behavior guidelines | No |
+| `USER.md` | User preferences and context | No |
+| `AGENTS.md` | Workspace conventions and rules | No |
+| `TOOLS.md` | Tool configurations and aliases | No |
+| `MEMORY.md` | Long-term curated memory | No |
+| `memory/YYYY-MM-DD.md` | Daily notes and logs | No |
+
+### Memory Files Location
+
+By default, memory files are loaded from `~/.openclaw/workspace/`:
+
+```bash
+~/.openclaw/workspace/
+├── SOUL.md        # Agent identity
+├── USER.md        # User info
+├── AGENTS.md      # Workspace rules
+├── TOOLS.md       # Tool configs
+├── MEMORY.md      # Long-term memory
+└── memory/
+    ├── 2026-01-31.md
+    └── 2026-02-01.md
+```
+
+### Security
+
+- **MEMORY.md** is only loaded for main sessions (main, webchat, discord)
+- Other sessions exclude sensitive memory content for privacy
+- Set `cache_ttl_seconds=0` in MemorySystem to disable caching
+
+### API Usage
+
+```python
+from agent.memory import memory_system
+
+# Build complete system prompt
+prompt = memory_system.build_system_prompt(include_memory=True)
+
+# Load individual files
+soul = memory_system.load_soul()
+user = memory_system.load_user()
+memory = memory_system.load_memory()
+
+# Configure cache (default: 60 seconds)
+memory_system = MemorySystem(cache_ttl_seconds=120)
 ```
 
 ---
