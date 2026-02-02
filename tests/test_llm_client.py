@@ -19,6 +19,7 @@ class MockResponse:
     def __init__(self, json_data, status_code=200):
         self.json_data = json_data
         self.status_code = status_code
+        self.text = str(json_data)  # Add text attribute for error handling
     
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -28,7 +29,7 @@ class MockResponse:
                 response=self
             )
     
-    async def json(self):
+    def json(self):  # httpx response.json() is sync
         return self.json_data
 
 
@@ -75,7 +76,7 @@ class TestLLMClientSuccess:
                 [{"role": "user", "content": "hi"}],
                 "You are helpful"
             )
-            assert result == "Hello!"
+            assert result["content"] == "Hello!"
 
     @pytest.mark.asyncio
     async def test_chat_with_system_prompt(self, llm_client):
@@ -90,7 +91,7 @@ class TestLLMClientSuccess:
                 [{"role": "user", "content": "hello"}],
                 system_prompt="You are a robot."
             )
-            assert result == "I am a helpful assistant."
+            assert result["content"] == "I am a helpful assistant."
 
     @pytest.mark.asyncio
     async def test_chat_empty_response(self, llm_client):
@@ -100,7 +101,7 @@ class TestLLMClientSuccess:
         
         with patch('httpx.AsyncClient', return_value=mock_client):
             result = await llm_client.chat([{"role": "user", "content": "hi"}])
-            assert result == ""
+            assert result["content"] == ""
 
     @pytest.mark.asyncio
     async def test_chat_response_no_message(self, llm_client):
@@ -110,7 +111,7 @@ class TestLLMClientSuccess:
         
         with patch('httpx.AsyncClient', return_value=mock_client):
             result = await llm_client.chat([{"role": "user", "content": "hi"}])
-            assert result == ""
+            assert result["content"] == ""
 
 
 class TestLLMClientRetry:
@@ -139,7 +140,7 @@ class TestLLMClientRetry:
         
         with patch('httpx.AsyncClient', return_value=mock_client):
             result = await llm_client.chat([{"role": "user", "content": "test"}])
-            assert result == "Success after retry"
+            assert result["content"] == "Success after retry"
             # First attempt fails, second succeeds
             assert call_count == 2
 
@@ -223,7 +224,7 @@ class TestLLMClientErrorHandling:
         
         with patch('httpx.AsyncClient', return_value=mock_client):
             result = await llm_client.chat([{"role": "user", "content": "test"}])
-            assert result == "Success"
+            assert result["content"] == "Success"
             assert mock_client.call_count == 2
 
 
@@ -282,7 +283,7 @@ class TestLLMClientEdgeCases:
         
         with patch('httpx.AsyncClient', return_value=mock_client):
             result = await llm_client.chat([], "System prompt")
-            assert result == "Response to empty"
+            assert result["content"] == "Response to empty"
 
     @pytest.mark.asyncio
     async def test_chat_long_history(self, llm_client):
@@ -300,7 +301,7 @@ class TestLLMClientEdgeCases:
         
         with patch('httpx.AsyncClient', return_value=mock_client):
             result = await llm_client.chat(long_history)
-            assert result == "Response"
+            assert result["content"] == "Response"
 
     @pytest.mark.asyncio
     async def test_chat_special_content(self, llm_client):
@@ -316,7 +317,7 @@ class TestLLMClientEdgeCases:
         
         with patch('httpx.AsyncClient', return_value=mock_client):
             result = await llm_client.chat(special_history)
-            assert result == "Response with special chars"
+            assert result["content"] == "Response with special chars"
 
 
 if __name__ == "__main__":

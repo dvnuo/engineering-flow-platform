@@ -180,17 +180,17 @@ class TestGitignoreConfig:
 class TestMainScript:
     """Test main script has proper structure."""
 
-    def test_main_has_asyncio_gather(self):
-        """Test main.py uses asyncio.gather for concurrent execution."""
+    def test_main_has_asyncio(self):
+        """Test main.py uses asyncio for async execution."""
         main_file = Path(__file__).parent.parent / "main.py"
         content = main_file.read_text()
         
-        assert "asyncio.gather" in content, "main.py should use asyncio.gather"
-        assert "run_discord_bot" in content or "run_http_server" in content
+        assert "asyncio" in content, "main.py should use asyncio"
+        assert "asyncio.run" in content, "main.py should use asyncio.run"
 
-    def test_main_has_message_callback(self):
-        """Test main.py has message callback for Discord."""
+    def test_main_has_gateway(self):
+        """Test main.py uses gateway for messaging."""
         main_file = Path(__file__).parent.parent / "main.py"
         content = main_file.read_text()
         
-        assert "handle_discord_message" in content, "main.py should have message handler"
+        assert "gateway" in content, "main.py should use gateway"
