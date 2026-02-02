@@ -10,7 +10,6 @@ from typing import Any, Dict, Optional
 import httpx
 
 from config import config
-from agent.llm import llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -384,9 +383,48 @@ TOOLS = {
 }
 
 
+# Registry of function-based tools (Jira, Confluence)
+FUNCTION_TOOLS = {}
+
+
+def _load_function_tools():
+    """Lazy load function-based tools to avoid circular imports."""
+    global FUNCTION_TOOLS
+    if not FUNCTION_TOOLS:
+        from tools.integration import (
+            jira_get_issue,
+            jira_search,
+            jira_add_comment,
+            jira_create_issue,
+            jira_transition,
+            jira_get_transitions,
+            confluence_get_page,
+            confluence_search,
+            confluence_create_page,
+            confluence_update_page,
+            confluence_add_comment,
+            confluence_list_spaces,
+        )
+        FUNCTION_TOOLS = {
+            "jira_get_issue": jira_get_issue,
+            "jira_search": jira_search,
+            "jira_add_comment": jira_add_comment,
+            "jira_create_issue": jira_create_issue,
+            "jira_transition": jira_transition,
+            "jira_get_transitions": jira_get_transitions,
+            "confluence_get_page": confluence_get_page,
+            "confluence_search": confluence_search,
+            "confluence_create_page": confluence_create_page,
+            "confluence_update_page": confluence_update_page,
+            "confluence_add_comment": confluence_add_comment,
+            "confluence_list_spaces": confluence_list_spaces,
+        }
+
+
 def get_tool_names() -> list:
     """Get list of all tool names."""
-    return list(TOOLS.keys())
+    _load_function_tools()
+    return list(TOOLS.keys()) + list(FUNCTION_TOOLS.keys())
 
 
 def get_tool(name: str) -> Optional[Tool]:
@@ -396,11 +434,25 @@ def get_tool(name: str) -> Optional[Tool]:
 
 def get_tools_schema() -> list:
     """Get all tool schemas for LLM."""
-    return [tool.get_schema() for tool in TOOLS.values()]
+    _load_function_tools()
+    from tools.integration import INTEGRATION_TOOLS
+    class_schemas = [tool.get_schema() for tool in TOOLS.values()]
+    return class_schemas + INTEGRATION_TOOLS
 
 
 async def execute_tool(name: str, **kwargs) -> ToolResult:
     """Execute a tool by name."""
+    _load_function_tools()
+    
+    # Check function-based tools first
+    if name in FUNCTION_TOOLS:
+        try:
+            result = await FUNCTION_TOOLS[name](**kwargs)
+            return ToolResult(success=not result.startswith("Error"), content=result)
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+    
+    # Fall back to class-based tools
     tool = TOOLS.get(name)
     if not tool:
         return ToolResult(success=False, error=f"Tool not found: {name}")

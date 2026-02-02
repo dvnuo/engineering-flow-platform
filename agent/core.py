@@ -14,6 +14,7 @@ from skills.executor import (
     get_tools_schemas,
     execute_tool_by_name,
 )
+from tools.integration import INTEGRATION_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +24,14 @@ class Agent:
 
     def __init__(self, system_prompt: Optional[str] = None, session_id: str = "default"):
         # Build OpenClaw-style system prompt
-        tools = get_tools_schemas()
+        base_tools = get_tools_schemas()
+        # Combine base tools with integration tools (Jira, Confluence)
+        self.tools = base_tools + INTEGRATION_TOOLS
         
         # Human-readable tool list (following OpenClaw's Tooling section)
         tools_list = "\n".join([
             f"- **{t['function']['name']}**: {t['function'].get('description', '')}"
-            for t in tools
+            for t in self.tools
         ])
         
         # Load memory files for system prompt
@@ -81,7 +84,7 @@ You have access to the following tools. When a user asks you to do something tha
 {current_time}
 """
         
-        self.tools = tools
+        self.tools = self.tools  # Already set above
 
     async def process(
         self,

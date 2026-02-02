@@ -6,6 +6,7 @@ openai
 python-dotenv
 httpx
 discord.py>=2.3.0
+requests  # For Atlassian API (Jira/Confluence)
 
 # Testing
 pytest>=7.0.0

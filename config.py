@@ -9,7 +9,7 @@ import yaml
 
 
 class Config:
-    """Configuration management with hot reload support."""
+    """Configuration management."""
 
     def __init__(self, config_path: Optional[str] = None):
         if config_path is None:
@@ -29,26 +29,21 @@ class Config:
             self._config = {}
 
     def reload(self) -> bool:
-        """Reload configuration from file if it has been modified.
-        
-        Returns:
-            True if config was reloaded, False if no changes detected.
-        """
+        """Reload configuration from file."""
         if not self.config_path.exists():
             return False
         
-        current_mtime = self.config_path.stat().st_mtime
-        if current_mtime > self._last_modified:
-            self.load()
-            return True
+        try:
+            current_mtime = self.config_path.stat().st_mtime
+            if current_mtime > self._last_modified:
+                self.load()
+                return True
+        except Exception:
+            pass
         return False
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Get a configuration value by key (supports dot notation).
-        
-        Note: Automatically checks for file updates on each call.
-        """
-        self.reload()  # Auto-reload on every get
+        """Get a configuration value by key (supports dot notation)."""
         keys = key.split(".")
         value = self._config
         for k in keys:
@@ -84,6 +79,11 @@ class Config:
     def jira(self) -> Dict[str, Any]:
         """Get Jira configuration."""
         return self._config.get("jira", {})
+
+    @property
+    def confluence(self) -> Dict[str, Any]:
+        """Get Confluence configuration."""
+        return self._config.get("confluence", {})
 
 
 # Global config instance
