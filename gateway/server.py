@@ -128,6 +128,7 @@ class Gateway:
         self.app.router.add_get("/api/sessions", self.handle_list_sessions)
         self.app.router.add_post("/api/sessions/{session_id}/clear", self.handle_clear_session)
         self.app.router.add_post("/api/test", self.handle_test_message)
+        self.app.router.add_post("/api/config/reload", self.handle_config_reload)
 
         # Webhook routes
         if self.mode == "webhook":
@@ -225,6 +226,20 @@ class Gateway:
             return web.json_response({"status": "cleared", "session_id": session_id})
         else:
             return web.json_response({"status": "error", "message": "session_id required"}, status=400)
+
+    async def handle_config_reload(self, request: Request) -> web.Response:
+        """Reload configuration from config.yaml.
+        
+        POST /api/config/reload
+        Returns: {"status": "ok", "reloaded": true|false}
+        """
+        from config import config
+        reloaded = config.reload()
+        return web.json_response({
+            "status": "ok",
+            "reloaded": reloaded,
+            "message": "Configuration reloaded" if reloaded else "No changes detected",
+        })
 
     async def handle_test_message(self, request: Request) -> web.Response:
         """Test endpoint for sending a message to the agent via HTTP.

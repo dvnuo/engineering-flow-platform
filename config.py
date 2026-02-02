@@ -1,6 +1,7 @@
 """Configuration loader for OpenClaw Mini."""
 
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -8,13 +9,14 @@ import yaml
 
 
 class Config:
-    """Configuration management."""
+    """Configuration management with hot reload support."""
 
     def __init__(self, config_path: Optional[str] = None):
         if config_path is None:
             config_path = Path(__file__).parent / "config.yaml"
         self.config_path = Path(config_path)
         self._config: Dict[str, Any] = {}
+        self._last_modified: float = 0
         self.load()
 
     def load(self) -> None:
@@ -22,11 +24,31 @@ class Config:
         if self.config_path.exists():
             with open(self.config_path, "r", encoding="utf-8") as f:
                 self._config = yaml.safe_load(f) or {}
+            self._last_modified = self.config_path.stat().st_mtime
         else:
             self._config = {}
 
+    def reload(self) -> bool:
+        """Reload configuration from file if it has been modified.
+        
+        Returns:
+            True if config was reloaded, False if no changes detected.
+        """
+        if not self.config_path.exists():
+            return False
+        
+        current_mtime = self.config_path.stat().st_mtime
+        if current_mtime > self._last_modified:
+            self.load()
+            return True
+        return False
+
     def get(self, key: str, default: Any = None) -> Any:
-        """Get a configuration value by key (supports dot notation)."""
+        """Get a configuration value by key (supports dot notation).
+        
+        Note: Automatically checks for file updates on each call.
+        """
+        self.reload()  # Auto-reload on every get
         keys = key.split(".")
         value = self._config
         for k in keys:
