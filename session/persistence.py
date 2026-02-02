@@ -26,11 +26,13 @@ class SessionStore:
     def __init__(self, base_path: str = "~/.openclaw/codew/sessions"):
         self.base_path = Path(base_path).expanduser()
         self.sessions_file = self.base_path / "sessions.json"
-        self._lock = asyncio.Lock()
-        
+        self._lock = None  # Created lazily in ensure_dir
+    
     async def ensure_dir(self):
         """Ensure base directory exists."""
         self.base_path.mkdir(parents=True, exist_ok=True)
+        if self._lock is None:
+            self._lock = asyncio.Lock()
         
     def _load_store(self) -> Dict[str, Any]:
         """Load sessions.json store."""
