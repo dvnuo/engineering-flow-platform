@@ -22,6 +22,12 @@ try:
 except ImportError:
     test_case_skill = None
 
+# Lazy import webchat to avoid circular dependency
+try:
+    from .webchat import setup_webchat_routes
+except ImportError:
+    setup_webchat_routes = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -136,6 +142,11 @@ class Gateway:
         
         if self.jira_enabled:
             self.app.router.add_post("/webhook/jira", self.handle_jira_webhook)
+
+        # WebChat routes (if available)
+        if setup_webchat_routes:
+            setup_webchat_routes(self.app)
+            logger.info("WebChat UI enabled at /chat")
 
     async def handle_health(self, request: Request) -> web.Response:
         """Health check endpoint."""
