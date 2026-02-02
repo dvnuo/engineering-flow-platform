@@ -1,11 +1,38 @@
 """Configuration loader for OpenClaw Mini."""
 
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
+
+
+class EnvVarLoader(yaml.SafeLoader):
+    """YAML loader that expands environment variables like ${VAR_NAME}."""
+    pass
+
+
+def _env_var_constructor(loader, node):
+    """Process ${VAR_NAME} environment variables."""
+    value = node.value
+    # Match ${VAR_NAME} pattern
+    pattern = r'\$\{([^}]+)\}'
+    
+    def replace(match):
+        var_name = match.group(1)
+        # Support default value like ${VAR:-default}
+        if ':-' in var_name:
+            actual_var, default = var_name.split(':-', 1)
+            return os.environ.get(actual_var, default)
+        return os.environ.get(var_name, match.group(0))
+    
+    return re.sub(pattern, replace, value)
+
+
+# Register the constructor for strings
+EnvVarLoader.add_constructor('tag:yaml.org,2002:str', _env_var_constructor)
 
 
 class Config:
@@ -20,10 +47,10 @@ class Config:
         self.load()
 
     def load(self) -> None:
-        """Load configuration from YAML file."""
+        """Load configuration from YAML file with environment variable expansion."""
         if self.config_path.exists():
             with open(self.config_path, "r", encoding="utf-8") as f:
-                self._config = yaml.safe_load(f) or {}
+                self._config = yaml.load(f, Loader=EnvVarLoader) or {}
             self._last_modified = self.config_path.stat().st_mtime
         else:
             self._config = {}

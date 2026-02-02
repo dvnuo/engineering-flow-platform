@@ -60,7 +60,7 @@ jira:
   enabled: false  # Set to true to enable Jira integration
   url: "https://your-domain.atlassian.net"
   username: "your-email@company.com"
-  api_token: "${JIRA_API_TOKEN}"  # Use env var for security
+  api_token: "${JIRA_API_TOKEN}"  # Use env var: export OPENCLAW_JIRA_API_TOKEN="..."
   project: "PROJECT"  # Default project key
 
 # ============================================
@@ -70,7 +70,7 @@ confluence:
   enabled: false  # Set to true to enable Confluence integration
   url: "https://your-domain.atlassian.net/wiki"
   username: "your-email@company.com"
-  api_token: "${CONFLUENCE_API_TOKEN}"  # Use env var for security
+  api_token: "${CONFLUENCE_API_TOKEN}"  # Use env var: export OPENCLAW_CONFLUENCE_API_TOKEN="..."
   space: "DEV"  # Default space key
 
 # ============================================
@@ -78,7 +78,7 @@ confluence:
 # ============================================
 github:
   enabled: false  # Set to true to enable GitHub integration
-  api_token: "${GITHUB_TOKEN}"  # GitHub Personal Access Token
+  api_token: "${GITHUB_TOKEN}"  # Use env var: export OPENCLAW_GITHUB_TOKEN="..."
 
 # ============================================
 # Mention Polling Configuration (OPTIONAL)

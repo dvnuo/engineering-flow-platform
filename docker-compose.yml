@@ -17,9 +17,21 @@ services:
       # Optional: logs directory
       - ./logs:/app/logs
     environment:
-      - OPENCLAW_DISCORD_BOT_TOKEN=${OPENCLAW_DISCORD_BOT_TOKEN}
-      - OPENCLAW_DISCORD_CHANNEL_ID=${OPENCLAW_DISCORD_CHANNEL_ID}
-      - OPENCLAW_LLM_API_KEY=${OPENCLAW_LLM_API_KEY}
+      # Discord (matched with config.yaml)
+      - DISCORD_BOT_TOKEN=${OPENCLAW_DISCORD_BOT_TOKEN}
+      - DISCORD_CHANNEL_ID=${OPENCLAW_DISCORD_CHANNEL_ID}
+      
+      # LLM
+      - LLM_API_KEY=${OPENCLAW_LLM_API_KEY}
+      
+      # Jira
+      - JIRA_API_TOKEN=${OPENCLAW_JIRA_API_TOKEN}
+      
+      # Confluence
+      - CONFLUENCE_API_TOKEN=${OPENCLAW_CONFLUENCE_API_TOKEN}
+      
+      # GitHub
+      - GITHUB_TOKEN=${OPENCLAW_GITHUB_TOKEN}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
