@@ -212,10 +212,11 @@ You have access to the following tools. When a user asks you to do something tha
     ) -> str:
         """Execute a skill and return the result."""
         try:
+            # Note: session_id is used for tracking but not passed to skills
+            # Skills don't accept session_id as a parameter
             result = await skills_executor.execute_skill(
                 skill_name,
                 message=message,
-                session_id=session_id,
             )
 
             if result.success:
