@@ -1,4 +1,7 @@
-"""Skills and Tools executor for OpenClaw Mini."""
+"""Skills and Tools executor for OpenClaw Mini.
+
+This module provides the ability to execute skills and tools based on user requests.
+"""
 
 import asyncio
 import json
@@ -7,7 +10,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from config import config
-from skills.decorator import skill, SkillResult
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,35 @@ from .tools import (
 )
 
 
+class SkillResult:
+    """Result from skill execution."""
+
+    def __init__(
+        self,
+        success: bool,
+        output: str = "",
+        error: Optional[str] = None,
+        data: Optional[Dict] = None,
+    ):
+        self.success = success
+        self.output = output
+        self.error = error
+        self.data = data or {}
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "success": self.success,
+            "output": self.output,
+            "error": self.error,
+            "data": self.data,
+        }
+
+    def __str__(self) -> str:
+        if self.success:
+            return self.output
+        return f"Error: {self.error}"
+
+
 class Skill:
     """Base class for skills."""
 
@@ -35,65 +66,109 @@ class Skill:
         return SkillResult(success=False, error="Not implemented")
 
 
-# Global executor instance (lazy initialization)
-_skills_executor: Optional['SkillsExecutor'] = None
-
-
-def _get_executor() -> 'SkillsExecutor':
-    """Get or create the skills executor (lazy initialization)."""
-    global _skills_executor
-    if _skills_executor is None:
-        _skills_executor = SkillsExecutor()
-    return _skills_executor
+def skill(name: str = None, description: str = "", parameters: Dict[str, Dict] = None):
+    """Decorator to convert an async function into a Skill class.
+    
+    Args:
+        name: Skill name (defaults to function name)
+        description: Skill description
+        parameters: Parameter schema (optional)
+    
+    Usage:
+        @skill(name="summarize", description="Summarize content")
+        async def summarize(url: str = None, text: str = None):
+            ...
+    """
+    def decorator(func):
+        # Extract parameter info from function signature
+        import inspect
+        sig = inspect.signature(func)
+        param_dict = {}
+        for param_name, param in sig.parameters.items():
+            param_dict[param_name] = {
+                "type": "string",
+                "description": f"Parameter: {param_name}"
+            }
+        
+        # Store the function name to avoid descriptor issues
+        func_name = func.__name__
+        
+        class DecoratedSkill(Skill):
+            @property
+            def name(self):
+                return name or func_name
+            
+            @property
+            def description(self):
+                return description or func.__doc__ or ""
+            
+            @property
+            def parameters(self):
+                return parameters or param_dict
+            
+            async def execute(self, **kwargs):
+                # Filter out session_id and other unexpected kwargs
+                filtered_kwargs = {k: v for k, v in kwargs.items() 
+                                   if k in sig.parameters}
+                # Use func directly, not as an attribute to avoid binding
+                return await func(**filtered_kwargs)
+        
+        return DecoratedSkill()
+    
+    return decorator
 
 
 class SkillsExecutor:
     """Execute skills and tools based on user requests."""
 
     def __init__(self):
-        self.skills: Dict[str, Any] = {}
+        self.skills: Dict[str, Skill] = {}
         self.tools: Dict[str, Tool] = TOOLS
         self._load_skills()
 
     def _load_skills(self):
         """Load all available skills."""
-        # Path(__file__) is /root/codew/skills/executor/__init__.py
-        # We need /root/codew/skills which is parent.parent
+        # Navigate up from executor/ to skills/
         skills_dir = Path(__file__).parent.parent
+        logger.debug(f"Loading skills from: {skills_dir}")
 
         for skill_dir in skills_dir.iterdir():
-            if skill_dir.is_dir() and not skill_dir.name.startswith("_"):
-                skill_file = skill_dir / "skill.py"
-                if skill_file.exists():
-                    self._import_skill(skill_dir.name)
+            if skill_dir.is_dir() and skill_dir.name.startswith("_"):
+                continue
+
+            skill_file = skill_dir / "skill.py"
+            if skill_file.exists():
+                logger.debug(f"Found skill file: {skill_file}")
+                self._import_skill(skill_dir.name)
 
     def _import_skill(self, skill_name: str):
         """Import a skill module."""
         try:
             module = __import__(
                 f"skills.{skill_name}.skill",
-                fromlist=[skill_name],
+                fromlist=[skill_name.title()],
             )
 
-            # Get the skill class or decorated function
-            skill_class_name_lower = skill_name.lower()
-            skill_class = getattr(module, skill_class_name_lower, None)
+            # Get the skill - could be a class or a decorated function instance
+            # Try both title case (class) and lowercase (decorated function)
+            skill_class = getattr(module, skill_name.title().replace("_", ""), None)
             
+            # If not found, try lowercase (for @skill decorated functions)
             if skill_class is None:
-                skill_class_name_title = skill_name.title().replace("_", "")
-                skill_class = getattr(module, skill_class_name_title, None)
+                skill_class = getattr(module, skill_name.lower().replace("_", ""), None)
             
-            if skill_class is not None and callable(skill_class):
-                if hasattr(skill_class, 'name') and hasattr(skill_class, 'description'):
-                    self.skills[skill_class.name] = skill_class
-                    logger.info(f"Loaded skill: {skill_class.name}")
-                elif hasattr(skill_class, 'name') and hasattr(skill_class, 'execute'):
-                    self.skills[skill_class.name] = skill_class()
-                    logger.info(f"Loaded skill: {skill_class.name}")
-                else:
-                    logger.warning(f"Skill {skill_name}: no name/description attributes")
+            # If it's a Skill instance (from @skill decorator), use it directly
+            if isinstance(skill_class, Skill):
+                self.skills[skill_class.name] = skill_class
+                logger.info(f"Loaded skill: {skill_class.name}")
             else:
-                logger.warning(f"Skill {skill_name}: could not find callable skill class or function")
+                # Look for any Skill instance in the module
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
+                    if isinstance(attr, Skill):
+                        self.skills[attr.name] = attr
+                        logger.info(f"Loaded skill: {attr.name}")
+                        break
 
         except Exception as e:
             logger.error(f"Failed to load skill {skill_name}: {e}")
@@ -158,19 +233,9 @@ class SkillsExecutor:
             return SkillResult(success=False, error=f"Skill not found: {skill_name}")
 
         try:
-            if hasattr(skill, 'execute') and callable(getattr(skill, 'execute', None)):
-                result = await skill.execute(**kwargs)
-            elif callable(skill):
-                result = await skill(**kwargs)
-            else:
-                return SkillResult(success=False, error=f"Skill {skill_name} is not callable")
-            
-            if isinstance(result, SkillResult):
-                logger.info(f"Skill {skill_name} executed: success={result.success}")
-                return result
-            else:
-                logger.info(f"Skill {skill_name} executed")
-                return SkillResult(success=True, output=str(result))
+            result = await skill.execute(**kwargs)
+            logger.info(f"Skill {skill_name} executed: success={result.success}")
+            return result
         except Exception as e:
             logger.error(f"Skill {skill_name} failed: {e}")
             return SkillResult(success=False, error=str(e))
@@ -183,24 +248,36 @@ class SkillsExecutor:
         }
 
 
+# Global executor instance - immediate initialization
+# No lazy loading needed since SkillsExecutor is lightweight
+# and HTTP clients are created on import anyway
+skills_executor = SkillsExecutor()
+
+
 def list_available_skills() -> List[str]:
     """List all available skills."""
-    return _get_executor().list_skills()
+    return skills_executor.list_skills()
 
 
 def list_available_tools() -> List[str]:
     """List all available tools."""
-    return _get_executor().list_tools()
+    return skills_executor.list_tools()
 
 
 def get_skill_info(skill_name: str) -> Optional[Dict]:
     """Get skill information."""
-    return _get_executor().get_skill_info(skill_name)
+    return skills_executor.get_skill_info(skill_name)
 
 
 async def execute_skill(skill_name: str, **kwargs) -> SkillResult:
-    """Execute a skill by name."""
-    return await _get_executor().execute_skill(skill_name, **kwargs)
+    """Execute a skill by name.
+    
+    Note: Filters out session_id to prevent TypeError since skills
+    don't accept session_id as a parameter.
+    """
+    # Filter out session_id and other unexpected kwargs
+    filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ('session_id',)}
+    return await skills_executor.execute_skill(skill_name, **filtered_kwargs)
 
 
 def get_tools_schemas() -> List[Dict]:

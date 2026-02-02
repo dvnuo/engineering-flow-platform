@@ -8,9 +8,9 @@ from typing import Any, Dict, List, Optional
 from agent.llm import llm_client
 from agent.memory import memory_system
 from session.manager import session_manager
-from skills.decorator import SkillResult
 from skills.executor import (
-    _get_executor,
+    skills_executor,
+    SkillResult,
     get_tools_schemas,
     execute_tool_by_name,
 )
@@ -105,7 +105,7 @@ You have access to the following tools. When a user asks you to do something tha
         usage_data = {}
         
         # Check if message matches a skill first
-        skill_name = _get_executor().match_skill(message)
+        skill_name = skills_executor.match_skill(message)
         if skill_name:
             logger.info(f"Matched skill: {skill_name}")
             result = await self._execute_skill(skill_name, message, session_id)
@@ -212,7 +212,9 @@ You have access to the following tools. When a user asks you to do something tha
     ) -> str:
         """Execute a skill and return the result."""
         try:
-            result = await _get_executor().execute_skill(
+            # Note: session_id is used for tracking but not passed to skills
+            # Skills don't accept session_id as a parameter
+            result = await skills_executor.execute_skill(
                 skill_name,
                 message=message,
             )
