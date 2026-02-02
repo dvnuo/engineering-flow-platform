@@ -37,7 +37,7 @@ Create an isolated Python environment:
 
 ```bash
 # Create virtual environment
-cd openclaw_mini
+# Run from project root
 python -m venv venv
 
 # Activate (Linux/macOS)
@@ -59,7 +59,7 @@ deactivate
 
 ```bash
 # Build the image
-cd openclaw_mini
+# Run from project root
 docker build -t openclaw-mini .
 
 # Run the container
@@ -94,7 +94,7 @@ docker-compose up -d
 ### 3. System-wide
 
 ```bash
-cd openclaw_mini
+# Run from project root
 pip install -r requirements.txt
 ```
 
@@ -346,7 +346,7 @@ OPENAI_API_KEY=sk-your-api-key
 #### 4.1 编辑配置文件
 
 ```bash
-cd openclaw_mini
+# Run from project root
 nano config.yaml
 ```
 
@@ -441,14 +441,14 @@ ModuleNotFoundError: No module named 'openclaw_mini'
 ```
 说明当前目录不对，请先执行：
 ```bash
-cd openclaw_mini
+# Run from project root
 ```
 
 ### Basic Run
 
 ```bash
 # 1. 进入目录
-cd openclaw_mini
+# Run from project root
 
 # 2. 运行程序
 python main.py
@@ -611,7 +611,7 @@ cd codew
 git checkout -b feature/your-feature
 
 # Create virtual environment
-cd openclaw_mini
+# Run from project root
 python -m venv venv
 source venv/bin/activate
 
