@@ -264,6 +264,57 @@ class JiraChannel:
             data={"body": body}
         )
     
+    async def get_comments(self, issue_key: str) -> List[Dict[str, Any]]:
+        """Get all comments for an issue.
+        
+        Args:
+            issue_key: Issue key
+            
+        Returns:
+            List of comments with id, body, author, and created time
+        """
+        logger.info(f"Getting comments for {issue_key}")
+        
+        result = await self._request("GET", f"/issue/{issue_key}/comment")
+        comments = result.get("comments", [])
+        
+        # Return simplified comment structure
+        return [
+            {
+                "id": str(c.get("id", "")),
+                "body": self._parse_adf_body(c.get("body", {})),
+                "author": c.get("author", {}).get("displayName", "unknown"),
+                "created": c.get("created", ""),
+            }
+            for c in comments
+        ]
+    
+    def _parse_adf_body(self, body) -> str:
+        """Extract text from Atlassian Document Format."""
+        if isinstance(body, str):
+            return body
+        if not isinstance(body, dict):
+            return ""
+        content = body.get("content", [])
+        if not content:
+            return ""
+        text_parts = []
+        for block in content:
+            self._extract_text(block, text_parts)
+        return "".join(text_parts)
+    
+    def _extract_text(self, block, text_parts):
+        """Recursively extract text from ADF block."""
+        if not block:
+            return
+        block_type = block.get("type", "")
+        if block_type == "text":
+            text_parts.append(block.get("text", ""))
+        elif block_type in ("paragraph", "heading"):
+            for item in block.get("content", []):
+                self._extract_text(item, text_parts)
+            text_parts.append("\n")
+    
     async def get_transitions(self, issue_key: str) -> List[Dict[str, Any]]:
         """Get available transitions for an issue.
         

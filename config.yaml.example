@@ -72,3 +72,48 @@ confluence:
   username: "your-email@company.com"
   api_token: "${CONFLUENCE_API_TOKEN}"  # Use env var for security
   space: "DEV"  # Default space key
+
+# ============================================
+# GitHub Configuration (OPTIONAL)
+# ============================================
+github:
+  enabled: false  # Set to true to enable GitHub integration
+  api_token: "${GITHUB_TOKEN}"  # GitHub Personal Access Token
+
+# ============================================
+# Mention Polling Configuration (OPTIONAL)
+# ============================================
+# Monitor @mentions across platforms and process commands
+polling:
+  enabled: false  # Set to true to enable mention polling
+  
+  # Polling interval in seconds (default: 30)
+  interval_seconds: 30
+  
+  # Usernames to monitor (the configured account usernames)
+  # When someone @mentions these users, the bot will process commands
+  monitored_usernames:
+    - "your-github-username"
+    - "your-jira-username"
+    - "your-confluence-username"
+  
+  # GitHub polling settings
+  github:
+    enabled: false
+    repos:  # Repositories to monitor
+      - "owner/repo1"
+      - "owner/repo2"
+  
+  # Jira polling settings
+  jira:
+    enabled: false
+    projects:  # Projects to monitor
+      - "PROJECT1"
+      - "PROJECT2"
+  
+  # Confluence polling settings
+  confluence:
+    enabled: false
+    spaces:  # Spaces to monitor
+      - "DEV"
+      - "DOCS"
