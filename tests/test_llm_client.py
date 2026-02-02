@@ -19,7 +19,7 @@ class MockResponse:
     def __init__(self, json_data, status_code=200):
         self.json_data = json_data
         self.status_code = status_code
-        self.text = str(json_data)  # Add text attribute for error handling
+        self.text = json_data if isinstance(json_data, str) else str(json_data)
     
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -76,7 +76,7 @@ class TestLLMClientSuccess:
                 [{"role": "user", "content": "hi"}],
                 "You are helpful"
             )
-            assert result["content"] == "Hello!"
+            assert result == {"content": "Hello!", "tool_calls": []}
 
     @pytest.mark.asyncio
     async def test_chat_with_system_prompt(self, llm_client):
