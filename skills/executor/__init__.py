@@ -1,7 +1,4 @@
-"""Skills and Tools executor for OpenClaw Mini.
-
-This module provides the ability to execute skills and tools based on user requests.
-"""
+"""Skills and Tools executor for OpenClaw Mini."""
 
 import asyncio
 import json
@@ -10,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from config import config
+from skills.decorator import skill, SkillResult
 
 logger = logging.getLogger(__name__)
 
@@ -25,35 +23,6 @@ from .tools import (
 )
 
 
-class SkillResult:
-    """Result from skill execution."""
-
-    def __init__(
-        self,
-        success: bool,
-        output: str = "",
-        error: Optional[str] = None,
-        data: Optional[Dict] = None,
-    ):
-        self.success = success
-        self.output = output
-        self.error = error
-        self.data = data or {}
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "success": self.success,
-            "output": self.output,
-            "error": self.error,
-            "data": self.data,
-        }
-
-    def __str__(self) -> str:
-        if self.success:
-            return self.output
-        return f"Error: {self.error}"
-
-
 class Skill:
     """Base class for skills."""
 
@@ -66,40 +35,65 @@ class Skill:
         return SkillResult(success=False, error="Not implemented")
 
 
+# Global executor instance (lazy initialization)
+_skills_executor: Optional['SkillsExecutor'] = None
+
+
+def _get_executor() -> 'SkillsExecutor':
+    """Get or create the skills executor (lazy initialization)."""
+    global _skills_executor
+    if _skills_executor is None:
+        _skills_executor = SkillsExecutor()
+    return _skills_executor
+
+
 class SkillsExecutor:
     """Execute skills and tools based on user requests."""
 
     def __init__(self):
-        self.skills: Dict[str, Skill] = {}
+        self.skills: Dict[str, Any] = {}
         self.tools: Dict[str, Tool] = TOOLS
         self._load_skills()
 
     def _load_skills(self):
         """Load all available skills."""
-        skills_dir = Path(__file__).parent
+        # Path(__file__) is /root/codew/skills/executor/__init__.py
+        # We need /root/codew/skills which is parent.parent
+        skills_dir = Path(__file__).parent.parent
 
         for skill_dir in skills_dir.iterdir():
-            if skill_dir.is_dir() and skill_dir.name.startswith("_"):
-                continue  # Skip private directories
-
-            skill_file = skill_dir / "skill.py"
-            if skill_file.exists():
-                self._import_skill(skill_dir.name)
+            if skill_dir.is_dir() and not skill_dir.name.startswith("_"):
+                skill_file = skill_dir / "skill.py"
+                if skill_file.exists():
+                    self._import_skill(skill_dir.name)
 
     def _import_skill(self, skill_name: str):
         """Import a skill module."""
         try:
             module = __import__(
                 f"skills.{skill_name}.skill",
-                fromlist=[skill_name.title()],
+                fromlist=[skill_name],
             )
 
-            # Get the skill class
-            skill_class = getattr(module, skill_name.title().replace("_", ""), None)
-            if skill_class:
-                skill_instance = skill_class()
-                self.skills[skill_instance.name] = skill_instance
-                logger.info(f"Loaded skill: {skill_instance.name}")
+            # Get the skill class or decorated function
+            skill_class_name_lower = skill_name.lower()
+            skill_class = getattr(module, skill_class_name_lower, None)
+            
+            if skill_class is None:
+                skill_class_name_title = skill_name.title().replace("_", "")
+                skill_class = getattr(module, skill_class_name_title, None)
+            
+            if skill_class is not None and callable(skill_class):
+                if hasattr(skill_class, 'name') and hasattr(skill_class, 'description'):
+                    self.skills[skill_class.name] = skill_class
+                    logger.info(f"Loaded skill: {skill_class.name}")
+                elif hasattr(skill_class, 'name') and hasattr(skill_class, 'execute'):
+                    self.skills[skill_class.name] = skill_class()
+                    logger.info(f"Loaded skill: {skill_class.name}")
+                else:
+                    logger.warning(f"Skill {skill_name}: no name/description attributes")
+            else:
+                logger.warning(f"Skill {skill_name}: could not find callable skill class or function")
 
         except Exception as e:
             logger.error(f"Failed to load skill {skill_name}: {e}")
@@ -164,9 +158,19 @@ class SkillsExecutor:
             return SkillResult(success=False, error=f"Skill not found: {skill_name}")
 
         try:
-            result = await skill.execute(**kwargs)
-            logger.info(f"Skill {skill_name} executed: success={result.success}")
-            return result
+            if hasattr(skill, 'execute') and callable(getattr(skill, 'execute', None)):
+                result = await skill.execute(**kwargs)
+            elif callable(skill):
+                result = await skill(**kwargs)
+            else:
+                return SkillResult(success=False, error=f"Skill {skill_name} is not callable")
+            
+            if isinstance(result, SkillResult):
+                logger.info(f"Skill {skill_name} executed: success={result.success}")
+                return result
+            else:
+                logger.info(f"Skill {skill_name} executed")
+                return SkillResult(success=True, output=str(result))
         except Exception as e:
             logger.error(f"Skill {skill_name} failed: {e}")
             return SkillResult(success=False, error=str(e))
@@ -179,28 +183,24 @@ class SkillsExecutor:
         }
 
 
-# Global executor instance
-skills_executor = SkillsExecutor()
-
-
 def list_available_skills() -> List[str]:
     """List all available skills."""
-    return skills_executor.list_skills()
+    return _get_executor().list_skills()
 
 
 def list_available_tools() -> List[str]:
     """List all available tools."""
-    return skills_executor.list_tools()
+    return _get_executor().list_tools()
 
 
 def get_skill_info(skill_name: str) -> Optional[Dict]:
     """Get skill information."""
-    return skills_executor.get_skill_info(skill_name)
+    return _get_executor().get_skill_info(skill_name)
 
 
 async def execute_skill(skill_name: str, **kwargs) -> SkillResult:
     """Execute a skill by name."""
-    return await skills_executor.execute_skill(skill_name, **kwargs)
+    return await _get_executor().execute_skill(skill_name, **kwargs)
 
 
 def get_tools_schemas() -> List[Dict]:

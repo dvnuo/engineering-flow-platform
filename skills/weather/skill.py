@@ -9,7 +9,7 @@ Uses:
 import subprocess
 from typing import Any, Dict, Optional
 
-from skills.executor import SkillResult, skill
+from skills.decorator import skill, SkillResult
 
 # Skill metadata
 SKILL_NAME = "weather"
@@ -18,6 +18,7 @@ SKILL_DESCRIPTION = "Get current weather and forecasts (no API key required)"
 
 @skill(name=SKILL_NAME, description=SKILL_DESCRIPTION)
 async def weather(
+    message: str = "",
     location: str = "current",
     format_type: str = "compact",
 ) -> SkillResult:
