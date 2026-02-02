@@ -18,6 +18,8 @@ if str(script_dir) not in sys.path:
 
 from gateway.server import gateway
 from config import config
+from session.persistence import session_store
+from session.usage import usage_tracker
 
 
 def setup_logging(level: int = logging.INFO) -> None:
@@ -72,6 +74,15 @@ async def main() -> None:
     if not can_start:
         logger.error("Cannot start: LLM api_key is required")
         return
+
+    # Initialize session store and usage tracker
+    try:
+        await session_store.ensure_dir()
+        logger.info("Session store initialized")
+        await usage_tracker.ensure_dir()
+        logger.info("Usage tracker initialized")
+    except Exception as e:
+        logger.warning(f"Failed to initialize session/usage tracking: {e}")
 
     try:
         await gateway.start()
