@@ -61,35 +61,65 @@ deactivate
 ```bash
 # Build the image
 # Run from project root
-docker build -t openclaw-mini .
-
-# Run the container
-docker run -d \
-  --name openclaw-mini \
-  -p 8000:8000 \
-  -v $(pwd)/config.yaml:/app/config.yaml \
-  openclaw-mini
+docker build -t codew .
 ```
 
 **Docker Compose (recommended)**:
 
+Create `docker-compose.yml`:
+
 ```yaml
-# docker-compose.yml
 version: '3.8'
+
 services:
-  openclaw-mini:
+  codew:
     build: .
+    container_name: codew-bot
     ports:
       - "8000:8000"
     volumes:
-      - ./config.yaml:/app/config.yaml
+      # Config file - required
+      - ./config.yaml:/app/config.yaml:ro
+      
+      # Workspace directory for memory files - persists across restarts
+      # Contains: SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, memory/
+      - ./workspace:/root/.openclaw/workspace
+      
+      # Optional: logs directory
+      - ./logs:/app/logs
     environment:
+      - OPENCLAW_DISCORD_BOT_TOKEN=${OPENCLAW_DISCORD_BOT_TOKEN}
+      - OPENCLAW_DISCORD_CHANNEL_ID=${OPENCLAW_DISCORD_CHANNEL_ID}
       - OPENCLAW_LLM_API_KEY=${OPENCLAW_LLM_API_KEY}
     restart: unless-stopped
 ```
 
 ```bash
+# Create workspace directory with template files
+mkdir -p workspace/memory
+cp workspace/*.example workspace/
+
+# Start the container
 docker-compose up -d
+```
+
+**⚠️ Important: Workspace Volume**
+
+Without the `./workspace:/root/.openclaw/workspace` volume mount:
+- Memory files (SOUL.md, USER.md, MEMORY.md, etc.) will be lost on restart
+- Conversation context and learned preferences won't persist
+
+**Directory Structure After Setup**:
+
+```
+./workspace/
+├── SOUL.md        # Agent persona (copy from SOUL.md.example)
+├── USER.md        # User preferences (copy from USER.md.example)
+├── AGENTS.md      # Workspace conventions (copy from AGENTS.md.example)
+├── TOOLS.md       # Tool configurations (optional)
+├── MEMORY.md      # Long-term memory (copy from MEMORY.md.example)
+└── memory/
+    └── 2026-02-02.md  # Daily notes (auto-created)
 ```
 
 ### 3. System-wide
