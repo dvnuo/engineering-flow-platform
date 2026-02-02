@@ -223,13 +223,13 @@ class Gateway:
 
     async def handle_list_sessions(self, request: Request) -> web.Response:
         """List all active sessions."""
-        from .session.manager import session_manager
+        from session.manager import session_manager
         sessions = session_manager.list_sessions()
         return web.json_response({"sessions": sessions, "count": len(sessions)})
 
     async def handle_clear_session(self, request: Request) -> web.Response:
         """Clear a session's history."""
-        from .session.manager import session_manager
+        from session.manager import session_manager
         session_id = request.match_info.get("session_id", "")
 
         if session_id:
