@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeW - Chat</title>
+    <link rel="stylesheet" href="/static/css/webchat.css">
+</head>
+<body>
+    <div class="header">
+        <div class="logo">CW</div>
+        <div>
+            <div class="header-title">CodeW Assistant</div>
+            <div class="header-subtitle">AI-Powered Personal Assistant</div>
+        </div>
+    </div>
+    
+    <div class="chat-container">
+        <div class="messages" id="messages">
+            <div class="welcome-message">
+                <h2>👋 Welcome!</h2>
+                <p>I'm your AI assistant. How can I help you today?</p>
+            </div>
+        </div>
+        
+        <div class="typing-indicator" id="typing">
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+        </div>
+        
+        <div class="input-area">
+            <div class="input-wrapper">
+                <textarea 
+                    class="input-field" 
+                    id="messageInput" 
+                    placeholder="Type your message..."
+                    rows="1"
+                ></textarea>
+                <button class="send-button" id="sendButton">Send</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="status-bar">
+        <span id="status">Ready</span>
+        <span id="tokenCount">Tokens: 0</span>
+    </div>
+    
+    <script src="/static/js/webchat.js"></script>
+</body>
+</html>

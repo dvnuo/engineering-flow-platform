@@ -4,7 +4,6 @@ A simple web interface to chat with the agent directly.
 """
 
 import asyncio
-import html
 import json
 import logging
 from datetime import datetime
@@ -16,483 +15,103 @@ from aiohttp import web
 from agent.core import Agent as AgentCore
 from config import config
 from session.manager import session_manager
-from session.persistence import session_store
 from session.usage import usage_tracker
 
 logger = logging.getLogger(__name__)
 
 
-# HTML Template for WebChat
-WEBCHAT_TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CodeW - Chat</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .header {
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(10px);
-            padding: 16px 24px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        
-        .logo {
-            width: 36px;
-            height: 36px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            color: white;
-            font-size: 18px;
-        }
-        
-        .header-title {
-            color: white;
-            font-size: 18px;
-            font-weight: 600;
-        }
-        
-        .header-subtitle {
-            color: rgba(255, 255, 255, 0.6);
-            font-size: 12px;
-        }
-        
-        .chat-container {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            max-width: 800px;
-            margin: 0 auto;
-            width: 100%;
-            padding: 16px;
-        }
-        
-        .messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 16px 0;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-        
-        .message {
-            display: flex;
-            gap: 12px;
-            max-width: 85%;
-            animation: fadeIn 0.3s ease;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .message.user {
-            align-self: flex-end;
-            flex-direction: row-reverse;
-        }
-        
-        .message.assistant {
-            align-self: flex-start;
-        }
-        
-        .message.error {
-            align-self: flex-start;
-            max-width: 90%;
-        }
-        
-        .avatar {
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 14px;
-            flex-shrink: 0;
-        }
-        
-        .message.user .avatar {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        
-        .message.assistant .avatar {
-            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-            color: white;
-        }
-        
-        .message.error .avatar {
-            background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
-            color: white;
-        }
-        
-        .message-content {
-            padding: 12px 16px;
-            border-radius: 16px;
-            font-size: 14px;
-            line-height: 1.5;
-            word-wrap: break-word;
-        }
-        
-        .message.user .message-content {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border-bottom-right-radius: 4px;
-        }
-        
-        .message.assistant .message-content {
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-            border-bottom-left-radius: 4px;
-        }
-        
-        .message.error .message-content {
-            background: rgba(235, 51, 73, 0.2);
-            color: #ff6b6b;
-            border-bottom-left-radius: 4px;
-        }
-        
-        .message-timestamp {
-            font-size: 11px;
-            color: rgba(255, 255, 255, 0.4);
-            margin-top: 4px;
-            padding: 0 8px;
-        }
-        
-        .message.user .message-timestamp {
-            text-align: right;
-        }
-        
-        .input-area {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 16px;
-            padding: 16px;
-            margin-top: 16px;
-        }
-        
-        .input-wrapper {
-            display: flex;
-            gap: 12px;
-            align-items: flex-end;
-        }
-        
-        .input-field {
-            flex: 1;
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 12px;
-            padding: 12px 16px;
-            color: white;
-            font-size: 14px;
-            resize: none;
-            min-height: 44px;
-            max-height: 120px;
-            font-family: inherit;
-        }
-        
-        .input-field:focus {
-            outline: none;
-            border-color: rgba(102, 126, 234, 0.5);
-        }
-        
-        .input-field::placeholder {
-            color: rgba(255, 255, 255, 0.4);
-        }
-        
-        .send-button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border: none;
-            border-radius: 12px;
-            padding: 12px 20px;
-            color: white;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        
-        .send-button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-        }
-        
-        .send-button:active {
-            transform: translateY(0);
-        }
-        
-        .send-button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
-        .typing-indicator {
-            display: none;
-            padding: 12px 16px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 16px;
-            margin-left: 44px;
-            margin-bottom: 12px;
-        }
-        
-        .typing-indicator.show {
-            display: flex;
-            gap: 4px;
-        }
-        
-        .typing-dot {
-            width: 8px;
-            height: 8px;
-            background: rgba(255, 255, 255, 0.4);
-            border-radius: 50%;
-            animation: typing 1.4s infinite ease-in-out;
-        }
-        
-        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
-        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
-        
-        @keyframes typing {
-            0%, 60%, 100% { transform: translateY(0); }
-            30% { transform: translateY(-4px); }
-        }
-        
-        .status-bar {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 16px;
-            font-size: 12px;
-            color: rgba(255, 255, 255, 0.4);
-        }
-        
-        .welcome-message {
-            text-align: center;
-            color: rgba(255, 255, 255, 0.6);
-            padding: 40px 20px;
-        }
-        
-        .welcome-message h2 {
-            color: white;
-            margin-bottom: 12px;
-        }
-        
-        .clear-button {
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 8px 16px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 12px;
-            transition: background 0.2s;
-        }
-        
-        .clear-button:hover {
-            background: rgba(255, 255, 255, 0.2);
-        }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <div class="logo">CW</div>
-        <div>
-            <div class="header-title">CodeW Assistant</div>
-            <div class="header-subtitle">AI-Powered Personal Assistant</div>
-        </div>
-    </div>
-    
-    <div class="chat-container">
-        <div class="messages" id="messages">
-            <div class="welcome-message">
-                <h2>👋 Welcome!</h2>
-                <p>I'm your AI assistant. How can I help you today?</p>
-            </div>
-        </div>
-        
-        <div class="typing-indicator" id="typing">
-            <div class="typing-dot"></div>
-            <div class="typing-dot"></div>
-            <div class="typing-dot"></div>
-        </div>
-        
-        <div class="input-area">
-            <div class="input-wrapper">
-                <textarea 
-                    class="input-field" 
-                    id="messageInput" 
-                    placeholder="Type your message..."
-                    rows="1"
-                ></textarea>
-                <button class="send-button" id="sendButton">Send</button>
-            </div>
-        </div>
-    </div>
-    
-    <div class="status-bar">
-        <span id="status">Ready</span>
-        <span id="tokenCount">Tokens: 0</span>
-    </div>
-    
-    <script>
-        const messagesContainer = document.getElementById('messages');
-        const messageInput = document.getElementById('messageInput');
-        const sendButton = document.getElementById('sendButton');
-        const typingIndicator = document.getElementById('typing');
-        const statusSpan = document.getElementById('status');
-        const tokenCountSpan = document.getElementById('tokenCount');
-        
-        let isLoading = false;
-        let messageCount = 0;
-        let totalTokens = 0;
-        
-        // Auto-resize textarea
-        messageInput.addEventListener('input', function() {
-            this.style.height = 'auto';
-            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-        });
-        
-        // Send on Enter (Shift+Enter for new line)
-        messageInput.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
-        });
-        
-        sendButton.addEventListener('click', sendMessage);
-        
-        function addMessage(role, content, timestamp = null) {
-            const welcome = messagesContainer.querySelector('.welcome-message');
-            if (welcome) {
-                welcome.remove();
-            }
-            
-            const div = document.createElement('div');
-            div.className = `message ${role}`;
-            
-            const avatar = role === 'user' ? 'U' : role === 'assistant' ? 'AI' : '!';
-            const time = timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            
-            div.innerHTML = `
-                <div class="avatar">${avatar}</div>
-                <div>
-                    <div class="message-content">${escapeHtml(content)}</div>
-                    <div class="message-timestamp">${time}</div>
-                </div>
-            `;
-            
-            messagesContainer.appendChild(div);
-            scrollToBottom();
-            messageCount++;
-        }
-        
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML.replace(/\n/g, '<br>');
-        }
-        
-        function scrollToBottom() {
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        }
-        
-        async function sendMessage() {
-            if (isLoading) return;
-            
-            const content = messageInput.value.trim();
-            if (!content) return;
-            
-            isLoading = true;
-            sendButton.disabled = true;
-            messageInput.value = '';
-            messageInput.style.height = 'auto';
-            
-            addMessage('user', content);
-            
-            statusSpan.textContent = 'Thinking...';
-            typingIndicator.classList.add('show');
-            
-            try {
-                const response = await fetch('/api/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        message: content,
-                        session_id: 'webchat'
-                    })
-                });
-                
-                const data = await response.json();
-                
-                typingIndicator.classList.remove('show');
-                
-                if (data.error) {
-                    addMessage('error', `Error: ${data.error}`);
-                    statusSpan.textContent = 'Error';
-                } else {
-                    addMessage('assistant', data.response);
-                    
-                    if (data.usage) {
-                        totalTokens += data.usage.total_tokens || 0;
-                        tokenCountSpan.textContent = `Tokens: ${totalTokens}`;
-                    }
-                    
-                    statusSpan.textContent = 'Ready';
-                }
-            } catch (error) {
-                typingIndicator.classList.remove('show');
-                addMessage('error', `Connection error: ${error.message}`);
-                statusSpan.textContent = 'Disconnected';
-            } finally {
-                isLoading = false;
-                sendButton.disabled = false;
-                messageInput.focus();
-            }
-        }
-    </script>
-</body>
-</html>
-"""
+# Get template and static paths
+TEMPLATE_DIR = Path(__file__).parent / "templates"
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+def load_template(filename: str) -> str:
+    """Load HTML template from file."""
+    template_path = TEMPLATE_DIR / filename
+    with open(template_path, 'r', encoding='utf-8') as f:
+        return f.read()
 
 
 async def serve_webchat(request: web.Request) -> web.Response:
     """Serve the WebChat UI."""
-    return web.Response(
-        text=WEBCHAT_TEMPLATE,
-        content_type='text/html',
-        headers={
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-        }
-    )
+    try:
+        html_content = load_template("webchat.html")
+        return web.Response(
+            text=html_content,
+            content_type='text/html',
+            headers={
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+            }
+        )
+    except FileNotFoundError:
+        logger.error(f"WebChat template not found: {TEMPLATE_DIR / 'webchat.html'}")
+        return web.Response(
+            text="<html><body><h1>WebChat template not found</h1></body></html>",
+            status=500,
+            content_type='text/html'
+        )
+
+
+async def serve_static(request: web.Request) -> web.Response:
+    """Serve static files (CSS, JS)."""
+    path = request.match_info.get('path', '')
+    file_path = STATIC_DIR / path
+    
+    # Security: prevent directory traversal
+    try:
+        file_path = file_path.resolve()
+        if not str(file_path).startswith(str(STATIC_DIR.resolve())):
+            return web.Response(status=403, text="Forbidden")
+    except (ValueError, OSError):
+        return web.Response(status=400, text="Invalid path")
+    
+    if not file_path.exists():
+        return web.Response(status=404, text="Not found")
+    
+    # Determine content type
+    content_type = 'text/plain'
+    if file_path.suffix == '.css':
+        content_type = 'text/css'
+    elif file_path.suffix == '.js':
+        content_type = 'application/javascript'
+    elif file_path.suffix == '.html':
+        content_type = 'text/html'
+    elif file_path.suffix == '.json':
+        content_type = 'application/json'
+    elif file_path.suffix == '.png':
+        content_type = 'image/png'
+    elif file_path.suffix == '.jpg' or file_path.suffix == '.jpeg':
+        content_type = 'image/jpeg'
+    elif file_path.suffix == '.svg':
+        content_type = 'image/svg+xml'
+    elif file_path.suffix == '.ico':
+        content_type = 'image/x-icon'
+    
+    try:
+        with open(file_path, 'rb') as f:
+            content = f.read()
+        return web.Response(
+            body=content,
+            content_type=content_type,
+            headers={
+                'Cache-Control': 'public, max-age=3600',
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error serving static file {file_path}: {e}")
+        return web.Response(status=500, text="Internal server error")
 
 
 async def api_chat(request: web.Request) -> web.Response:
-    """Handle chat API requests."""
+    """Handle chat API requests.
+    
+    POST /api/chat
+    Body: {"message": "...", "session_id": "optional"}
+    """
     try:
         data = await request.json()
         message = data.get('message', '').strip()
+        
         # Dynamic session_id with timestamp-based default for multi-session support
         session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
         
@@ -526,6 +145,8 @@ async def api_chat(request: web.Request) -> web.Response:
             'usage': usage
         })
         
+    except json.JSONDecodeError:
+        return web.json_response({'error': 'Invalid JSON'}, status=400)
     except Exception as e:
         logger.error(f"Chat error: {e}")
         return web.json_response({'error': str(e)}, status=500)
@@ -534,7 +155,7 @@ async def api_chat(request: web.Request) -> web.Response:
 async def api_sessions(request: web.Request) -> web.Response:
     """List active sessions."""
     try:
-        sessions = await session_store.list_sessions()
+        sessions = session_manager.list_sessions()
         return web.json_response({'sessions': sessions})
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
@@ -565,8 +186,6 @@ async def api_clear(request: web.Request) -> web.Response:
         session_id = data.get('session_id', 'webchat')
         
         session_manager.clear_history(session_id)
-        await session_store.delete_session(session_id)
-        usage_tracker.clear_session_usage(session_id)
         
         return web.json_response({'success': True})
     except Exception as e:
@@ -574,11 +193,27 @@ async def api_clear(request: web.Request) -> web.Response:
 
 
 def setup_webchat_routes(app: web.Application):
-    """Set up WebChat routes."""
+    """Set up WebChat routes.
+    
+    Routes:
+        GET  /chat           - WebChat UI
+        GET  /static/*       - Static files (CSS, JS)
+        POST /api/chat       - Send message
+        GET  /api/sessions   - List sessions
+        GET  /api/usage      - Get usage stats
+        POST /api/clear      - Clear session
+    """
     app.router.add_get('/chat', serve_webchat)
+    app.router.add_get('/static/{path:.*}', serve_static)
     app.router.add_post('/api/chat', api_chat)
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
     
-    logger.info("WebChat routes registered: /chat, /api/chat, /api/sessions, /api/usage, /api/clear")
+    logger.info("WebChat routes registered:")
+    logger.info("  GET  /chat        - WebChat UI")
+    logger.info("  GET  /static/*    - Static files (CSS, JS)")
+    logger.info("  POST /api/chat    - Send message")
+    logger.info("  GET  /api/sessions - List sessions")
+    logger.info("  GET  /api/usage    - Get usage stats")
+    logger.info("  POST /api/clear   - Clear session")
