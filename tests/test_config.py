@@ -8,7 +8,7 @@ import pytest
 import tempfile
 import os
 
-from openclaw_mini.config import Config
+from config import Config
 
 
 class TestConfigBasic:

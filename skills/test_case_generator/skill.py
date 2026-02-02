@@ -3,7 +3,7 @@
 import re
 from typing import Any, Dict
 
-from openclaw_mini.agent.llm import llm_client
+from agent.llm import llm_client
 
 
 class TestCaseSkill:

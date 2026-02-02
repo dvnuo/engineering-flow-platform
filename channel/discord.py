@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, Optional
 import discord
 from discord.ext import commands
 
-from openclaw_mini.config import config
+from config import config
 
 logger = logging.getLogger(__name__)
 

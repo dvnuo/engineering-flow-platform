@@ -15,7 +15,7 @@ class TestDiscordChannel:
 
     def test_discord_channel_init(self):
         """Test DiscordChannel initialization."""
-        with patch('openclaw_mini.channel.discord.config') as mock_config:
+        with patch('channel.discord.config') as mock_config:
             mock_config.discord = {
                 'mode': 'bot',
                 'bot_token': 'test_token',
@@ -23,7 +23,7 @@ class TestDiscordChannel:
                 'webhook_url': ''
             }
             
-            from openclaw_mini.channel.discord import DiscordChannel
+            from channel.discord import DiscordChannel
             
             channel = DiscordChannel()
             assert channel.mode == 'bot'
@@ -32,7 +32,7 @@ class TestDiscordChannel:
 
     def test_verify_discord_signature_missing_values(self):
         """Test signature verification with missing values."""
-        from openclaw_mini.gateway.server import verify_discord_signature
+        from gateway.server import verify_discord_signature
         
         # Missing signature or secret should return True (skip verification)
         result = verify_discord_signature(b'test', '', '')
@@ -44,10 +44,10 @@ class TestDiscordChannel:
     @pytest.mark.asyncio
     async def test_handle_webhook_payload(self):
         """Test webhook payload handling."""
-        with patch('openclaw_mini.channel.discord.config') as mock_config:
+        with patch('channel.discord.config') as mock_config:
             mock_config.discord = {}
             
-            from openclaw_mini.channel.discord import DiscordChannel
+            from channel.discord import DiscordChannel
             
             channel = DiscordChannel()
             payload = {
@@ -69,14 +69,14 @@ class TestDiscordChannel:
     @pytest.mark.asyncio
     async def test_send_message_bot_api_mode(self):
         """Test sending message in Bot API mode."""
-        with patch('openclaw_mini.channel.discord.config') as mock_config:
+        with patch('channel.discord.config') as mock_config:
             mock_config.discord = {
                 'mode': 'bot',
                 'bot_token': 'test_token',
                 'channel_id': '123456'
             }
             
-            from openclaw_mini.channel.discord import DiscordChannel
+            from channel.discord import DiscordChannel
             
             # Create mock bot and channel
             mock_channel = AsyncMock()
@@ -97,14 +97,14 @@ class TestDiscordChannel:
     @pytest.mark.asyncio
     async def test_send_message_without_channel_id(self):
         """Test sending message without channel_id uses default."""
-        with patch('openclaw_mini.channel.discord.config') as mock_config:
+        with patch('channel.discord.config') as mock_config:
             mock_config.discord = {
                 'mode': 'bot',
                 'bot_token': 'test_token',
                 'channel_id': '123456'
             }
             
-            from openclaw_mini.channel.discord import DiscordChannel
+            from channel.discord import DiscordChannel
             
             mock_channel = AsyncMock()
             mock_channel.send = AsyncMock(return_value=MagicMock(id='sent456'))
@@ -122,10 +122,10 @@ class TestDiscordChannel:
     @pytest.mark.asyncio
     async def test_set_message_callback(self):
         """Test setting message callback."""
-        with patch('openclaw_mini.channel.discord.config') as mock_config:
+        with patch('channel.discord.config') as mock_config:
             mock_config.discord = {'mode': 'bot', 'bot_token': 'test'}
             
-            from openclaw_mini.channel.discord import DiscordChannel
+            from channel.discord import DiscordChannel
             
             channel = DiscordChannel()
             callback = AsyncMock()
@@ -141,13 +141,13 @@ class TestDiscordBot:
 
     def test_discord_bot_init(self):
         """Test DiscordBot initialization."""
-        with patch('openclaw_mini.channel.discord.config') as mock_config:
+        with patch('channel.discord.config') as mock_config:
             mock_config.discord = {
                 'bot_token': 'test_token',
                 'channel_id': '123456'
             }
             
-            from openclaw_mini.channel.discord import DiscordBot
+            from channel.discord import DiscordBot
             
             bot = DiscordBot(message_callback=None)
             assert bot.target_channel_id == '123456'
@@ -160,7 +160,7 @@ class TestRunBot:
     @pytest.mark.asyncio
     async def test_run_bot_function(self):
         """Test run_bot function exists and is callable."""
-        from openclaw_mini.channel.discord import run_bot
+        from channel.discord import run_bot
         import inspect
         
         assert inspect.iscoroutinefunction(run_bot)

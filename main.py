@@ -16,8 +16,8 @@ if str(project_root) not in sys.path:
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from openclaw_mini.gateway.server import gateway
-from openclaw_mini.config import config
+from gateway.server import gateway
+from config import config
 
 
 def setup_logging(level: int = logging.INFO) -> None:

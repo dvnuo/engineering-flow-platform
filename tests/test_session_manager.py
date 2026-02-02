@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import pytest
-from openclaw_mini.session.manager import SessionManager, session_manager
+from session.manager import SessionManager, session_manager
 
 
 @pytest.fixture
