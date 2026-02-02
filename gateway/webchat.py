@@ -493,43 +493,37 @@ async def api_chat(request: web.Request) -> web.Response:
     try:
         data = await request.json()
         message = data.get('message', '').strip()
-        session_id = data.get('session_id', 'webchat')
+        # Dynamic session_id with timestamp-based default for multi-session support
+        session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
         
         if not message:
             return web.json_response({'error': 'Empty message'}, status=400)
         
-        # Get or create session
-        session = session_manager.get_session(session_id)
-        
-        # Add user message to session
-        session_manager.add_message(session_id, 'user', message)
-        
         # Run agent (history is managed internally by session_manager)
         agent = AgentCore()
-        response = await agent.process(
+        result = await agent.process(
             message=message,
             session_id=session_id,
-            user_name="webchat-user"
+            user_name="webchat-user",
+            track_usage=True
         )
         
-        result = {"response": response}
+        response = result.get("response", "")
+        usage = result.get("usage", {})
         
-        # Record usage
-        if result.get('usage'):
+        # Record usage if available
+        if usage:
             usage_tracker.record_usage(
                 session_id=session_id,
-                response=result['usage'],
+                response={"usage": usage},
                 model=config.llm.get('model', 'unknown'),
                 channel='webchat'
             )
         
-        # Add assistant response to session
-        session_manager.add_message(session_id, 'assistant', result.get('response', ''))
-        
         return web.json_response({
-            'response': result.get('response', ''),
+            'response': response,
             'session_id': session_id,
-            'usage': result.get('usage')
+            'usage': usage
         })
         
     except Exception as e:

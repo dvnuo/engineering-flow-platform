@@ -135,6 +135,7 @@ class Gateway:
         self.app.router.add_post("/api/sessions/{session_id}/clear", self.handle_clear_session)
         self.app.router.add_post("/api/test", self.handle_test_message)
         self.app.router.add_post("/api/config/reload", self.handle_config_reload)
+        self.app.router.add_get("/api/queue/status", self.handle_queue_status)
 
         # Webhook routes
         if self.mode == "webhook":
@@ -251,6 +252,24 @@ class Gateway:
             "reloaded": reloaded,
             "message": "Configuration reloaded" if reloaded else "No changes detected",
         })
+
+    async def handle_queue_status(self, request: Request) -> web.Response:
+        """Get execution queue status.
+        
+        GET /api/queue/status
+        Returns: {"status": "ok", "queues": {...}, "active_sessions": N}
+        """
+        try:
+            from agent.queue import execution_queue
+            queues = await execution_queue.list_all_queues()
+            return web.json_response({
+                "status": "ok",
+                "queues": queues,
+                "active_sessions": execution_queue.get_active_sessions(),
+            })
+        except Exception as e:
+            logger.error(f"Queue status error: {e}")
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def handle_test_message(self, request: Request) -> web.Response:
         """Test endpoint for sending a message to the agent via HTTP.

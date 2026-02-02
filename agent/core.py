@@ -72,16 +72,25 @@ When you use a tool, use this format:
         message: str,
         session_id: str,
         user_name: Optional[str] = None,
-    ) -> str:
+        track_usage: bool = True,
+    ) -> Dict[str, Any]:
         """Process a user message with ReAct pattern.
         
         Flow: User → LLM (with tools) → Tool Call → Execute → Result → LLM → Final Response
+        
+        Returns:
+            Dict with:
+                - response: str - The assistant's response
+                - usage: Dict - Token usage from LLM API (if track_usage=True)
         """
+        usage_data = {}
+        
         # Check if message matches a skill first
         skill_name = skills_executor.match_skill(message)
         if skill_name:
             logger.info(f"Matched skill: {skill_name}")
-            return await self._execute_skill(skill_name, message, session_id)
+            result = await self._execute_skill(skill_name, message, session_id)
+            return {"response": result, "usage": usage_data}
 
         # Add user message to history
         session_manager.add_message(session_id, "user", message)
@@ -93,19 +102,23 @@ When you use a tool, use this format:
         
         # Step 1: Call LLM with tools
         logger.debug(f"Calling LLM with {len(self.tools)} tools")
-        result = await llm_client.chat(
+        llm_result = await llm_client.chat(
             messages=messages,
             system_prompt=self.system_prompt,
             tools=self.tools
         )
         
-        content = result.get("content", "").strip()
-        tool_calls = result.get("tool_calls", [])
+        # Track usage if enabled
+        if track_usage:
+            usage_data = llm_result.get("usage", {})
+        
+        content = llm_result.get("content", "").strip()
+        tool_calls = llm_result.get("tool_calls", [])
         
         # If no tool calls, return directly
         if not tool_calls:
             session_manager.add_message(session_id, "assistant", content)
-            return content
+            return {"response": content, "usage": usage_data}
         
         logger.info(f"LLM requested {len(tool_calls)} tool calls")
         
@@ -155,10 +168,22 @@ When you use a tool, use this format:
         
         final_content = final_result.get("content", "").strip()
         
+        # Track final usage and merge
+        if track_usage:
+            final_usage = final_result.get("usage", {})
+            if usage_data:
+                usage_data = {
+                    "prompt_tokens": usage_data.get("prompt_tokens", 0) + final_usage.get("prompt_tokens", 0),
+                    "completion_tokens": usage_data.get("completion_tokens", 0) + final_usage.get("completion_tokens", 0),
+                    "total_tokens": usage_data.get("total_tokens", 0) + final_usage.get("total_tokens", 0),
+                }
+            else:
+                usage_data = final_usage
+        
         # Add final response to history
         session_manager.add_message(session_id, "assistant", final_content)
         
-        return final_content
+        return {"response": final_content, "usage": usage_data}
 
     async def _execute_skill(
         self,

@@ -108,9 +108,13 @@ class LLMClient:
                     content = ""
                     tool_calls = []
 
+                # Extract usage info from response
+                usage = data.get("usage", {})
+
                 return {
                     "content": content.strip() if content else "",
                     "tool_calls": tool_calls,
+                    "usage": usage,
                 }
 
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
