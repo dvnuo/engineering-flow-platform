@@ -20,6 +20,7 @@ from gateway.server import gateway
 from config import config
 from session.persistence import session_store
 from session.usage import usage_tracker
+from cron.mention_poller import start_polling, stop_polling, is_enabled
 
 
 def setup_logging(level: int = logging.INFO) -> None:
@@ -86,6 +87,13 @@ async def main() -> None:
 
     try:
         await gateway.start()
+        
+        # Start mention polling if enabled
+        polling_task = None
+        if is_enabled():
+            logger.info("Starting mention polling...")
+            polling_task = asyncio.create_task(start_polling())
+        
         logger.info("OpenClaw Mini is running. Press Ctrl+C to stop.")
 
         # Keep running
@@ -95,6 +103,12 @@ async def main() -> None:
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:
+        # Stop mention polling
+        if polling_task and not polling_task.done():
+            logger.info("Stopping mention polling...")
+            await stop_polling()
+            await polling_task
+        
         await gateway.stop()
 
 
