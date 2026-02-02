@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from openclaw_mini.config import config
+from config import config
 
 logger = logging.getLogger(__name__)
 

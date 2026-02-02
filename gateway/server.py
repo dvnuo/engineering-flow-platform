@@ -10,15 +10,15 @@ from typing import Any, Callable, Dict
 from aiohttp import web
 from aiohttp.web import Request
 
-from openclaw_mini.agent.core import agent
-from openclaw_mini.channel.discord import discord_channel
-from openclaw_mini.channel.jira import jira_channel
-from openclaw_mini.config import config
-from openclaw_mini.session.manager import DISCORD_SESSION_PREFIX, JIRA_SESSION_PREFIX
+from agent.core import agent
+from channel.discord import discord_channel
+from channel.jira import jira_channel
+from config import config
+from session.manager import DISCORD_SESSION_PREFIX, JIRA_SESSION_PREFIX
 
 # Lazy import test_case_skill to avoid circular dependency
 try:
-    from openclaw_mini.skills.test_case_generator.skill import test_case_skill
+    from skills.test_case_generator.skill import test_case_skill
 except ImportError:
     test_case_skill = None
 
@@ -211,13 +211,13 @@ class Gateway:
 
     async def handle_list_sessions(self, request: Request) -> web.Response:
         """List all active sessions."""
-        from openclaw_mini.session.manager import session_manager
+        from .session.manager import session_manager
         sessions = session_manager.list_sessions()
         return web.json_response({"sessions": sessions, "count": len(sessions)})
 
     async def handle_clear_session(self, request: Request) -> web.Response:
         """Clear a session's history."""
-        from openclaw_mini.session.manager import session_manager
+        from .session.manager import session_manager
         session_id = request.match_info.get("session_id", "")
 
         if session_id:
@@ -302,9 +302,20 @@ class Gateway:
     async def start(self) -> None:
         """Start the gateway server."""
         if self.mode == "bot":
-            # Bot API mode - start Discord bot (which runs its own asyncio loop)
-            await discord_channel.start(message_callback=handle_discord_message)
-            logger.info(f"Gateway started in Bot API mode (listening for Discord messages)")
+            # Bot API mode - start Discord bot and HTTP server in parallel
+            # Use create_task because discord_channel.start() blocks
+            bot_task = asyncio.create_task(discord_channel.start(message_callback=handle_discord_message))
+            
+            # Small delay to let bot start
+            await asyncio.sleep(2)
+            
+            # Start HTTP server for API endpoints (including test endpoint)
+            self.runner = web.AppRunner(self.app)
+            await self.runner.setup()
+            self.site = web.TCPSite(self.runner, self.host, self.port)
+            await self.site.start()
+            
+            logger.info(f"Gateway started in Bot API mode on http://{self.host}:{self.port}")
         else:
             # Webhook mode - start HTTP server and Discord session
             await discord_channel.start()

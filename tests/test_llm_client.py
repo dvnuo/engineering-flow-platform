@@ -10,7 +10,7 @@ import asyncio
 import httpx
 
 # Import after path setup
-from openclaw_mini.agent.llm import LLMClient
+from agent.llm import LLMClient
 
 
 class MockResponse:

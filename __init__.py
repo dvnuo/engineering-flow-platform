@@ -2,11 +2,11 @@
 
 __version__ = "0.1.0"
 
-from openclaw_mini.config import config
-from openclaw_mini.agent import agent, llm_client
-from openclaw_mini.gateway import gateway
-from openclaw_mini.session import session_manager
-from openclaw_mini.channel import discord_channel
+from .config import config
+from .agent import agent, llm_client
+from .gateway import gateway
+from .session import session_manager
+from .channel import discord_channel
 
 __all__ = [
     "__version__",

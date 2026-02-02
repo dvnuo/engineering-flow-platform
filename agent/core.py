@@ -4,9 +4,9 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from openclaw_mini.agent.llm import llm_client
-from openclaw_mini.session.manager import session_manager
-from openclaw_mini.skills.executor import (
+from agent.llm import llm_client
+from session.manager import session_manager
+from skills.executor import (
     skills_executor,
     SkillResult,
     get_tools_schemas,

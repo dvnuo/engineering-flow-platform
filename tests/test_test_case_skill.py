@@ -15,7 +15,7 @@ class TestTestCaseSkill:
 
     def test_skill_init(self):
         """Test skill initialization."""
-        from openclaw_mini.skills.test_case_generator.skill import TestCaseSkill
+        from skills.test_case_generator.skill import TestCaseSkill
         
         skill = TestCaseSkill()
         assert skill.name == "test_case_generator"
@@ -24,9 +24,9 @@ class TestTestCaseSkill:
     @pytest.mark.asyncio
     async def test_generate_test_cases(self):
         """Test generating test cases from requirements."""
-        from openclaw_mini.skills.test_case_generator.skill import TestCaseSkill
+        from skills.test_case_generator.skill import TestCaseSkill
         
-        with patch('openclaw_mini.skills.test_case_generator.skill.llm_client') as mock_llm:
+        with patch('skills.test_case_generator.skill.llm_client') as mock_llm:
             mock_llm.complete = AsyncMock(
                 return_value="""import pytest
 
@@ -49,9 +49,9 @@ class TestUserLogin:
     @pytest.mark.asyncio
     async def test_generate_with_empty_requirements(self):
         """Test error handling with empty requirements."""
-        from openclaw_mini.skills.test_case_generator.skill import TestCaseSkill
+        from skills.test_case_generator.skill import TestCaseSkill
         
-        with patch('openclaw_mini.skills.test_case_generator.skill.llm_client') as mock_llm:
+        with patch('skills.test_case_generator.skill.llm_client') as mock_llm:
             mock_llm.complete = AsyncMock(return_value="")
             
             skill = TestCaseSkill()
@@ -62,7 +62,7 @@ class TestUserLogin:
 
     def test_parse_requirements_from_adf(self):
         """Test parsing ADF formatted description."""
-        from openclaw_mini.skills.test_case_generator.skill import TestCaseSkill
+        from skills.test_case_generator.skill import TestCaseSkill
         
         skill = TestCaseSkill()
         adf_description = {
@@ -87,7 +87,7 @@ class TestUserLogin:
 
     def test_parse_requirements_from_string(self):
         """Test parsing plain text description."""
-        from openclaw_mini.skills.test_case_generator.skill import TestCaseSkill
+        from skills.test_case_generator.skill import TestCaseSkill
         
         skill = TestCaseSkill()
         plain_description = "这是一个简单的需求描述"
@@ -101,9 +101,9 @@ class TestTestCaseCommand:
 
     def test_is_test_case_command_chinese(self):
         """Test detecting Chinese test case commands."""
-        from openclaw_mini.channel.jira import JiraChannel
+        from channel.jira import JiraChannel
         
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
             
             channel = JiraChannel()
@@ -113,9 +113,9 @@ class TestTestCaseCommand:
 
     def test_is_test_case_command_english(self):
         """Test detecting English test case commands."""
-        from openclaw_mini.channel.jira import JiraChannel
+        from channel.jira import JiraChannel
         
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
             
             channel = JiraChannel()
@@ -125,9 +125,9 @@ class TestTestCaseCommand:
 
     def test_is_not_test_case_command(self):
         """Test negative case - regular messages."""
-        from openclaw_mini.channel.jira import JiraChannel
+        from channel.jira import JiraChannel
         
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
             
             channel = JiraChannel()
@@ -142,12 +142,12 @@ class TestTestCaseIntegration:
     @pytest.mark.asyncio
     async def test_full_generation_flow(self):
         """Test the complete flow from command to test cases."""
-        from openclaw_mini.skills.test_case_generator.skill import TestCaseSkill
-        from openclaw_mini.channel.jira import JiraChannel
+        from skills.test_case_generator.skill import TestCaseSkill
+        from channel.jira import JiraChannel
         
         # Mock dependencies
-        with patch('openclaw_mini.skills.test_case_generator.skill.llm_client') as mock_llm, \
-             patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('skills.test_case_generator.skill.llm_client') as mock_llm, \
+             patch('channel.jira.config') as mock_config:
             
             mock_llm.complete = AsyncMock(
                 return_value="""def test_feature():

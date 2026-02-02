@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from openclaw_mini.config import config
+from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class SkillsExecutor:
         """Import a skill module."""
         try:
             module = __import__(
-                f"openclaw_mini.skills.{skill_name}.skill",
+                f"skills.{skill_name}.skill",
                 fromlist=[skill_name.title()],
             )
 

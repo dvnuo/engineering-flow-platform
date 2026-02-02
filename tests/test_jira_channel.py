@@ -15,7 +15,7 @@ class TestJiraChannel:
 
     def test_jira_channel_init(self):
         """Test JiraChannel initialization."""
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {
                 'enabled': True,
                 'base_url': 'https://test.atlassian.net',
@@ -24,7 +24,7 @@ class TestJiraChannel:
                 'project_key': 'TEST',
             }
             
-            from openclaw_mini.channel.jira import JiraChannel
+            from channel.jira import JiraChannel
             
             channel = JiraChannel()
             assert channel.base_url == 'https://test.atlassian.net'
@@ -36,10 +36,10 @@ class TestJiraChannel:
 
     def test_jira_channel_init_defaults(self):
         """Test JiraChannel with default values."""
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
             
-            from openclaw_mini.channel.jira import JiraChannel
+            from channel.jira import JiraChannel
             
             channel = JiraChannel()
             assert channel.base_url == ""
@@ -48,10 +48,10 @@ class TestJiraChannel:
 
     def test_create_session_id(self):
         """Test session ID creation."""
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
             
-            from openclaw_mini.channel.jira import JiraChannel
+            from channel.jira import JiraChannel
             
             channel = JiraChannel()
             session_id = channel.create_session_id("PROJ-123")
@@ -59,10 +59,10 @@ class TestJiraChannel:
 
     def test_handle_webhook_payload_comment(self):
         """Test handling comment webhook payload."""
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
             
-            from openclaw_mini.channel.jira import JiraChannel
+            from channel.jira import JiraChannel
             
             channel = JiraChannel()
             payload = {
@@ -97,10 +97,10 @@ class TestJiraChannel:
 
     def test_handle_webhook_payload_non_comment(self):
         """Test handling non-comment webhook is ignored."""
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
             
-            from openclaw_mini.channel.jira import JiraChannel
+            from channel.jira import JiraChannel
             
             channel = JiraChannel()
             payload = {
@@ -117,10 +117,10 @@ class TestJiraChannel:
 
     def test_handle_webhook_payload_project_filter(self):
         """Test project key filtering."""
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {'project_key': 'PROJ'}
             
-            from openclaw_mini.channel.jira import JiraChannel
+            from channel.jira import JiraChannel
             
             channel = JiraChannel()
             
@@ -157,14 +157,14 @@ class TestJiraChannel:
 
     def test_add_comment_code_block(self):
         """Test adding a comment with code block."""
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {
                 'base_url': 'https://test.atlassian.net',
                 'email': 'test@example.com',
                 'api_token': 'test_token',
             }
             
-            from openclaw_mini.channel.jira import JiraChannel
+            from channel.jira import JiraChannel
             
             channel = JiraChannel()
             channel.session = AsyncMock()
@@ -201,10 +201,10 @@ class TestJiraChannel:
 
     def test_handle_webhook_payload_adf_format(self):
         """Test handling ADF format comment body."""
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
             
-            from openclaw_mini.channel.jira import JiraChannel
+            from channel.jira import JiraChannel
             
             channel = JiraChannel()
             payload = {
@@ -238,14 +238,14 @@ class TestJiraChannel:
     @pytest.mark.asyncio
     async def test_add_comment_text_only(self):
         """Test adding a plain text comment."""
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {
                 'base_url': 'https://test.atlassian.net',
                 'email': 'test@example.com',
                 'api_token': 'test_token',
             }
             
-            from openclaw_mini.channel.jira import JiraChannel
+            from channel.jira import JiraChannel
             
             channel = JiraChannel()
             channel.session = AsyncMock()
@@ -267,14 +267,14 @@ class TestJiraChannel:
     @pytest.mark.asyncio
     async def test_get_issue(self):
         """Test getting issue details."""
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {
                 'base_url': 'https://test.atlassian.net',
                 'email': 'test@example.com',
                 'api_token': 'test_token',
             }
             
-            from openclaw_mini.channel.jira import JiraChannel
+            from channel.jira import JiraChannel
             
             channel = JiraChannel()
             channel.session = AsyncMock()
@@ -303,13 +303,13 @@ class TestJiraAuth:
         """Test that auth header is correctly formatted."""
         import base64
         
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {
                 'email': 'test@example.com',
                 'api_token': 'test_token',
             }
             
-            from openclaw_mini.channel.jira import JiraChannel
+            from channel.jira import JiraChannel
             
             channel = JiraChannel()
             expected_auth = base64.b64encode(b'test@example.com:test_token').decode()
@@ -322,14 +322,14 @@ class TestJiraAPIEndpoints:
     @pytest.mark.asyncio
     async def test_search_issues(self):
         """Test issue search."""
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {
                 'base_url': 'https://test.atlassian.net',
                 'email': 'test@example.com',
                 'api_token': 'test_token',
             }
             
-            from openclaw_mini.channel.jira import JiraChannel
+            from channel.jira import JiraChannel
             
             channel = JiraChannel()
             channel.session = AsyncMock()
@@ -355,7 +355,7 @@ class TestJiraSecurity:
 
     def test_jql_injection_blocked_semicolon(self):
         """Test that JQL injection with semicolon is blocked."""
-        from openclaw_mini.channel.jira import validate_jql
+        from channel.jira import validate_jql
         
         # These should be blocked
         assert validate_jql("project = PROJ; DELETE FROM issues") == False
@@ -365,14 +365,14 @@ class TestJiraSecurity:
 
     def test_jql_injection_blocked_exec(self):
         """Test that JQL injection with EXEC is blocked."""
-        from openclaw_mini.channel.jira import validate_jql
+        from channel.jira import validate_jql
         
         assert validate_jql("project = PROJ; exec xp_shell") == False
         assert validate_jql("project = PROJ; execute whatever") == False
 
     def test_valid_jql_allowed(self):
         """Test that valid JQL queries are allowed."""
-        from openclaw_mini.channel.jira import validate_jql
+        from channel.jira import validate_jql
         
         # These should be allowed
         assert validate_jql("project = PROJ AND status = Open") == True
@@ -381,14 +381,14 @@ class TestJiraSecurity:
 
     def test_long_comment_split(self):
         """Test that long comments are split correctly."""
-        with patch('openclaw_mini.channel.jira.config') as mock_config:
+        with patch('channel.jira.config') as mock_config:
             mock_config.jira = {
                 'base_url': 'https://test.atlassian.net',
                 'email': 'test@example.com',
                 'api_token': 'test_token',
             }
             
-            from openclaw_mini.channel.jira import JiraChannel, JIRA_MAX_COMMENT_LENGTH
+            from channel.jira import JiraChannel, JIRA_MAX_COMMENT_LENGTH
             
             channel = JiraChannel()
             channel.session = AsyncMock()

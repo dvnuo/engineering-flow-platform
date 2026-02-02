@@ -9,8 +9,8 @@ from typing import Any, Dict, Optional
 
 import httpx
 
-from openclaw_mini.config import config
-from openclaw_mini.agent.llm import llm_client
+from config import config
+from agent.llm import llm_client
 
 logger = logging.getLogger(__name__)
 
