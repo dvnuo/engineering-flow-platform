@@ -48,12 +48,12 @@ def verify_discord_signature(payload: bytes, signature: str, secret: str) -> boo
 async def handle_discord_message(message: str, session_id: str, user_name: str) -> str:
     """Handle a Discord message and return response."""
     try:
-        response = await agent.process(
+        result = await agent.process(
             message=message,
             session_id=session_id,
             user_name=user_name,
         )
-        return response
+        return result["response"]
     except Exception as e:
         logger.error(f"Error processing message: {e}")
         return f"Sorry, I encountered an error: {str(e)}"
@@ -72,12 +72,12 @@ async def handle_jira_message(
             return await handle_test_case_generation(issue_key, user_name)
         
         # Normal conversation
-        response = await agent.process(
+        result = await agent.process(
             message=message,
             session_id=session_id,
             user_name=user_name,
         )
-        return response
+        return result["response"]
     except Exception as e:
         logger.error(f"Error processing Jira comment: {e}")
         return f"Sorry, I encountered an error: {str(e)}"
@@ -286,7 +286,7 @@ class Gateway:
                 return web.json_response({"status": "error", "message": "message required"}, status=400)
             
             # Process message through agent
-            response = await agent.process(
+            result = await agent.process(
                 message=message,
                 session_id=session_id,
                 user_name="http-tester",
@@ -295,7 +295,7 @@ class Gateway:
             return web.json_response({
                 "status": "ok",
                 "message": message,
-                "response": response,
+                "response": result["response"],
                 "session_id": session_id,
             })
             

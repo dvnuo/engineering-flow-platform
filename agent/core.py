@@ -2,9 +2,11 @@
 
 import json
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from agent.llm import llm_client
+from agent.memory import memory_system
 from session.manager import session_manager
 from skills.executor import (
     skills_executor,
@@ -19,7 +21,7 @@ logger = logging.getLogger(__name__)
 class Agent:
     """Agent for processing messages with ReAct pattern (Reasoning + Acting)."""
 
-    def __init__(self, system_prompt: Optional[str] = None):
+    def __init__(self, system_prompt: Optional[str] = None, session_id: str = "default"):
         # Build OpenClaw-style system prompt
         tools = get_tools_schemas()
         
@@ -29,7 +31,36 @@ class Agent:
             for t in tools
         ])
         
-        default_prompt = f"""You are a helpful AI assistant that can execute commands, read/write files, search the web, and more.
+        # Load memory files for system prompt
+        # For main session (includes memory), include MEMORY.md
+        # For other sessions, exclude memory for security
+        include_memory = (session_id == "main" or session_id.startswith("main") or 
+                         session_id == "webchat" or "discord" in session_id)
+        
+        memory_prompt = memory_system.build_system_prompt(include_memory=include_memory)
+        
+        # Current date/time for the prompt
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+        
+        if system_prompt:
+            # Custom prompt provided
+            self.system_prompt = system_prompt
+        elif memory_prompt:
+            # Use memory files + basic structure
+            self.system_prompt = f"""{memory_prompt}
+
+## Tooling
+
+You have access to the following tools. When a user asks you to do something that requires a tool, you MUST use the appropriate tool. Do NOT explain how to do something—DO IT directly.
+
+{tools_list}
+
+## Current Date & Time
+{current_time}
+"""
+        else:
+            # Fallback to basic prompt
+            self.system_prompt = f"""You are a helpful AI assistant that can execute commands, read/write files, search the web, and more.
 
 ## Tooling
 
@@ -47,24 +78,9 @@ You have access to the following tools. When a user asks you to do something tha
 - Execute tools proactively—don't just talk about actions
 
 ## Current Date & Time
-
-Time zone: Asia/Hong_Kong
-
-## Runtime
-
-You are running in a Linux environment. Your workspace is /root/.openclaw/workspace.
-
----
-Reply with a tool call (in JSON format) when you need to use a tool, or reply with your answer directly when no tool is needed.
-
-When you use a tool, use this format:
-{{
-  "name": "tool-name",
-  "arguments": {{"arg1": "value1", "arg2": "value2"}}
-}}
+{current_time}
 """
         
-        self.system_prompt = system_prompt or default_prompt
         self.tools = tools
 
     async def process(
@@ -217,7 +233,8 @@ When you use a tool, use this format:
     ) -> str:
         """Process a message with additional context."""
         full_message = f"Context: {context}\n\nUser: {message}"
-        return await self.process(full_message, context.get("session_id", "default"))
+        result = await self.process(full_message, context.get("session_id", "default"))
+        return result["response"]
 
     def clear_session(self, session_id: str) -> None:
         """Clear a session's history."""
