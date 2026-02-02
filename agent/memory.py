@@ -18,16 +18,17 @@ DEFAULT_WORKSPACE = Path.home() / ".openclaw" / "workspace"
 class MemorySystem:
     """Manages loading and access to workspace memory files."""
     
-    def __init__(self, workspace_path: Optional[str] = None):
+    def __init__(self, workspace_path: Optional[str] = None, cache_ttl_seconds: int = 60):
         """Initialize memory system.
         
         Args:
             workspace_path: Path to workspace directory. Defaults to ~/.openclaw/workspace
+            cache_ttl_seconds: Cache TTL in seconds (default: 60). Set to 0 to disable caching.
         """
         self.workspace = Path(workspace_path) if workspace_path else DEFAULT_WORKSPACE
         self._cache: Dict[str, Any] = {}
         self._cache_time: Optional[datetime] = None
-        self._cache_ttl_seconds = 60  # Cache for 60 seconds
+        self._cache_ttl_seconds = cache_ttl_seconds
     
     def _load_file(self, filename: str) -> Optional[str]:
         """Load a markdown file from workspace.
@@ -57,6 +58,10 @@ class MemorySystem:
         Returns:
             Loaded value
         """
+        # If caching is disabled (TTL=0), always reload
+        if self._cache_ttl_seconds <= 0:
+            return loader()
+        
         now = datetime.now()
         
         # Check if cache is stale
