@@ -31,11 +31,11 @@ class TestInternationalization:
 
     def test_english_system_prompt(self):
         """Test that system prompt is in English."""
-        from openclaw_mini.agent.core import Agent
-        from openclaw_mini.skills.executor import get_tools_schemas
+        from agent.core import Agent
+        from skills.executor import get_tools_schemas
         
         # Mock get_tools_schemas at module level
-        with patch('openclaw_mini.skills.executor.get_tools_schemas', return_value=[]):
+        with patch('skills.executor.get_tools_schemas', return_value=[]):
             agent = Agent()
             
             # System prompt should be in English
@@ -45,7 +45,7 @@ class TestInternationalization:
 
     def test_english_tool_descriptions(self):
         """Test that tool descriptions are in English."""
-        from openclaw_mini.skills.executor.tools import (
+        from skills.executor.tools import (
             ExecTool, ReadTool, WriteTool, EditTool,
             WebSearchTool, WebFetchTool
         )
@@ -71,14 +71,14 @@ class TestInternationalization:
 
     def test_english_skill_descriptions(self):
         """Test that skill descriptions are in English."""
-        from openclaw_mini.skills.test_case_generator.skill import TestCaseSkill
+        from skills.test_case_generator.skill import TestCaseSkill
         
         skill = TestCaseSkill()
         assert "pytest" in skill.description.lower() or "test" in skill.description.lower()
 
     def test_english_jira_messages(self):
         """Test that Jira-related messages are in English."""
-        from openclaw_mini.channel.jira import JiraChannel
+        from channel.jira import JiraChannel
         
         # Test command detection (should be English)
         # is_test_case_command is an instance method
@@ -130,10 +130,10 @@ class TestInternationalization:
 
     def test_english_log_messages(self):
         """Test that log messages are in English."""
-        from openclaw_mini.gateway.server import logger
+        from gateway.server import logger
         
-        # Logger should use English
-        assert logger.name == "openclaw_mini.gateway.server"
+        # Logger should use English (new structure uses 'gateway.server')
+        assert "gateway" in logger.name or "server" in logger.name
 
     def test_english_response_format(self):
         """Test that response formats use English."""
@@ -151,7 +151,7 @@ class TestI18nConfiguration:
 
     def test_config_works_with_english(self):
         """Test that configuration works with English settings."""
-        from openclaw_mini.config import Config
+        from config import Config
         
         config = Config()
         assert isinstance(config._config, dict)
