@@ -52,3 +52,23 @@ session:
 server:
   host: "0.0.0.0"  # Listen on all interfaces
   port: 8000       # Default port
+
+# ============================================
+# Jira Configuration (OPTIONAL)
+# ============================================
+jira:
+  enabled: false  # Set to true to enable Jira integration
+  url: "https://your-domain.atlassian.net"
+  username: "your-email@company.com"
+  api_token: "${JIRA_API_TOKEN}"  # Use env var for security
+  project: "PROJECT"  # Default project key
+
+# ============================================
+# Confluence Configuration (OPTIONAL)
+# ============================================
+confluence:
+  enabled: false  # Set to true to enable Confluence integration
+  url: "https://your-domain.atlassian.net/wiki"
+  username: "your-email@company.com"
+  api_token: "${CONFLUENCE_API_TOKEN}"  # Use env var for security
+  space: "DEV"  # Default space key
