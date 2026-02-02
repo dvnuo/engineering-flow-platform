@@ -136,6 +136,13 @@ class Gateway:
         self.app.router.add_post("/api/test", self.handle_test_message)
         self.app.router.add_post("/api/config/reload", self.handle_config_reload)
         self.app.router.add_get("/api/queue/status", self.handle_queue_status)
+        
+        # Settings routes
+        self.app.router.add_get("/api/settings", self.handle_settings_get)
+        self.app.router.add_post("/api/settings", self.handle_settings_post)
+        self.app.router.add_get("/api/settings/providers", self.handle_settings_providers)
+        self.app.router.add_get("/api/settings/ollama/models", self.handle_ollama_models)
+        self.app.router.add_post("/api/settings/ollama/pull", self.handle_ollama_pull)
 
         # Webhook routes
         if self.mode == "webhook":
@@ -148,6 +155,11 @@ class Gateway:
         if setup_webchat_routes:
             setup_webchat_routes(self.app)
             logger.info("WebChat UI enabled at /chat")
+
+        # Settings page
+        self.app.router.add_get("/settings", lambda r: web.FileResponse("gateway/templates/settings/index.html"))
+        self.app.router.add_get("/static/css/settings.css", lambda r: web.FileResponse("gateway/static/css/settings.css"))
+        self.app.router.add_get("/static/js/settings.js", lambda r: web.FileResponse("gateway/static/js/settings.js"))
 
     async def handle_health(self, request: Request) -> web.Response:
         """Health check endpoint."""
@@ -238,6 +250,86 @@ class Gateway:
             return web.json_response({"status": "cleared", "session_id": session_id})
         else:
             return web.json_response({"status": "error", "message": "session_id required"}, status=400)
+
+    async def handle_settings_get(self, request: Request) -> web.Response:
+        """Get current settings.
+        
+        GET /api/settings
+        Returns: {...config}
+        """
+        from config import config
+        return web.json_response({
+            "llm": {
+                "provider": config.llm.get("provider"),
+                "model": config.llm.get("model"),
+                "api_base": config.llm.get("api_base"),
+                "temperature": config.llm.get("temperature"),
+                "max_tokens": config.llm.get("max_tokens"),
+            },
+            "discord": {
+                "enabled": bool(config.discord.get("bot_token")),
+            },
+            "jira": {
+                "enabled": bool(config.jira.get("webhook_url")),
+            }
+        })
+
+    async def handle_settings_post(self, request: Request) -> web.Response:
+        """Update settings.
+        
+        POST /api/settings
+        Body: {"llm": {...}, ...}
+        Returns: {"status": "ok"}
+        """
+        try:
+            data = await request.json()
+            # For now, just validate the settings
+            if "llm" in data:
+                llm = data["llm"]
+                if "provider" in llm and llm["provider"] not in ["openai", "github_copilot", "claude", "ollama"]:
+                    return web.json_response({"status": "error", "message": "Invalid provider"}, status=400)
+            return web.json_response({"status": "ok", "message": "Settings validated. Restart required to apply."})
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=400)
+
+    async def handle_settings_providers(self, request: Request) -> web.Response:
+        """Get provider information.
+        
+        GET /api/settings/providers
+        Returns: {provider: {name, default_model, models: [...]}}
+        """
+        from agent.llm import llm_client
+        return web.json_response(llm_client.get_provider_info())
+
+    async def handle_ollama_models(self, request: Request) -> web.Response:
+        """Get Ollama models.
+        
+        GET /api/settings/ollama/models
+        Returns: {"status": "healthy", "models": [...]}
+        """
+        from agent.llm import llm_client
+        return web.json_response(await llm_client.check_provider_health('ollama'))
+
+    async def handle_ollama_pull(self, request: Request) -> web.Response:
+        """Pull an Ollama model.
+        
+        POST /api/settings/ollama/pull
+        Body: {"model": "llama3"}
+        """
+        try:
+            data = await request.json()
+            model = data.get("model")
+            if not model:
+                return web.json_response({"status": "error", "message": "model required"}, status=400)
+            
+            from agent.llm import llm_client
+            if 'ollama' not in llm_client.providers:
+                return web.json_response({"status": "error", "message": "Ollama not configured"}, status=400)
+            
+            result = await llm_client.providers['ollama'].pull_model(model)
+            return web.json_response({"status": "success", "result": result})
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def handle_config_reload(self, request: Request) -> web.Response:
         """Reload configuration from config.yaml.

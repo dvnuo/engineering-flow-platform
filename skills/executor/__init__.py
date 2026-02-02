@@ -128,8 +128,28 @@ class SkillsExecutor:
         request_lower = request.lower()
 
         # Direct skill mentions
-        if "create test" in request_lower:
+        if "create test" in request_lower or "generate test" in request_lower:
             return "test_case_generator"
+        
+        # Summarize skill
+        if any(phrase in request_lower for phrase in [
+            "summarize", "summarise", "summary of", "what's this about",
+            "what is this about", "tl;dr", "tldr"
+        ]):
+            return "summarize"
+        
+        # Cron/Scheduler skill
+        if any(phrase in request_lower for phrase in [
+            "schedule", "remind me", "set a reminder", "cron job",
+            "recurring", "repeat every"
+        ]):
+            return "cron"
+        
+        # Weather skill
+        if any(phrase in request_lower for phrase in [
+            "weather", "temperature", "forecast", "how's the weather"
+        ]):
+            return "weather"
 
         return None
 
