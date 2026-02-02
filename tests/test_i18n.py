@@ -132,7 +132,7 @@ class TestInternationalization:
         """Test that log messages are in English."""
         from gateway.server import logger
         
-        # Logger should use English (new structure uses 'gateway.server')
+        # Logger should use English (and not contain Chinese)
         assert "gateway" in logger.name or "server" in logger.name
 
     def test_english_response_format(self):
