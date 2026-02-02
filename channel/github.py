@@ -5,10 +5,12 @@ Features:
 - Get issue/PR comments
 - Add comments to issues/PRs
 - Search issues
+- Rate limit handling with exponential backoff
 """
 
+import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -16,6 +18,11 @@ import httpx
 from config import config
 
 logger = logging.getLogger(__name__)
+
+# Rate limit settings
+RATE_LIMIT_RETRIES = 5
+INITIAL_BACKOFF = 1.0  # seconds
+MAX_BACKOFF = 60.0  # seconds
 
 
 class GitHubChannel:
@@ -44,25 +51,62 @@ class GitHubChannel:
         endpoint: str,
         **kwargs
     ) -> Dict[str, Any]:
-        """Make an API request."""
+        """Make an API request with rate limit handling and exponential backoff."""
         url = f"{self.base_url}{endpoint}"
         
-        response = await self.client.request(
-            method, url, headers=self._headers, **kwargs
-        )
+        backoff = INITIAL_BACKOFF
+        last_error = None
         
-        if response.status_code >= 400:
-            error_msg = f"GitHub API error: {response.status_code}"
+        for attempt in range(RATE_LIMIT_RETRIES):
             try:
-                error_msg += f" - {response.json()}"
-            except Exception:
-                error_msg += f" - {response.text}"
-            raise Exception(error_msg)
+                response = await self.client.request(
+                    method, url, headers=self._headers, **kwargs
+                )
+                
+                # Handle rate limiting (403)
+                if response.status_code == 403:
+                    # Check if it's rate limited
+                    reset_header = response.headers.get("X-RateLimit-Reset")
+                    if reset_header:
+                        wait_time = int(reset_header) - int(datetime.utcnow().timestamp())
+                        if wait_time > 0:
+                            logger.warning(f"GitHub rate limited, waiting {wait_time}s")
+                            await asyncio.sleep(min(wait_time + 1, MAX_BACKOFF))
+                            continue
+                    
+                    # Exponential backoff for other 403 errors
+                    logger.warning(f"GitHub API 403, attempt {attempt + 1}/{RATE_LIMIT_RETRIES}, backing off {backoff}s")
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, MAX_BACKOFF)
+                    last_error = f"Rate limit: {response.text}"
+                    continue
+                
+                if response.status_code >= 400:
+                    error_msg = f"GitHub API error: {response.status_code}"
+                    try:
+                        error_msg += f" - {response.json()}"
+                    except Exception:
+                        error_msg += f" - {response.text}"
+                    raise Exception(error_msg)
+                
+                if response.status_code == 204:
+                    return {}
+                
+                return response.json()
+                
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                last_error = e
+                if attempt < RATE_LIMIT_RETRIES - 1:
+                    logger.warning(f"GitHub API request failed, attempt {attempt + 1}/{RATE_LIMIT_RETRIES}: {e}")
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, MAX_BACKOFF)
+                else:
+                    logger.error(f"GitHub API request failed after {RATE_LIMIT_RETRIES} attempts: {e}")
+                    raise
         
-        if response.status_code == 204:
-            return {}
-        
-        return response.json()
+        raise Exception(f"GitHub API request failed: {last_error}")
     
     async def get_issue_comments(
         self, 

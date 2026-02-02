@@ -12,6 +12,8 @@ This feature allows the bot to monitor when specific users are mentioned in comm
 - **Configurable monitoring**: Choose which repos/projects/spaces to monitor
 - **Command parsing**: Natural language commands for common operations
 - **Automatic replies**: Bot responds directly in the comment thread
+- **Rate limit handling**: Exponential backoff for GitHub API rate limits
+- **Production-ready**: Integrated into `main.py` for automatic startup
 
 ## Configuration
 
@@ -175,6 +177,49 @@ await stop_polling()
 ```bash
 # Run mention poller tests
 python3 -m pytest tests/test_mention_poller.py -v
+```
+
+## Rate Limit Handling
+
+GitHub API has rate limits. The GitHub channel implements exponential backoff:
+
+- **Initial backoff**: 1 second
+- **Max backoff**: 60 seconds
+- **Max retries**: 5 attempts
+
+When rate limited (403 response), the bot will:
+1. Check for `X-RateLimit-Reset` header for exact reset time
+2. If not available, use exponential backoff
+3. Log warnings for each retry attempt
+
+## Integration
+
+### Automatic Startup (via main.py)
+
+The mention poller is automatically started when:
+1. `polling.enabled` is set to `true` in `config.yaml`
+2. The main application is started (`python main.py`)
+
+```python
+# In main.py
+from cron.mention_poller import start_polling, stop_polling, is_enabled
+
+# Start polling if enabled
+if is_enabled():
+    logger.info("Starting mention polling...")
+    polling_task = asyncio.create_task(start_polling())
+
+# Stop on shutdown
+await stop_polling()
+```
+
+### Manual Startup
+
+```python
+from cron.mention_poller import start_polling, stop_polling, is_enabled
+
+if is_enabled():
+    await start_polling()
 ```
 
 ## Future Enhancements

@@ -6,6 +6,7 @@ the configured users, then processes commands and replies.
 """
 
 import asyncio
+import logging
 import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set
@@ -16,6 +17,8 @@ from channel.github import github_channel
 from channel.jira import jira_channel
 from channel.confluence import confluence_channel
 from skills.executor import execute_tool
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -132,7 +135,7 @@ class MentionPoller:
                 
                 self.last_check[f"github:{repo}"] = datetime.utcnow()
             except Exception as e:
-                print(f"GitHub polling error for {repo}: {e}")
+                logger.warning(f"GitHub polling error for {repo}: {e}")
     
     async def _poll_jira(self):
         """Poll Jira for @mentions."""
@@ -155,7 +158,7 @@ class MentionPoller:
                         await self._process_mention(comment, "jira", issue)
             
         except Exception as e:
-            print(f"Jira polling error: {e}")
+            logger.warning(f"Jira polling error: {e}")
     
     async def _poll_confluence(self):
         """Poll Confluence for @mentions."""
@@ -178,7 +181,7 @@ class MentionPoller:
                             await self._process_mention(comment, "confluence", page)
                             
         except Exception as e:
-            print(f"Confluence polling error: {e}")
+            logger.warning(f"Confluence polling error: {e}")
     
     def _has_mention(self, text: str) -> bool:
         """Check if text contains @mention of monitored users."""
@@ -218,7 +221,7 @@ class MentionPoller:
                 await self._reply_to(comment, result, platform, resource)
                 
                 self._processed.add(processed_id)
-                print(f"Processed {processed_id}: {cmd.tool_name}")
+                logger.info(f"Processed {processed_id}: {cmd.tool_name}")
                 
             except Exception as e:
                 error_msg = f"Error executing command: {e}"
