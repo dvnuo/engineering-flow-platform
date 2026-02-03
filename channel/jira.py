@@ -93,8 +93,20 @@ class JiraChannel:
         return {}
     
     def is_configured(self) -> bool:
-        """Check if Jira is properly configured."""
-        return bool(self.base_url and self.username and self.api_token and self.enabled)
+        """Check if Jira is properly configured with required credentials.
+        
+        Note: This only checks if credentials are present, not if enabled.
+        Use is_enabled() to check if the channel should be active.
+        """
+        has_auth = bool(
+            (self.base_url) and
+            (self.bearer_token or (self.username and (self.api_token or self.password)))
+        )
+        return has_auth
+    
+    def is_enabled(self) -> bool:
+        """Check if Jira channel is enabled."""
+        return bool(self.enabled)
     
     async def _request(
         self,
