@@ -249,8 +249,11 @@ class SkillsExecutor:
 
 
 # Global executor instance - immediate initialization
-# No lazy loading needed since SkillsExecutor is lightweight
-# and HTTP clients are created on import anyway
+# Unified pattern: All helper functions use skills_executor directly
+# No lazy loading needed because:
+#   1. SkillsExecutor is lightweight
+#   2. HTTP clients are created on channel import anyway
+#   3. Lazy loading adds complexity without significant benefit
 skills_executor = SkillsExecutor()
 
 
