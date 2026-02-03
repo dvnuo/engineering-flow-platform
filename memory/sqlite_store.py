@@ -156,20 +156,25 @@ class SqliteMemoryStore(MemoryStore):
     ) -> List[Dict[str, Any]]:
         """Search memories using full-text search.
         
+        Note: Currently uses FTS5 BM25 full-text search.
+        When vector search is added, results will be fused using:
+          finalScore = vector_weight * vectorScore + text_weight * textScore
+        
         Args:
             query: Search query.
             limit: Maximum number of results.
             memory_type: Optional filter by memory type.
             
         Returns:
-            List of matching memories with scores.
+            List of matching memories with normalized scores.
+            Score is normalized to 0-1 range (higher is better).
         """
         cursor = self._connection.cursor()
         
         # Build query
         sql = """
             SELECT m.id, m.content, m.source, m.memory_type, m.created_at, m.metadata,
-                   bm25(memories_fts) as score
+                   bm25(memories_fts) as bm25_score
             FROM memories_fts
             JOIN memories m ON memories_fts.rowid = m.rowid
             WHERE memories_fts MATCH ?
@@ -180,13 +185,19 @@ class SqliteMemoryStore(MemoryStore):
             sql += " AND m.memory_type = ?"
             params.append(memory_type)
         
-        sql += " ORDER BY score LIMIT ?"
+        sql += " ORDER BY bm25_score LIMIT ?"
         params.append(limit)
         
         cursor.execute(sql, params)
         
         results = []
         for row in cursor.fetchall():
+            # Normalize BM25 score to 0-1 range (higher is better)
+            # BM25: lower is better, so we invert: 1 / (1 + bm25)
+            # Then apply text_weight for future hybrid search
+            bm25_score = row["bm25_score"]
+            normalized_score = (1.0 / (1.0 + bm25_score)) * self.config.text_weight
+            
             results.append({
                 "id": row["id"],
                 "content": row["content"],
@@ -194,7 +205,10 @@ class SqliteMemoryStore(MemoryStore):
                 "memory_type": row["memory_type"],
                 "created_at": row["created_at"],
                 "metadata": json.loads(row["metadata"]) if row["metadata"] else None,
-                "score": row["score"]
+                "score": normalized_score,
+                "raw_score": bm25_score,  # Keep raw BM25 for debugging
+                "search_type": "bm25"
+            })
             })
         
         logger.debug(f"Search '{query}': {len(results)} results")

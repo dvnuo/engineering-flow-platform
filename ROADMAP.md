@@ -375,11 +375,10 @@ Based on OpenClaw's memory system design, implement SQLite + vector search for d
 - [ ] Implement embedding cache in SQLite
 - [ ] Add sqlite-vec extension support (optional acceleration)
 
-#### Step 3: Hybrid Search (Vector + BM25)
-- [ ] Implement weighted score fusion:
-  ```
-  finalScore = 0.7 * vectorScore + 0.3 * textScore
-  ```
+#### Step 3: Hybrid Search (Vector + BM25) ✅ PARTIAL
+- [x] BM25 score normalization to 0-1 range
+- [x] Apply text_weight configuration
+- [ ] Implement weighted score fusion (waiting for vector search)
 - [ ] Add candidate pool retrieval and union
 
 #### Step 4: Memory Tools Integration
