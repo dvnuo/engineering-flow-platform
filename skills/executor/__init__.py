@@ -235,12 +235,6 @@ class SkillsExecutor:
             "recurring", "repeat every"
         ]):
             return "cron"
-        
-        # Weather skill
-        if any(phrase in request_lower for phrase in [
-            "weather", "temperature", "forecast", "how's the weather"
-        ]):
-            return "weather"
 
         return None
 

@@ -1,7 +1,7 @@
 """
 Summarize skill - Summarize URLs, files, and text content.
 
-Uses wttr.in for weather and Open-Meteo as fallback.
+Uses LLM for intelligent summarization with extractive fallback.
 """
 
 import json
