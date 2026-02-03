@@ -45,6 +45,8 @@ class JiraChannel:
         self.base_url = config.jira.get("url", "").rstrip("/")
         self.username = config.jira.get("username", "")
         self.api_token = config.jira.get("api_token", "")
+        self.password = config.jira.get("password", "")  # Alternative to api_token for Basic Auth
+        self.bearer_token = config.jira.get("bearer_token", "")  # Bearer Token authentication
         self.project = config.jira.get("project", "")
         self.enabled = config.jira.get("enabled", False)
         
@@ -61,15 +63,33 @@ class JiraChannel:
         
         self.client = httpx.AsyncClient(timeout=self.timeout)
         self._auth_header = self._get_auth_header()
+        self._auth_type = self._get_auth_type()
         
-        logger.info(f"JiraChannel initialized: version={self.api_version}, timeout={self.timeout}s")
+        logger.info(f"JiraChannel initialized: version={self.api_version}, timeout={self.timeout}s, auth={self._auth_type}")
+    
+    def _get_auth_type(self) -> str:
+        """Determine authentication type based on configuration."""
+        if self.bearer_token:
+            return "Bearer"
+        elif self.username and (self.api_token or self.password):
+            return "Basic"
+        return "None"
     
     def _get_auth_header(self) -> Dict[str, str]:
-        """Get authorization header."""
-        if self.username and self.api_token:
-            creds = f"{self.username}:{self.api_token}"
+        """Get authorization header based on authentication type."""
+        # Bearer Token authentication
+        if self.bearer_token:
+            logger.debug("Using Bearer Token authentication")
+            return {"Authorization": f"Bearer {self.bearer_token}"}
+        
+        # Basic Auth (username:api_token or username:password)
+        if self.username and (self.api_token or self.password):
+            creds = f"{self.username}:{self.api_token or self.password}"
             token = base64.b64encode(creds.encode()).decode()
+            logger.debug("Using Basic Auth authentication")
             return {"Authorization": f"Basic {token}"}
+        
+        logger.warning("No authentication credentials configured")
         return {}
     
     def is_configured(self) -> bool:
@@ -704,6 +724,53 @@ async def jira_get_transitions(issue_key: str) -> str:
     except Exception as e:
         logger.exception(f"jira_get_transitions: Failed for {issue_key}")
         return f"Error getting transitions: {str(e)}"
+
+
+async def jira_get_comments(issue_key: str) -> str:
+    """Get all comments for a Jira issue.
+    
+    This tool allows the model to retrieve and review comments on an issue,
+    which is useful for understanding discussion history or context.
+    
+    Args:
+        issue_key: Issue key (e.g., "PROJ-123")
+        
+    Returns:
+        Formatted list of comments with author, date, and content
+    """
+    logger.debug(f"jira_get_comments: {issue_key}")
+    
+    if not jira_channel.is_configured():
+        logger.warning("jira_get_comments: Jira not configured")
+        return "Error: Jira not configured"
+    
+    try:
+        logger.info(f"Getting comments for {issue_key}")
+        comments = await jira_channel.get_comments(issue_key)
+        
+        logger.debug(f"jira_get_comments: {issue_key} has {len(comments)} comments")
+        
+        if not comments:
+            return f"No comments found for {issue_key}"
+        
+        lines = [f"**Comments for {issue_key}** ({len(comments)} total):\n"]
+        
+        for i, comment in enumerate(comments, 1):
+            author = comment.get("author", "Unknown")
+            created = comment.get("created", "")[:10] if comment.get("created") else "N/A"
+            body = comment.get("body", "")
+            
+            lines.append(f"---")
+            lines.append(f"**Comment #{i}** by {author} on {created}")
+            lines.append(f"{body}")
+        
+        return "\n".join(lines)
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_get_comments: HTTP error {e.response.status_code}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
+    except Exception as e:
+        logger.exception(f"jira_get_comments: Failed for {issue_key}")
+        return f"Error getting comments: {str(e)}"
 
 
 # ========== ADF Parsing Utility ==========
