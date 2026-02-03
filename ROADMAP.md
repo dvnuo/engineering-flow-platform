@@ -311,3 +311,135 @@ See [docs/COMPARISON.md](docs/COMPARISON.md) for detailed analysis.
 
 *Last updated: 2026-02-02*
 *Generated for CodeW project roadmap planning*
+
+---
+
+## Phase 6: Long-term Memory Enhancement (NEW - 2026-02-03)
+
+Based on OpenClaw's memory system design, implement SQLite + vector search for durable memory.
+
+### Reference: OpenClaw Memory System
+
+| Component | OpenClaw | CodeW (Current) | Implementation |
+|-----------|----------|-----------------|----------------|
+| **Storage** | SQLite + sqlite-vec | Markdown files | TODO |
+| **Vector Search** | ✅ | ❌ | TODO |
+| **Semantic Search** | ✅ | ❌ | TODO |
+| **Hybrid Search** | Vector + BM25 | ❌ | TODO |
+| **Embedding Cache** | SQLite-based | ❌ | TODO |
+| **Session Indexing** | Optional | ❌ | TODO |
+
+### Memory Layers (Reference from OpenClaw)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    ~/.openclaw/memory/                       │
+│                    <agentId>.sqlite                          │
+├─────────────────────────────────────────────────────────────┤
+│ Layer 1: Daily Notes                                         │
+│   - File: memory/YYYY-MM-DD.md                              │
+│   - Purpose: Day-to-day context                             │
+│   - Lifecycle: Read today + yesterday at session start      │
+├─────────────────────────────────────────────────────────────┤
+│ Layer 2: Long-term Memory                                   │
+│   - File: MEMORY.md                                         │
+│   - Purpose: Durable decisions, preferences, facts          │
+│   - Context: Only load in main private session              │
+├─────────────────────────────────────────────────────────────┤
+│ Layer 3: Session Transcripts (Optional)                     │
+│   - File: ~/.openclaw/agents/<agentId>/sessions/*.jsonl    │
+│   - Purpose: Index session history for semantic search      │
+│   - Note: Opt-in, debounced async indexing                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Implementation Plan
+
+#### Step 1: SQLite Storage Layer
+- [ ] Create `memory/sqlite_store.py`
+- [ ] Implement SQLite connection management
+- [ ] Define schema for memory chunks and embeddings
+- [ ] Add migration support for existing Markdown files
+
+#### Step 2: Vector Search Integration
+- [ ] Evaluate embedding providers:
+  - OpenAI `text-embedding-3-small`
+  - Local (GGUF via node-llama-cpp)
+  - Custom OpenAI-compatible endpoint
+- [ ] Implement embedding cache in SQLite
+- [ ] Add sqlite-vec extension support (optional acceleration)
+
+#### Step 3: Hybrid Search (Vector + BM25)
+- [ ] Implement BM25 full-text search
+- [ ] Create weighted score fusion:
+  ```
+  finalScore = 0.7 * vectorScore + 0.3 * textScore
+  ```
+- [ ] Add candidate pool retrieval and union
+
+#### Step 4: Memory Tools Integration
+- [ ] Update `memory_search` tool with semantic search
+- [ ] Update `memory_get` tool for SQLite-backed retrieval
+- [ ] Add memory index watching (debounced sync)
+
+#### Step 5: Configuration
+- [ ] Add memory config section to `config.yaml.example`:
+  ```yaml
+  memory:
+    enabled: true
+    provider: "openai"  # or "local", "gemini"
+    model: "text-embedding-3-small"
+    hybrid:
+      enabled: true
+      vector_weight: 0.7
+      text_weight: 0.3
+    cache:
+      enabled: true
+      max_entries: 50000
+  ```
+
+### Files to Create/Modify
+
+| File | Changes |
+|------|---------|
+| `memory/sqlite_store.py` | NEW - SQLite storage layer |
+| `memory/embedding.py` | NEW - Embedding provider |
+| `memory/search.py` | NEW - Hybrid search engine |
+| `memory/config.py` | NEW - Memory configuration |
+| `memory/__init__.py` | NEW - Module exports |
+| `config.yaml.example` | ADD - Memory config section |
+| `skills/executor/tools.py` | UPDATE - Register memory tools |
+
+### Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `sqlite-vec` | Vector acceleration (optional) |
+| `chromadb` | Alternative vector DB (simpler) |
+| `sentence-transformers` | Local embeddings (no API key) |
+| `rank-bm25` | BM25 implementation |
+
+### Estimated Effort
+
+| Task | Complexity | Time |
+|------|------------|------|
+| SQLite storage layer | Medium | 2-3 days |
+| Embedding integration | Medium | 2-3 days |
+| Hybrid search | Medium | 2-3 days |
+| Tool integration | Low | 1 day |
+| Testing | Medium | 2 days |
+| **Total** | - | **9-12 days** |
+
+### Quick Win Options
+
+1. **SQLite only (no vectors)**: Store memory chunks in SQLite, skip vector search
+   - Time: 2-3 days
+   - Benefit: Fast lookups, structured storage
+
+2. **Sentence-Transformers local**: Free embeddings, no API key needed
+   - Time: 1-2 days
+   - Model: `all-MiniLM-L6-v2` (~90MB, CPU-friendly)
+
+3. **BM25 only**: Keyword search without vectors
+   - Time: 1 day
+   - Benefit: Exact match for IDs, env vars, code symbols
