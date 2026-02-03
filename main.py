@@ -23,8 +23,17 @@ from session.usage import usage_tracker
 from cron.mention_poller import start_polling, stop_polling, is_enabled
 
 
-def setup_logging(level: int = logging.INFO) -> None:
-    """Configure logging."""
+def setup_logging(level: int = None) -> None:
+    """Configure logging.
+    
+    Args:
+        level: Logging level. If None, reads from config.debug.log_level.
+    """
+    # Determine log level from config if not specified
+    if level is None:
+        log_level_str = config.debug.get("log_level", "INFO").upper()
+        level = getattr(logging, log_level_str, logging.INFO)
+    
     logging.basicConfig(
         level=level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

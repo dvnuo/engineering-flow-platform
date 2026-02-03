@@ -84,6 +84,11 @@ class Config:
     def confluence(self) -> Dict[str, Any]:
         """Get Confluence configuration."""
         return self._config.get("confluence", {})
+    
+    @property
+    def debug(self) -> Dict[str, Any]:
+        """Get debug configuration."""
+        return self._config.get("debug", {})
 
 
 # Global config instance
