@@ -44,7 +44,7 @@ class JiraChannel:
         self.api_token = config.jira.get("api_token", "")
         self.project = config.jira.get("project", "")
         self.enabled = config.jira.get("enabled", False)
-        self.api_version = config.jira.get("api_version", "3")  # "2" or "3"
+        self.api_version = config.jira.get("api_version", "2")  # "2" or "3"
         
         self.client = httpx.AsyncClient(timeout=30.0)
         self._auth_header = self._get_auth_header()
