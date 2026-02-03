@@ -346,18 +346,26 @@ class MentionPoller:
     _processed: Set[str] = set()
 
 
-# Global instance
-mention_poller = MentionPoller()
+# Lazy-loaded instance
+_mention_poller: Optional[MentionPoller] = None
+
+
+def _get_poller() -> MentionPoller:
+    """Get or create the mention poller instance."""
+    global _mention_poller
+    if _mention_poller is None:
+        _mention_poller = MentionPoller()
+    return _mention_poller
 
 
 async def start_polling():
     """Start the mention poller."""
-    await mention_poller.start()
+    await _get_poller().start()
 
 
 async def stop_polling():
     """Stop the mention poller."""
-    await mention_poller.stop()
+    await _get_poller().stop()
 
 
 def is_enabled() -> bool:
