@@ -38,16 +38,31 @@ JQL_DANGEROUS_PATTERNS = [
 class JiraChannel:
     """Jira channel adapter with REST API v2/v3 support."""
     
+    # Valid API versions
+    VALID_API_VERSIONS = ("2", "3")
+    
     def __init__(self):
         self.base_url = config.jira.get("url", "").rstrip("/")
         self.username = config.jira.get("username", "")
         self.api_token = config.jira.get("api_token", "")
         self.project = config.jira.get("project", "")
         self.enabled = config.jira.get("enabled", False)
-        self.api_version = config.jira.get("api_version", "2")  # "2" or "3"
         
-        self.client = httpx.AsyncClient(timeout=30.0)
+        # API version with validation
+        api_version = config.jira.get("api_version", "2")
+        if api_version not in self.VALID_API_VERSIONS:
+            logger.warning(f"Invalid api_version '{api_version}', defaulting to '2'. Valid: {self.VALID_API_VERSIONS}")
+            api_version = "2"
+        self.api_version = api_version
+        
+        # Configurable timeout (default: 30s)
+        timeout = config.jira.get("timeout", 30.0)
+        self.timeout = float(timeout)
+        
+        self.client = httpx.AsyncClient(timeout=self.timeout)
         self._auth_header = self._get_auth_header()
+        
+        logger.info(f"JiraChannel initialized: version={self.api_version}, timeout={self.timeout}s")
     
     def _get_auth_header(self) -> Dict[str, str]:
         """Get authorization header."""
@@ -487,10 +502,14 @@ jira_channel = JiraChannel()
 
 async def jira_get_issue(issue_key: str) -> str:
     """Get details for a Jira issue."""
+    logger.debug(f"jira_get_issue called: {issue_key}")
+    
     if not jira_channel.is_configured():
+        logger.warning("jira_get_issue: Jira not configured")
         return "Error: Jira not configured"
     
     try:
+        logger.info(f"Fetching issue: {issue_key}")
         issue = await jira_channel.get_issue(issue_key)
         fields = issue.get("fields", {})
         
@@ -499,6 +518,8 @@ async def jira_get_issue(issue_key: str) -> str:
         assignee_name = assignee.get("displayName", "Unassigned") if assignee else "Unassigned"
         summary = fields.get("summary", "")
         description = jira_channel._parse_body(fields.get("description", ""))
+        
+        logger.debug(f"jira_get_issue: {issue_key} found, status={status}")
         
         return f"""**{issue_key}: {summary}**
 
@@ -511,19 +532,29 @@ async def jira_get_issue(issue_key: str) -> str:
 
 **Description:**
 {description[:500]}{'...' if len(description) > 500 else ''}"""
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_get_issue: HTTP error {e.response.status_code} for {issue_key}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
     except Exception as e:
+        logger.exception(f"jira_get_issue: Failed to fetch {issue_key}")
         return f"Error getting issue {issue_key}: {str(e)}"
 
 
 async def jira_search(jql: str, max_results: int = 10) -> str:
     """Search Jira issues using JQL."""
+    logger.debug(f"jira_search called: jql={jql[:50]}..., max_results={max_results}")
+    
     if not jira_channel.is_configured():
+        logger.warning("jira_search: Jira not configured")
         return "Error: Jira not configured"
     
     try:
+        logger.info(f"Searching issues with JQL: {jql[:80]}...")
         result = await jira_channel.search_issues(jql, max_results=max_results)
         issues = result.get("issues", [])
         total = result.get("total", 0)
+        
+        logger.debug(f"jira_search: found {total} issues, returning {len(issues)}")
         
         if not issues:
             return f"No issues found for JQL: {jql}"
@@ -538,20 +569,36 @@ async def jira_search(jql: str, max_results: int = 10) -> str:
             lines.append(f"- **{key}** [{status}] {summary}")
         
         return "\n".join(lines)
+    except ValueError as e:
+        logger.warning(f"jira_search: Invalid JQL - {e}")
+        return f"Error: Invalid JQL query - {str(e)}"
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_search: HTTP error {e.response.status_code}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
     except Exception as e:
+        logger.exception("jira_search: Search failed")
         return f"Error searching issues: {str(e)}"
 
 
 async def jira_add_comment(issue_key: str, comment: str) -> str:
     """Add a comment to a Jira issue."""
+    logger.debug(f"jira_add_comment: {issue_key}, comment_len={len(comment)}")
+    
     if not jira_channel.is_configured():
+        logger.warning("jira_add_comment: Jira not configured")
         return "Error: Jira not configured"
     
     try:
+        logger.info(f"Adding comment to {issue_key}")
         result = await jira_channel.add_comment(issue_key, comment)
         comment_id = result.get("id", "unknown")
+        logger.info(f"Comment added: {issue_key}, comment_id={comment_id}")
         return f"Comment added to {issue_key}: ID={comment_id}"
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_add_comment: HTTP error {e.response.status_code} for {issue_key}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
     except Exception as e:
+        logger.exception(f"jira_add_comment: Failed for {issue_key}")
         return f"Error adding comment: {str(e)}"
 
 
@@ -563,11 +610,15 @@ async def jira_create_issue(
     priority: str = None
 ) -> str:
     """Create a new Jira issue."""
+    logger.debug(f"jira_create_issue: project={project}, summary={summary[:30]}...")
+    
     if not jira_channel.is_configured():
+        logger.warning("jira_create_issue: Jira not configured")
         return "Error: Jira not configured"
     
     try:
         proj = project or jira_channel.project
+        logger.info(f"Creating issue in {proj}: {summary[:50]}...")
         result = await jira_channel.create_issue(
             project=proj,
             summary=summary,
@@ -576,8 +627,13 @@ async def jira_create_issue(
             priority=priority
         )
         issue_key = result.get("key", "unknown")
+        logger.info(f"Issue created: {issue_key}")
         return f"Issue created: **{issue_key}**\nSummary: {summary[:50]}"
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_create_issue: HTTP error {e.response.status_code}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
     except Exception as e:
+        logger.exception("jira_create_issue: Failed to create issue")
         return f"Error creating issue: {str(e)}"
 
 
@@ -587,10 +643,14 @@ async def jira_transition(
     comment: str = None
 ) -> str:
     """Transition an issue to a new status."""
+    logger.debug(f"jira_transition: {issue_key} -> {to_status}")
+    
     if not jira_channel.is_configured():
+        logger.warning("jira_transition: Jira not configured")
         return "Error: Jira not configured"
     
     try:
+        logger.info(f"Transitioning {issue_key} to {to_status}")
         transitions = await jira_channel.get_transitions(issue_key)
         
         # Find transition by status name
@@ -602,21 +662,33 @@ async def jira_transition(
         
         if not transition_id:
             available = [t.get("name") for t in transitions]
+            logger.warning(f"jira_transition: No transition to '{to_status}', available: {available}")
             return f"Cannot transition to '{to_status}'. Available: {', '.join(available)}"
         
         await jira_channel.transition_issue(issue_key, transition_id, comment)
+        logger.info(f"Issue transitioned: {issue_key} -> {to_status}")
         return f"{issue_key} transitioned to '{to_status}'"
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_transition: HTTP error {e.response.status_code}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
     except Exception as e:
+        logger.exception(f"jira_transition: Failed for {issue_key}")
         return f"Error transitioning issue: {str(e)}"
 
 
 async def jira_get_transitions(issue_key: str) -> str:
     """Get available transitions for an issue."""
+    logger.debug(f"jira_get_transitions: {issue_key}")
+    
     if not jira_channel.is_configured():
+        logger.warning("jira_get_transitions: Jira not configured")
         return "Error: Jira not configured"
     
     try:
+        logger.info(f"Getting transitions for {issue_key}")
         transitions = await jira_channel.get_transitions(issue_key)
+        
+        logger.debug(f"jira_get_transitions: {issue_key} has {len(transitions)} transitions")
         
         if not transitions:
             return f"No transitions available for {issue_key}"
@@ -626,7 +698,11 @@ async def jira_get_transitions(issue_key: str) -> str:
             lines.append(f"- {t.get('name')} (ID: {t.get('id')})")
         
         return "\n".join(lines)
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_get_transitions: HTTP error {e.response.status_code}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
     except Exception as e:
+        logger.exception(f"jira_get_transitions: Failed for {issue_key}")
         return f"Error getting transitions: {str(e)}"
 
 
