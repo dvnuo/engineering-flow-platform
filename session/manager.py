@@ -11,6 +11,22 @@ from session.persistence import session_store
 
 logger = logging.getLogger(__name__)
 
+
+def _run_async(coro):
+    """Run coroutine, handling both sync and async contexts.
+    
+    In Python 3.9+, asyncio.run() cannot be called from a running event loop.
+    This helper detects the context and uses the appropriate method.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop, safe to use asyncio.run()
+        return asyncio.run(coro)
+    else:
+        # Running loop exists, use run_until_complete
+        return loop.run_until_complete(coro)
+
 # Session ID prefix for Discord channels
 DISCORD_SESSION_PREFIX = "discord:"
 
@@ -37,7 +53,7 @@ class SessionManager:
     def _load_all_sessions(self):
         """Load all sessions from disk."""
         try:
-            sessions = asyncio.run(session_store.list_sessions())
+            sessions = _run_async(session_store.list_sessions())
             
             for session_info in sessions:
                 session_key = self._get_session_key(session_info)
@@ -69,7 +85,7 @@ class SessionManager:
             # Create persisted session
             if self.auto_save:
                 try:
-                    asyncio.run(
+                    _run_async(
                         session_store.create_session(session_id, channel="default")
                     )
                 except Exception as e:
@@ -94,7 +110,7 @@ class SessionManager:
         # Auto-save to persistence layer
         if self.auto_save and session.get("_persisted", False):
             try:
-                asyncio.run(
+                _run_async(
                     session_store.append_message(session_id, role, content)
                 )
             except Exception as e:
@@ -116,7 +132,7 @@ class SessionManager:
             # Clear persisted transcript
             if self.auto_save:
                 try:
-                    asyncio.run(
+                    _run_async(
                         session_store.delete_session(session_id)
                     )
                 except Exception as e:
@@ -208,7 +224,7 @@ class SessionManager:
         try:
             for session_id, session in self.sessions.items():
                 for msg in session.get("history", []):
-                    asyncio.run(
+                    _run_async(
                         session_store.append_message(session_id, msg["role"], msg["content"])
                     )
             logger.info(f"Saved {len(self.sessions)} sessions to persistence layer")
