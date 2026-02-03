@@ -141,3 +141,6 @@ htmlcov/
 # Local config - NEVER commit
 config.yaml
 *.log
+
+# Agent memory files - personal workspace data
+memory/
