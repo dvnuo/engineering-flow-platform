@@ -263,7 +263,9 @@ class SkillsExecutor:
             else:
                 return SkillResult(success=False, error=f"Skill {skill_name} is not callable")
             
-            logger.info(f"Skill {skill_name} executed: success={isinstance(result, SkillResult) and result.success}")
+            # Safely log success status
+            success = isinstance(result, SkillResult) and result.success
+            logger.info(f"Skill {skill_name} executed: success={success}")
             return result
         except Exception as e:
             logger.error(f"Skill {skill_name} failed: {e}")
