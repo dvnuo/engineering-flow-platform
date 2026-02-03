@@ -30,8 +30,8 @@ class Agent:
         
         # ===== DEBUG =====
         from config import config
-        debug_enabled = config.debug.get("enabled", False)
-        if debug_enabled:
+        self.self.debug_enabled = config.debug.get("enabled", False)
+        if self.self.debug_enabled:
             print(f"\n{'='*60}")
             print(f"DEBUG: Tools Initialization")
             print(f"  Base tools count: {len(base_tools)}")
@@ -100,7 +100,7 @@ You have access to the following tools. When a user asks you to do something tha
             prompt_source = "fallback"
         
         # ===== DEBUG =====
-        if debug_enabled:
+        if self.debug_enabled:
             print(f"\n{'='*60}")
             print(f"DEBUG: System Prompt Construction")
             print(f"  Session: {session_id}")
@@ -145,7 +145,7 @@ You have access to the following tools. When a user asks you to do something tha
         messages = session_manager.get_history(session_id)
 
         # ===== DEBUG =====
-        if debug_enabled:
+        if self.debug_enabled:
             print(f"\n{'='*60}")
             print(f"DEBUG: Message Received")
             print(f"  Session: {session_id}")
@@ -162,7 +162,7 @@ You have access to the following tools. When a user asks you to do something tha
         logger.debug(f"Calling LLM with {len(self.tools)} tools")
         
         # ===== DEBUG =====
-        if debug_enabled:
+        if self.debug_enabled:
             print(f"\n{'='*60}")
             print(f"DEBUG: LLM API Call")
             print(f"  Messages count: {len(messages)}")
@@ -178,7 +178,7 @@ You have access to the following tools. When a user asks you to do something tha
         )
         
         # ===== DEBUG =====
-        if debug_enabled:
+        if self.debug_enabled:
             print(f"\n{'='*60}")
             print(f"DEBUG: LLM Response")
             print(f"  Content: {llm_result.get('content')[:200] if llm_result.get('content') else '(empty)'}")
@@ -230,7 +230,7 @@ You have access to the following tools. When a user asks you to do something tha
             logger.info(f"Executing tool: {tool_name} with args: {args}")
             
             # ===== DEBUG =====
-            if debug_enabled:
+            if self.debug_enabled:
                 print(f"\n{'='*60}")
                 print(f"DEBUG: Execute Tool")
                 print(f"  Tool: {tool_name}")
@@ -242,7 +242,7 @@ You have access to the following tools. When a user asks you to do something tha
             tool_result = await execute_tool_by_name(tool_name, **args)
             
             # ===== DEBUG =====
-            if debug_enabled:
+            if self.debug_enabled:
                 print(f"\n{'='*60}")
                 print(f"DEBUG: Tool Result")
                 print(f"  Tool: {tool_name}")
@@ -269,7 +269,7 @@ You have access to the following tools. When a user asks you to do something tha
         final_content = (final_result.get("content") or "").strip()
         
         # ===== DEBUG =====
-        if debug_enabled:
+        if self.debug_enabled:
             print(f"\n{'='*60}")
             print(f"DEBUG: Final Response")
             print(f"  Content: {final_content[:500]}...")
