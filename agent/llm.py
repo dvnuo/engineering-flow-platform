@@ -157,7 +157,10 @@ class GitHubCopilotProvider(BaseProvider):
         self,
         messages: List[Dict],
         system_prompt: Optional[str] = None,
-        **kwargs
+        tools: Optional[List[Dict]] = None,
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Call GitHub Copilot Chat API."""
         import os
@@ -168,10 +171,21 @@ class GitHubCopilotProvider(BaseProvider):
             "Accept": "application/vnd.github.copilot-chat-preview+json",
         }
         
+        # Build messages - GitHub Copilot uses system differently
+        all_messages = []
+        if system_prompt:
+            # GitHub Copilot: prepend system message to conversation
+            all_messages.append({"role": "system", "content": system_prompt})
+        all_messages.extend(messages)
+        
         payload = {
-            "messages": messages,
-            "model": self.default_model,
+            "messages": all_messages,
+            "model": model or self.default_model,
         }
+        
+        # Add tools support (similar to OpenAI)
+        if tools:
+            payload["tools"] = tools
         
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
@@ -182,12 +196,25 @@ class GitHubCopilotProvider(BaseProvider):
             response.raise_for_status()
             data = response.json()
         
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        # Parse response - check for tool calls
+        message_data = data.get("choices", [{}])[0].get("message", {})
+        content = message_data.get("content", "")
+        
+        # GitHub Copilot may return tool_calls
+        tool_calls = message_data.get("tool_calls", [])
+        
+        # Calculate usage (approximate)
+        prompt_tokens = sum(len(str(m).split()) for m in all_messages) * 4  # Rough estimate
+        completion_tokens = len(content.split()) * 4  # Rough estimate
         
         return {
             "content": content,
-            "tool_calls": [],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            "tool_calls": tool_calls,
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
         }
     
     def list_models(self) -> List[str]:
