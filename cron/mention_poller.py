@@ -320,7 +320,7 @@ class MentionPoller:
     ):
         """Reply to a comment with the result."""
         author = comment.get("author", "user")
-        reply_body = f"@{author} 处理结果:\n\n{result}"
+        reply_body = f"@{author} Processing result:\n\n{result}"
         
         # Determine resource ID based on platform
         if platform == "github":

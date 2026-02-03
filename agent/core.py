@@ -122,11 +122,11 @@ You have access to the following tools. When a user asks you to do something tha
         debug_enabled = config.debug.get("enabled", False)
         if debug_enabled:
             print(f"\n{'='*60}")
-            print(f"DEBUG: 收到消息")
+            print(f"DEBUG: Message received")
             print(f"  Session: {session_id}")
-            print(f"  System prompt 长度: {len(self.system_prompt)}")
-            print(f"  工具数量: {len(self.tools)}")
-            print(f"  历史消息数: {len(messages)}")
+            print(f"  System prompt length: {len(self.system_prompt)}")
+            print(f"  Tools count: {len(self.tools)}")
+            print(f"  History messages: {len(messages)}")
             print(f"{'='*60}\n")
 
         # ===== REACT PATTERN =====
@@ -142,7 +142,7 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== DEBUG =====
         if debug_enabled:
             print(f"\n{'='*60}")
-            print(f"DEBUG: LLM 响应")
+            print(f"DEBUG: LLM response")
             print(f"  Content: {llm_result.get('content')[:200] if llm_result.get('content') else '(empty)'}...")
             print(f"  Tool calls: {len(llm_result.get('tool_calls', []))}")
             if llm_result.get('tool_calls'):
@@ -192,9 +192,9 @@ You have access to the following tools. When a user asks you to do something tha
             # ===== DEBUG =====
             if debug_enabled:
                 print(f"\n{'='*60}")
-                print(f"DEBUG: 执行工具")
-                print(f"  工具: {tool_name}")
-                print(f"  参数: {args}")
+                print(f"DEBUG: Execute tool")
+                print(f"  Tool: {tool_name}")
+                print(f"  Args: {args}")
                 print(f"{'='*60}\n")
             
             # Execute the tool
@@ -203,9 +203,9 @@ You have access to the following tools. When a user asks you to do something tha
             # ===== DEBUG =====
             if debug_enabled:
                 print(f"\n{'='*60}")
-                print(f"DEBUG: 工具结果")
-                print(f"  工具: {tool_name}")
-                print(f"  结果: {str(tool_result)[:500]}...")
+                print(f"DEBUG: Tool result")
+                print(f"  Tool: {tool_name}")
+                print(f"  Result: {str(tool_result)[:500]}...")
                 print(f"{'='*60}\n")
             
             # Add tool result - MUST follow the assistant message with tool_calls
@@ -229,8 +229,8 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== DEBUG =====
         if debug_enabled:
             print(f"\n{'='*60}")
-            print(f"DEBUG: 最终响应")
-            print(f"  内容: {final_content[:500]}...")
+            print(f"DEBUG: Final response")
+            print(f"  Content: {final_content[:500]}...")
             print(f"{'='*60}\n")
         
         # Track final usage and merge
