@@ -110,7 +110,7 @@ async def api_chat(request: web.Request) -> web.Response:
     """
     try:
         data = await request.json()
-        message = data.get('message', '').strip()
+        message = (data.get('message') or '').strip()
         
         # Dynamic session_id with timestamp-based default for multi-session support
         session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
