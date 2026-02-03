@@ -370,6 +370,23 @@ class OllamaProvider(BaseProvider):
             }
         }
         
+        # Add tools support for Ollama (format varies by model version)
+        if tools:
+            # Convert OpenAI-style tools to Ollama format if needed
+            # Note: Not all Ollama models support tools - check your model
+            ollama_tools = []
+            for tool in tools:
+                func = tool.get("function", {})
+                ollama_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": func.get("name", ""),
+                        "description": func.get("description", ""),
+                        "parameters": func.get("parameters", {}),
+                    }
+                })
+            payload["tools"] = ollama_tools
+        
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
@@ -391,9 +408,30 @@ class OllamaProvider(BaseProvider):
     def _parse_response(self, data: Dict) -> Dict[str, Any]:
         """Parse Ollama response."""
         message = data.get("message", {})
+        content = message.get("content", "")
+        
+        # Parse tool_calls from Ollama response
+        tool_calls = []
+        raw_tool_calls = message.get("tool_calls", [])
+        if not raw_tool_calls:
+            # Try alternative location
+            raw_tool_calls = data.get("message", {}).get("tool_calls", [])
+        
+        for tc in raw_tool_calls:
+            # Ollama format: {"function": {"name": "...", "arguments": "..."}}
+            func_data = tc.get("function", tc)
+            tool_calls.append({
+                "id": tc.get("id", f"call_{len(tool_calls)}"),
+                "type": "function",
+                "function": {
+                    "name": func_data.get("name", ""),
+                    "arguments": func_data.get("arguments", "{}")
+                }
+            })
+        
         return {
-            "content": message.get("content", ""),
-            "tool_calls": [],
+            "content": content,
+            "tool_calls": tool_calls,
             "usage": {
                 "prompt_tokens": data.get("prompt_eval_count", 0),
                 "completion_tokens": data.get("eval_count", 0),
