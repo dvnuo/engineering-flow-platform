@@ -11,22 +11,6 @@ from session.persistence import session_store
 
 logger = logging.getLogger(__name__)
 
-
-def _run_async(coro):
-    """Run coroutine, handling both sync and async contexts.
-    
-    In Python 3.9+, asyncio.run() cannot be called from a running event loop.
-    This helper detects the context and uses the appropriate method.
-    """
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # No running loop, safe to use asyncio.run()
-        return asyncio.run(coro)
-    else:
-        # Running loop exists, use run_until_complete
-        return loop.run_until_complete(coro)
-
 # Session ID prefix for Discord channels
 DISCORD_SESSION_PREFIX = "discord:"
 
@@ -46,14 +30,17 @@ class SessionManager:
         self.auto_save = auto_save
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self._last_compact_time: Optional[datetime] = None
+        self._initialized = False
         
-        # Auto-load sessions from disk on init
-        self._load_all_sessions()
+        # NOTE: Session loading is deferred to initialize() method
+        # to avoid event loop issues at module import time
 
-    def _load_all_sessions(self):
-        """Load all sessions from disk."""
+    async def initialize(self):
+        """Load persisted sessions from disk. Call after event loop is running."""
+        if self._initialized:
+            return
         try:
-            sessions = _run_async(session_store.list_sessions())
+            sessions = await session_store.list_sessions()
             
             for session_info in sessions:
                 session_key = self._get_session_key(session_info)
@@ -65,6 +52,7 @@ class SessionManager:
                         "_persisted": True,
                     }
             logger.info(f"Loaded {len(self.sessions)} persisted sessions")
+            self._initialized = True
         except Exception as e:
             logger.error(f"Failed to load sessions: {e}")
 
@@ -82,14 +70,7 @@ class SessionManager:
                 "updated_at": datetime.now().isoformat(),
                 "_persisted": False,
             }
-            # Create persisted session
-            if self.auto_save:
-                try:
-                    _run_async(
-                        session_store.create_session(session_id, channel="default")
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to create persisted session: {e}")
+        return self.sessions[session_id]
 
     def add_message(self, session_id: str, role: str, content: str) -> None:
         """Add a message to the session history."""
@@ -107,14 +88,11 @@ class SessionManager:
 
         session["updated_at"] = datetime.now().isoformat()
 
-        # Auto-save to persistence layer
+        # Auto-save to persistence layer (async)
         if self.auto_save and session.get("_persisted", False):
-            try:
-                _run_async(
-                    session_store.append_message(session_id, role, content)
-                )
-            except Exception as e:
-                logger.error(f"Failed to save message to persistence: {e}")
+            asyncio.create_task(
+                session_store.append_message(session_id, role, content)
+            )
 
         # Check if we should run compaction
         self._check_compaction()
@@ -131,12 +109,9 @@ class SessionManager:
             self.sessions[session_id]["updated_at"] = datetime.now().isoformat()
             # Clear persisted transcript
             if self.auto_save:
-                try:
-                    _run_async(
-                        session_store.delete_session(session_id)
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to delete session from persistence: {e}")
+                asyncio.create_task(
+                    session_store.delete_session(session_id)
+                )
 
     def list_sessions(self) -> List[str]:
         """List all active session IDs."""
@@ -219,18 +194,28 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Compaction failed: {e}")
 
-    def save_all(self):
+    async def save_all(self):
         """Manually save all sessions to persistence layer."""
         try:
             for session_id, session in self.sessions.items():
                 for msg in session.get("history", []):
-                    _run_async(
-                        session_store.append_message(session_id, msg["role"], msg["content"])
-                    )
+                    await session_store.append_message(session_id, msg["role"], msg["content"])
             logger.info(f"Saved {len(self.sessions)} sessions to persistence layer")
         except Exception as e:
             logger.error(f"Failed to save all sessions: {e}")
 
 
-# Global session manager instance
-session_manager = SessionManager()
+# Global session manager instance (lazy initialization)
+_session_manager: Optional['SessionManager'] = None
+
+
+def get_session_manager() -> 'SessionManager':
+    """Get or create the session manager instance."""
+    global _session_manager
+    if _session_manager is None:
+        _session_manager = SessionManager(auto_save=False)
+    return _session_manager
+
+
+# Backwards compatibility - create instance at import time but without persistence
+session_manager = SessionManager(auto_save=False)

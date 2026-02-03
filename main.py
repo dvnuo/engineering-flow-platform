@@ -19,6 +19,7 @@ if str(script_dir) not in sys.path:
 from gateway.server import gateway
 from config import config
 from session.persistence import session_store
+from session.manager import session_manager
 from session.usage import usage_tracker
 from cron.mention_poller import start_polling, stop_polling, is_enabled
 
@@ -91,6 +92,8 @@ async def main() -> None:
         logger.info("Session store initialized")
         await usage_tracker.ensure_dir()
         logger.info("Usage tracker initialized")
+        await session_manager.initialize()
+        logger.info("Session manager initialized")
     except Exception as e:
         logger.warning(f"Failed to initialize session/usage tracking: {e}")
 
