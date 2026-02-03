@@ -146,26 +146,48 @@ class SkillsExecutor:
         try:
             module = __import__(
                 f"skills.{skill_name}.skill",
-                fromlist=[skill_name.title()],
+                fromlist=[skill_name],
             )
 
-            # Get the skill - could be a class or a decorated function instance
-            # Try both title case (class) and lowercase (decorated function)
-            skill_class = getattr(module, skill_name.title().replace("_", ""), None)
+            # Get the skill - could be a class or a decorated function
+            # Try lowercase (for @skill decorated functions) first
+            skill_class = getattr(module, skill_name.lower(), None)
             
-            # If not found, try lowercase (for @skill decorated functions)
+            # If not found, try title case (for class-based skills)
             if skill_class is None:
-                skill_class = getattr(module, skill_name.lower().replace("_", ""), None)
+                skill_class = getattr(module, skill_name.title().replace("_", ""), None)
             
-            # If it's a Skill instance (from @skill decorator), use it directly
-            if isinstance(skill_class, Skill):
-                self.skills[skill_class.name] = skill_class
-                logger.info(f"Loaded skill: {skill_class.name}")
+            # Handle decorated function (has name and description attributes)
+            if skill_class is not None and callable(skill_class):
+                if hasattr(skill_class, 'name') and hasattr(skill_class, 'description'):
+                    # It's a @skill decorated function
+                    self.skills[skill_class.name] = skill_class
+                    logger.info(f"Loaded skill: {skill_class.name}")
+                elif isinstance(skill_class, Skill):
+                    # It's a Skill class instance
+                    self.skills[skill_class.name] = skill_class
+                    logger.info(f"Loaded skill: {skill_class.name}")
+                else:
+                    # Look for any Skill instance or decorated function in the module
+                    for attr_name in dir(module):
+                        attr = getattr(module, attr_name)
+                        if isinstance(attr, Skill):
+                            self.skills[attr.name] = attr
+                            logger.info(f"Loaded skill: {attr.name}")
+                            break
+                        elif callable(attr) and hasattr(attr, 'name') and hasattr(attr, 'description'):
+                            self.skills[attr.name] = attr
+                            logger.info(f"Loaded skill: {attr.name}")
+                            break
             else:
                 # Look for any Skill instance in the module
                 for attr_name in dir(module):
                     attr = getattr(module, attr_name)
                     if isinstance(attr, Skill):
+                        self.skills[attr.name] = attr
+                        logger.info(f"Loaded skill: {attr.name}")
+                        break
+                    elif callable(attr) and hasattr(attr, 'name') and hasattr(attr, 'description'):
                         self.skills[attr.name] = attr
                         logger.info(f"Loaded skill: {attr.name}")
                         break
@@ -233,8 +255,15 @@ class SkillsExecutor:
             return SkillResult(success=False, error=f"Skill not found: {skill_name}")
 
         try:
-            result = await skill.execute(**kwargs)
-            logger.info(f"Skill {skill_name} executed: success={result.success}")
+            # Handle both Skill class instances and @skill decorated functions
+            if hasattr(skill, 'execute') and callable(skill.execute):
+                result = await skill.execute(**kwargs)
+            elif callable(skill):
+                result = await skill(**kwargs)
+            else:
+                return SkillResult(success=False, error=f"Skill {skill_name} is not callable")
+            
+            logger.info(f"Skill {skill_name} executed: success={isinstance(result, SkillResult) and result.success}")
             return result
         except Exception as e:
             logger.error(f"Skill {skill_name} failed: {e}")
