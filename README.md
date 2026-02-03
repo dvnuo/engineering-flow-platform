@@ -8,12 +8,12 @@ A simple version of [OpenClaw](https://github.com/openclaw/openclaw) written in 
 
 ## Features
 
-- 🎯 **Simple Architecture** - Core components: Gateway, Agent, Channel, Session
-- 💬 **Discord Support** - Receive and respond to messages via Discord Bot
-- 🧠 **LLM Integration** - Supports OpenAI and GitHub Copilot APIs
-- 💾 **Session Management** - Maintain conversation history per user/channel
-- 📝 **Memory System** - Load context from workspace MD files (SOUL.md, USER.md, etc.)
-- 🔌 **Extensible** - Easy to add new channels or tools
+- Simple Architecture - Core components: Gateway, Agent, Channel, Session
+- Discord Support - Receive and respond to messages via Discord Bot
+- LLM Integration - Supports OpenAI and GitHub Copilot APIs
+- Session Management - Maintain conversation history per user/channel
+- Memory System - Load context from workspace MD files (SOUL.md, USER.md, etc.)
+- Extensible - Easy to add new channels or tools
 
 ## Table of Contents
 
@@ -103,7 +103,7 @@ cp workspace/*.example workspace/
 docker-compose up -d
 ```
 
-**⚠️ Important: Workspace Volume**
+**Important: Workspace Volume**
 
 Without the `./workspace:/root/.openclaw/workspace` volume mount:
 - Memory files (SOUL.md, USER.md, MEMORY.md, etc.) will be lost on restart
@@ -197,78 +197,78 @@ llm:
 
 ### Configuration Options
 
-#### Discord 配置
+#### Discord Configuration
 
 | Key | Type | Required | Default | Description | Example |
 |-----|------|----------|---------|-------------|---------|
-| `discord.bot_token` | string | Yes* | - | Discord Bot Token，从 Discord Developer Portal 获取 | `MTIzNDU2Nzg5MC5xyz...` |
-| `discord.channel_id` | int/string | Yes* | - | 目标频道 ID，启用开发者模式后右键频道复制 | `123456789012345678` |
-| `discord.webhook_url` | string | No | - | Discord Webhook URL，用于接收消息（可选，与 bot_token 二选一） | `https://discord.com/api/webhooks/...` |
+| `discord.bot_token` | string | Yes* | - | Discord Bot Token from Developer Portal | `MTIzNDU2Nzg5MC5xyz...` |
+| `discord.channel_id` | int/string | Yes* | - | Target channel ID (right-click channel to copy) | `123456789012345678` |
+| `discord.webhook_url` | string | No | - | Discord Webhook URL for receiving messages (optional) | `https://discord.com/api/webhooks/...` |
 
-**注意**: `bot_token` 和 `Webhook_url` 至少需要一个
+**Note**: At least one of `bot_token` or `webhook_url` is required
 
-**获取 bot_token**:
-1. 访问 [Discord Developer Portal](https://discord.com/developers/applications)
-2. 创建应用 → Bot → Reset Token → 复制
+**Getting bot_token**:
+1. Visit [Discord Developer Portal](https://discord.com/developers/applications)
+2. Create Application → Bot → Reset Token → Copy
 
-**获取 channel_id**:
-1. Discord 设置 → 高级 → 启用开发者模式
-2. 右键频道 → 复制 ID
+**Getting channel_id**:
+1. Discord Settings → Advanced → Developer Mode
+2. Right-click channel → Copy ID
 
-#### LLM 配置
+#### LLM Configuration
 
 | Key | Type | Required | Default | Description | Example |
 |-----|------|----------|---------|-------------|---------|
-| `llm.provider` | string | No | `openai` | LLM 提供商 | `openai` / `github_copilot` |
-| `llm.api_base` | string | No | OpenAI URL | API 基础 URL | `https://api.openai.com/v1` |
-| `llm.api_key` | string | Yes | - | API 密钥 | `sk-...` |
-| `llm.model` | string | No | `gpt-3.5-turbo` | 模型名称 | `gpt-3.5-turbo` / `gpt-4` |
-| `llm.max_tokens` | int | No | 1000 | 响应最大 token 数 | 500 / 2000 |
-| `llm.temperature` | float | No | 0.7 | 响应随机性 (0.0-1.0) | 0.5 / 0.9 |
-| `llm.max_retries` | int | No | 3 | API 失败重试次数 | 3 / 5 |
-| `llm.retry_delay` | float | No | 1 | 重试间隔秒数（指数退避） | 1 / 2 |
+| `llm.provider` | string | No | `openai` | LLM provider | `openai` / `github_copilot` |
+| `llm.api_base` | string | No | OpenAI URL | API base URL | `https://api.openai.com/v1` |
+| `llm.api_key` | string | Yes | - | API key | `sk-...` |
+| `llm.model` | string | No | `gpt-3.5-turbo` | Model name | `gpt-3.5-turbo` / `gpt-4` |
+| `llm.max_tokens` | int | No | 1000 | Max response tokens | 500 / 2000 |
+| `llm.temperature` | float | No | 0.7 | Response randomness (0.0-1.0) | 0.5 / 0.9 |
+| `llm.max_retries` | int | No | 3 | API retry attempts | 3 / 5 |
+| `llm.retry_delay` | float | No | 1 | Retry delay in seconds (exponential backoff) | 1 / 2 |
 
-**Provider 说明**:
-- `openai`: OpenAI 官方 API (ChatGPT)
+**Provider Notes**:
+- `openai`: OpenAI official API (ChatGPT)
 - `github_copilot`: GitHub Copilot API
 
-**模型推荐**:
-- `gpt-3.5-turbo`: 便宜快速，适合日常对话
-- `gpt-4`: 更强推理能力，适合复杂任务
+**Model Recommendations**:
+- `gpt-3.5-turbo`: Cheap and fast, suitable for daily conversations
+- `gpt-4`: Stronger reasoning, suitable for complex tasks
 
-**Temperature 说明**:
-- `0.0`: 最确定性输出
-- `0.7`: 平衡创造力
-- `1.0`: 最高随机性
+**Temperature Notes**:
+- `0.0`: Most deterministic output
+- `0.7`: Balanced creativity
+- `1.0`: Highest randomness
 
-#### Session 配置
-
-| Key | Type | Required | Default | Description | Example |
-|-----|------|----------|---------|-------------|---------|
-| `session.max_history` | int | No | 5 | 保留的对话轮数（每轮包含用户和助手消息） | 5 / 10 |
-
-**说明**: 会话历史存储在内存中，服务器重启后清零
-
-#### Server 配置
+#### Session Configuration
 
 | Key | Type | Required | Default | Description | Example |
 |-----|------|----------|---------|-------------|---------|
-| `server.host` | string | No | `0.0.0.0` | 监听地址 | `0.0.0.0` / `127.0.0.1` |
-| `server.port` | int | No | 8000 | 监听端口 | 8000 / 8080 |
+| `session.max_history` | int | No | 5 | Conversation turns to retain | 5 / 10 |
 
-**说明**:
-- `0.0.0.0`: 监听所有网络接口
-- `127.0.0.1`: 仅本地访问（更安全）
+**Note**: Session history is stored in memory and cleared on server restart
 
-#### 完整配置示例
+#### Server Configuration
+
+| Key | Type | Required | Default | Description | Example |
+|-----|------|----------|---------|-------------|---------|
+| `server.host` | string | No | `0.0.0.0` | Listen address | `0.0.0.0` / `127.0.0.1` |
+| `server.port` | int | No | 8000 | Listen port | 8000 / 8080 |
+
+**Notes**:
+- `0.0.0.0`: Listen on all network interfaces
+- `127.0.0.1`: Local only (more secure)
+
+#### Complete Configuration Example
 
 ```yaml
-# 基础配置
+# Basic configuration
 discord:
   bot_token: "YOUR_BOT_TOKEN"
   channel_id: "1234567890"
 
-# OpenAI 配置
+# OpenAI configuration
 llm:
   provider: "openai"
   api_base: "https://api.openai.com/v1"
@@ -279,17 +279,17 @@ llm:
   max_retries: 3
   retry_delay: 1
 
-# 会话配置
+# Session configuration
 session:
   max_history: 5
 
-# 服务器配置
+# Server configuration
 server:
   host: "0.0.0.0"
   port: 8000
 ```
 
-#### Docker 环境变量配置
+#### Docker Environment Variables Configuration
 
 ```yaml
 # docker-compose.yml
@@ -302,7 +302,7 @@ services:
 ```
 
 ```bash
-# .env 文件
+# .env file
 DISCORD_BOT_TOKEN=your_bot_token
 DISCORD_CHANNEL_ID=your_channel_id
 OPENAI_API_KEY=sk-your-api-key
@@ -310,181 +310,133 @@ OPENAI_API_KEY=sk-your-api-key
 
 ---
 
-## 新手完全指南 (5分钟上手)
+## Quick Start Guide (5 Minutes)
 
-### 第一步：准备 Discord 机器人 🤖
+### Step 1: Prepare Discord Bot
 
-#### 1.1 创建 Discord 应用
+#### 1.1 Create Discord Application
 
-1. 打开浏览器，访问 https://discord.com/developers/applications
-2. 点击右上角 **"New Application"**（新应用）
-3. 输入应用名称（例如：`OpenClaw-Bot`）
-4. 点击 **"Create"**
+1. Open browser, visit https://discord.com/developers/applications
+2. Click "New Application" in top-right
+3. Enter application name (e.g., `OpenClaw-Bot`)
+4. Click "Create"
 
-#### 1.2 创建机器人
+#### 1.2 Create Bot
 
-1. 点击左侧菜单 **"Bot"**（机器人）
-2. 点击 **"Add Bot"**（添加机器人）
-3. 点击 **"Yes, do it!"** 确认
+1. Click "Bot" in left menu
+2. Click "Add Bot"
+3. Click "Yes, do it!" to confirm
 
-#### 1.3 获取 Bot Token（非常重要！）
+#### 1.3 Get Bot Token (Important!)
 
-1. 在 Bot 页面，找到 **"Token"** 部分
-2. 点击 **"Reset Token"**（重置令牌）
-3. 点击 **"Copy"**（复制）
-4. **保存到安全的地方**，不要分享给他人！
+1. On Bot page, find "Token" section
+2. Click "Reset Token"
+3. Click "Copy"
+4. **Save securely**, don't share!
 
-#### 1.4 启用必要权限
+#### 1.4 Enable Required Permissions
 
-1. 在 Bot 页面，找到 **"Privileged Gateway Intents"**
-2. 启用 **"Message Content Intent"**（必须开启，否则收不到消息）
-3. 点击 **"Save Changes"**
+1. On Bot page, find "Privileged Gateway Intents"
+2. Enable "Message Content Intent" (Required to receive messages)
+3. Click "Save Changes"
 
-#### 1.5 邀请机器人到服务器
+#### 1.5 Invite Bot to Server
 
-1. 点击左侧菜单 **"OAuth2"** → **"URL Generator"**
-2. 在 **"Scopes"**（范围）中，勾选 `bot`
-3. 在 **"Bot Permissions"**（机器人权限）中，勾选：
-   - ✅ `Send Messages`（发送消息）
-   - ✅ `Read Message History`（读取消息历史）
-   - ✅ `View Channel`（查看频道）
-4. 滚动到页面底部，复制 **"Generated URL"**
-5. 在浏览器中打开链接，选择你的 Discord 服务器，点击 **"授权"**
+1. Click "OAuth2" → "URL Generator" in left menu
+2. In "Scopes", check `bot`
+3. In "Bot Permissions", check:
+   - Send Messages
+   - Read Message History
+   - View Channel
+4. Scroll down, copy "Generated URL"
+5. Open in browser, select your Discord server, click "Authorize"
 
-### 第二步：获取频道 ID 📺
+### Step 2: Get Channel ID
 
-1. 打开 Discord
-2. 点击左下角 **齿轮图标**（用户设置）
-3. 选择 **"Advanced"**（高级）
-4. 开启 **"Developer Mode"**（开发者模式）
-5. 右键点击你想要机器人发言的频道
-6. 选择 **"Copy ID"**（复制 ID）
+1. Open Discord
+2. Click gear icon (User Settings) bottom-left
+3. Select "Advanced"
+4. Enable "Developer Mode"
+5. Right-click the channel where bot should respond
+6. Select "Copy ID"
 
-### 第三步：获取 OpenAI API Key 🔑
+### Step 3: Get OpenAI API Key
 
-1. 打开 https://platform.openai.com/api-keys
-2. 登录/注册 OpenAI 账号
-3. 点击 **"Create new secret key"**
-4. 复制 API Key（格式：`sk-...`）
+1. Open https://platform.openai.com/api-keys
+2. Login/Register OpenAI account
+3. Click "Create new secret key"
+4. Copy API Key (format: `sk-...`)
 
-**注意**：
-- 使用 ChatGPT Plus 账号可以直接使用
-- 需要先充值或绑定支付方式
-- 有免费额度（$5）
+**Notes**:
+- ChatGPT Plus users can use directly
+- Payment method required
+- Free tier available ($5)
 
-### 第四步：配置项目 📝
-
-#### 4.1 编辑配置文件
+### Step 4: Configure Project
 
 ```bash
 # Run from project root
 nano config.yaml
 ```
 
-#### 4.2 填入配置
+Fill in configuration:
 
 ```yaml
 discord:
-  bot_token: "刚才复制的 Bot Token"
-  channel_id: "刚才复制的频道 ID"
+  bot_token: "Bot Token you copied"
+  channel_id: "Channel ID you copied"
 
 llm:
   provider: "openai"
-  api_key: "刚才复制的 OpenAI API Key"
-  model: "gpt-3.5-turbo"  # 推荐用这个，便宜好用
+  api_key: "OpenAI API Key you copied"
+  model: "gpt-3.5-turbo"  # Recommended: cheap and effective
 ```
 
-#### 4.3 验证配置
+Verify configuration:
 
 ```bash
-# 测试配置文件是否正确
 python main.py --help
 ```
 
-### 第五步：运行机器人 🚀
+### Step 5: Run Bot
 
 ```bash
-# 方式一：前台运行（测试用）
+# Method 1: Run in foreground (for testing)
 python main.py
 
-# 看到 "Gateway started on http://0.0.0.0:8000" 就是成功了！
+# When you see "Gateway started on http://0.0.0.0:8000", it's successful!
 ```
 
-### 第六步：测试 🤝
+### Step 6: Test
 
-1. 在 Discord 频道中发送：`你好`
-2. 机器人应该会回复你！
-
----
-
-## 常见问题 FAQ
-
-1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Click "New Application" and name it
-3. Go to "Bot" section and click "Add Bot"
-4. Copy the Bot Token (keep it secret!)
-
-### Step 2: Enable Privileged Intents
-
-In the Bot settings, enable:
-- **Message Content Intent** (Required for reading messages)
-
-### Step 3: Invite Bot to Server
-
-1. Go to OAuth2 → URL Generator
-2. Select scopes: `bot`
-3. Select permissions:
-   - `Send Messages`
-   - `Read Message History`
-   - `View Channel`
-4. Copy the generated URL and open it
-
-### Step 4: Get Channel ID
-
-1. Enable Developer Mode in Discord (Settings → Advanced → Developer Mode)
-2. Right-click the channel → Copy ID
-
-### Step 5: Create Webhook (Optional)
-
-```bash
-curl -X POST \
-  -H "Authorization: Bot YOUR_BOT_TOKEN" \
-  -H "Content-Type: application/json" \
-  https://discord.com/api/v10/channels/YOUR_CHANNEL_ID/webhooks \
-  -d '{"name": "openclaw-mini"}'
-```
+1. Send `Hello` in Discord channel
+2. Bot should reply!
 
 ---
 
 ## Running
 
-### 重要：确保在正确目录 ⚠️
+### Important: Run from Correct Directory
 
-**必须进入 `openclaw_mini` 目录运行**：
+Must run from `codew` directory:
 
 ```bash
-cd /root/codew/openclaw_mini
+cd /root/codew
 ```
 
-如果出现以下错误：
+If you see this error:
 ```
-ModuleNotFoundError: No module named 'openclaw_mini'
+ModuleNotFoundError: No module named 'codew'
 ```
-说明当前目录不对，请先执行：
-```bash
-# Run from project root
-```
+Your current directory is wrong.
 
 ### Basic Run
 
 ```bash
-# 1. 进入目录
 # Run from project root
-
-# 2. 运行程序
 python main.py
 
-# 看到以下输出表示成功：
+# Success output:
 # Gateway started on http://0.0.0.0:8000
 ```
 
@@ -497,16 +449,16 @@ python main.py --config /path/to/config.yaml
 ### Run in Background (Linux/macOS)
 
 ```bash
-# 创建日志目录
+# Create logs directory
 mkdir -p logs
 
-# 使用 nohup 后台运行
+# Run in background with nohup
 nohup python main.py > logs/app.log 2>&1 &
 
-# 查看日志
+# View logs
 tail -f logs/app.log
 
-# 停止服务
+# Stop service
 pkill -f "python main.py"
 ```
 
@@ -522,12 +474,10 @@ After=network.target
 [Service]
 Type=simple
 User=your_user
-WorkingDirectory=/path/to/openclaw_mini
+WorkingDirectory=/path/to/codew
 ExecStart=/path/to/venv/bin/python main.py
 Restart=on-failure
 RestartSec=5
-
-[368 more lines in file. Use offset=468 continues]
 Environment=OPENCLAW_LLM_API_KEY=your_api_key
 
 [Install]
@@ -588,22 +538,22 @@ curl -X POST http://localhost:8000/api/sessions/discord:123:456/clear
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────┐     ┌─────────────┐     ┌─────────┐
-│ Discord     │────▶│ Gateway  │────▶│ Agent Core  │────▶│ LLM API │
-│ (Webhook)   │     │ (HTTP)   │     │             │     │          │
-└─────────────┘     └──────────┘     └─────────────┘     └─────────┘
-                          │                 ▲
-                          │                 │
-                     ┌──────────┐     ┌─────────────┐
-                     │ Session  │     │   LLM       │
-                     │ Manager  │     │   Client    │
-                     └──────────┘     └─────────────┘
++-------------+     +----------+     +-------------+     +---------+
+| Discord     |---->| Gateway  |---->| Agent Core  |---->| LLM API |
+| (Webhook)   |     | (HTTP)   |     |             |     |          |
++-------------+     +----------+     +-------------+     +---------+
+                         │                  ^
+                         │                  │
+                    +----------+     +-------------+
+                    | Session  |     |   LLM       |
+                    | Manager  |     |   Client    |
+                    +----------+     +-------------+
 ```
 
 ## Project Structure
 
 ```
-openclaw_mini/
+codew/
 ├── main.py              # Entry point
 ├── config.yaml          # Configuration
 ├── config.py            # Config loader
@@ -749,171 +699,171 @@ class TelegramChannel:
 
 ---
 
-## 故障排除 Troubleshooting
+## Troubleshooting
 
-### ❌ 机器人不回复消息
+### Bot Not Responding
 
-**按以下顺序检查**：
+**Check in this order**:
 
-1. ✅ **Bot 是否在线？**
-   - 查看 Discord 服务器成员列表，机器人头像应该在线且显示绿色
+1. Is Bot Online?
+   - Check Discord server member list, bot avatar should be online with green indicator
 
-2. ✅ **Message Content Intent 是否开启？**
-   - 访问 Discord Developer Portal → Bot
-   - 确认 **"Message Content Intent"** 已启用
-   - 点击 **"Save Changes"**
+2. Is Message Content Intent Enabled?
+   - Visit Discord Developer Portal → Bot
+   - Confirm "Message Content Intent" is enabled
+   - Click "Save Changes"
 
-3. ✅ **config.yaml 配置是否正确？**
+3. Is config.yaml Correct?
    ```bash
    cat config.yaml
    ```
-   确认 `bot_token` 和 `channel_id` 正确且没有多余空格
+   Confirm `bot_token` and `channel_id` are correct without extra spaces
 
-4. ✅ **Bot Token 是否正确？**
-   - Token 格式：一串字符如 `MTIzNDU2Nzg5MC5xyz...`
-   - 不要包含引号或额外字符
+4. Is Bot Token Correct?
+   - Token format: characters like `MTIzNDU2Nzg5MC5xyz...`
+   - Don't include quotes or extra characters
 
-5. ✅ **频道 ID 是否正确？**
-   - 必须是纯数字，如 `123456789012345678`
-   - 不要包含 `<` `>` 等符号
+5. Is Channel ID Correct?
+   - Must be pure numbers, like `123456789012345678`
+   - Don't include `<` `>` symbols
 
-6. ✅ **检查控制台日志**
+6. Check Console Logs
    ```bash
    python main.py
    ```
-   查看是否有错误信息
+   Look for error messages
 
-### ❌ 报错 "401 Unauthorized"
+### Error "401 Unauthorized"
 
-**原因**：API Key 错误
+**Cause**: Wrong API Key
 
-**解决方法**：
+**Solution**:
 ```bash
-# 1. 重新获取 API Key
-# 访问 https://platform.openai.com/api-keys
+# 1. Get new API key
+# Visit https://platform.openai.com/api-keys
 
-# 2. 确认格式正确（以 sk- 开头）
-# 3. 更新 config.yaml
+# 2. Confirm format (starts with sk-)
+# 3. Update config.yaml
 ```
 
-### ❌ 报错 "429 Too Many Requests"
+### Error "429 Too Many Requests"
 
-**原因**：API 调用频率超限
+**Cause**: API rate limit exceeded
 
-**解决方法**：
+**Solution**:
 ```bash
-# 1. 等待 1 分钟后再试
-# 2. 或降低 config.yaml 中的 max_tokens
-# 3. 或提高 temperature 值
+# 1. Wait 1 minute and retry
+# 2. Or reduce max_tokens in config.yaml
+# 3. Or increase temperature value
 ```
 
-### ❌ 报错 "Connection Error" 或 "Failed to connect"
+### Error "Connection Error" or "Failed to connect"
 
-**原因**：网络问题
+**Cause**: Network issue
 
-**解决方法**：
+**Solution**:
 ```bash
-# 1. 检查网络连接
+# 1. Check network connection
 ping api.openai.com
 
-# 2. 确认能访问 OpenAI
+# 2. Confirm OpenAI access
 curl https://api.openai.com/v1/models
 
-# 3. 尝试使用代理
+# 3. Try using proxy
 ```
 
-### ❌ 机器人回复很慢
+### Bot Response is Slow
 
-**可能原因**：
-1. 网络延迟
-2. API 服务器繁忙
-3. 使用了 `gpt-4`（比 gpt-3.5-turbo 慢）
+**Possible causes**:
+1. Network latency
+2. API server busy
+3. Using `gpt-4` (slower than gpt-3.5-turbo)
 
-**解决方法**：
+**Solution**:
 ```yaml
-# config.yaml 中使用更快的模型
+# Use faster model in config.yaml
 llm:
-  model: "gpt-3.5-turbo"  # 比 gpt-4 快且便宜
-  max_tokens: 500         # 减少响应长度
+  model: "gpt-3.5-turbo"  # Faster and cheaper than gpt-4
+  max_tokens: 500         # Reduce response length
 ```
 
-### ❌ 端口 8000 被占用
+### Port 8000 Already in Use
 
 ```bash
-# 1. 查看占用端口的进程
+# 1. Check process using port
 lsof -i :8000
 
-# 2. 杀掉进程
+# 2. Kill process
 kill <PID>
 
-# 3. 或修改 config.yaml 中的端口
+# 3. Or change port in config.yaml
 server:
-  port: 8080  # 改用其他端口
+  port: 8080  # Use different port
 ```
 
-### ❌ Docker 权限被拒绝
+### Docker Permission Denied
 
 ```bash
-# 方法一：使用 sudo（不推荐）
+# Method 1: Use sudo (not recommended)
 sudo docker-compose up -d
 
-# 方法二：将用户添加到 docker 组（推荐）
+# Method 2: Add user to docker group (recommended)
 sudo usermod -aG docker $USER
-# 重新登录后生效
+# Log out and back in to take effect
 ```
 
-### ❌ 看不到日志输出
+### No Log Output
 
 ```bash
-# 1. 确保在前台运行
+# 1. Run in foreground
 python main.py
 
-# 2. 查看详细日志（修改 main.py）
-# 找到 logging.basicConfig，修改为：
+# 2. Enable detailed logging (modify main.py)
+# Find logging.basicConfig, change to:
 logging.basicConfig(level=logging.DEBUG)
 
-# 3. 重启程序
+# 3. Restart program
 ```
 
-### ❌ Bot 回复 "我遇到了错误"
+### Bot Replies "I encountered an error"
 
-**可能原因**：
-1. OpenAI 账号余额不足
-2. API Key 过期
-3. 网络超时
+**Possible causes**:
+1. OpenAI account has insufficient balance
+2. API Key expired
+3. Network timeout
 
-**解决方法**：
+**Solution**:
 ```bash
-# 1. 检查 OpenAI 账号余额
-# 访问 https://platform.openai.com/account/usage
+# 1. Check OpenAI account balance
+# Visit https://platform.openai.com/account/usage
 
-# 2. 检查控制台具体错误信息
+# 2. Check console for specific error
 python main.py
 ```
 
 ---
 
-## 快速检查清单 ✅
+## Quick Checklist
 
-运行机器人前，确认以下所有项：
+Before running bot, confirm all items:
 
-- [ ] Discord Bot 创建完成
-- [ ] Message Content Intent 已启用
-- [ ] Bot Token 已复制并保存
-- [ ] Bot 已邀请到服务器
-- [ ] 频道 ID 已获取（纯数字格式）
-- [ ] OpenAI API Key 已获取（以 sk- 开头）
-- [ ] config.yaml 配置正确
-- [ ] 依赖已安装：`pip install -r requirements.txt`
-- [ ] 机器人在线且能发送消息
+- [ ] Discord Bot created
+- [ ] Message Content Intent enabled
+- [ ] Bot Token copied and saved
+- [ ] Bot invited to server
+- [ ] Channel ID obtained (pure numbers)
+- [ ] OpenAI API Key obtained (starts with sk-)
+- [ ] config.yaml configured correctly
+- [ ] Dependencies installed: `pip install -r requirements.txt`
+- [ ] Bot online and can send messages
 
 ---
 
-## 获得帮助 🤝
+## Getting Help
 
-1. **查看日志**：控制台的错误信息通常能说明问题
-2. **搜索错误**：把错误信息粘贴到搜索引擎
-3. **提 Issue**：在 GitHub 仓库提交问题
+1. Check logs: Console error messages usually indicate the problem
+2. Search errors: Paste error message into search engine
+3. Create Issue: Submit problem in GitHub repository
 
 ---
 
@@ -952,6 +902,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Support
 
-- 📧 Create an issue for bugs
-- 💬 Join our Discord community
-- 📖 Read the full documentation
+- Create an issue for bugs
+- Join our Discord community
+- Read the full documentation
