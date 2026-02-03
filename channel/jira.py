@@ -5,6 +5,7 @@ Features:
 - Get, create, update, transition issues
 - JQL search with validation
 - Comment management
+- Support for both Jira REST API v2 and v3
 - Webhook handling for inbound events
 """
 
@@ -35,7 +36,7 @@ JQL_DANGEROUS_PATTERNS = [
 
 
 class JiraChannel:
-    """Jira channel adapter with full REST API support."""
+    """Jira channel adapter with REST API v2/v3 support."""
     
     def __init__(self):
         self.base_url = config.jira.get("url", "").rstrip("/")
@@ -43,6 +44,7 @@ class JiraChannel:
         self.api_token = config.jira.get("api_token", "")
         self.project = config.jira.get("project", "")
         self.enabled = config.jira.get("enabled", False)
+        self.api_version = config.jira.get("api_version", "3")  # "2" or "3"
         
         self.client = httpx.AsyncClient(timeout=30.0)
         self._auth_header = self._get_auth_header()
@@ -70,7 +72,8 @@ class JiraChannel:
         if not self.is_configured():
             raise RuntimeError("Jira not configured")
         
-        url = f"{self.base_url}/rest/api/3{endpoint}"
+        # Use configured API version
+        url = f"{self.base_url}/rest/api/{self.api_version}{endpoint}"
         headers = {
             **self._auth_header,
             "Content-Type": "application/json",
@@ -110,7 +113,7 @@ class JiraChannel:
             jql: JQL query string
             max_results: Maximum results to return
             start_at: Pagination offset
-            fields: Specific fields to return
+            fields: Specific fields to return (v2: limited support)
             
         Returns:
             Search results with issues list and total count
@@ -127,7 +130,8 @@ class JiraChannel:
             "startAt": start_at,
         }
         
-        if fields:
+        # v2 has limited fields support
+        if fields and self.api_version == "3":
             params["fields"] = ",".join(fields)
         
         return await self._request("GET", "/search", params=params)
@@ -147,38 +151,49 @@ class JiraChannel:
         Args:
             project: Project key (e.g., "PROJ")
             summary: Issue summary/title
-            description: Issue description (supports ADF format)
+            description: Issue description (v2: plain text, v3: ADF format)
             issue_type: Issue type (Task, Bug, Story, etc.)
-            priority: Priority name
+            priority: Priority name (v2: limited support)
             assignee: Assignee account ID or email
-            labels: List of labels
+            labels: List of labels (v2: limited support)
             
         Returns:
             Created issue key and details
         """
         logger.info(f"Creating issue in {project}: {summary[:50]}...")
         
-        fields = {
-            "project": {"key": project},
-            "summary": summary,
-            "description": {
-                "type": "doc",
-                "version": 1,
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "content": [{"type": "text", "text": description}]
-                    }
-                ]
-            },
-            "issuetype": {"name": issue_type},
-        }
+        if self.api_version == "3":
+            # v3: Use Atlassian Document Format (ADF)
+            fields = {
+                "project": {"key": project},
+                "summary": summary,
+                "description": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": description}]
+                        }
+                    ]
+                },
+                "issuetype": {"name": issue_type},
+            }
+        else:
+            # v2: Use plain text for description
+            fields = {
+                "project": {"key": project},
+                "summary": summary,
+                "description": description,
+                "issuetype": {"name": issue_type},
+            }
         
-        if priority:
+        if priority and self.api_version == "3":
             fields["priority"] = {"name": priority}
         if assignee:
+            # v2 may require different assignee format
             fields["assignee"] = {"id": assignee} if len(assignee) == 36 else {"name": assignee}
-        if labels:
+        if labels and self.api_version == "3":
             fields["labels"] = labels
         
         return await self._request("POST", "/issue", data={"fields": fields})
@@ -197,8 +212,8 @@ class JiraChannel:
             issue_key: Issue key to update
             summary: New summary (optional)
             description: New description (optional)
-            priority: New priority (optional)
-            labels: New labels list (optional)
+            priority: New priority (optional, v3 only)
+            labels: New labels list (optional, v3 only)
             
         Returns:
             True if update successful
@@ -206,27 +221,32 @@ class JiraChannel:
         logger.info(f"Updating issue: {issue_key}")
         
         fields = {}
-        update = {}
+        data = {}
         
         if summary is not None:
             fields["summary"] = summary
+        
         if description is not None:
-            fields["description"] = {
-                "type": "doc",
-                "version": 1,
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "content": [{"type": "text", "text": description}]
-                    }
-                ]
-            }
-        if priority is not None:
+            if self.api_version == "3":
+                fields["description"] = {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": description}]
+                        }
+                    ]
+                }
+            else:
+                fields["description"] = description
+        
+        if priority is not None and self.api_version == "3":
             fields["priority"] = {"name": priority}
-        if labels is not None:
+        
+        if labels is not None and self.api_version == "3":
             fields["labels"] = labels
         
-        data = {}
         if fields:
             data["fields"] = fields
         
@@ -240,23 +260,28 @@ class JiraChannel:
         
         Args:
             issue_key: Issue key
-            comment: Comment text
+            comment: Comment text (v2: plain text, v3: ADF format)
             
         Returns:
             Created comment details
         """
         logger.info(f"Adding comment to {issue_key}")
         
-        body = {
-            "type": "doc",
-            "version": 1,
-            "content": [
-                {
-                    "type": "paragraph",
-                    "content": [{"type": "text", "text": comment}]
-                }
-            ]
-        }
+        if self.api_version == "3":
+            # v3: Use ADF format
+            body = {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": comment}]
+                    }
+                ]
+            }
+        else:
+            # v2: Use plain text
+            body = comment
         
         return await self._request(
             "POST",
@@ -282,15 +307,23 @@ class JiraChannel:
         return [
             {
                 "id": str(c.get("id", "")),
-                "body": self._parse_adf_body(c.get("body", {})),
+                "body": self._parse_body(c.get("body", {})),
                 "author": c.get("author", {}).get("displayName", "unknown"),
                 "created": c.get("created", ""),
             }
             for c in comments
         ]
 
+    def _parse_body(self, body) -> str:
+        """Extract text from comment body (supports v2 plain text and v3 ADF)."""
+        if isinstance(body, str):
+            return body
+        if not isinstance(body, dict):
+            return ""
+        return self._parse_adf_body(body)
+    
     def _parse_adf_body(self, body) -> str:
-        """Extract text from Atlassian Document Format."""
+        """Extract text from Atlassian Document Format (v3)."""
         if isinstance(body, str):
             return body
         if not isinstance(body, dict):
@@ -350,15 +383,18 @@ class JiraChannel:
         data = {"transition": {"id": transition_id}}
         
         if comment:
-            data["comment"] = [
-                {
-                    "type": "doc",
-                    "version": 1,
-                    "content": [
-                        {"type": "paragraph", "content": [{"type": "text", "text": comment}]}
-                    ]
-                }
-            ]
+            if self.api_version == "3":
+                data["comment"] = [
+                    {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [
+                            {"type": "paragraph", "content": [{"type": "text", "text": comment}]}
+                        ]
+                    }
+                ]
+            else:
+                data["comment"] = comment
         
         await self._request("POST", f"/issue/{issue_key}/transitions", data=data)
         return True
@@ -462,13 +498,13 @@ async def jira_get_issue(issue_key: str) -> str:
         assignee = fields.get("assignee", {})
         assignee_name = assignee.get("displayName", "Unassigned") if assignee else "Unassigned"
         summary = fields.get("summary", "")
-        description = _parse_adf_body(fields.get("description", ""))
+        description = jira_channel._parse_body(fields.get("description", ""))
         
         return f"""**{issue_key}: {summary}**
 
 **Status:** {status}
 **Assignee:** {assignee}
-**Priority:** {fields.get("priority", {}).get("name", "None")}
+**Priority:** {fields.get("priority", {}).get("name", "None") if jira_channel.api_version == "3" else "N/A"}
 **Type:** {fields.get("issuetype", {}).get("name", "Task")}
 **Created:** {fields.get("created", "")[:10]}
 **Updated:** {fields.get("updated", "")[:10]}
