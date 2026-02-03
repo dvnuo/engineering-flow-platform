@@ -5,6 +5,7 @@ Features:
 - Get, create, update, transition issues
 - JQL search with validation
 - Comment management
+- Support for both Jira REST API v2 and v3
 - Webhook handling for inbound events
 """
 
@@ -35,24 +36,60 @@ JQL_DANGEROUS_PATTERNS = [
 
 
 class JiraChannel:
-    """Jira channel adapter with full REST API support."""
+    """Jira channel adapter with REST API v2/v3 support."""
+    
+    # Valid API versions
+    VALID_API_VERSIONS = ("2", "3")
     
     def __init__(self):
         self.base_url = config.jira.get("url", "").rstrip("/")
         self.username = config.jira.get("username", "")
         self.api_token = config.jira.get("api_token", "")
+        self.password = config.jira.get("password", "")  # Alternative to api_token for Basic Auth
+        self.bearer_token = config.jira.get("bearer_token", "")  # Bearer Token authentication
         self.project = config.jira.get("project", "")
         self.enabled = config.jira.get("enabled", False)
         
-        self.client = httpx.AsyncClient(timeout=30.0)
+        # API version with validation
+        api_version = config.jira.get("api_version", "2")
+        if api_version not in self.VALID_API_VERSIONS:
+            logger.warning(f"Invalid api_version '{api_version}', defaulting to '2'. Valid: {self.VALID_API_VERSIONS}")
+            api_version = "2"
+        self.api_version = api_version
+        
+        # Configurable timeout (default: 30s)
+        timeout = config.jira.get("timeout", 30.0)
+        self.timeout = float(timeout)
+        
+        self.client = httpx.AsyncClient(timeout=self.timeout)
         self._auth_header = self._get_auth_header()
+        self._auth_type = self._get_auth_type()
+        
+        logger.info(f"JiraChannel initialized: version={self.api_version}, timeout={self.timeout}s, auth={self._auth_type}")
+    
+    def _get_auth_type(self) -> str:
+        """Determine authentication type based on configuration."""
+        if self.bearer_token:
+            return "Bearer"
+        elif self.username and (self.api_token or self.password):
+            return "Basic"
+        return "None"
     
     def _get_auth_header(self) -> Dict[str, str]:
-        """Get authorization header."""
-        if self.username and self.api_token:
-            creds = f"{self.username}:{self.api_token}"
+        """Get authorization header based on authentication type."""
+        # Bearer Token authentication
+        if self.bearer_token:
+            logger.debug("Using Bearer Token authentication")
+            return {"Authorization": f"Bearer {self.bearer_token}"}
+        
+        # Basic Auth (username:api_token or username:password)
+        if self.username and (self.api_token or self.password):
+            creds = f"{self.username}:{self.api_token or self.password}"
             token = base64.b64encode(creds.encode()).decode()
+            logger.debug("Using Basic Auth authentication")
             return {"Authorization": f"Basic {token}"}
+        
+        logger.warning("No authentication credentials configured")
         return {}
     
     def is_configured(self) -> bool:
@@ -70,7 +107,8 @@ class JiraChannel:
         if not self.is_configured():
             raise RuntimeError("Jira not configured")
         
-        url = f"{self.base_url}/rest/api/3{endpoint}"
+        # Use configured API version
+        url = f"{self.base_url}/rest/api/{self.api_version}{endpoint}"
         headers = {
             **self._auth_header,
             "Content-Type": "application/json",
@@ -110,7 +148,7 @@ class JiraChannel:
             jql: JQL query string
             max_results: Maximum results to return
             start_at: Pagination offset
-            fields: Specific fields to return
+            fields: Specific fields to return (v2: limited support)
             
         Returns:
             Search results with issues list and total count
@@ -127,7 +165,8 @@ class JiraChannel:
             "startAt": start_at,
         }
         
-        if fields:
+        # v2 has limited fields support
+        if fields and self.api_version == "3":
             params["fields"] = ",".join(fields)
         
         return await self._request("GET", "/search", params=params)
@@ -147,38 +186,49 @@ class JiraChannel:
         Args:
             project: Project key (e.g., "PROJ")
             summary: Issue summary/title
-            description: Issue description (supports ADF format)
+            description: Issue description (v2: plain text, v3: ADF format)
             issue_type: Issue type (Task, Bug, Story, etc.)
-            priority: Priority name
+            priority: Priority name (v2: limited support)
             assignee: Assignee account ID or email
-            labels: List of labels
+            labels: List of labels (v2: limited support)
             
         Returns:
             Created issue key and details
         """
         logger.info(f"Creating issue in {project}: {summary[:50]}...")
         
-        fields = {
-            "project": {"key": project},
-            "summary": summary,
-            "description": {
-                "type": "doc",
-                "version": 1,
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "content": [{"type": "text", "text": description}]
-                    }
-                ]
-            },
-            "issuetype": {"name": issue_type},
-        }
+        if self.api_version == "3":
+            # v3: Use Atlassian Document Format (ADF)
+            fields = {
+                "project": {"key": project},
+                "summary": summary,
+                "description": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": description}]
+                        }
+                    ]
+                },
+                "issuetype": {"name": issue_type},
+            }
+        else:
+            # v2: Use plain text for description
+            fields = {
+                "project": {"key": project},
+                "summary": summary,
+                "description": description,
+                "issuetype": {"name": issue_type},
+            }
         
-        if priority:
+        if priority and self.api_version == "3":
             fields["priority"] = {"name": priority}
         if assignee:
+            # v2 may require different assignee format
             fields["assignee"] = {"id": assignee} if len(assignee) == 36 else {"name": assignee}
-        if labels:
+        if labels and self.api_version == "3":
             fields["labels"] = labels
         
         return await self._request("POST", "/issue", data={"fields": fields})
@@ -197,8 +247,8 @@ class JiraChannel:
             issue_key: Issue key to update
             summary: New summary (optional)
             description: New description (optional)
-            priority: New priority (optional)
-            labels: New labels list (optional)
+            priority: New priority (optional, v3 only)
+            labels: New labels list (optional, v3 only)
             
         Returns:
             True if update successful
@@ -206,27 +256,32 @@ class JiraChannel:
         logger.info(f"Updating issue: {issue_key}")
         
         fields = {}
-        update = {}
+        data = {}
         
         if summary is not None:
             fields["summary"] = summary
+        
         if description is not None:
-            fields["description"] = {
-                "type": "doc",
-                "version": 1,
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "content": [{"type": "text", "text": description}]
-                    }
-                ]
-            }
-        if priority is not None:
+            if self.api_version == "3":
+                fields["description"] = {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": description}]
+                        }
+                    ]
+                }
+            else:
+                fields["description"] = description
+        
+        if priority is not None and self.api_version == "3":
             fields["priority"] = {"name": priority}
-        if labels is not None:
+        
+        if labels is not None and self.api_version == "3":
             fields["labels"] = labels
         
-        data = {}
         if fields:
             data["fields"] = fields
         
@@ -240,23 +295,28 @@ class JiraChannel:
         
         Args:
             issue_key: Issue key
-            comment: Comment text
+            comment: Comment text (v2: plain text, v3: ADF format)
             
         Returns:
             Created comment details
         """
         logger.info(f"Adding comment to {issue_key}")
         
-        body = {
-            "type": "doc",
-            "version": 1,
-            "content": [
-                {
-                    "type": "paragraph",
-                    "content": [{"type": "text", "text": comment}]
-                }
-            ]
-        }
+        if self.api_version == "3":
+            # v3: Use ADF format
+            body = {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": comment}]
+                    }
+                ]
+            }
+        else:
+            # v2: Use plain text
+            body = comment
         
         return await self._request(
             "POST",
@@ -282,15 +342,23 @@ class JiraChannel:
         return [
             {
                 "id": str(c.get("id", "")),
-                "body": self._parse_adf_body(c.get("body", {})),
+                "body": self._parse_body(c.get("body", {})),
                 "author": c.get("author", {}).get("displayName", "unknown"),
                 "created": c.get("created", ""),
             }
             for c in comments
         ]
 
+    def _parse_body(self, body) -> str:
+        """Extract text from comment body (supports v2 plain text and v3 ADF)."""
+        if isinstance(body, str):
+            return body
+        if not isinstance(body, dict):
+            return ""
+        return self._parse_adf_body(body)
+    
     def _parse_adf_body(self, body) -> str:
-        """Extract text from Atlassian Document Format."""
+        """Extract text from Atlassian Document Format (v3)."""
         if isinstance(body, str):
             return body
         if not isinstance(body, dict):
@@ -350,15 +418,18 @@ class JiraChannel:
         data = {"transition": {"id": transition_id}}
         
         if comment:
-            data["comment"] = [
-                {
-                    "type": "doc",
-                    "version": 1,
-                    "content": [
-                        {"type": "paragraph", "content": [{"type": "text", "text": comment}]}
-                    ]
-                }
-            ]
+            if self.api_version == "3":
+                data["comment"] = [
+                    {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [
+                            {"type": "paragraph", "content": [{"type": "text", "text": comment}]}
+                        ]
+                    }
+                ]
+            else:
+                data["comment"] = comment
         
         await self._request("POST", f"/issue/{issue_key}/transitions", data=data)
         return True
@@ -451,10 +522,14 @@ jira_channel = JiraChannel()
 
 async def jira_get_issue(issue_key: str) -> str:
     """Get details for a Jira issue."""
+    logger.debug(f"jira_get_issue called: {issue_key}")
+    
     if not jira_channel.is_configured():
+        logger.warning("jira_get_issue: Jira not configured")
         return "Error: Jira not configured"
     
     try:
+        logger.info(f"Fetching issue: {issue_key}")
         issue = await jira_channel.get_issue(issue_key)
         fields = issue.get("fields", {})
         
@@ -462,32 +537,44 @@ async def jira_get_issue(issue_key: str) -> str:
         assignee = fields.get("assignee", {})
         assignee_name = assignee.get("displayName", "Unassigned") if assignee else "Unassigned"
         summary = fields.get("summary", "")
-        description = _parse_adf_body(fields.get("description", ""))
+        description = jira_channel._parse_body(fields.get("description", ""))
+        
+        logger.debug(f"jira_get_issue: {issue_key} found, status={status}")
         
         return f"""**{issue_key}: {summary}**
 
 **Status:** {status}
 **Assignee:** {assignee}
-**Priority:** {fields.get("priority", {}).get("name", "None")}
+**Priority:** {fields.get("priority", {}).get("name", "None") if jira_channel.api_version == "3" else "N/A"}
 **Type:** {fields.get("issuetype", {}).get("name", "Task")}
 **Created:** {fields.get("created", "")[:10]}
 **Updated:** {fields.get("updated", "")[:10]}
 
 **Description:**
 {description[:500]}{'...' if len(description) > 500 else ''}"""
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_get_issue: HTTP error {e.response.status_code} for {issue_key}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
     except Exception as e:
+        logger.exception(f"jira_get_issue: Failed to fetch {issue_key}")
         return f"Error getting issue {issue_key}: {str(e)}"
 
 
 async def jira_search(jql: str, max_results: int = 10) -> str:
     """Search Jira issues using JQL."""
+    logger.debug(f"jira_search called: jql={jql[:50]}..., max_results={max_results}")
+    
     if not jira_channel.is_configured():
+        logger.warning("jira_search: Jira not configured")
         return "Error: Jira not configured"
     
     try:
+        logger.info(f"Searching issues with JQL: {jql[:80]}...")
         result = await jira_channel.search_issues(jql, max_results=max_results)
         issues = result.get("issues", [])
         total = result.get("total", 0)
+        
+        logger.debug(f"jira_search: found {total} issues, returning {len(issues)}")
         
         if not issues:
             return f"No issues found for JQL: {jql}"
@@ -502,20 +589,36 @@ async def jira_search(jql: str, max_results: int = 10) -> str:
             lines.append(f"- **{key}** [{status}] {summary}")
         
         return "\n".join(lines)
+    except ValueError as e:
+        logger.warning(f"jira_search: Invalid JQL - {e}")
+        return f"Error: Invalid JQL query - {str(e)}"
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_search: HTTP error {e.response.status_code}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
     except Exception as e:
+        logger.exception("jira_search: Search failed")
         return f"Error searching issues: {str(e)}"
 
 
 async def jira_add_comment(issue_key: str, comment: str) -> str:
     """Add a comment to a Jira issue."""
+    logger.debug(f"jira_add_comment: {issue_key}, comment_len={len(comment)}")
+    
     if not jira_channel.is_configured():
+        logger.warning("jira_add_comment: Jira not configured")
         return "Error: Jira not configured"
     
     try:
+        logger.info(f"Adding comment to {issue_key}")
         result = await jira_channel.add_comment(issue_key, comment)
         comment_id = result.get("id", "unknown")
+        logger.info(f"Comment added: {issue_key}, comment_id={comment_id}")
         return f"Comment added to {issue_key}: ID={comment_id}"
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_add_comment: HTTP error {e.response.status_code} for {issue_key}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
     except Exception as e:
+        logger.exception(f"jira_add_comment: Failed for {issue_key}")
         return f"Error adding comment: {str(e)}"
 
 
@@ -527,11 +630,15 @@ async def jira_create_issue(
     priority: str = None
 ) -> str:
     """Create a new Jira issue."""
+    logger.debug(f"jira_create_issue: project={project}, summary={summary[:30]}...")
+    
     if not jira_channel.is_configured():
+        logger.warning("jira_create_issue: Jira not configured")
         return "Error: Jira not configured"
     
     try:
         proj = project or jira_channel.project
+        logger.info(f"Creating issue in {proj}: {summary[:50]}...")
         result = await jira_channel.create_issue(
             project=proj,
             summary=summary,
@@ -540,8 +647,13 @@ async def jira_create_issue(
             priority=priority
         )
         issue_key = result.get("key", "unknown")
+        logger.info(f"Issue created: {issue_key}")
         return f"Issue created: **{issue_key}**\nSummary: {summary[:50]}"
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_create_issue: HTTP error {e.response.status_code}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
     except Exception as e:
+        logger.exception("jira_create_issue: Failed to create issue")
         return f"Error creating issue: {str(e)}"
 
 
@@ -551,10 +663,14 @@ async def jira_transition(
     comment: str = None
 ) -> str:
     """Transition an issue to a new status."""
+    logger.debug(f"jira_transition: {issue_key} -> {to_status}")
+    
     if not jira_channel.is_configured():
+        logger.warning("jira_transition: Jira not configured")
         return "Error: Jira not configured"
     
     try:
+        logger.info(f"Transitioning {issue_key} to {to_status}")
         transitions = await jira_channel.get_transitions(issue_key)
         
         # Find transition by status name
@@ -566,21 +682,33 @@ async def jira_transition(
         
         if not transition_id:
             available = [t.get("name") for t in transitions]
+            logger.warning(f"jira_transition: No transition to '{to_status}', available: {available}")
             return f"Cannot transition to '{to_status}'. Available: {', '.join(available)}"
         
         await jira_channel.transition_issue(issue_key, transition_id, comment)
+        logger.info(f"Issue transitioned: {issue_key} -> {to_status}")
         return f"{issue_key} transitioned to '{to_status}'"
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_transition: HTTP error {e.response.status_code}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
     except Exception as e:
+        logger.exception(f"jira_transition: Failed for {issue_key}")
         return f"Error transitioning issue: {str(e)}"
 
 
 async def jira_get_transitions(issue_key: str) -> str:
     """Get available transitions for an issue."""
+    logger.debug(f"jira_get_transitions: {issue_key}")
+    
     if not jira_channel.is_configured():
+        logger.warning("jira_get_transitions: Jira not configured")
         return "Error: Jira not configured"
     
     try:
+        logger.info(f"Getting transitions for {issue_key}")
         transitions = await jira_channel.get_transitions(issue_key)
+        
+        logger.debug(f"jira_get_transitions: {issue_key} has {len(transitions)} transitions")
         
         if not transitions:
             return f"No transitions available for {issue_key}"
@@ -590,8 +718,59 @@ async def jira_get_transitions(issue_key: str) -> str:
             lines.append(f"- {t.get('name')} (ID: {t.get('id')})")
         
         return "\n".join(lines)
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_get_transitions: HTTP error {e.response.status_code}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
     except Exception as e:
+        logger.exception(f"jira_get_transitions: Failed for {issue_key}")
         return f"Error getting transitions: {str(e)}"
+
+
+async def jira_get_comments(issue_key: str) -> str:
+    """Get all comments for a Jira issue.
+    
+    This tool allows the model to retrieve and review comments on an issue,
+    which is useful for understanding discussion history or context.
+    
+    Args:
+        issue_key: Issue key (e.g., "PROJ-123")
+        
+    Returns:
+        Formatted list of comments with author, date, and content
+    """
+    logger.debug(f"jira_get_comments: {issue_key}")
+    
+    if not jira_channel.is_configured():
+        logger.warning("jira_get_comments: Jira not configured")
+        return "Error: Jira not configured"
+    
+    try:
+        logger.info(f"Getting comments for {issue_key}")
+        comments = await jira_channel.get_comments(issue_key)
+        
+        logger.debug(f"jira_get_comments: {issue_key} has {len(comments)} comments")
+        
+        if not comments:
+            return f"No comments found for {issue_key}"
+        
+        lines = [f"**Comments for {issue_key}** ({len(comments)} total):\n"]
+        
+        for i, comment in enumerate(comments, 1):
+            author = comment.get("author", "Unknown")
+            created = comment.get("created", "")[:10] if comment.get("created") else "N/A"
+            body = comment.get("body", "")
+            
+            lines.append(f"---")
+            lines.append(f"**Comment #{i}** by {author} on {created}")
+            lines.append(f"{body}")
+        
+        return "\n".join(lines)
+    except httpx.HTTPStatusError as e:
+        logger.error(f"jira_get_comments: HTTP error {e.response.status_code}")
+        return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
+    except Exception as e:
+        logger.exception(f"jira_get_comments: Failed for {issue_key}")
+        return f"Error getting comments: {str(e)}"
 
 
 # ========== ADF Parsing Utility ==========

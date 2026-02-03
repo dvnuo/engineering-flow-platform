@@ -398,6 +398,7 @@ def _load_function_tools():
             jira_create_issue,
             jira_transition,
             jira_get_transitions,
+            jira_get_comments,  # New: Get comments tool
             confluence_get_page,
             confluence_search,
             confluence_create_page,
@@ -412,6 +413,7 @@ def _load_function_tools():
             "jira_create_issue": jira_create_issue,
             "jira_transition": jira_transition,
             "jira_get_transitions": jira_get_transitions,
+            "jira_get_comments": jira_get_comments,  # New: Get comments tool
             "confluence_get_page": confluence_get_page,
             "confluence_search": confluence_search,
             "confluence_create_page": confluence_create_page,

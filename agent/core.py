@@ -272,7 +272,7 @@ You have access to the following tools. When a user asks you to do something tha
         if self.debug_enabled:
             print(f"\n{'='*60}")
             print(f"DEBUG: Final Response")
-            print(f"  Content: {final_content[:500]}...")
+            print(f"  Content: {final_content}")
             print(f"  Usage: {final_result.get('usage', {})}")
             print(f"{'='*60}\n")
         

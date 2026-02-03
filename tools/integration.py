@@ -144,6 +144,23 @@ JIRA_TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "jira_get_comments",
+            "description": "Get all comments for a Jira issue. Returns comments with author, date, and content. Useful for understanding discussion history.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_key": {
+                        "type": "string",
+                        "description": "Issue key (e.g., 'PROJ-123')"
+                    }
+                },
+                "required": ["issue_key"]
+            }
+        }
+    },
 ]
 
 # Confluence Tools
@@ -404,6 +421,28 @@ async def jira_get_transitions(issue_key: str) -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"Error getting transitions: {str(e)}"
+
+
+async def jira_get_comments(issue_key: str) -> str:
+    """Get all comments for a Jira issue."""
+    from channel.jira import jira_channel
+    if not jira_channel.is_configured():
+        return "Error: Jira not configured"
+    try:
+        comments = await jira_channel.get_comments(issue_key)
+        if not comments:
+            return f"No comments found for {issue_key}"
+        lines = [f"**Comments for {issue_key}** ({len(comments)} total):\n"]
+        for i, comment in enumerate(comments, 1):
+            author = comment.get("author", "Unknown")
+            created = comment.get("created", "")[:10] if comment.get("created") else "N/A"
+            body = comment.get("body", "")
+            lines.append(f"---")
+            lines.append(f"**Comment #{i}** by {author} on {created}")
+            lines.append(f"{body}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error getting comments: {str(e)}"
 
 
 async def confluence_get_page(page_id: str) -> str:
