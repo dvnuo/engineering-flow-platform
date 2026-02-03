@@ -3,6 +3,7 @@ Mention Polling Module - Monitor @mentions and process commands.
 
 This module polls GitHub, Jira, and Confluence for comments that mention
 the configured users, then processes commands and replies.
+Uses long-term memory (SQLite) to track processed issues.
 """
 
 import asyncio
@@ -17,6 +18,14 @@ from channel.github import github_channel
 from channel.jira import jira_channel
 from channel.confluence import confluence_channel
 from skills.executor import execute_tool
+
+# Import memory module for tracking processed issues
+try:
+    from memory import get_memory_store
+    MEMORY_AVAILABLE = True
+except ImportError:
+    MEMORY_AVAILABLE = False
+    logger.warning("Memory module not available, using in-memory tracking only")
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +140,13 @@ class MentionPoller:
                 
                 for comment in comments:
                     if self._has_mention(comment.get("body", "")):
-                        await self._process_mention(comment, "github")
+                        # Extract issue number from comment if available
+                        resource = {
+                            "key": comment.get("extra", {}).get("issue_number") or comment.get("issue_number"),
+                            "owner": comment.get("extra", {}).get("owner"),
+                            "repo": repo
+                        }
+                        await self._process_mention(comment, "github", resource)
                 
                 self.last_check[f"github:{repo}"] = datetime.utcnow()
             except Exception as e:
@@ -194,6 +209,89 @@ class MentionPoller:
         pattern = r'@(\w+)'
         return re.findall(pattern, text, re.IGNORECASE)
     
+    async def _is_already_processed(
+        self,
+        platform: str,
+        resource_id: str,
+        comment_id: str
+    ) -> bool:
+        """Check if a mention has already been processed using memory.
+        
+        Uses long-term memory (SQLite) to track processed issues across restarts.
+        Falls back to in-memory tracking if memory is unavailable.
+        
+        Args:
+            platform: Platform name (jira, github, confluence)
+            resource_id: Issue key, PR number, or page ID
+            comment_id: Comment ID
+            
+        Returns:
+            True if already processed, False otherwise
+        """
+        # Generate unique memory ID for this mention
+        memory_id = f"processed:{platform}:{resource_id}:{comment_id}"
+        
+        # Check in-memory cache first (fast path)
+        if memory_id in self._processed:
+            return True
+        
+        # Check memory store if available
+        if MEMORY_AVAILABLE:
+            try:
+                memory_store = get_memory_store()
+                if memory_store:
+                    # Use get_memory for exact match (not fuzzy search)
+                    memory = await memory_store.get_memory(memory_id)
+                    if memory:
+                        logger.debug(f"Found in memory: {memory_id}")
+                        # Add to in-memory cache
+                        self._processed.add(memory_id)
+                        return True
+            except Exception as e:
+                logger.warning(f"Error checking memory for {memory_id}: {e}")
+        
+        return False
+    
+    async def _mark_as_processed(
+        self,
+        platform: str,
+        resource_id: str,
+        comment_id: str,
+        result_summary: str
+    ):
+        """Mark a mention as processed in memory.
+        
+        Args:
+            platform: Platform name
+            resource_id: Issue/PR/page ID
+            comment_id: Comment ID
+            result_summary: Brief summary of processing result
+        """
+        memory_id = f"processed:{platform}:{resource_id}:{comment_id}"
+        
+        # Add to in-memory cache
+        self._processed.add(memory_id)
+        
+        # Persist to memory store if available
+        if MEMORY_AVAILABLE:
+            try:
+                memory_store = get_memory_store()
+                if memory_store:
+                    content = f"[{datetime.now().isoformat()}] {platform}:{resource_id}: {result_summary}"
+                    await memory_store.add_memory(
+                        content=content,
+                        metadata={
+                            "platform": platform,
+                            "resource_id": resource_id,
+                            "comment_id": comment_id,
+                            "result": result_summary
+                        },
+                        memory_type="processed_mention"
+                    )
+                    logger.info(f"Saved to memory: {memory_id}")
+            except Exception as e:
+                logger.warning(f"Error saving to memory: {e}")
+    
     async def _process_mention(
         self, 
         comment: Dict, 
@@ -203,12 +301,25 @@ class MentionPoller:
         """Process a detected mention."""
         comment_body = comment.get("body", "")
         comment_id = str(comment.get("id", ""))
+        resource_id = resource.get("key") if resource else None
+        
+        # Check if already processed using memory
+        if resource_id:
+            is_processed = await self._is_already_processed(
+                platform, resource_id, comment_id
+            )
+            if is_processed:
+                logger.debug(f"Skipping already processed: {platform}:{resource_id}")
+                return
         
         async with self._lock:
-            # Check if already processed (dedup)
-            processed_id = f"{platform}:{comment_id}"
-            if processed_id in self._processed:
-                return
+            # Double-check after acquiring lock
+            if resource_id:
+                is_processed = await self._is_already_processed(
+                    platform, resource_id, comment_id
+                )
+                if is_processed:
+                    return
             
             # Parse command
             cmd = self.parse_command(comment_body, platform)
@@ -220,12 +331,25 @@ class MentionPoller:
                 # Reply to the comment
                 await self._reply_to(comment, result, platform, resource)
                 
-                self._processed.add(processed_id)
-                logger.info(f"Processed {processed_id}: {cmd.tool_name}")
+                # Mark as processed in memory
+                if resource_id:
+                    await self._mark_as_processed(
+                        platform, resource_id, comment_id,
+                        f"{cmd.tool_name}: {result[:100]}"
+                    )
+                
+                logger.info(f"Processed: {platform}:{resource_id}: {cmd.tool_name}")
                 
             except Exception as e:
                 error_msg = f"Error executing command: {e}"
                 await self._reply_to(comment, error_msg, platform, resource)
+                
+                # Still mark as processed to avoid re-processing errors
+                if resource_id:
+                    await self._mark_as_processed(
+                        platform, resource_id, comment_id,
+                        f"ERROR: {str(e)[:100]}"
+                    )
     
     def parse_command(self, text: str, platform: str) -> Command:
         """Parse a command from mention text."""

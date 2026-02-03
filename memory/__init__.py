@@ -147,22 +147,24 @@ def get_long_term_memory_path() -> Path:
 
 # Global memory store instance
 memory_store: Optional[MemoryStore] = None
+_memory_auto_init = False
 
 
-def init_memory_store(config: Optional[MemoryConfig] = None) -> MemoryStore:
+def init_memory_store(config: Optional[MemoryConfig] = None, auto_init: bool = False) -> MemoryStore:
     """Initialize the global memory store.
     
     Args:
         config: Optional memory configuration.
+        auto_init: If True, automatically initialize on first use.
         
     Returns:
         Initialized memory store.
     """
-    global memory_store
-    # Import here to avoid circular imports when store is implemented
+    global memory_store, _memory_auto_init
     from memory.sqlite_store import SqliteMemoryStore
     
     memory_store = SqliteMemoryStore(config)
+    _memory_auto_init = auto_init
     logger.info(f"Memory store initialized: {config}")
     return memory_store
 
@@ -170,9 +172,20 @@ def init_memory_store(config: Optional[MemoryConfig] = None) -> MemoryStore:
 def get_memory_store() -> Optional[MemoryStore]:
     """Get the global memory store.
     
+    If not initialized and auto_init is True, initializes automatically.
+    
     Returns:
         Current memory store or None if not initialized.
     """
+    global memory_store, _memory_auto_init
+    
+    if memory_store is None and _memory_auto_init:
+        try:
+            memory_store = SqliteMemoryStore()
+            logger.info("Memory store auto-initialized")
+        except Exception as e:
+            logger.warning(f"Failed to auto-initialize memory store: {e}")
+    
     return memory_store
 
 
