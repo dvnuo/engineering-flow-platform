@@ -66,15 +66,15 @@ class SessionStore:
             store = self._load_store()
             
             # Generate session ID
-            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             session_id = f"{channel}_{timestamp}"
             
             # Store metadata
             store[session_key] = {
                 "sessionId": session_id,
                 "channel": channel,
-                "createdAt": datetime.utcnow().isoformat(),
-                "updatedAt": datetime.utcnow().isoformat(),
+                "createdAt": datetime.now().isoformat(),
+                "updatedAt": datetime.now().isoformat(),
                 "messageCount": 0,
                 "metadata": metadata or {},
             }
@@ -110,7 +110,7 @@ class SessionStore:
                 return False
             
             store[session_key].update(updates)
-            store[session_key]["updatedAt"] = datetime.utcnow().isoformat()
+            store[session_key]["updatedAt"] = datetime.now().isoformat()
             self._save_store(store)
             return True
     
@@ -135,7 +135,7 @@ class SessionStore:
         entry = {
             "role": role,
             "content": content,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "metadata": metadata or {},
         }
         
@@ -144,7 +144,7 @@ class SessionStore:
         
         # Update message count
         session_info["messageCount"] = session_info.get("messageCount", 0) + 1
-        session_info["updatedAt"] = datetime.utcnow().isoformat()
+        session_info["updatedAt"] = datetime.now().isoformat()
         self._save_store(store)
         
         return True
@@ -187,7 +187,7 @@ class SessionStore:
         sessions = list(store.values())
         
         if active_minutes:
-            cutoff = datetime.utcnow().timestamp() - (active_minutes * 60)
+            cutoff = datetime.now().timestamp() - (active_minutes * 60)
             sessions = [
                 s for s in sessions
                 if datetime.fromisoformat(s["updatedAt"]).timestamp() > cutoff
