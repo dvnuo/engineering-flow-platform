@@ -322,11 +322,12 @@ Based on OpenClaw's memory system design, implement SQLite + vector search for d
 
 | Component | OpenClaw | CodeW (Current) | Implementation |
 |-----------|----------|-----------------|----------------|
-| **Storage** | SQLite + sqlite-vec | Markdown files | TODO |
-| **Vector Search** | ✅ | ❌ | TODO |
-| **Semantic Search** | ✅ | ❌ | TODO |
-| **Hybrid Search** | Vector + BM25 | ❌ | TODO |
-| **Embedding Cache** | SQLite-based | ❌ | TODO |
+| **Storage** | SQLite | ✅ SQLite | Complete |
+| **Full-text Search** | ✅ FTS5 | ✅ FTS5 | Complete |
+| **Vector Search** | ✅ sqlite-vec | 🔄 Requires additional deps | TODO |
+| **Semantic Search** | ✅ | 🔄 Requires embedding provider | TODO |
+| **Hybrid Search** | Vector + BM25 | 🔄 FTS5 only (BM25) | Partial |
+| **Embedding Cache** | SQLite-based | ✅ Metadata only | Partial |
 | **Session Indexing** | Optional | ❌ | TODO |
 
 ### Memory Layers (Reference from OpenClaw)
@@ -355,23 +356,27 @@ Based on OpenClaw's memory system design, implement SQLite + vector search for d
 
 ### Implementation Plan
 
-#### Step 1: SQLite Storage Layer
-- [ ] Create `memory/sqlite_store.py`
-- [ ] Implement SQLite connection management
-- [ ] Define schema for memory chunks and embeddings
-- [ ] Add migration support for existing Markdown files
+#### Step 1: SQLite Storage Layer ✅ COMPLETED
+- [x] Create `memory/sqlite_store.py`
+- [x] Implement SQLite connection management
+- [x] Define schema for memory chunks and embeddings
+- [x] Add FTS5 full-text search (BM25)
 
-#### Step 2: Vector Search Integration
+#### Step 2: Vector Search Integration 📋 NEXT
 - [ ] Evaluate embedding providers:
-  - OpenAI `text-embedding-3-small`
-  - Local (GGUF via node-llama-cpp)
-  - Custom OpenAI-compatible endpoint
+  - Option A: **sqlite-vec** (native, recommended by OpenClaw)
+    - Fast in-process vector operations
+    - Requires: `pip install sqlite-vec`
+  - Option B: **External Vector DB** (ChromaDB, Weaviate, etc.)
+    - Better for large-scale deployments
+    - Requires: `pip install chromadb` or similar
+  - Option C: **sentence-transformers** (local, no API key)
+    - Model: `all-MiniLM-L6-v2` (~90MB, CPU-friendly)
 - [ ] Implement embedding cache in SQLite
 - [ ] Add sqlite-vec extension support (optional acceleration)
 
 #### Step 3: Hybrid Search (Vector + BM25)
-- [ ] Implement BM25 full-text search
-- [ ] Create weighted score fusion:
+- [ ] Implement weighted score fusion:
   ```
   finalScore = 0.7 * vectorScore + 0.3 * textScore
   ```

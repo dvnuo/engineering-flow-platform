@@ -56,6 +56,11 @@ class SqliteMemoryStore(MemoryStore):
         """)
         
         # Embeddings cache table (stores embedding metadata, not actual vectors)
+        # Note: Actual vector storage requires:
+        # - Option A: sqlite-vec extension (native, fast)
+        # - Option B: External vector DB (ChromaDB, Weaviate, etc.)
+        # - Option C: In-memory numpy arrays (simple, no deps)
+        # This table caches embedding provider/model info for future vector search.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS embeddings (
                 memory_id TEXT PRIMARY KEY,
@@ -351,19 +356,33 @@ class SqliteMemoryStore(MemoryStore):
         return imported
     
     async def close(self):
-        """Close the database connection."""
+        """Close the database connection gracefully."""
         if self._connection:
             self._connection.close()
             self._connection = None
             logger.info("SQLite memory store closed")
     
-    def __del__(self):
-        """Cleanup on deletion."""
-        import asyncio
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - ensures connection is closed."""
+        # Create a new event loop for synchronous cleanup
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self.close())
             loop.close()
+        except Exception as e:
+            logger.error(f"Error closing memory store: {e}")
+        return False
+    
+    def __del__(self):
+        """Cleanup on deletion - graceful shutdown."""
+        try:
+            if self._connection:
+                self._connection.close()
+                self._connection = None
         except Exception:
-            pass
+            pass  # Ignore errors during interpreter shutdown

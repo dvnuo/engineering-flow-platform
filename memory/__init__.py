@@ -2,9 +2,53 @@
 
 Features:
 - SQLite storage for memory chunks
-- Vector search with embedding cache
-- Hybrid search (vector + BM25)
+- FTS5 full-text search (BM25 ranking)
+- Hybrid search ready for vector integration
 - Session transcript indexing (optional)
+
+## Vector Search Options (Future Enhancement)
+
+Current: FTS5 full-text search only (BM25)
+
+For semantic/vector search, choose one:
+
+### Option A: sqlite-vec (Recommended by OpenClaw)
+- Native SQLite extension for vector storage
+- Fast in-process vector operations
+- Requires: `pip install sqlite-vec`
+- Config: `memory.store.vector.extensionPath`
+
+### Option B: External Vector DB
+- ChromaDB, Weaviate, Milvus, Qdrant
+- Requires: `pip install chromadb` etc.
+- Better for large-scale deployments
+
+### Option C: Local Embeddings
+- sentence-transformers (no API key)
+- Model: `all-MiniLM-L6-v2` (~90MB, CPU-friendly)
+- Requires: `pip install sentence-transformers`
+
+## Configuration
+
+```yaml
+memory:
+  enabled: true
+  provider: "openai"  # or "local", "gemini"
+  model: "text-embedding-3-small"
+  hybrid:
+    enabled: true
+    vector_weight: 0.7
+    text_weight: 0.3
+  cache:
+    enabled: true
+    max_entries: 50000
+```
+
+## Memory Layers
+
+1. Daily Notes: memory/YYYY-MM-DD.md
+2. Long-term Memory: MEMORY.md
+3. Session Transcripts: ~/.openclaw/codew/sessions/*.jsonl (future)
 """
 
 import logging
