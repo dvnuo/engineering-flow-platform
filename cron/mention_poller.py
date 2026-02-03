@@ -229,7 +229,7 @@ class MentionPoller:
             True if already processed, False otherwise
         """
         # Generate unique memory ID for this mention
-        memory_id = f"{platform}:{resource_id}:{comment_id}"
+        memory_id = f"processed:{platform}:{resource_id}:{comment_id}"
         
         # Check in-memory cache first (fast path)
         if memory_id in self._processed:
@@ -240,12 +240,9 @@ class MentionPoller:
             try:
                 memory_store = get_memory_store()
                 if memory_store:
-                    # Search for existing processing record
-                    results = await memory_store.search(
-                        f"processed:{memory_id}",
-                        limit=1
-                    )
-                    if results:
+                    # Use get_memory for exact match (not fuzzy search)
+                    memory = await memory_store.get_memory(memory_id)
+                    if memory:
                         logger.debug(f"Found in memory: {memory_id}")
                         # Add to in-memory cache
                         self._processed.add(memory_id)
@@ -270,7 +267,7 @@ class MentionPoller:
             comment_id: Comment ID
             result_summary: Brief summary of processing result
         """
-        memory_id = f"{platform}:{resource_id}:{comment_id}"
+        memory_id = f"processed:{platform}:{resource_id}:{comment_id}"
         
         # Add to in-memory cache
         self._processed.add(memory_id)
@@ -284,13 +281,12 @@ class MentionPoller:
                     await memory_store.add_memory(
                         content=content,
                         metadata={
-                            "type": "processed_mention",
                             "platform": platform,
                             "resource_id": resource_id,
                             "comment_id": comment_id,
                             "result": result_summary
                         },
-                        memory_type="system"
+                        memory_type="processed_mention"
                     )
                     logger.info(f"Saved to memory: {memory_id}")
             except Exception as e:
