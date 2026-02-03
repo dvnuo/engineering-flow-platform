@@ -30,8 +30,8 @@ class Agent:
         
         # ===== DEBUG =====
         from config import config
-        self.self.debug_enabled = config.debug.get("enabled", False)
-        if self.self.debug_enabled:
+        self.debug_enabled = config.debug.get("enabled", False)
+        if self.debug_enabled:
             print(f"\n{'='*60}")
             print(f"DEBUG: Tools Initialization")
             print(f"  Base tools count: {len(base_tools)}")
