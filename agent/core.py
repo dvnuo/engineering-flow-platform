@@ -28,6 +28,18 @@ class Agent:
         # Combine base tools with integration tools (Jira, Confluence)
         self.tools = base_tools + INTEGRATION_TOOLS
         
+        # ===== DEBUG =====
+        from config import config
+        debug_enabled = config.debug.get("enabled", False)
+        if debug_enabled:
+            print(f"\n{'='*60}")
+            print(f"DEBUG: Tools Initialization")
+            print(f"  Base tools count: {len(base_tools)}")
+            print(f"  Integration tools count: {len(INTEGRATION_TOOLS)}")
+            print(f"  Total tools: {len(self.tools)}")
+            print(f"  Tool names: {[t['function']['name'] for t in self.tools]}")
+            print(f"{'='*60}\n")
+        
         # Human-readable tool list (following OpenClaw's Tooling section)
         tools_list = "\n".join([
             f"- **{t['function']['name']}**: {t['function'].get('description', '')}"
@@ -48,6 +60,7 @@ class Agent:
         if system_prompt:
             # Custom prompt provided
             self.system_prompt = system_prompt
+            prompt_source = "custom"
         elif memory_prompt:
             # Use memory files + basic structure
             self.system_prompt = f"""{memory_prompt}
@@ -61,6 +74,7 @@ You have access to the following tools. When a user asks you to do something tha
 ## Current Date & Time
 {current_time}
 """
+            prompt_source = "memory"
         else:
             # Fallback to basic prompt
             self.system_prompt = f"""You are a helpful AI assistant that can execute commands, read/write files, search the web, and more.
@@ -83,6 +97,19 @@ You have access to the following tools. When a user asks you to do something tha
 ## Current Date & Time
 {current_time}
 """
+            prompt_source = "fallback"
+        
+        # ===== DEBUG =====
+        if debug_enabled:
+            print(f"\n{'='*60}")
+            print(f"DEBUG: System Prompt Construction")
+            print(f"  Session: {session_id}")
+            print(f"  Include memory: {include_memory}")
+            print(f"  Prompt source: {prompt_source}")
+            print(f"  System prompt length: {len(self.system_prompt)} characters")
+            print(f"  Tools count: {len(self.tools)}")
+            print(f"  Tools list length: {len(tools_list)} characters")
+            print(f"{'='*60}\n")
         
         self.tools = self.tools  # Already set above
 
@@ -118,21 +145,32 @@ You have access to the following tools. When a user asks you to do something tha
         messages = session_manager.get_history(session_id)
 
         # ===== DEBUG =====
-        from config import config
-        debug_enabled = config.debug.get("enabled", False)
         if debug_enabled:
             print(f"\n{'='*60}")
-            print(f"DEBUG: Message received")
+            print(f"DEBUG: Message Received")
             print(f"  Session: {session_id}")
-            print(f"  System prompt length: {len(self.system_prompt)}")
+            print(f"  User: {user_name}")
+            print(f"  Message length: {len(message)} characters")
+            print(f"  System prompt length: {len(self.system_prompt)} characters")
             print(f"  Tools count: {len(self.tools)}")
             print(f"  History messages: {len(messages)}")
             print(f"{'='*60}\n")
 
         # ===== REACT PATTERN =====
-        
+
         # Step 1: Call LLM with tools
         logger.debug(f"Calling LLM with {len(self.tools)} tools")
+        
+        # ===== DEBUG =====
+        if debug_enabled:
+            print(f"\n{'='*60}")
+            print(f"DEBUG: LLM API Call")
+            print(f"  Messages count: {len(messages)}")
+            print(f"  Tools count: {len(self.tools)}")
+            print(f"  System prompt preview (first 500 chars):")
+            print(f"{self.system_prompt[:500]}")
+            print(f"{'='*60}\n")
+        
         llm_result = await llm_client.chat(
             messages=messages,
             system_prompt=self.system_prompt,
@@ -142,12 +180,14 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== DEBUG =====
         if debug_enabled:
             print(f"\n{'='*60}")
-            print(f"DEBUG: LLM response")
-            print(f"  Content: {llm_result.get('content')[:200] if llm_result.get('content') else '(empty)'}...")
+            print(f"DEBUG: LLM Response")
+            print(f"  Content: {llm_result.get('content')[:200] if llm_result.get('content') else '(empty)'}")
             print(f"  Tool calls: {len(llm_result.get('tool_calls', []))}")
             if llm_result.get('tool_calls'):
                 for tc in llm_result.get('tool_calls', []):
-                    print(f"    - {tc.get('function', {}).get('name')}: {tc.get('function', {}).get('arguments')[:100]}...")
+                    func = tc.get('function', {})
+                    print(f"    - {func.get('name')}: {func.get('arguments')[:100]}...")
+            print(f"  Usage: {llm_result.get('usage', {})}")
             print(f"{'='*60}\n")
         
         # Track usage if enabled
@@ -192,9 +232,10 @@ You have access to the following tools. When a user asks you to do something tha
             # ===== DEBUG =====
             if debug_enabled:
                 print(f"\n{'='*60}")
-                print(f"DEBUG: Execute tool")
+                print(f"DEBUG: Execute Tool")
                 print(f"  Tool: {tool_name}")
-                print(f"  Args: {args}")
+                print(f"  Tool call ID: {tool_call_id}")
+                print(f"  Arguments: {args}")
                 print(f"{'='*60}\n")
             
             # Execute the tool
@@ -203,9 +244,10 @@ You have access to the following tools. When a user asks you to do something tha
             # ===== DEBUG =====
             if debug_enabled:
                 print(f"\n{'='*60}")
-                print(f"DEBUG: Tool result")
+                print(f"DEBUG: Tool Result")
                 print(f"  Tool: {tool_name}")
-                print(f"  Result: {str(tool_result)[:500]}...")
+                print(f"  Success: {tool_result.success}")
+                print(f"  Result preview: {str(tool_result)[:500]}...")
                 print(f"{'='*60}\n")
             
             # Add tool result - MUST follow the assistant message with tool_calls
@@ -229,8 +271,9 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== DEBUG =====
         if debug_enabled:
             print(f"\n{'='*60}")
-            print(f"DEBUG: Final response")
+            print(f"DEBUG: Final Response")
             print(f"  Content: {final_content[:500]}...")
+            print(f"  Usage: {final_result.get('usage', {})}")
             print(f"{'='*60}\n")
         
         # Track final usage and merge
