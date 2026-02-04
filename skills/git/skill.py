@@ -192,9 +192,8 @@ async def git(command: str = "status", message: str = None, branch: str = None,
     """
     cmd = command.lower()
     
-    # Setup SSH key if enabled in config
-    if cmd in ("clone", "push", "pull"):
-        await _setup_ssh_key()
+    # SSH key is now set up at startup in main.py
+    # Use "git ssh_setup" command for manual reconfiguration
     
     if cmd == "status":
         return await _status(repo_path)
