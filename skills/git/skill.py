@@ -32,26 +32,35 @@ logger = logging.getLogger(__name__)
 # Default workspace path using home directory
 DEFAULT_WORKSPACE = Path.home() / ".opsclaw" / "workspace"
 
+# Flag to track if SSH key has been setup (prevent repeated initialization)
+_ssh_key_setup_done = False
+
 
 async def _setup_ssh_key() -> bool:
     """Setup SSH key from config.
     
     Copies configured private key to ~/.ssh/ and sets proper permissions.
     Also handles known_hosts for automatic host verification.
-    Called automatically on initialization if ssh.enabled is true.
+    Only runs once per process lifetime to avoid repeated initialization.
     """
+    global _ssh_key_setup_done
+    
+    # Skip if already setup
+    if _ssh_key_setup_done:
+        return True
+    
     ssh_config = config.get("ssh", {})
     if not ssh_config.get("enabled", False):
         return False
     
     private_key_path = ssh_config.get("private_key_path", "")
     if not private_key_path:
-        logger.warning("SSH enabled but no private_key_path configured")
+        logger.debug("SSH enabled but no private_key_path configured")
         return False
     
     source_path = Path(private_key_path)
     if not source_path.exists():
-        logger.warning(f"SSH key not found at {private_key_path}")
+        logger.debug(f"SSH key not found at {private_key_path}")
         return False
     
     # Ensure ~/.ssh directory exists
@@ -64,7 +73,7 @@ async def _setup_ssh_key() -> bool:
         shutil.copy2(source_path, dest_path)
         logger.info(f"Copied SSH key to {dest_path}")
     except Exception as e:
-        logger.error(f"Failed to copy SSH key: {e}")
+        logger.debug(f"Failed to copy SSH key: {e}")
         return False
     
     # Set permissions to 600 (required by SSH)
@@ -72,12 +81,14 @@ async def _setup_ssh_key() -> bool:
         os.chmod(dest_path, 0o600)
         logger.info(f"Set SSH key permissions to 600")
     except Exception as e:
-        logger.error(f"Failed to set SSH key permissions: {e}")
+        logger.debug(f"Failed to set SSH key permissions: {e}")
         return False
     
     # Setup known_hosts for automatic host verification
     await _setup_known_hosts(ssh_dir)
     
+    # Mark as done
+    _ssh_key_setup_done = True
     return True
 
 
@@ -85,8 +96,15 @@ async def _setup_known_hosts(ssh_dir: Path) -> None:
     """Add Git host to known_hosts for automatic trust.
     
     Uses github.base_url from config to determine the host.
+    Runs keyscan asynchronously for better performance.
     """
+    global _ssh_key_setup_done
+    
     known_hosts_file = ssh_dir / "known_hosts"
+    
+    # Check if already configured (skip if file exists with content)
+    if known_hosts_file.exists() and known_hosts_file.stat().st_size > 0:
+        return
     
     # Get GitHub base URL from config
     github_config = config.get("github", {})
@@ -103,43 +121,40 @@ async def _setup_known_hosts(ssh_dir: Path) -> None:
     
     logger.info(f"Setting up known_hosts for {github_host}")
     
+    hosts_to_scan = [github_host]
+    
+    # Also add github.com for API access if using public GitHub
+    if "api.github.com" in base_url:
+        hosts_to_scan.append("github.com")
+    
+    # Open file for appending
     try:
-        # Fetch and add GitHub host keys
-        import subprocess
-        hosts_to_scan = [github_host]
-        
-        # Also add github.com for API access if using Enterprise
-        if "api.github.com" in base_url:
-            hosts_to_scan.append("github.com")
-        
-        for host in hosts_to_scan:
-            try:
-                # Try to add existing host key
-                result = subprocess.run(
-                    ["ssh-keygen", "-H", "-f", str(known_hosts_file), "-H", host],
-                    capture_output=True,
-                    text=True
-                )
-                if result.returncode == 0:
-                    logger.info(f"Added {host} to known_hosts")
-                elif "no matching" not in result.stderr:
-                    # Host key not found, scan it
-                    subprocess.run(
-                        ["ssh-keyscan", "-H", "-t", "rsa,ecdsa,ed25519", host],
-                        stdout=open(str(known_hosts_file), "a"),
-                        stderr=subprocess.DEVNULL,
-                        check=False
+        with open(str(known_hosts_file), "a") as kh:
+            for host in hosts_to_scan:
+                try:
+                    # Use asyncio subprocess for keyscan
+                    proc = await asyncio.create_subprocess_exec(
+                        "ssh-keyscan", "-H", "-t", "rsa,ecdsa,ed25519", host,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL
                     )
-                    logger.info(f"Scanned and added {host} to known_hosts")
-            except Exception as e:
-                logger.debug(f"Could not add {host} to known_hosts: {e}")
+                    stdout, _ = await proc.communicate()
+                    
+                    if stdout:
+                        kh.write(stdout.decode("utf-8"))
+                        logger.debug(f"Added {host} to known_hosts")
+                        
+                except Exception as e:
+                    # Fail quietly - host may be unreachable during setup
+                    logger.debug(f"Could not add {host} to known_hosts: {e}")
         
         # Set permissions on known_hosts
         os.chmod(str(known_hosts_file), 0o644)
         logger.info("Known hosts file configured")
         
     except Exception as e:
-        logger.warning(f"Failed to setup known_hosts: {e}")
+        # Fail quietly - known_hosts is optional
+        logger.debug(f"Failed to setup known_hosts: {e}")
 
 
 async def _run_git_command(args: list, cwd: str = None) -> str:
