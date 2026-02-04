@@ -301,11 +301,29 @@ You have access to the following tools. When a user asks you to do something tha
     ) -> str:
         """Execute a skill and return the result."""
         try:
-            # Note: session_id is used for tracking but not passed to skills
-            # Skills don't accept session_id as a parameter
+            # Parse command and arguments from message
+            # Format: "git status" or "git log limit=5" or "git commit message='fix bug'"
+            parts = message.split()
+            if not parts:
+                return "Error: Empty message"
+            
+            # First word is the command (already matched by match_skill)
+            # Remaining parts may contain arguments
+            args = {}
+            for part in parts[1:]:
+                if '=' in part:
+                    key, value = part.split('=', 1)
+                    # Remove quotes if present
+                    value = value.strip("'\"")
+                    # Try to convert to int if numeric
+                    if value.isdigit():
+                        value = int(value)
+                    args[key] = value
+            
             result = await skills_executor.execute_skill(
                 skill_name,
                 message=message,
+                **args
             )
 
             if result.success:
