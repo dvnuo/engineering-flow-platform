@@ -161,6 +161,39 @@ JIRA_TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "jira_edit_issue",
+            "description": "Edit/Update an existing Jira issue. Allows modifying summary, description, priority, and labels. At least one field to update is required.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_key": {
+                        "type": "string",
+                        "description": "Issue key to edit (e.g., 'PROJ-123')"
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "New summary/title (optional)"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "New description (optional)"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "description": "New priority - High, Medium, Low, etc. (optional, v3 only)"
+                    },
+                    "labels": {
+                        "type": "string",
+                        "description": "Comma-separated labels (optional, v3 only)"
+                    }
+                },
+                "required": ["issue_key"]
+            }
+        }
+    },
 ]
 
 # Confluence Tools
@@ -443,6 +476,56 @@ async def jira_get_comments(issue_key: str) -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"Error getting comments: {str(e)}"
+
+
+async def jira_edit_issue(
+    issue_key: str,
+    summary: str = None,
+    description: str = None,
+    priority: str = None,
+    labels: str = None
+) -> str:
+    """Edit/Update an existing Jira issue."""
+    from channel.jira import jira_channel
+    if not jira_channel.is_configured():
+        return "Error: Jira not configured"
+    
+    # Check if at least one field is provided
+    if not any([summary, description, priority, labels]):
+        return "Error: At least one of summary, description, priority, or labels must be provided"
+    
+    # Parse labels if provided as comma-separated string
+    labels_list = None
+    if labels:
+        labels_list = [l.strip() for l in labels.split(",") if l.strip()]
+    
+    try:
+        success = await jira_channel.update_issue(
+            issue_key=issue_key,
+            summary=summary,
+            description=description,
+            priority=priority,
+            labels=labels_list
+        )
+        
+        if success:
+            changes = []
+            if summary:
+                changes.append("summary")
+            if description:
+                changes.append("description")
+            if priority:
+                changes.append(f"priority to {priority}")
+            if labels_list:
+                changes.append(f"labels to {labels}")
+            
+            change_str = ", ".join(changes) if changes else "no changes"
+            return f"Successfully updated {issue_key}: {change_str}"
+        else:
+            return f"Failed to update {issue_key}"
+            
+    except Exception as e:
+        return f"Error editing issue: {str(e)}"
 
 
 async def confluence_get_page(page_id: str) -> str:
