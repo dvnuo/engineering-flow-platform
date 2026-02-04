@@ -395,3 +395,59 @@ async def _add(path: str, repo_path: str = None) -> SkillResult:
     """Stage files for commit."""
     await _run_git_command(["add", path], repo_path)
     return SkillResult(success=True, output=f"✅ Staged {path}")
+
+
+async def setup_ssh_key() -> bool:
+    """Public wrapper for _setup_ssh_key.
+    
+    Called during application startup to configure SSH key for git operations.
+    """
+    return await _setup_ssh_key()
+
+
+async def setup_git_user() -> bool:
+    """Configure git user name and email from config.
+    
+    Reads git.user.name and git.user.email from config and sets them
+    via `git config --global`.
+    
+    Returns:
+        True if configured successfully, False if not configured.
+    """
+    git_config = config.get("git", {}).get("user", {})
+    user_name = git_config.get("name", "").strip()
+    user_email = git_config.get("email", "").strip()
+    
+    if not user_name or not user_email:
+        return False
+    
+    try:
+        # Set user name
+        proc1 = await asyncio.create_subprocess_exec(
+            "git", "config", "--global", "user.name", user_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr1 = await proc1.communicate()
+        
+        # Set user email
+        proc2 = await asyncio.create_subprocess_exec(
+            "git", "config", "--global", "user.email", user_email,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr2 = await proc2.communicate()
+        
+        if proc1.returncode == 0 and proc2.returncode == 0:
+            logger.info(f"Git user configured: {user_name} <{user_email}>")
+            return True
+        else:
+            if stderr1:
+                logger.warning(f"Failed to set git user.name: {stderr1.decode()}")
+            if stderr2:
+                logger.warning(f"Failed to set git user.email: {stderr2.decode()}")
+            return False
+            
+    except Exception as e:
+        logger.warning(f"Failed to setup git user: {e}")
+        return False
