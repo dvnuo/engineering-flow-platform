@@ -1,8 +1,8 @@
-# CodeW vs OpenClaw 功能对比与优先开发建议
+# CodeW vs OpsClaw 功能对比与优先开发建议
 
 ## 概览对比
 
-| 维度 | OpenClaw | CodeW | 差距 |
+| 维度 | OpsClaw | CodeW | 差距 |
 |------|----------|-------|------|
 | **语言** | TypeScript/Node.js | Python | 语言不同 |
 | **代码行数** | ~87,000 行 | ~2,500 行 | 35x |
@@ -17,10 +17,10 @@
 
 ### 1. 多 Channel 支持 (最重要)
 
-OpenClaw 有 **26 个 channel**，CodeW 只有 **2 个**：
+OpsClaw 有 **26 个 channel**，CodeW 只有 **2 个**：
 
 ```
-OpenClaw Channels (按优先级):
+OpsClaw Channels (按优先级):
 ├── ✅ Discord (已有)
 ├── ✅ Jira (已有)
 ├── 🚀 Telegram (高优先级 - 用户常用)
@@ -36,7 +36,7 @@ OpenClaw Channels (按优先级):
 
 ### 2. Skill 系统完善
 
-OpenClaw 有 **54 个 skills**，CodeW 只有 **2 个**：
+OpsClaw 有 **54 个 skills**，CodeW 只有 **2 个**：
 
 ```
 高优先级 Skills:
@@ -60,7 +60,7 @@ OpenClaw 有 **54 个 skills**，CodeW 只有 **2 个**：
 **现状**: CodeW 只有内存存储
 
 ```
-OpenClaw 持久化方案:
+OpsClaw 持久化方案:
 ├── ✅ SQLite 持久化 (已有 persistence.py)
 ├── 🚀 磁盘持久化 (需要完善)
 ├── 📂 会话导入/导出
@@ -75,7 +75,7 @@ OpenClaw 持久化方案:
 ### 4. 消息队列与任务调度
 
 ```
-OpenClaw Cron 系统:
+OpsClaw Cron 系统:
 ├── ⏰ 定时任务
 ├── 🔄 周期性检查
 ├── 📅 日历集成
@@ -90,7 +90,7 @@ CodeW 现状:
 ### 5. Hooks 系统
 
 ```
-OpenClaw Hooks:
+OpsClaw Hooks:
 ├── before_message
 ├── after_message
 ├── on_error
@@ -104,7 +104,7 @@ CodeW 现状:
 ### 6. 消息增强功能
 
 ```
-OpenClaw 消息能力:
+OpsClaw 消息能力:
 ├── ✅ 文本消息 (已有)
 ├── 🔗 链接预览
 ├── 🖼️ 图片/附件
@@ -123,7 +123,7 @@ CodeW 现状:
 ### 7. 权限与安全
 
 ```
-OpenClaw 安全:
+OpsClaw 安全:
 ├── 🔐 API Key 加密
 ├── 🛡️ 输入验证
 ├── 🚫 危险命令拦截
@@ -141,7 +141,7 @@ CodeW 现状:
 ### 8. 多模型支持
 
 ```
-OpenClaw Providers:
+OpsClaw Providers:
 ├── OpenAI (已有)
 ├── GitHub Copilot (已有)
 ├── Anthropic Claude
@@ -158,7 +158,7 @@ CodeW 现状:
 ### 9. 日志与调试
 
 ```
-OpenClaw 日志:
+OpsClaw 日志:
 ├── 🪵 结构化日志
 ├── 📊 使用追踪
 ├── 🔍 请求调试
@@ -172,7 +172,7 @@ CodeW 现状:
 ### 10. Web UI 改进
 
 ```
-OpenClaw Web:
+OpsClaw Web:
 ├── 完整 Web UI
 ├── 消息历史
 ├── 会话管理
@@ -233,7 +233,7 @@ CodeW 现状:
 
 ### 已完成 (✅)
 
-| 功能 | OpenClaw | CodeW | 状态 |
+| 功能 | OpsClaw | CodeW | 状态 |
 |------|----------|-------|------|
 | 内存系统 | ✅ | ✅ | PR #29 已合并 |
 | Discord | ✅ | ✅ | 基础可用 |
@@ -246,7 +246,7 @@ CodeW 现状:
 
 ### 待实现 (🚧)
 
-| 功能 | OpenClaw | CodeW | 优先级 |
+| 功能 | OpsClaw | CodeW | 优先级 |
 |------|----------|-------|--------|
 | Telegram | ✅ | ❌ | P0 |
 | Slack | ✅ | ❌ | P0 |
@@ -271,4 +271,4 @@ CodeW 现状:
 ---
 
 *生成时间: 2026-02-02*
-*对比版本: OpenClaw latest vs CodeW main*
+*对比版本: OpsClaw latest vs CodeW main*

@@ -1,4 +1,4 @@
-"""Session package for OpenClaw Mini."""
+"""Session package for OpsClaw Mini."""
 
 from .manager import session_manager, SessionManager
 

@@ -45,7 +45,7 @@ class GitHubChannel:
         self.client = httpx.AsyncClient(timeout=30.0)
         self._headers = {
             "Accept": "application/vnd.github.v3+json",
-            "User-Agent": "OpenClaw-Mini",
+            "User-Agent": "OpsClaw-Mini",
         }
         if self.token:
             self._headers["Authorization"] = f"Bearer {self.token}"

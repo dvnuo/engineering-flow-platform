@@ -1,4 +1,4 @@
-"""Test Case Generator Skill for OpenClaw Mini."""
+"""Test Case Generator Skill for OpsClaw Mini."""
 
 import re
 from typing import Any, Dict

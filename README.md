@@ -1,10 +1,10 @@
-# OpenClaw Mini
+# OpsClaw Mini
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![pytest](https://img.shields.io/badge/pytest-76%20tests-green.svg)](tests/)
 [![MIT License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
-A simple version of [OpenClaw](https://github.com/openclaw/openclaw) written in Python.
+A simple version of [OpsClaw](https://github.com/openclaw/openclaw) written in Python.
 
 ## Features
 
@@ -294,7 +294,7 @@ server:
 ```yaml
 # docker-compose.yml
 services:
-  openclaw-mini:
+  opsclaw:
     environment:
       - OPENCLAW_DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
       - OPENCLAW_DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
@@ -318,7 +318,7 @@ OPENAI_API_KEY=sk-your-api-key
 
 1. Open browser, visit https://discord.com/developers/applications
 2. Click "New Application" in top-right
-3. Enter application name (e.g., `OpenClaw-Bot`)
+3. Enter application name (e.g., `OpsClaw-Bot`)
 4. Click "Create"
 
 #### 1.2 Create Bot
@@ -464,11 +464,11 @@ pkill -f "python main.py"
 
 ### Run as a Service (systemd)
 
-Create `/etc/systemd/system/openclaw-mini.service`:
+Create `/etc/systemd/system/opsclaw.service`:
 
 ```ini
 [Unit]
-Description=OpenClaw Mini - Discord Bot
+Description=OpsClaw Mini - Discord Bot
 After=network.target
 
 [Service]
@@ -487,9 +487,9 @@ WantedBy=multi-user.target
 Then:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable openclaw-mini
-sudo systemctl start openclaw-mini
-sudo systemctl status openclaw-mini
+sudo systemctl enable opsclaw
+sudo systemctl start opsclaw
+sudo systemctl status opsclaw
 ```
 
 ---
@@ -512,7 +512,7 @@ sudo systemctl status openclaw-mini
 curl http://localhost:8000/health
 
 # Response
-{"status": "ok", "service": "openclaw-mini"}
+{"status": "ok", "service": "opsclaw"}
 ```
 
 ### List Sessions
@@ -587,7 +587,7 @@ opsclaw/
 
 ## Memory System
 
-CodeW loads context from workspace MD files, similar to OpenClaw's memory system.
+CodeW loads context from workspace MD files, similar to OpsClaw's memory system.
 
 ### Workspace Files
 

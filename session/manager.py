@@ -1,4 +1,4 @@
-"""Session management for OpenClaw Mini with persistence."""
+"""Session management for OpsClaw Mini with persistence."""
 
 import asyncio
 import json

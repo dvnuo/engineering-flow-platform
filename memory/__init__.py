@@ -1,4 +1,4 @@
-"""Memory module for OpenClaw-style long-term memory.
+"""Memory module for OpsClaw-style long-term memory.
 
 Features:
 - SQLite storage for memory chunks
@@ -12,7 +12,7 @@ Current: FTS5 full-text search only (BM25)
 
 For semantic/vector search, choose one:
 
-### Option A: sqlite-vec (Recommended by OpenClaw)
+### Option A: sqlite-vec (Recommended by OpsClaw)
 - Native SQLite extension for vector storage
 - Fast in-process vector operations
 - Requires: `pip install sqlite-vec`

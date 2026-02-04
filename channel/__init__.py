@@ -1,4 +1,4 @@
-"""Channel package for OpenClaw Mini."""
+"""Channel package for OpsClaw Mini."""
 
 from .discord import discord_channel, DiscordChannel
 from .jira import (

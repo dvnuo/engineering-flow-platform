@@ -1,5 +1,5 @@
 """
-LLM client for OpenClaw Mini - Supports multiple providers.
+LLM client for OpsClaw Mini - Supports multiple providers.
 
 Providers:
 - OpenAI (GPT-3.5, GPT-4)

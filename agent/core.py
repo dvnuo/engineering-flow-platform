@@ -1,4 +1,4 @@
-"""Agent core for OpenClaw Mini - Following OpenClaw's Agent Loop pattern."""
+"""Agent core for OpsClaw Mini - Following OpsClaw's Agent Loop pattern."""
 
 import json
 import logging
@@ -23,7 +23,7 @@ class Agent:
     """Agent for processing messages with ReAct pattern (Reasoning + Acting)."""
 
     def __init__(self, system_prompt: Optional[str] = None, session_id: str = "default"):
-        # Build OpenClaw-style system prompt
+        # Build OpsClaw-style system prompt
         base_tools = get_tools_schemas()
         # Combine base tools with integration tools (Jira, Confluence)
         self.tools = base_tools + INTEGRATION_TOOLS
@@ -40,7 +40,7 @@ class Agent:
             print(f"  Tool names: {[t['function']['name'] for t in self.tools]}")
             print(f"{'='*60}\n")
         
-        # Human-readable tool list (following OpenClaw's Tooling section)
+        # Human-readable tool list (following OpsClaw's Tooling section)
         tools_list = "\n".join([
             f"- **{t['function']['name']}**: {t['function'].get('description', '')}"
             for t in self.tools

@@ -1,8 +1,8 @@
-# OpenClaw vs CodeW Feature Comparison & Roadmap
+# OpsClaw vs CodeW Feature Comparison & Roadmap
 
 ## Overview
 
-| Aspect | OpenClaw (Original) | CodeW (Our Implementation) |
+| Aspect | OpsClaw (Original) | CodeW (Our Implementation) |
 |--------|---------------------|---------------------------|
 | **Language** | TypeScript/Node.js | Python |
 | **License** | MIT | MIT |
@@ -15,7 +15,7 @@
 
 ### Core Platform
 
-| Feature | OpenClaw | CodeW | Status |
+| Feature | OpsClaw | CodeW | Status |
 |---------|----------|-------|--------|
 | Gateway WS Control Plane | ✅ | ⚠️ HTTP only | TODO |
 | Sessions Management | ✅ | ✅ Persistent + Queue | Complete |
@@ -29,7 +29,7 @@
 
 ### Channels
 
-| Feature | OpenClaw | CodeW | Status |
+| Feature | OpsClaw | CodeW | Status |
 |---------|----------|-------|--------|
 | Discord | ✅ | ✅ Bot API | Complete |
 | Slack | ✅ Bolt | ❌ | TODO |
@@ -41,7 +41,7 @@
 
 ### Tools & Automation
 
-| Feature | OpenClaw | CodeW | Status |
+| Feature | OpsClaw | CodeW | Status |
 |---------|----------|-------|--------|
 | exec | ✅ | ✅ | Complete |
 | read | ✅ | ✅ | Complete |
@@ -58,7 +58,7 @@
 
 ### Agent Capabilities
 
-| Feature | OpenClaw | CodeW | Status |
+| Feature | OpsClaw | CodeW | Status |
 |---------|----------|-------|--------|
 | Tool Calling | ✅ Claude-native | ✅ OpenAI Function | Complete |
 | ReAct Pattern | ✅ pi-agent-core | ✅ Custom | Complete |
@@ -70,7 +70,7 @@
 
 ### Apps & Nodes
 
-| Feature | OpenClaw | CodeW | Status |
+| Feature | OpsClaw | CodeW | Status |
 |---------|----------|-------|--------|
 | macOS App | ✅ Menu bar | ❌ | TODO |
 | iOS Node | ✅ | ❌ | TODO |
@@ -81,7 +81,7 @@
 
 ### Security
 
-| Feature | OpenClaw | CodeW | Status |
+| Feature | OpsClaw | CodeW | Status |
 |---------|----------|-------|--------|
 | DM Pairing | ✅ | ❌ | TODO |
 | Sandbox Mode | ✅ Docker | ❌ | TODO |
@@ -90,7 +90,7 @@
 
 ### DevOps
 
-| Feature | OpenClaw | CodeW | Status |
+| Feature | OpsClaw | CodeW | Status |
 |---------|----------|-------|--------|
 | Health Checks | ✅ | ✅ /health | Complete |
 | Config Reload | ✅ | ✅ API | Complete |
@@ -143,7 +143,7 @@
 - [x] Execution Queue
 
 ### Phase 2: Channel Expansion (Next - Updated 2026-02-03)
-Based on comparison with OpenClaw and enterprise needs:
+Based on comparison with OpsClaw and enterprise needs:
 
 | Priority | Channel | Library | Status |
 |----------|---------|---------|--------|
@@ -175,7 +175,7 @@ Full Jira REST API v2/v3 support with 8 tools:
 | `jira_get_comments` | Get comments |
 
 ### Phase 3: Tool Enhancement (Updated 2026-02-03)
-Based on comparison with OpenClaw and enterprise needs:
+Based on comparison with OpsClaw and enterprise needs:
 
 | Priority | Tool | Status |
 |----------|------|--------|
@@ -235,7 +235,7 @@ Based on comparison with OpenClaw and enterprise needs:
 
 ## Code Structure Comparison
 
-### OpenClaw Structure
+### OpsClaw Structure
 ```
 openclaw/
 ├── src/
@@ -282,22 +282,22 @@ opsclaw/
 │   └── memory/        # Daily notes
 ├── tests/             # Unit tests (76+ tests)
 └── docs/              # Documentation
-    └── COMPARISON.md  # CodeW vs OpenClaw analysis
+    └── COMPARISON.md  # CodeW vs OpsClaw analysis
 ```
 
 ---
 
 ## References
 
-- OpenClaw Docs: https://docs.opsclaw.ai
-- OpenClaw GitHub: https://github.com/openclaw/openclaw
-- OpenClaw Discord: https://discord.gg/clawd
-- **CodeW vs OpenClaw Comparison**: [docs/COMPARISON.md](docs/COMPARISON.md)
-- **OpenClaw Original**: `/root/.opsclaw/workspace/openclaw_original/`
+- OpsClaw Docs: https://docs.opsclaw.ai
+- OpsClaw GitHub: https://github.com/openclaw/openclaw
+- OpsClaw Discord: https://discord.gg/clawd
+- **CodeW vs OpsClaw Comparison**: [docs/COMPARISON.md](docs/COMPARISON.md)
+- **OpsClaw Original**: `/root/.opsclaw/workspace/openclaw_original/`
 
 ## Comparison Summary (2026-02-02)
 
-| Dimension | OpenClaw | CodeW | Gap |
+| Dimension | OpsClaw | CodeW | Gap |
 |-----------|----------|-------|-----|
 | Lines of Code | ~87,000 | ~5,000 | 17x |
 | Channels | 26 | 2 | 24 |
@@ -324,11 +324,11 @@ See [docs/COMPARISON.md](docs/COMPARISON.md) for detailed analysis.
 
 ## Phase 6: Long-term Memory Enhancement (NEW - 2026-02-03)
 
-Based on OpenClaw's memory system design, implement SQLite + vector search for durable memory.
+Based on OpsClaw's memory system design, implement SQLite + vector search for durable memory.
 
-### Reference: OpenClaw Memory System
+### Reference: OpsClaw Memory System
 
-| Component | OpenClaw | CodeW (Current) | Implementation |
+| Component | OpsClaw | CodeW (Current) | Implementation |
 |-----------|----------|-----------------|----------------|
 | **Storage** | SQLite | ✅ SQLite | Complete |
 | **Full-text Search** | ✅ FTS5 | ✅ FTS5 | Complete |
@@ -338,7 +338,7 @@ Based on OpenClaw's memory system design, implement SQLite + vector search for d
 | **Embedding Cache** | SQLite-based | ✅ Metadata only | Partial |
 | **Session Indexing** | Optional | ❌ | TODO |
 
-### Memory Layers (Reference from OpenClaw)
+### Memory Layers (Reference from OpsClaw)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -372,7 +372,7 @@ Based on OpenClaw's memory system design, implement SQLite + vector search for d
 
 #### Step 2: Vector Search Integration 📋 NEXT
 - [ ] Evaluate embedding providers:
-  - Option A: **sqlite-vec** (native, recommended by OpenClaw)
+  - Option A: **sqlite-vec** (native, recommended by OpsClaw)
     - Fast in-process vector operations
     - Requires: `pip install sqlite-vec`
   - Option B: **External Vector DB** (ChromaDB, Weaviate, etc.)

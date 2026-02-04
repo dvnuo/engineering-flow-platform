@@ -1,4 +1,4 @@
-"""WebChat UI and HTTP server for OpenClaw Mini.
+"""WebChat UI and HTTP server for OpsClaw Mini.
 
 A simple web interface to chat with the agent directly.
 """

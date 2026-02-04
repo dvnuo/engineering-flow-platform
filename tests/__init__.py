@@ -1,1 +1,1 @@
-"""Tests package for OpenClaw Mini."""
+"""Tests package for OpsClaw Mini."""

@@ -1,4 +1,4 @@
-"""Tools for OpenClaw Mini - Enable the agent to execute actions."""
+"""Tools for OpsClaw Mini - Enable the agent to execute actions."""
 
 import asyncio
 import json

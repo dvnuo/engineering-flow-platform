@@ -1,4 +1,4 @@
-"""Gateway server for OpenClaw Mini."""
+"""Gateway server for OpsClaw Mini."""
 
 import asyncio
 import hashlib
@@ -118,7 +118,7 @@ async def handle_test_case_generation(issue_key: str, user_name: str) -> str:
 
 
 class Gateway:
-    """Simple HTTP/WebSocket gateway for OpenClaw Mini."""
+    """Simple HTTP/WebSocket gateway for OpsClaw Mini."""
 
     def __init__(self):
         self.mode = config.discord.get("mode", "bot")  # 'bot' or 'webhook'
@@ -165,7 +165,7 @@ class Gateway:
         """Health check endpoint."""
         return web.json_response({
             "status": "ok", 
-            "service": "openclaw-mini",
+            "service": "opsclaw",
             "mode": self.mode
         })
 

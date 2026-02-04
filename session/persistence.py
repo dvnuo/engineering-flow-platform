@@ -1,4 +1,4 @@
-"""Session persistence layer for OpenClaw Mini.
+"""Session persistence layer for OpsClaw Mini.
 
 Manages JSONL transcript files and sessions.json store.
 """

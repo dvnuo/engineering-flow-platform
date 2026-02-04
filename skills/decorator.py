@@ -1,4 +1,4 @@
-"""Skill decorator and utilities for OpenClaw Mini."""
+"""Skill decorator and utilities for OpsClaw Mini."""
 
 from typing import Any, Dict, Optional
 
