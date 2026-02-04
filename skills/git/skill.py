@@ -18,7 +18,7 @@ Usage:
 import asyncio
 from typing import Optional
 
-from skills.executor import skill
+from skills.executor import SkillResult
 
 
 async def _run_git_command(args: list, cwd: str = None) -> str:
@@ -36,13 +36,9 @@ async def _run_git_command(args: list, cwd: str = None) -> str:
         return f"Error: {e}"
 
 
-@skill(
-    name="git",
-    description="Manage local git repositories. Commands: status, commit, push, pull, branch, log, checkout, diff, add"
-)
 async def git(command: str = "status", message: str = None, branch: str = None, 
               path: str = ".", delete: bool = False, limit: int = 10,
-              repo_path: str = None) -> str:
+              repo_path: str = None) -> SkillResult:
     """Execute git commands for local repository management.
     
     Args:
@@ -75,14 +71,14 @@ async def git(command: str = "status", message: str = None, branch: str = None,
     elif cmd == "add":
         return await _add(path, repo_path)
     else:
-        return f"Unknown git command: {command}. Available: status, commit, push, pull, branch, log, checkout, diff, add"
+        return SkillResult(success=False, error=f"Unknown git command: {command}. Available: status, commit, push, pull, branch, log, checkout, diff, add")
 
 
-async def _status(repo_path: str = None) -> str:
+async def _status(repo_path: str = None) -> SkillResult:
     """Show working tree status."""
     output = await _run_git_command(["status", "--porcelain"], repo_path)
     if not output:
-        return "✅ Working tree is clean"
+        return SkillResult(success=True, output="✅ Working tree is clean")
     
     lines = output.split("\n")
     staged = [l for l in lines if l.startswith("A ") or l.startswith("M ")]
@@ -98,62 +94,62 @@ async def _status(repo_path: str = None) -> str:
         for s in unstaged:
             result.append(f"  {s}")
     
-    return "\n".join(result)
+    return SkillResult(success=True, output="\n".join(result))
 
 
-async def _commit(message: str, repo_path: str = None) -> str:
+async def _commit(message: str, repo_path: str = None) -> SkillResult:
     """Commit staged changes."""
     if not message:
-        return "Error: Commit message required"
+        return SkillResult(success=False, error="Commit message required")
     
     await _run_git_command(["add", "-A"], repo_path)
     status = await _run_git_command(["status", "--porcelain"], repo_path)
     
     if not status.strip():
-        return "Nothing to commit - working tree is clean"
+        return SkillResult(success=True, output="Nothing to commit - working tree is clean")
     
     output = await _run_git_command(["commit", "-m", message], repo_path)
     
     if "Error" in output:
-        return f"❌ {output}"
+        return SkillResult(success=False, error=output)
     
-    return f"✅ Committed successfully\n\n{message}"
+    return SkillResult(success=True, output=f"✅ Committed successfully\n\n{message}")
 
 
-async def _push(branch: str, repo_path: str = None) -> str:
+async def _push(branch: str, repo_path: str = None) -> SkillResult:
     """Push to remote."""
     branch = branch or "main"
     output = await _run_git_command(["push", "origin", branch], repo_path)
     
     if "Error" in output:
-        return f"❌ Push failed: {output}"
+        return SkillResult(success=False, error=output)
     if "up to date" in output.lower() or "everything up-to-date" in output.lower():
-        return "✅ Already up to date"
+        return SkillResult(success=True, output="✅ Already up to date")
     
-    return f"✅ Pushed to {branch}"
+    return SkillResult(success=True, output=f"✅ Pushed to {branch}")
 
 
-async def _pull(repo_path: str = None) -> str:
+async def _pull(repo_path: str = None) -> SkillResult:
     """Pull from remote."""
     output = await _run_git_command(["pull"], repo_path)
     
     if "Error" in output:
-        return f"❌ Pull failed: {output}"
+        return SkillResult(success=False, error=output)
     if "Already up to date" in output:
-        return "✅ Already up to date"
+        return SkillResult(success=True, output="✅ Already up to date")
     
-    return f"✅ Pulled changes\n\n{output[:200]}"
+    return SkillResult(success=True, output=f"✅ Pulled changes\n\n{output[:200]}")
 
 
-async def _branch(name: str, delete: bool, repo_path: str = None) -> str:
+async def _branch(name: str, delete: bool, repo_path: str = None) -> SkillResult:
     """List, create, or delete branches."""
     if delete and name:
         await _run_git_command(["branch", "-D", name], repo_path)
-        return f"✅ Deleted branch {name}"
+        return SkillResult(success=True, output=f"✅ Deleted branch {name}")
     
     if name:
         await _run_git_command(["checkout", "-b", name], repo_path)
-        return f"✅ Created and switched to branch '{name}'"
+        return SkillResult(success=True, output=f"✅ Created and switched to branch '{name}'")
     
     # List branches
     output = await _run_git_command(["branch", "-a"], repo_path)
@@ -171,10 +167,10 @@ async def _branch(name: str, delete: bool, repo_path: str = None) -> str:
         else:
             result.append(f"    {line}")
     
-    return "\n".join(result)
+    return SkillResult(success=True, output="\n".join(result))
 
 
-async def _log(limit: int, repo_path: str = None) -> str:
+async def _log(limit: int, repo_path: str = None) -> SkillResult:
     """Show commit history."""
     output = await _run_git_command(
         ["log", "--oneline", f"-n{limit}", "--decorate"],
@@ -182,7 +178,7 @@ async def _log(limit: int, repo_path: str = None) -> str:
     )
     
     if not output:
-        return "No commit history"
+        return SkillResult(success=True, output="No commit history")
     
     lines = output.split("\n")
     result = [f"**Recent Commits** ({len(lines)}):\n"]
@@ -190,33 +186,33 @@ async def _log(limit: int, repo_path: str = None) -> str:
         if line.strip():
             result.append(f"• {line}")
     
-    return "\n".join(result)
+    return SkillResult(success=True, output="\n".join(result))
 
 
-async def _checkout(branch: str, repo_path: str = None) -> str:
+async def _checkout(branch: str, repo_path: str = None) -> SkillResult:
     """Switch to a branch."""
     if not branch:
-        return "Error: Branch name required"
+        return SkillResult(success=False, error="Branch name required")
     
     output = await _run_git_command(["checkout", branch], repo_path)
     
     if "Error" in output:
-        return f"❌ Checkout failed: {output}"
+        return SkillResult(success=False, error=output)
     
-    return f"✅ Switched to branch '{branch}'"
+    return SkillResult(success=True, output=f"✅ Switched to branch '{branch}'")
 
 
-async def _diff(path: str, repo_path: str = None) -> str:
+async def _diff(path: str, repo_path: str = None) -> SkillResult:
     """Show unstaged changes."""
     output = await _run_git_command(["diff", "--stat"], repo_path)
     
     if not output or output == "":
-        return "No unstaged changes"
+        return SkillResult(success=True, output="No unstaged changes")
     
-    return f"**Unstaged Changes**\n\n{output}"
+    return SkillResult(success=True, output=f"**Unstaged Changes**\n\n{output}")
 
 
-async def _add(path: str, repo_path: str = None) -> str:
+async def _add(path: str, repo_path: str = None) -> SkillResult:
     """Stage files for commit."""
     await _run_git_command(["add", path], repo_path)
-    return f"✅ Staged {path}"
+    return SkillResult(success=True, output=f"✅ Staged {path}")

@@ -240,6 +240,14 @@ class SkillsExecutor:
             "recurring", "repeat every"
         ]):
             return "cron"
+        
+        # Git skill
+        if any(phrase in request_lower for phrase in [
+            "git status", "git commit", "git push", "git pull",
+            "git branch", "git checkout", "git log", "git diff",
+            "check git", "show git", "run git", "git add"
+        ]):
+            return "git"
 
         return None
 
