@@ -502,8 +502,247 @@ CONFLUENCE_TOOLS = [
     },
 ]
 
+# GitHub Tools
+GITHUB_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "github_get_issue",
+            "description": "Get an issue or PR details from GitHub.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner (e.g., 'owner')"
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name (e.g., 'myrepo')"
+                    },
+                    "issue_number": {
+                        "type": "integer",
+                        "description": "Issue or PR number"
+                    }
+                },
+                "required": ["owner", "repo", "issue_number"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_search_issues",
+            "description": "Search issues and PRs on GitHub.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (e.g., 'repo:owner/repo is:issue state:open')"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum results to return",
+                        "default": 10
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_add_comment",
+            "description": "Add a comment to an issue or PR on GitHub.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner"
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name"
+                    },
+                    "issue_number": {
+                        "type": "integer",
+                        "description": "Issue or PR number"
+                    },
+                    "comment": {
+                        "type": "string",
+                        "description": "Comment text"
+                    }
+                },
+                "required": ["owner", "repo", "issue_number", "comment"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_create_issue",
+            "description": "Create a new issue on GitHub.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner"
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Issue title"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Issue body (optional)"
+                    },
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Labels (optional)"
+                    }
+                },
+                "required": ["owner", "repo", "title"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_close_issue",
+            "description": "Close an issue or PR on GitHub.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner"
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name"
+                    },
+                    "issue_number": {
+                        "type": "integer",
+                        "description": "Issue or PR number"
+                    }
+                },
+                "required": ["owner", "repo", "issue_number"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_get_file",
+            "description": "Get file content from a GitHub repository.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner"
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File path (e.g., 'src/main.py')"
+                    },
+                    "ref": {
+                        "type": "string",
+                        "description": "Branch or commit SHA (optional)"
+                    }
+                },
+                "required": ["owner", "repo", "path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_create_or_update_file",
+            "description": "Create or update a file in a GitHub repository.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner"
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File path"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "File content"
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Commit message"
+                    },
+                    "sha": {
+                        "type": "string",
+                        "description": "SHA of file being updated (required for updates)"
+                    },
+                    "branch": {
+                        "type": "string",
+                        "description": "Branch name (optional)"
+                    }
+                },
+                "required": ["owner", "repo", "path", "content", "message"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_list_commits",
+            "description": "List commits in a GitHub repository.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner"
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name"
+                    },
+                    "branch": {
+                        "type": "string",
+                        "description": "Branch name (optional)"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum results",
+                        "default": 10
+                    }
+                },
+                "required": ["owner", "repo"]
+            }
+        }
+    },
+]
+
 # All integration tools
-INTEGRATION_TOOLS = JIRA_TOOLS + CONFLUENCE_TOOLS
+INTEGRATION_TOOLS = JIRA_TOOLS + CONFLUENCE_TOOLS + GITHUB_TOOLS
 
 
 # ========== Tool Implementations ==========
@@ -985,3 +1224,152 @@ def _extract_text(block, text_parts):
         for item in block.get("content", []):
             _extract_text(item, text_parts)
         text_parts.append("\n")
+
+
+# ========== GitHub Tool Implementations ==========
+
+async def github_get_issue(owner: str, repo: str, issue_number: int) -> str:
+    """Get an issue or PR details from GitHub."""
+    from channel.github import github_channel
+    if not github_channel.is_configured():
+        return "Error: GitHub not configured"
+    try:
+        issue = await github_channel.get_issue(owner, repo, issue_number)
+        state = issue.get("state", "unknown")
+        title = issue.get("title", "Untitled")
+        body = issue.get("body", "")[:500]
+        labels = issue.get("labels", [])
+        label_names = ", ".join(l.get("name", "") for l in labels)
+        
+        return f"**{owner}/{repo}#{issue_number}: {title}**\n\n**State:** {state}\n**Labels:** {label_names or 'None'}\n\n{body}..."
+    except Exception as e:
+        return f"Error getting issue: {e}"
+
+
+async def github_search_issues(query: str, max_results: int = 10) -> str:
+    """Search issues and PRs on GitHub."""
+    from channel.github import github_channel
+    if not github_channel.is_configured():
+        return "Error: GitHub not configured"
+    try:
+        result = await github_channel.search_issues(query, max_results)
+        items = result.get("items", [])
+        
+        if not items:
+            return "No issues found."
+        
+        lines = [f"**Search Results** ({len(items)}):\n"]
+        for item in items:
+            num = item.get("number")
+            title = item.get("title", "")[:40]
+            state = item.get("state")
+            repo_url = item.get("repository_url", "")
+            repo_name = repo_url.split("/")[-1] if repo_url else "?"
+            lines.append(f"- **{repo_name}#{num}** [{state}] {title}")
+        
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error searching: {e}"
+
+
+async def github_add_comment(owner: str, repo: str, issue_number: int, comment: str) -> str:
+    """Add a comment to an issue or PR on GitHub."""
+    from channel.github import github_channel
+    if not github_channel.is_configured():
+        return "Error: GitHub not configured"
+    try:
+        result = await github_channel.add_comment(owner, repo, issue_number, comment)
+        comment_id = result.get("id", "unknown")
+        return f"Comment added to {owner}/{repo}#{issue_number}: ID={comment_id}"
+    except Exception as e:
+        return f"Error adding comment: {e}"
+
+
+async def github_create_issue(owner: str, repo: str, title: str, body: str = "", labels: list = None) -> str:
+    """Create a new issue on GitHub."""
+    from channel.github import github_channel
+    if not github_channel.is_configured():
+        return "Error: GitHub not configured"
+    try:
+        result = await github_channel.create_issue(owner, repo, title, body, labels)
+        issue_number = result.get("number", "unknown")
+        url = result.get("html_url", "")
+        return f"Issue created: **{owner}/{repo}#{issue_number}**\n{url}"
+    except Exception as e:
+        return f"Error creating issue: {e}"
+
+
+async def github_close_issue(owner: str, repo: str, issue_number: int) -> str:
+    """Close an issue or PR on GitHub."""
+    from channel.github import github_channel
+    if not github_channel.is_configured():
+        return "Error: GitHub not configured"
+    try:
+        result = await github_channel.close_issue(owner, repo, issue_number)
+        state = result.get("state", "unknown")
+        return f"Successfully closed {owner}/{repo}#{issue_number} (state: {state})"
+    except Exception as e:
+        return f"Error closing issue: {e}"
+
+
+async def github_get_file(owner: str, repo: str, path: str, ref: str = "") -> str:
+    """Get file content from a GitHub repository."""
+    import base64
+    from channel.github import github_channel
+    if not github_channel.is_configured():
+        return "Error: GitHub not configured"
+    try:
+        result = await github_channel.get_file(owner, repo, path, ref)
+        content_b64 = result.get("content", "")
+        encoding = result.get("encoding", "base64")
+        sha = result.get("sha", "")
+        
+        if encoding == "base64" and content_b64:
+            content = base64.b64decode(content_b64).decode("utf-8")
+        else:
+            content = content_b64
+        
+        return f"**{owner}/{repo}/{path}** (SHA: {sha[:7]})\n\n```{content}```"
+    except Exception as e:
+        return f"Error getting file: {e}"
+
+
+async def github_create_or_update_file(
+    owner: str, repo: str, path: str, content: str, message: str, 
+    sha: str = None, branch: str = ""
+) -> str:
+    """Create or update a file in a GitHub repository."""
+    from channel.github import github_channel
+    if not github_channel.is_configured():
+        return "Error: GitHub not configured"
+    try:
+        result = await github_channel.create_or_update_file(owner, repo, path, content, message, sha, branch)
+        commit_sha = result.get("commit", {}).get("sha", "")[:7]
+        url = result.get("content", {}).get("html_url", "")
+        return f"File {owner}/{repo}/{path} updated (commit: {commit_sha})\n{url}"
+    except Exception as e:
+        return f"Error updating file: {e}"
+
+
+async def github_list_commits(owner: str, repo: str, branch: str = "", max_results: int = 10) -> str:
+    """List commits in a GitHub repository."""
+    from channel.github import github_channel
+    if not github_channel.is_configured():
+        return "Error: GitHub not configured"
+    try:
+        commits = await github_channel.list_commits(owner, repo, branch, "", max_results)
+        
+        if not commits:
+            return f"No commits found in {owner}/{repo}" + (f" on {branch}" if branch else "")
+        
+        lines = [f"**Commits in {owner}/{repo}" + (f":{branch}" if branch else "") + "** ({len(commits)}):\n"]
+        for commit in commits:
+            sha = commit.get("sha", "")[:7]
+            msg = commit.get("commit", {}).get("message", "")[:50]
+            author = commit.get("commit", {}).get("author", {}).get("name", "unknown")
+            date = commit.get("commit", {}).get("author", {}).get("date", "")[:10]
+            lines.append(f"- `{sha}` {msg} - {author} ({date})")
+        
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error listing commits: {e}"

@@ -228,6 +228,183 @@ class GitHubChannel:
             params={"q": query, "per_page": max_results}
         )
     
+    async def get_issue(self, owner: str, repo: str, issue_number: int) -> Dict[str, Any]:
+        """Get a single issue or PR.
+        
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            issue_number: Issue or PR number
+            
+        Returns:
+            Issue data
+        """
+        logger.info(f"Getting issue {owner}/{repo}#{issue_number}")
+        return await self._request(
+            "GET", f"/repos/{owner}/{repo}/issues/{issue_number}"
+        )
+    
+    async def create_issue(
+        self, 
+        owner: str, 
+        repo: str, 
+        title: str, 
+        body: str = "",
+        labels: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Create a new issue.
+        
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            title: Issue title
+            body: Issue body
+            labels: Optional list of labels
+            
+        Returns:
+            Created issue data
+        """
+        logger.info(f"Creating issue in {owner}/{repo}: {title[:50]}")
+        
+        data = {"title": title, "body": body}
+        if labels:
+            data["labels"] = labels
+            
+        return await self._request(
+            "POST",
+            f"/repos/{owner}/{repo}/issues",
+            json=data
+        )
+    
+    async def close_issue(self, owner: str, repo: str, issue_number: int) -> Dict[str, Any]:
+        """Close an issue or PR.
+        
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            issue_number: Issue or PR number
+            
+        Returns:
+            Updated issue data
+        """
+        logger.info(f"Closing issue {owner}/{repo}#{issue_number}")
+        return await self._request(
+            "PATCH",
+            f"/repos/{owner}/{repo}/issues/{issue_number}",
+            json={"state": "closed"}
+        )
+    
+    async def get_pull_request(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
+        """Get a pull request.
+        
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            pull_number: PR number
+            
+        Returns:
+            PR data
+        """
+        logger.info(f"Getting PR {owner}/{repo}#{pull_number}")
+        return await self._request(
+            "GET", f"/repos/{owner}/{repo}/pulls/{pull_number}"
+        )
+    
+    async def get_file(self, owner: str, repo: str, path: str, ref: str = "") -> Dict[str, Any]:
+        """Get file content from a repository.
+        
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            path: File path
+            ref: Branch or commit SHA
+            
+        Returns:
+            File data including content (base64 encoded)
+        """
+        endpoint = f"/repos/{owner}/{repo}/contents/{path}"
+        if ref:
+            endpoint += f"?ref={ref}"
+            
+        logger.info(f"Getting file {owner}/{repo}/{path}")
+        return await self._request("GET", endpoint)
+    
+    async def create_or_update_file(
+        self,
+        owner: str,
+        repo: str,
+        path: str,
+        content: str,
+        message: str,
+        sha: Optional[str] = None,
+        branch: str = ""
+    ) -> Dict[str, Any]:
+        """Create or update a file in the repository.
+        
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            path: File path
+            content: File content (will be base64 encoded)
+            message: Commit message
+            sha: SHA of file being updated (optional, required for updates)
+            branch: Branch name
+            
+        Returns:
+            Commit data
+        """
+        import base64
+        
+        logger.info(f"{'Updating' if sha else 'Creating'} file {owner}/{repo}/{path}")
+        
+        data = {
+            "message": message,
+            "content": base64.b64encode(content.encode()).decode(),
+        }
+        if sha:
+            data["sha"] = sha
+        if branch:
+            data["branch"] = branch
+            
+        return await self._request(
+            "PUT",
+            f"/repos/{owner}/{repo}/contents/{path}",
+            json=data
+        )
+    
+    async def list_commits(
+        self,
+        owner: str,
+        repo: str,
+        branch: str = "",
+        path: str = "",
+        max_results: int = 10
+    ) -> List[Dict[str, Any]]:
+        """List commits in a repository.
+        
+        Args:
+            owner: Repository owner
+            repo: Repository name
+            branch: Branch name (optional)
+            path: File path (optional)
+            max_results: Maximum results
+            
+        Returns:
+            List of commits
+        """
+        params = {"per_page": min(max_results, 100)}
+        if branch:
+            params["sha"] = branch
+        if path:
+            params["path"] = path
+            
+        logger.info(f"Listing commits for {owner}/{repo}")
+        return await self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/commits",
+            params=params
+        )
+    
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()
