@@ -298,7 +298,12 @@ class JiraChannel:
             data["fields"] = fields
         
         if data:
-            await self._request("PUT", f"/issue/{issue_key}", data=data)
+            try:
+                await self._request("PUT", f"/issue/{issue_key}", data=data)
+                return True
+            except Exception:
+                logger.warning(f"Failed to update issue: {issue_key}")
+                return False
         
         return True
     
