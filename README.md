@@ -61,7 +61,7 @@ deactivate
 ```bash
 # Build the image
 # Run from project root
-docker build -t codew .
+docker build -t opsclaw .
 ```
 
 **Docker Compose (recommended)**:
@@ -72,9 +72,9 @@ Create `docker-compose.yml`:
 version: '3.8'
 
 services:
-  codew:
+  opsclaw:
     build: .
-    container_name: codew-bot
+    container_name: opsclaw-bot
     ports:
       - "8000:8000"
     volumes:
@@ -418,15 +418,15 @@ python main.py
 
 ### Important: Run from Correct Directory
 
-Must run from `codew` directory:
+Must run from `opsclaw` directory:
 
 ```bash
-cd /root/codew
+cd /root/opsclaw
 ```
 
 If you see this error:
 ```
-ModuleNotFoundError: No module named 'codew'
+ModuleNotFoundError: No module named 'opsclaw'
 ```
 Your current directory is wrong.
 
@@ -474,7 +474,7 @@ After=network.target
 [Service]
 Type=simple
 User=your_user
-WorkingDirectory=/path/to/codew
+WorkingDirectory=/path/to/opsclaw
 ExecStart=/path/to/venv/bin/python main.py
 Restart=on-failure
 RestartSec=5
@@ -553,7 +553,7 @@ curl -X POST http://localhost:8000/api/sessions/discord:123:456/clear
 ## Project Structure
 
 ```
-codew/
+opsclaw/
 ├── main.py              # Entry point
 ├── config.yaml          # Configuration
 ├── config.py            # Config loader
@@ -647,8 +647,8 @@ memory_system = MemorySystem(cache_ttl_seconds=120)
 
 ```bash
 # Clone and setup
-git clone https://github.com/itwake/codew.git
-cd codew
+git clone https://github.com/itwake/opsclaw.git
+cd opsclaw
 git checkout -b feature/your-feature
 
 # Create virtual environment

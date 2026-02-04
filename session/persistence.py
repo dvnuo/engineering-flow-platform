@@ -23,7 +23,7 @@ class SessionStore:
             └── <sessionId>.jsonl
     """
     
-    def __init__(self, base_path: str = "~/.openclaw/codew/sessions"):
+    def __init__(self, base_path: str = "~/.openclaw/opsclaw/sessions"):
         self.base_path = Path(base_path).expanduser()
         self.sessions_file = self.base_path / "sessions.json"
         self._lock = None  # Created lazily in ensure_dir

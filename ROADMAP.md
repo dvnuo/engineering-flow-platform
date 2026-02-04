@@ -251,7 +251,7 @@ openclaw/
 
 ### CodeW Structure (Current - Updated 2026-02-02)
 ```
-codew/
+opsclaw/
 ├── main.py             # Entry point
 ├── config.py          # YAML config loader
 ├── Dockerfile         # Container image

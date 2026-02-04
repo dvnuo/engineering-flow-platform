@@ -48,7 +48,7 @@ memory:
 
 1. Daily Notes: memory/YYYY-MM-DD.md
 2. Long-term Memory: MEMORY.md
-3. Session Transcripts: ~/.openclaw/codew/sessions/*.jsonl (future)
+3. Session Transcripts: ~/.openclaw/opsclaw/sessions/*.jsonl (future)
 """
 
 import logging
@@ -58,7 +58,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Default memory paths
-DEFAULT_MEMORY_DIR = Path.home() / ".openclaw/codew/memory"
+DEFAULT_MEMORY_DIR = Path.home() / ".openclaw/opsclaw/memory"
 DEFAULT_WORKSPACE = Path.home() / ".openclaw/workspace"
 
 

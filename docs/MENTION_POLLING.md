@@ -121,7 +121,7 @@ polling:
 ### Files
 
 ```
-codew/
+opsclaw/
 ├── cron/
 │   └── mention_poller.py      # Main polling logic
 ├── channel/
