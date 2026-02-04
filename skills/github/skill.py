@@ -11,6 +11,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
+from skills.decorator import skill
 from skills.executor import SkillResult
 
 # Default to github.com, can be overridden via config or arguments
@@ -52,6 +53,7 @@ async def _run_gh_command(args: list, cwd: str = None, hostname: str = None) -> 
         return False, f"Error: {e}"
 
 
+@skill(name="github_clone", description="Clone a GitHub repository using gh CLI")
 async def github_clone(repo: str, directory: str = None, branch: str = None, 
                        hostname: str = None) -> SkillResult:
     """Clone a GitHub repository.
@@ -75,6 +77,7 @@ async def github_clone(repo: str, directory: str = None, branch: str = None,
     return SkillResult(success=False, error=output)
 
 
+@skill(name="github_repo_clone", description="Clone a repository with interactive selection or specified owner/repo")
 async def github_repo_clone(owner: str = None, repo: str = None, 
                            select: bool = False, hostname: str = None) -> SkillResult:
     """Clone a repository with interactive selection or specified owner/repo.
@@ -100,6 +103,7 @@ async def github_repo_clone(owner: str = None, repo: str = None,
     return SkillResult(success=False, error="Please specify owner/repo or use select=true")
 
 
+@skill(name="github_issue_list", description="List issues in a GitHub repository")
 async def github_issue_list(owner: str, repo: str, state: str = "open", 
                            limit: int = 10, hostname: str = None) -> SkillResult:
     """List issues in a repository.
@@ -132,6 +136,7 @@ async def github_issue_list(owner: str, repo: str, state: str = "open",
     return SkillResult(success=False, error=output)
 
 
+@skill(name="github_pr_list", description="List pull requests in a GitHub repository")
 async def github_pr_list(owner: str, repo: str, state: str = "open", 
                          limit: int = 10, hostname: str = None) -> SkillResult:
     """List pull requests in a repository.
@@ -164,6 +169,7 @@ async def github_pr_list(owner: str, repo: str, state: str = "open",
     return SkillResult(success=False, error=output)
 
 
+@skill(name="github_pr_checks", description="Check CI status on a pull request")
 async def github_pr_checks(owner: str, repo: str, pr_number: int, 
                            hostname: str = None) -> SkillResult:
     """Check CI status on a PR.
@@ -185,6 +191,7 @@ async def github_pr_checks(owner: str, repo: str, pr_number: int,
     return SkillResult(success=False, error=output)
 
 
+@skill(name="github_run_list", description="List recent workflow runs in a GitHub repository")
 async def github_run_list(owner: str, repo: str, limit: int = 10, 
                           hostname: str = None) -> SkillResult:
     """List recent workflow runs.
@@ -206,6 +213,7 @@ async def github_run_list(owner: str, repo: str, limit: int = 10,
     return SkillResult(success=False, error=output)
 
 
+@skill(name="github_run_view", description="View a workflow run in detail")
 async def github_run_view(owner: str, repo: str, run_id: str, 
                           log_failed: bool = False, hostname: str = None) -> SkillResult:
     """View a workflow run.
@@ -228,6 +236,7 @@ async def github_run_view(owner: str, repo: str, run_id: str,
     return SkillResult(success=False, error=output)
 
 
+@skill(name="github_api", description="Make an arbitrary GitHub API call")
 async def github_api(endpoint: str, method: str = "GET", 
                      body: str = None, hostname: str = None) -> SkillResult:
     """Make an arbitrary GitHub API call.
