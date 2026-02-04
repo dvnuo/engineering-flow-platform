@@ -36,7 +36,7 @@
 | WhatsApp | ✅ Baileys | ❌ | TODO |
 | Signal | ✅ signal-cli | ❌ | TODO |
 | iMessage | ✅ imsg | ❌ | TODO |
-| Jira | ✅ | ⚠️ Webhook only | Partial |
+| Jira | ✅ | ✅ REST API v2/v3 | Complete |
 | WebChat | ✅ | ✅ HTTP + Static Files | Complete |
 
 ### Tools & Automation
@@ -158,6 +158,21 @@ Based on comparison with OpenClaw and enterprise needs:
 - [ ] Add WhatsApp channel (P1)
 - [ ] Add Signal channel (P2)
 - [ ] Add iMessage channel (P2)
+
+### Jira Tools (Updated 2026-02-04)
+
+Full Jira REST API v2/v3 support with 8 tools:
+
+| Tool | Description |
+|------|-------------|
+| `jira_get_issue` | Get issue details |
+| `jira_search` | Search with JQL |
+| `jira_create_issue` | Create new issue |
+| `jira_edit_issue` | **NEW** - Edit existing issue |
+| `jira_transition` | Change status |
+| `jira_get_transitions` | List available transitions |
+| `jira_add_comment` | Add comment |
+| `jira_get_comments` | Get comments |
 
 ### Phase 3: Tool Enhancement (Updated 2026-02-03)
 Based on comparison with OpenClaw and enterprise needs:
