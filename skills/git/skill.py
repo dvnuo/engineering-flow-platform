@@ -19,7 +19,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from skills.executor import SkillResult
+from skills.executor import SkillResult, skill
 
 # Default workspace path using home directory
 DEFAULT_WORKSPACE = Path.home() / ".opsclaw" / "workspace"
@@ -40,6 +40,10 @@ async def _run_git_command(args: list, cwd: str = None) -> str:
         return f"Error: {e}"
 
 
+@skill(
+    name="git",
+    description="Manage local git repositories. Commands: status, commit, push, pull, branch, log, checkout, diff, add"
+)
 async def git(command: str = "status", message: str = None, branch: str = None, 
               path: str = ".", delete: bool = False, limit: int = 10,
               repo_path: str = None) -> SkillResult:
