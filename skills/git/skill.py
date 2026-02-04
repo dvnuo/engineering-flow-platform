@@ -58,6 +58,8 @@ async def git(command: str = "status", message: str = None, branch: str = None,
     
     if cmd == "status":
         return await _status(repo_path)
+    elif cmd == "clone":
+        return await _clone(path, repo_path)  # path = repo URL
     elif cmd == "commit":
         return await _commit(message, repo_path)
     elif cmd == "push":
@@ -75,7 +77,7 @@ async def git(command: str = "status", message: str = None, branch: str = None,
     elif cmd == "add":
         return await _add(path, repo_path)
     else:
-        return SkillResult(success=False, error=f"Unknown git command: {command}. Available: status, commit, push, pull, branch, log, checkout, diff, add")
+        return SkillResult(success=False, error=f"Unknown git command: {command}. Available: status, clone, commit, push, pull, branch, log, checkout, diff, add")
 
 
 async def _status(repo_path: str = None) -> SkillResult:
@@ -99,6 +101,34 @@ async def _status(repo_path: str = None) -> SkillResult:
             result.append(f"  {s}")
     
     return SkillResult(success=True, output="\n".join(result))
+
+
+async def _clone(repo_url: str, repo_path: str = None) -> SkillResult:
+    """Clone a repository.
+    
+    Args:
+        repo_url: Repository URL (e.g., 'https://github.com/owner/repo.git' or 'git@github.com:owner/repo.git')
+        repo_path: Target directory (optional, defaults to workspace/repo-name)
+    """
+    if not repo_url:
+        return SkillResult(success=False, error="Repository URL required for clone command")
+    
+    # Determine target directory
+    if repo_path:
+        target_dir = repo_path
+    else:
+        # Extract repo name from URL
+        repo_name = repo_url.rstrip('/').split('/')[-1]
+        if repo_name.endswith('.git'):
+            repo_name = repo_name[:-4]
+        target_dir = str(DEFAULT_WORKSPACE / repo_name)
+    
+    output = await _run_git_command(["clone", repo_url, target_dir], None)
+    
+    if "Error" in output:
+        return SkillResult(success=False, error=output)
+    
+    return SkillResult(success=True, output=f"✅ Cloned repository to {target_dir}")
 
 
 async def _commit(message: str, repo_path: str = None) -> SkillResult:
