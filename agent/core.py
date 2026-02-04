@@ -303,6 +303,7 @@ You have access to the following tools. When a user asks you to do something tha
         try:
             # Parse command and arguments from message
             # Format: "git status" or "git log limit=5" or "git commit message='fix bug'"
+            #        or "git clone https://github.com/owner/repo.git"
             parts = message.split()
             if not parts:
                 return "Error: Empty message"
@@ -321,6 +322,12 @@ You have access to the following tools. When a user asks you to do something tha
                     if value.isdigit():
                         value = int(value)
                     args[key] = value
+                elif part.startswith('http://') or part.startswith('https://') or part.startswith('git@'):
+                    # Handle URL as path argument for clone operations
+                    args['path'] = part
+                elif part.startswith('/') or part.startswith('./') or part.startswith('../'):
+                    # Handle path arguments
+                    args['path'] = part
             
             result = await skills_executor.execute_skill(
                 skill_name,
