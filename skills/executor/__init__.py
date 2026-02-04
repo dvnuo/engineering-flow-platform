@@ -111,7 +111,12 @@ def skill(name: str = None, description: str = "", parameters: Dict[str, Dict] =
                 filtered_kwargs = {k: v for k, v in kwargs.items() 
                                    if k in sig.parameters}
                 # Use func directly, not as an attribute to avoid binding
-                return await func(**filtered_kwargs)
+                result = await func(**filtered_kwargs)
+                
+                # Wrap string results in SkillResult for backward compatibility
+                if isinstance(result, str):
+                    return SkillResult(success=True, output=result)
+                return result
         
         return DecoratedSkill()
     
