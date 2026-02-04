@@ -386,6 +386,120 @@ CONFLUENCE_TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "confluence_delete_page",
+            "description": "Delete a Confluence page by ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "page_id": {
+                        "type": "string",
+                        "description": "Page ID to delete"
+                    }
+                },
+                "required": ["page_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "confluence_get_page_by_title",
+            "description": "Get a Confluence page by space and title.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "space_key": {
+                        "type": "string",
+                        "description": "Space key (e.g., 'DEV')"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Page title to find"
+                    }
+                },
+                "required": ["space_key", "title"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "confluence_get_space",
+            "description": "Get details of a Confluence space.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "space_key": {
+                        "type": "string",
+                        "description": "Space key (e.g., 'DEV')"
+                    }
+                },
+                "required": ["space_key"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "confluence_get_comments",
+            "description": "Get all comments for a Confluence page.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "page_id": {
+                        "type": "string",
+                        "description": "Page ID"
+                    }
+                },
+                "required": ["page_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "confluence_add_label",
+            "description": "Add a label to a Confluence page.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "page_id": {
+                        "type": "string",
+                        "description": "Page ID"
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Label to add"
+                    }
+                },
+                "required": ["page_id", "label"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "confluence_remove_label",
+            "description": "Remove a label from a Confluence page.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "page_id": {
+                        "type": "string",
+                        "description": "Page ID"
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Label to remove"
+                    }
+                },
+                "required": ["page_id", "label"]
+            }
+        }
+    },
 ]
 
 # All integration tools
@@ -740,6 +854,109 @@ async def confluence_list_spaces(limit: int = 20) -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"Error listing spaces: {str(e)}"
+
+
+async def confluence_delete_page(page_id: str) -> str:
+    """Delete a Confluence page by ID."""
+    from channel.confluence import confluence_channel
+    if not confluence_channel.is_configured():
+        return "Error: Confluence not configured"
+    try:
+        success = await confluence_channel.delete_page(page_id)
+        if success:
+            return f"Successfully deleted page {page_id}"
+        else:
+            return f"Failed to delete page {page_id}"
+    except Exception as e:
+        return f"Error deleting page: {str(e)}"
+
+
+async def confluence_get_page_by_title(space_key: str, title: str) -> str:
+    """Get a Confluence page by space and title."""
+    from channel.confluence import confluence_channel
+    if not confluence_channel.is_configured():
+        return "Error: Confluence not configured"
+    try:
+        page = await confluence_channel.get_page_by_title(space_key, title)
+        if page:
+            page_id = page.get("id", "?")
+            version = page.get("version", {}).get("number", "?")
+            body = page.get("body", {}).get("storage", {}).get("value", "")[:300]
+            return f"**{title}** (ID: {page_id}, Version: {version})\n\n{body}..."
+        else:
+            return f"Page '{title}' not found in space {space_key}"
+    except Exception as e:
+        return f"Error getting page: {str(e)}"
+
+
+async def confluence_get_space(space_key: str) -> str:
+    """Get details of a Confluence space."""
+    from channel.confluence import confluence_channel
+    if not confluence_channel.is_configured():
+        return "Error: Confluence not configured"
+    try:
+        space = await confluence_channel.get_space(space_key)
+        if space:
+            name = space.get("name", "Unknown")
+            key = space.get("key", "?")
+            description = space.get("description", {}).get("plain", {}).get("value", "No description")[:200]
+            return f"**{name}** (key: {key})\n\n{description}..."
+        else:
+            return f"Space {space_key} not found"
+    except Exception as e:
+        return f"Error getting space: {str(e)}"
+
+
+async def confluence_get_comments(page_id: str) -> str:
+    """Get all comments for a Confluence page."""
+    from channel.confluence import confluence_channel
+    if not confluence_channel.is_configured():
+        return "Error: Confluence not configured"
+    try:
+        comments = await confluence_channel.get_comments(page_id)
+        if not comments:
+            return f"No comments found for page {page_id}"
+        lines = [f"**Comments for {page_id}** ({len(comments)} total):\n"]
+        for i, comment in enumerate(comments, 1):
+            author = comment.get("history", {}).get("createdBy", {}).get("displayName", "Unknown")
+            created = comment.get("created", "")[:10] if comment.get("created") else "N/A"
+            body = comment.get("body", {}).get("storage", {}).get("value", "")[:200]
+            lines.append(f"---")
+            lines.append(f"**Comment #{i}** by {author} on {created}")
+            lines.append(f"{body}...")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error getting comments: {str(e)}"
+
+
+async def confluence_add_label(page_id: str, label: str) -> str:
+    """Add a label to a Confluence page."""
+    from channel.confluence import confluence_channel
+    if not confluence_channel.is_configured():
+        return "Error: Confluence not configured"
+    try:
+        success = await confluence_channel.add_label(page_id, label)
+        if success:
+            return f"Successfully added label '{label}' to page {page_id}"
+        else:
+            return f"Failed to add label '{label}' to page {page_id}"
+    except Exception as e:
+        return f"Error adding label: {str(e)}"
+
+
+async def confluence_remove_label(page_id: str, label: str) -> str:
+    """Remove a label from a Confluence page."""
+    from channel.confluence import confluence_channel
+    if not confluence_channel.is_configured():
+        return "Error: Confluence not configured"
+    try:
+        success = await confluence_channel.remove_label(page_id, label)
+        if success:
+            return f"Successfully removed label '{label}' from page {page_id}"
+        else:
+            return f"Failed to remove label '{label}' from page {page_id}"
+    except Exception as e:
+        return f"Error removing label: {str(e)}"
 
 
 def _parse_adf_body(body) -> str:
