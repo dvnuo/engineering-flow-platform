@@ -79,3 +79,39 @@ git(command="clone", path="git@github.com:owner/repo.git")
 # HTTPS clone
 git(command="clone", path="https://github.com/owner/repo.git")
 ```
+
+## SSH Key Configuration
+
+For private repository access, configure SSH key in `config.yaml`:
+
+```yaml
+ssh:
+  enabled: true
+  private_key_path: "/path/to/private_key"
+```
+
+### How It Works
+
+1. On first git operation (clone, push, pull), the skill checks `config.yaml`
+2. If `ssh.enabled` is true and `private_key_path` is set, the key is:
+   - Copied from configured path to `~/.ssh/id_ed25519`
+   - Permissions set to `600` (required by SSH)
+3. Subsequent git operations use the configured SSH key
+
+### Security Notes
+
+- **Do NOT commit private keys** to version control
+- Use Docker secrets or environment variables for key paths
+- The key is only accessible by the current user (600 permissions)
+
+### Manual SSH Setup
+
+To manually setup SSH key:
+
+```bash
+# Setup SSH key from config
+git(command="ssh_setup")
+
+# Verify SSH connection
+ssh -T git@github.com
+```
