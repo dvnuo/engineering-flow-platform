@@ -11,7 +11,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from skills.executor import SkillResult
+from skills.executor import SkillResult, skill
 
 # Default to github.com, can be overridden via config or arguments
 DEFAULT_HOSTNAME = "github.com"
@@ -247,3 +247,71 @@ async def github_api(endpoint: str, method: str = "GET",
     if success:
         return SkillResult(success=True, output=f"**API Response**\n\n{output}")
     return SkillResult(success=False, error=output)
+
+
+@skill(
+    name="github",
+    description="Interact with GitHub using gh CLI. Commands: clone, repo_clone, issue_list, pr_list, pr_checks, run_list, run_view, api"
+)
+async def github(
+    command: str = "clone",
+    repo: str = None,
+    owner: str = None,
+    directory: str = None,
+    branch: str = None,
+    state: str = "open",
+    limit: int = 10,
+    pr_number: int = None,
+    run_id: str = None,
+    endpoint: str = None,
+    method: str = "GET",
+    body: str = None,
+    select: bool = False,
+    hostname: str = None
+) -> SkillResult:
+    """Execute GitHub commands using gh CLI.
+    
+    Args:
+        command: Sub-command (clone, repo_clone, issue_list, pr_list, pr_checks, run_list, run_view, api)
+        repo: Repository (owner/repo format)
+        owner: Repository owner
+        directory: Target directory
+        branch: Branch name
+        state: Issue/PR state (open, closed, all)
+        limit: Maximum results
+        pr_number: Pull request number
+        run_id: Workflow run ID
+        endpoint: API endpoint
+        method: HTTP method
+        body: Request body
+        select: Use interactive selection
+        hostname: GitHub hostname (for GitHub Enterprise)
+    """
+    cmd = command.lower().replace("_", "-")
+    
+    if cmd in ("clone", "repo-clone"):
+        return await github_repo_clone(owner=owner, repo=repo, directory=directory, branch=branch, hostname=hostname, select=select)
+    elif cmd == "issue-list":
+        if not owner or not repo:
+            return SkillResult(success=False, error="owner and repo required for issue_list")
+        return await github_issue_list(owner, repo, state=state, limit=limit, hostname=hostname)
+    elif cmd in ("pr-list", "pr_list"):
+        if not owner or not repo:
+            return SkillResult(success=False, error="owner and repo required for pr_list")
+        return await github_pr_list(owner, repo, state=state, limit=limit, hostname=hostname)
+    elif cmd == "pr-checks":
+        if not owner or not repo or not pr_number:
+            return SkillResult(success=False, error="owner, repo, and pr_number required for pr_checks")
+        return await github_pr_checks(owner, repo, pr_number=pr_number, hostname=hostname)
+    elif cmd in ("run-list", "run_list"):
+        if not owner or not repo:
+            return SkillResult(success=False, error="owner and repo required for run_list")
+        return await github_run_list(owner, repo, limit=limit, hostname=hostname)
+    elif cmd in ("run-view", "run_view"):
+        if not owner or not repo or not run_id:
+            return SkillResult(success=False, error="owner, repo, and run_id required for run_view")
+        return await github_run_view(owner, repo, run_id=run_id, hostname=hostname)
+    elif cmd == "api":
+        return await github_api(endpoint=endpoint, method=method, body=body, hostname=hostname)
+    else:
+        return SkillResult(success=False, error=f"Unknown github command: {command}. Available: clone, repo_clone, issue_list, pr_list, pr_checks, run_list, run_view, api")
