@@ -273,7 +273,7 @@ async def github(
     
     Args:
         command: Sub-command (clone, repo_clone, issue_list, pr_list, pr_checks, run_list, run_view, api)
-        repo: Repository (owner/repo format)
+        repo: Repository (owner/repo format) or repository name
         owner: Repository owner
         directory: Target directory
         branch: Branch name
@@ -290,7 +290,7 @@ async def github(
     cmd = command.lower().replace("_", "-")
     
     if cmd in ("clone", "repo-clone"):
-        return await github_repo_clone(owner=owner, repo=repo, directory=directory, branch=branch, hostname=hostname, select=select)
+        return await github_repo_clone(owner=owner, repo=repo, select=select, hostname=hostname)
     elif cmd == "issue-list":
         if not owner or not repo:
             return SkillResult(success=False, error="owner and repo required for issue_list")
