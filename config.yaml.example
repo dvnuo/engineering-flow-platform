@@ -147,3 +147,19 @@ polling:
     spaces:  # Spaces to monitor
       - "DEV"
       - "DOCS"
+
+# ============================================
+# SSH Configuration (OPTIONAL)
+# ============================================
+# Configure SSH key path for git operations (clone, push, pull)
+# The key will be copied to ~/.ssh/ with proper permissions (600)
+# Useful for Docker deployments where SSH key should not be baked in
+
+ssh:
+  enabled: false  # Set to true to enable SSH key setup
+  private_key_path: ""  # Path to private key file (e.g., "/etc/opsclaw/id_ed25519")
+
+# Example usage:
+# ssh:
+#   enabled: true
+#   private_key_path: "/run/secrets/github_ssh_key"

@@ -13,16 +13,67 @@ Usage:
 - git checkout → Switch branches
 - git diff → Show unstaged changes
 - git add → Stage files
+- git clone → Clone repositories
 """
 
 import asyncio
+import logging
+import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
 from skills.executor import SkillResult
+from config import config
+
+logger = logging.getLogger(__name__)
 
 # Default workspace path using home directory
 DEFAULT_WORKSPACE = Path.home() / ".opsclaw" / "workspace"
+
+
+async def _setup_ssh_key() -> bool:
+    """Setup SSH key from config.
+    
+    Copies configured private key to ~/.ssh/ and sets proper permissions.
+    Called automatically on initialization if ssh.enabled is true.
+    """
+    ssh_config = config.get("ssh", {})
+    if not ssh_config.get("enabled", False):
+        return False
+    
+    private_key_path = ssh_config.get("private_key_path", "")
+    if not private_key_path:
+        logger.warning("SSH enabled but no private_key_path configured")
+        return False
+    
+    source_path = Path(private_key_path)
+    if not source_path.exists():
+        logger.warning(f"SSH key not found at {private_key_path}")
+        return False
+    
+    # Ensure ~/.ssh directory exists
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Copy key to ~/.ssh/
+    dest_path = ssh_dir / source_path.name
+    try:
+        shutil.copy2(source_path, dest_path)
+        logger.info(f"Copied SSH key to {dest_path}")
+    except Exception as e:
+        logger.error(f"Failed to copy SSH key: {e}")
+        return False
+    
+    # Set permissions to 600 (required by SSH)
+    try:
+        os.chmod(dest_path, 0o600)
+        logger.info(f"Set SSH key permissions to 600")
+    except Exception as e:
+        logger.error(f"Failed to set SSH key permissions: {e}")
+        return False
+    
+    return True
 
 
 async def _run_git_command(args: list, cwd: str = None) -> str:
@@ -46,20 +97,29 @@ async def git(command: str = "status", message: str = None, branch: str = None,
     """Execute git commands for local repository management.
     
     Args:
-        command: Git command (status, commit, push, pull, branch, log, checkout, diff, add)
+        command: Git command (status, clone, commit, push, pull, branch, log, checkout, diff, add, ssh_setup)
         message: Commit message (for commit command)
         branch: Branch name (for push, branch, checkout commands)
-        path: File path (for add, diff commands)
+        path: File path (for add, diff, clone commands)
         delete: Delete branch (for branch command)
         limit: Limit number of commits (for log command)
         repo_path: Repository path (optional)
     """
     cmd = command.lower()
     
+    # Setup SSH key if enabled in config
+    if cmd in ("clone", "push", "pull"):
+        await _setup_ssh_key()
+    
     if cmd == "status":
         return await _status(repo_path)
     elif cmd == "clone":
         return await _clone(path, repo_path)  # path = repo URL
+    elif cmd == "ssh_setup":
+        success = await _setup_ssh_key()
+        if success:
+            return SkillResult(success=True, output="✅ SSH key configured successfully")
+        return SkillResult(success=False, error="SSH key configuration failed")
     elif cmd == "commit":
         return await _commit(message, repo_path)
     elif cmd == "push":
@@ -77,7 +137,7 @@ async def git(command: str = "status", message: str = None, branch: str = None,
     elif cmd == "add":
         return await _add(path, repo_path)
     else:
-        return SkillResult(success=False, error=f"Unknown git command: {command}. Available: status, clone, commit, push, pull, branch, log, checkout, diff, add")
+        return SkillResult(success=False, error=f"Unknown git command: {command}. Available: status, clone, ssh_setup, commit, push, pull, branch, log, checkout, diff, add")
 
 
 async def _status(repo_path: str = None) -> SkillResult:
