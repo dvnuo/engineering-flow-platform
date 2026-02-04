@@ -237,7 +237,8 @@ class SkillsExecutor:
         # Cron/Scheduler skill
         if any(phrase in request_lower for phrase in [
             "schedule", "remind me", "set a reminder", "cron job",
-            "recurring", "repeat every"
+            "recurring", "repeat every", "cron status", "list cron",
+            "cron jobs", "show cron", "get cron"
         ]):
             return "cron"
         
@@ -245,7 +246,8 @@ class SkillsExecutor:
         if any(phrase in request_lower for phrase in [
             "git status", "git commit", "git push", "git pull",
             "git branch", "git checkout", "git log", "git diff",
-            "check git", "show git", "run git", "git add"
+            "git add", "git clone", "git ssh",
+            "check git", "show git", "run git"
         ]):
             return "git"
         
@@ -254,7 +256,8 @@ class SkillsExecutor:
             "github clone", "gh clone", "clone repo", "clone repository",
             "github issue", "gh issue", "list issues", "list prs",
             "github pr", "gh pr", "pr checks", "workflow run",
-            "github run", "gh run", "github api", "gh api"
+            "github run", "gh run", "github api", "gh api",
+            "github pr list", "github run view"
         ]):
             return "github"
 
