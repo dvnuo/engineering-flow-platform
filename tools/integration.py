@@ -194,6 +194,63 @@ JIRA_TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "jira_assign_issue",
+            "description": "Assign a Jira issue to a user. Use '-' to unassign.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_key": {
+                        "type": "string",
+                        "description": "Issue key (e.g., 'PROJ-123')"
+                    },
+                    "assignee": {
+                        "type": "string",
+                        "description": "Account ID, email, or '-' to unassign"
+                    }
+                },
+                "required": ["issue_key", "assignee"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "jira_get_my_issues",
+            "description": "Get issues assigned to the current user. Optionally filter by status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "description": "Optional status filter (e.g., 'Open', 'In Progress')"
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "jira_get_project_issues",
+            "description": "Get issues in a project. Defaults to configured project.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Project key (optional, defaults to configured project)"
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "Optional status filter"
+                    }
+                }
+            }
+        }
+    },
 ]
 
 # Confluence Tools
@@ -526,6 +583,69 @@ async def jira_edit_issue(
             
     except Exception as e:
         return f"Error editing issue: {str(e)}"
+
+
+async def jira_assign_issue(issue_key: str, assignee: str) -> str:
+    """Assign a Jira issue to a user. Use '-' to unassign."""
+    from channel.jira import jira_channel
+    if not jira_channel.is_configured():
+        return "Error: Jira not configured"
+    
+    try:
+        success = await jira_channel.assign_issue(issue_key, assignee)
+        if success:
+            if assignee == "-":
+                return f"Successfully unassigned {issue_key}"
+            return f"Successfully assigned {issue_key} to {assignee}"
+        else:
+            return f"Failed to assign {issue_key}"
+    except Exception as e:
+        return f"Error assigning issue: {str(e)}"
+
+
+async def jira_get_my_issues(status: str = None) -> str:
+    """Get issues assigned to the current user."""
+    from channel.jira import jira_channel
+    if not jira_channel.is_configured():
+        return "Error: Jira not configured"
+    
+    try:
+        issues = await jira_channel.get_my_issues(status)
+        if not issues:
+            return "No issues assigned to you" + (f" with status '{status}'" if status else "")
+        
+        lines = [f"**Your Issues** ({len(issues)} total):\n"]
+        for issue in issues:
+            key = issue.get("key")
+            summary = issue.get("fields", {}).get("summary", "")[:50]
+            status = issue.get("fields", {}).get("status", {}).get("name", "?")
+            lines.append(f"- **{key}** [{status}] {summary}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error getting your issues: {str(e)}"
+
+
+async def jira_get_project_issues(project: str = None, status: str = None) -> str:
+    """Get issues in a project."""
+    from channel.jira import jira_channel
+    if not jira_channel.is_configured():
+        return "Error: Jira not configured"
+    
+    try:
+        issues = await jira_channel.get_project_issues(project, status)
+        if not issues:
+            proj = project or jira_channel.project
+            return f"No issues found in project {proj}" + (f" with status '{status}'" if status else "")
+        
+        lines = [f"**Project Issues** ({len(issues)} total):\n"]
+        for issue in issues:
+            key = issue.get("key")
+            summary = issue.get("fields", {}).get("summary", "")[:50]
+            status = issue.get("fields", {}).get("status", {}).get("name", "?")
+            lines.append(f"- **{key}** [{status}] {summary}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error getting project issues: {str(e)}"
 
 
 async def confluence_get_page(page_id: str) -> str:
