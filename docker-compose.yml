@@ -12,7 +12,7 @@ services:
       
       # Workspace directory for memory files - persists across restarts
       # Contains: SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, memory/
-      - ./workspace:/root/.openclaw/workspace
+      - ./workspace:/root/.opsclaw/workspace
       
       # Optional: logs directory
       - ./logs:/app/logs

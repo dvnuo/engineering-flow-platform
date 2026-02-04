@@ -289,11 +289,11 @@ opsclaw/
 
 ## References
 
-- OpenClaw Docs: https://docs.openclaw.ai
+- OpenClaw Docs: https://docs.opsclaw.ai
 - OpenClaw GitHub: https://github.com/openclaw/openclaw
 - OpenClaw Discord: https://discord.gg/clawd
 - **CodeW vs OpenClaw Comparison**: [docs/COMPARISON.md](docs/COMPARISON.md)
-- **OpenClaw Original**: `/root/.openclaw/workspace/openclaw_original/`
+- **OpenClaw Original**: `/root/.opsclaw/workspace/openclaw_original/`
 
 ## Comparison Summary (2026-02-02)
 
@@ -342,7 +342,7 @@ Based on OpenClaw's memory system design, implement SQLite + vector search for d
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    ~/.openclaw/memory/                       │
+│                    ~/.opsclaw/memory/                       │
 │                    <agentId>.sqlite                          │
 ├─────────────────────────────────────────────────────────────┤
 │ Layer 1: Daily Notes                                         │
@@ -356,7 +356,7 @@ Based on OpenClaw's memory system design, implement SQLite + vector search for d
 │   - Context: Only load in main private session              │
 ├─────────────────────────────────────────────────────────────┤
 │ Layer 3: Session Transcripts (Optional)                     │
-│   - File: ~/.openclaw/agents/<agentId>/sessions/*.jsonl    │
+│   - File: ~/.opsclaw/agents/<agentId>/sessions/*.jsonl    │
 │   - Purpose: Index session history for semantic search      │
 │   - Note: Opt-in, debounced async indexing                  │
 └─────────────────────────────────────────────────────────────┘

@@ -6,7 +6,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Add project root to path
-sys.path.insert(0, '/root/.openclaw/workspace/opsclaw')
+sys.path.insert(0, '/root/.opsclaw/workspace/opsclaw')
 
 from cron.mention_poller import (
     MentionPoller,

@@ -132,9 +132,9 @@ class TestMemorySystemIntegration:
     """Integration tests for memory system."""
     
     def test_default_workspace(self):
-        """Test that default workspace is ~/.openclaw/workspace."""
+        """Test that default workspace is ~/.opsclaw/workspace."""
         memory = MemorySystem()
-        expected = Path.home() / ".openclaw" / "workspace"
+        expected = Path.home() / ".opsclaw" / "workspace"
         assert memory.workspace == expected
     
     def test_workspace_not_exists(self):

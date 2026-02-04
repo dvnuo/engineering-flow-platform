@@ -83,7 +83,7 @@ services:
       
       # Workspace directory for memory files - persists across restarts
       # Contains: SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, memory/
-      - ./workspace:/root/.openclaw/workspace
+      - ./workspace:/root/.opsclaw/workspace
       
       # Optional: logs directory
       - ./logs:/app/logs
@@ -105,7 +105,7 @@ docker-compose up -d
 
 **Important: Workspace Volume**
 
-Without the `./workspace:/root/.openclaw/workspace` volume mount:
+Without the `./workspace:/root/.opsclaw/workspace` volume mount:
 - Memory files (SOUL.md, USER.md, MEMORY.md, etc.) will be lost on restart
 - Conversation context and learned preferences won't persist
 
@@ -602,10 +602,10 @@ CodeW loads context from workspace MD files, similar to OpenClaw's memory system
 
 ### Memory Files Location
 
-By default, memory files are loaded from `~/.openclaw/workspace/`:
+By default, memory files are loaded from `~/.opsclaw/workspace/`:
 
 ```bash
-~/.openclaw/workspace/
+~/.opsclaw/workspace/
 ├── SOUL.md        # Agent identity
 ├── USER.md        # User info
 ├── AGENTS.md      # Workspace rules

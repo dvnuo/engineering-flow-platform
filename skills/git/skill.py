@@ -28,7 +28,7 @@ async def _run_git_command(args: list, cwd: str = None) -> str:
             "git", *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=cwd or "/root/.openclaw/workspace/opsclaw"
+            cwd=cwd or "/root/.opsclaw/workspace/opsclaw"
         )
         stdout, _ = await result.communicate()
         return stdout.decode("utf-8").strip()
