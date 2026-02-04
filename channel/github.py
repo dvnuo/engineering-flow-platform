@@ -26,12 +26,21 @@ MAX_BACKOFF = 60.0  # seconds
 
 
 class GitHubChannel:
-    """GitHub channel adapter with basic REST API support."""
+    """GitHub channel adapter with basic REST API support.
+    
+    Supports URL for GitHub configurable base Enterprise instances.
+    Configuration:
+        github.api_token: API token for authentication
+        github.enabled: Whether GitHub integration is enabled
+        github.base_url: Base URL for API (default: https://api.github.com)
+        github.hostname: Hostname for gh CLI (defaults to base_url hostname)
+    """
     
     def __init__(self):
-        self.base_url = "https://api.github.com"
+        self.base_url = config.get("github.base_url", "https://api.github.com")
         self.token = config.get("github.api_token", "")
         self.enabled = config.get("github.enabled", False)
+        self.hostname = config.get("github.hostname", "")
         
         self.client = httpx.AsyncClient(timeout=30.0)
         self._headers = {
