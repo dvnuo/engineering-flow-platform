@@ -371,6 +371,118 @@ class ImageTool(Tool):
         )
 
 
+class GitTool(Tool):
+    """Execute git commands."""
+
+    name = "git"
+    description = "Execute git commands (clone, status, commit, push, pull, branch, log, etc.)"
+    parameters = {
+        "command": {
+            "type": "string",
+            "description": "Git command to execute (e.g., 'clone', 'status', 'commit', 'push', 'pull', 'branch', 'log', 'checkout')",
+        },
+        "args": {
+            "type": "string",
+            "description": "Additional arguments for the command (space-separated)",
+        },
+        "timeout": {
+            "type": "integer",
+            "description": "Timeout in seconds (default: 30)",
+            "default": 30,
+        },
+    }
+
+    async def execute(self, command: str, args: str = "", timeout: int = 30) -> ToolResult:
+        """Execute a git command."""
+        full_command = f"git {command}"
+        if args:
+            full_command += f" {args}"
+        
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                full_command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+
+            output = stdout.decode()
+            error = stderr.decode()
+
+            if proc.returncode != 0:
+                return ToolResult(
+                    success=False,
+                    content=output,
+                    error=error or f"git {command} failed with exit code {proc.returncode}",
+                )
+
+            return ToolResult(success=True, content=output or "(no output)")
+
+        except asyncio.TimeoutError:
+            return ToolResult(success=False, error="git command timed out")
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+
+class GhTool(Tool):
+    """Execute gh CLI commands."""
+
+    name = "gh"
+    description = "Execute GitHub CLI commands (repo clone, issue list, pr checks, run list, api, etc.)"
+    parameters = {
+        "command": {
+            "type": "string",
+            "description": "gh command to execute (e.g., 'repo clone', 'issue list', 'pr checks', 'run list', 'api')",
+        },
+        "args": {
+            "type": "string",
+            "description": "Additional arguments for the command (space-separated)",
+        },
+        "timeout": {
+            "type": "integer",
+            "description": "Timeout in seconds (default: 30)",
+            "default": 30,
+        },
+    }
+
+    async def execute(self, command: str, args: str = "", timeout: int = 30) -> ToolResult:
+        """Execute a gh command."""
+        full_command = f"gh {command}"
+        if args:
+            full_command += f" {args}"
+        
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                full_command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+
+            output = stdout.decode()
+            error = stderr.decode()
+
+            if proc.returncode != 0:
+                return ToolResult(
+                    success=False,
+                    content=output,
+                    error=error or f"gh {command} failed with exit code {proc.returncode}",
+                )
+
+            return ToolResult(success=True, content=output or "(no output)")
+
+        except asyncio.TimeoutError:
+            return ToolResult(success=False, error="gh command timed out")
+        except FileNotFoundError:
+            return ToolResult(success=False, error="gh CLI not found. Install with: brew install gh (macOS) or apt install gh (Linux)")
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+
 # Registry of all available tools
 TOOLS = {
     "exec": ExecTool(),
@@ -380,6 +492,8 @@ TOOLS = {
     "web_search": WebSearchTool(),
     "web_fetch": WebFetchTool(),
     "image": ImageTool(),
+    "git": GitTool(),
+    "gh": GhTool(),
 }
 
 
