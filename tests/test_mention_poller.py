@@ -3,10 +3,11 @@
 import pytest
 import sys
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# Add project root to path
-sys.path.insert(0, '/root/.openclaw/workspace/codew')
+# Add project root to path (relative to this test file)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from cron.mention_poller import (
     MentionPoller,

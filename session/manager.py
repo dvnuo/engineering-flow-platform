@@ -140,7 +140,7 @@ class SessionManager:
     def _run_compaction(self):
         """Run compaction - extract important info and write to memory."""
         try:
-            workspace_path = Path.home() / ".openclaw" / "workspace"
+            workspace_path = Path.home() / ".opsclaw" / "workspace"
             memory_file = workspace_path / "MEMORY.md"
             
             # Collect important information from all sessions

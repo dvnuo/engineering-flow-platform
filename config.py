@@ -9,15 +9,35 @@ import yaml
 
 
 class Config:
-    """Configuration management."""
+    """Configuration management.
+    
+    Searches for config.yaml in the following order:
+    1. Project directory (same directory as this file)
+    2. ~/.opsclaw/config.yaml
+    """
+    
+    DEFAULT_PATHS = [
+        Path(__file__).parent / "config.yaml",  # Project directory
+        Path.home() / ".opsclaw" / "config.yaml",  # User config directory
+    ]
 
     def __init__(self, config_path: Optional[str] = None):
         if config_path is None:
-            config_path = Path(__file__).parent / "config.yaml"
-        self.config_path = Path(config_path)
+            # Find first existing config file
+            self.config_path = self._find_config()
+        else:
+            self.config_path = Path(config_path)
         self._config: Dict[str, Any] = {}
         self._last_modified: float = 0
         self.load()
+
+    def _find_config(self) -> Path:
+        """Find the first existing config file from default paths."""
+        for path in self.DEFAULT_PATHS:
+            if path.exists():
+                return path
+        # Return the primary path even if it doesn't exist
+        return self.DEFAULT_PATHS[0]
 
     def load(self) -> None:
         """Load configuration from YAML file."""
@@ -27,6 +47,11 @@ class Config:
             self._last_modified = self.config_path.stat().st_mtime
         else:
             self._config = {}
+    
+    @property
+    def config_source(self) -> str:
+        """Return the path to the loaded config file."""
+        return str(self.config_path)
 
     def reload(self) -> bool:
         """Reload configuration from file."""

@@ -16,9 +16,13 @@ Usage:
 """
 
 import asyncio
+from pathlib import Path
 from typing import Optional
 
 from skills.executor import SkillResult
+
+# Default workspace path using home directory
+DEFAULT_WORKSPACE = Path.home() / ".opsclaw" / "workspace"
 
 
 async def _run_git_command(args: list, cwd: str = None) -> str:
@@ -28,7 +32,7 @@ async def _run_git_command(args: list, cwd: str = None) -> str:
             "git", *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=cwd or "/root/.openclaw/workspace/codew"
+            cwd=cwd or str(DEFAULT_WORKSPACE / "opsclaw")
         )
         stdout, _ = await result.communicate()
         return stdout.decode("utf-8").strip()
