@@ -82,20 +82,39 @@ async def _setup_ssh_key() -> bool:
 
 
 async def _setup_known_hosts(ssh_dir: Path) -> None:
-    """Add common Git hosts to known_hosts for automatic trust."""
+    """Add Git host to known_hosts for automatic trust.
+    
+    Uses github.base_url from config to determine the host.
+    """
     known_hosts_file = ssh_dir / "known_hosts"
     
-    # GitHub hosts to trust
-    github_hosts = [
-        "github.com",
-        "ssh.github.com:443"
-    ]
+    # Get GitHub base URL from config
+    github_config = config.get("github", {})
+    base_url = github_config.get("base_url", "https://api.github.com")
+    
+    # Extract hostname from URL
+    from urllib.parse import urlparse
+    parsed = urlparse(base_url)
+    github_host = parsed.netloc if parsed.netloc else "github.com"
+    
+    # Remove port if present
+    if ":" in github_host:
+        github_host = github_host.split(":")[0]
+    
+    logger.info(f"Setting up known_hosts for {github_host}")
     
     try:
-        # Fetch GitHub's SSH host keys
+        # Fetch and add GitHub host keys
         import subprocess
-        for host in github_hosts:
+        hosts_to_scan = [github_host]
+        
+        # Also add github.com for API access if using Enterprise
+        if "api.github.com" in base_url:
+            hosts_to_scan.append("github.com")
+        
+        for host in hosts_to_scan:
             try:
+                # Try to add existing host key
                 result = subprocess.run(
                     ["ssh-keygen", "-H", "-f", str(known_hosts_file), "-H", host],
                     capture_output=True,
@@ -104,7 +123,7 @@ async def _setup_known_hosts(ssh_dir: Path) -> None:
                 if result.returncode == 0:
                     logger.info(f"Added {host} to known_hosts")
                 elif "no matching" not in result.stderr:
-                    # Host key not found, add it via keyscan
+                    # Host key not found, scan it
                     subprocess.run(
                         ["ssh-keyscan", "-H", "-t", "rsa,ecdsa,ed25519", host],
                         stdout=open(str(known_hosts_file), "a"),
