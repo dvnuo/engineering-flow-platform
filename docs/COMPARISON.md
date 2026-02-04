@@ -41,7 +41,6 @@ OpenClaw 有 **54 个 skills**，CodeW 只有 **2 个**：
 ```
 高优先级 Skills:
 ├── 📝 summarize - 消息摘要
-├── 🌤️ weather - 天气查询 (无 API key)
 ├── 🔍 web_search - 网页搜索 (已有)
 ├── 📄 web_fetch - 网页抓取 (已有)
 ├── 📷 image - 图片分析

@@ -32,14 +32,11 @@
 | Feature | OpenClaw | CodeW | Status |
 |---------|----------|-------|--------|
 | Discord | ✅ | ✅ Bot API | Complete |
-| WhatsApp | ✅ Baileys | ❌ | TODO |
-| Telegram | ✅ grammY | ❌ | TODO |
 | Slack | ✅ Bolt | ❌ | TODO |
-| Google Chat | ✅ | ❌ | TODO |
+| WhatsApp | ✅ Baileys | ❌ | TODO |
 | Signal | ✅ signal-cli | ❌ | TODO |
 | iMessage | ✅ imsg | ❌ | TODO |
-| Microsoft Teams | ✅ | ❌ | TODO |
-| Jira | ✅ | ⚠️ Webhook only | Partial |
+| Jira | ✅ | ✅ REST API v2/v3 | Complete |
 | WebChat | ✅ | ✅ HTTP + Static Files | Complete |
 
 ### Tools & Automation
@@ -126,7 +123,7 @@
 | Total Lines | 5000+ |
 | Tests | 76+ |
 | PRs Merged | 6+ |
-| Channels | 2 (+5 planned) |
+| Channels | 2 (+4 planned) |
 | Skills | 2 (+10 planned) |
 
 ---
@@ -145,29 +142,43 @@
 - [x] Session Pruning
 - [x] Execution Queue
 
-### Phase 2: Channel Expansion (Next - Updated 2026-02-02)
-Based on comparison with OpenClaw, priority channels:
+### Phase 2: Channel Expansion (Next - Updated 2026-02-03)
+Based on comparison with OpenClaw and enterprise needs:
 
 | Priority | Channel | Library | Status |
 |----------|---------|---------|--------|
-| P0 | **Telegram** | python-telegram-bot | TODO |
 | P0 | **Slack** | slack-sdk | TODO |
+| P0 | **WebSocket** | Native aiohttp | TODO |
 | P1 | **WhatsApp** | pyrogram/baileys | TODO |
-| P1 | **WebSocket** | Native aiohttp | TODO |
 | P2 | **Signal** | signal-cli | TODO |
 | P2 | **iMessage** | py-imessage | TODO |
 
-- [ ] Add Telegram channel (P0 - most requested)
-- [ ] Add Slack channel (P0 - work场景)
-- [ ] Add WebSocket support for real-time (P1)
-- [ ] Improve Jira integration (bi-directional) (P1)
+- [ ] Add Slack channel (P0 - work场景, 企业内部)
+- [ ] Add WebSocket support for real-time (P0)
+- [ ] Add WhatsApp channel (P1)
+- [ ] Add Signal channel (P2)
+- [ ] Add iMessage channel (P2)
 
-### Phase 3: Tool Enhancement (Updated 2026-02-02)
-Based on comparison with OpenClaw:
+### Jira Tools (Updated 2026-02-04)
+
+Full Jira REST API v2/v3 support with 8 tools:
+
+| Tool | Description |
+|------|-------------|
+| `jira_get_issue` | Get issue details |
+| `jira_search` | Search with JQL |
+| `jira_create_issue` | Create new issue |
+| `jira_edit_issue` | **NEW** - Edit existing issue |
+| `jira_transition` | Change status |
+| `jira_get_transitions` | List available transitions |
+| `jira_add_comment` | Add comment |
+| `jira_get_comments` | Get comments |
+
+### Phase 3: Tool Enhancement (Updated 2026-02-03)
+Based on comparison with OpenClaw and enterprise needs:
 
 | Priority | Tool | Status |
 |----------|------|--------|
-| P0 | **Weather** (skill) | TODO |
 | P0 | **Summarize** (skill) | TODO |
 | P1 | **browser** (CDP) | TODO |
 | P1 | **cron** (scheduling) | TODO |
@@ -177,15 +188,14 @@ Based on comparison with OpenClaw:
 | P2 | **TTS** (ElevenLabs) | TODO |
 | P2 | **Ollama** (local LLM) | TODO |
 
-- [ ] Implement weather skill (no API key required)
-- [ ] Implement summarize skill
+- [ ] Implement summarize skill (高实用性)
 - [ ] Implement browser control (CDP)
 - [ ] Add cron support for scheduled tasks
 - [ ] Add hooks system for extensibility
 - [ ] Add Claude provider support
-- [ ] Implement canvas/A2UI (low priority)
-- [ ] Add TTS support (low priority)
-- [ ] Add Ollama local LLM support (low priority)
+- [ ] Implement canvas/A2UI (低优先级)
+- [ ] Add TTS support (低优先级)
+- [ ] Add Ollama local LLM support (低优先级)
 
 ### Phase 4: Security & Polish
 - [ ] DM pairing mode
@@ -205,9 +215,9 @@ Based on comparison with OpenClaw:
 ## Gap Analysis - What Still Needs Implementation
 
 ### High Priority (Channels)
-1. **WhatsApp** - Baileys library needed
-2. **Telegram** - grammY library needed
-3. **WebChat WebSocket** - Real-time updates
+1. **Slack** - Work场景, 企业内部
+2. **WebSocket** - Real-time updates
+3. **WhatsApp** - Baileys library needed
 
 ### Medium Priority (Tools)
 1. **browser** - CDP control
@@ -299,11 +309,9 @@ codew/
 
 ### Recommended Next Steps
 
-1. **Telegram Channel** - Most requested, mature Python library
-2. **Slack Channel** - Work场景, high demand
-3. **Weather Skill** - No API key, quick win
-4. **Summarize Skill** - High utility, easy to implement
-5. **Complete Persistence** - SQLite + disk storage
+1. **Slack Channel** - Work场景, 企业内部
+2. **Summarize Skill** - 高实用性, 快速实现
+3. **Complete Persistence** - SQLite + disk storage
 
 See [docs/COMPARISON.md](docs/COMPARISON.md) for detailed analysis.
 
@@ -436,13 +444,13 @@ Based on OpenClaw's memory system design, implement SQLite + vector search for d
 
 ### Quick Win Options
 
-1. **SQLite only (no vectors)**: Store memory chunks in SQLite, skip vector search
+1. **Summarize Skill**: 高实用性, 企业内部场景
+   - Time: 1-2 days
+   - Benefit: 快速总结文档、对话、代码
+
+2. **SQLite only (no vectors)**: Store memory chunks in SQLite, skip vector search
    - Time: 2-3 days
    - Benefit: Fast lookups, structured storage
-
-2. **Sentence-Transformers local**: Free embeddings, no API key needed
-   - Time: 1-2 days
-   - Model: `all-MiniLM-L6-v2` (~90MB, CPU-friendly)
 
 3. **BM25 only**: Keyword search without vectors
    - Time: 1 day
