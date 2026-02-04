@@ -20,6 +20,7 @@ import asyncio
 import logging
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -36,6 +37,7 @@ async def _setup_ssh_key() -> bool:
     """Setup SSH key from config.
     
     Copies configured private key to ~/.ssh/ and sets proper permissions.
+    Also handles known_hosts for automatic host verification.
     Called automatically on initialization if ssh.enabled is true.
     """
     ssh_config = config.get("ssh", {})
@@ -73,7 +75,52 @@ async def _setup_ssh_key() -> bool:
         logger.error(f"Failed to set SSH key permissions: {e}")
         return False
     
+    # Setup known_hosts for automatic host verification
+    await _setup_known_hosts(ssh_dir)
+    
     return True
+
+
+async def _setup_known_hosts(ssh_dir: Path) -> None:
+    """Add common Git hosts to known_hosts for automatic trust."""
+    known_hosts_file = ssh_dir / "known_hosts"
+    
+    # GitHub hosts to trust
+    github_hosts = [
+        "github.com",
+        "ssh.github.com:443"
+    ]
+    
+    try:
+        # Fetch GitHub's SSH host keys
+        import subprocess
+        for host in github_hosts:
+            try:
+                result = subprocess.run(
+                    ["ssh-keygen", "-H", "-f", str(known_hosts_file), "-H", host],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    logger.info(f"Added {host} to known_hosts")
+                elif "no matching" not in result.stderr:
+                    # Host key not found, add it via keyscan
+                    subprocess.run(
+                        ["ssh-keyscan", "-H", "-t", "rsa,ecdsa,ed25519", host],
+                        stdout=open(str(known_hosts_file), "a"),
+                        stderr=subprocess.DEVNULL,
+                        check=False
+                    )
+                    logger.info(f"Scanned and added {host} to known_hosts")
+            except Exception as e:
+                logger.debug(f"Could not add {host} to known_hosts: {e}")
+        
+        # Set permissions on known_hosts
+        os.chmod(str(known_hosts_file), 0o644)
+        logger.info("Known hosts file configured")
+        
+    except Exception as e:
+        logger.warning(f"Failed to setup known_hosts: {e}")
 
 
 async def _run_git_command(args: list, cwd: str = None) -> str:
