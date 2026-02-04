@@ -163,3 +163,20 @@ ssh:
 # ssh:
 #   enabled: true
 #   private_key_path: "/run/secrets/github_ssh_key"
+
+# ============================================
+# Git Configuration (OPTIONAL)
+# ============================================
+# Configure git user for commits
+# These will be set via `git config --global` at startup
+
+git:
+  user:
+    name: ""  # Git user name (e.g., "OpsClaw Bot")
+    email: ""  # Git user email (e.g., "bot@example.com")
+
+# Example usage:
+# git:
+#   user:
+#     name: "OpsClaw Bot"
+#     email: "bot@company.com"

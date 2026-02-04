@@ -22,6 +22,7 @@ from session.persistence import session_store
 from session.manager import session_manager
 from session.usage import usage_tracker
 from cron.mention_poller import start_polling, stop_polling, is_enabled
+from skills.git.skill import setup_ssh_key, setup_git_user
 
 
 def setup_logging(level: int = None) -> None:
@@ -96,6 +97,26 @@ async def main() -> None:
         logger.info("Session manager initialized")
     except Exception as e:
         logger.warning(f"Failed to initialize session/usage tracking: {e}")
+
+    # Setup SSH key for git operations (from config)
+    try:
+        ssh_key_configured = await setup_ssh_key()
+        if ssh_key_configured:
+            logger.info("SSH key configured successfully")
+        else:
+            logger.debug("SSH key not configured (ssh.enabled=false or no key path)")
+    except Exception as e:
+        logger.warning(f"Failed to setup SSH key: {e}")
+
+    # Setup git user configuration (from config)
+    try:
+        git_user_configured = await setup_git_user()
+        if git_user_configured:
+            logger.info("Git user configured successfully")
+        else:
+            logger.debug("Git user not configured (git.user.name/email not set)")
+    except Exception as e:
+        logger.warning(f"Failed to setup git user: {e}")
 
     try:
         await gateway.start()
