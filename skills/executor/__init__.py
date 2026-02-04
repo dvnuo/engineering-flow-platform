@@ -248,6 +248,15 @@ class SkillsExecutor:
             "check git", "show git", "run git", "git add"
         ]):
             return "git"
+        
+        # GitHub skill (for gh CLI interactions)
+        if any(phrase in request_lower for phrase in [
+            "github clone", "gh clone", "clone repo", "clone repository",
+            "github issue", "gh issue", "list issues", "list prs",
+            "github pr", "gh pr", "pr checks", "workflow run",
+            "github run", "gh run", "github api", "gh api"
+        ]):
+            return "github"
 
         return None
 
