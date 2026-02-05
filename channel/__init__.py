@@ -2,7 +2,7 @@
 
 from .discord import discord_channel, DiscordChannel
 from .jira import (
-    jira_channel, 
+    jira_channel,
     JiraChannel,
     jira_get_issue,
     jira_search,
@@ -10,13 +10,13 @@ from .jira import (
     jira_create_issue,
     jira_transition,
     jira_get_transitions,
-    jira_get_comments,  # New: Get comments tool
+    jira_get_comments,
 )
 
 __all__ = [
-    "discord_channel", 
-    "DiscordChannel", 
-    "jira_channel", 
+    "discord_channel",
+    "DiscordChannel",
+    "jira_channel",
     "JiraChannel",
     "jira_get_issue",
     "jira_search",
