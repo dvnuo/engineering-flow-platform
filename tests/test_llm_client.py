@@ -159,6 +159,8 @@ class TestLLMClientRetry:
     @pytest.mark.asyncio
     async def test_chat_max_retries_exceeded(self, llm_client):
         """Test chat fails after max retries."""
+        llm_client.max_retries = 3  # Default is 3 attempts
+        
         call_count = 0
         
         async def mock_post(*args, **kwargs):
@@ -176,8 +178,8 @@ class TestLLMClientRetry:
             with pytest.raises(httpx.RequestError):
                 await llm_client.chat([{"role": "user", "content": "test"}])
             
-            # max_retries = 2 means 2 total attempts (not 2 retries)
-            assert call_count == 2
+            # max_retries = 3 means 3 total attempts (1 initial + 2 retries)
+            assert call_count == 3
 
 
 class TestLLMClientErrorHandling:
