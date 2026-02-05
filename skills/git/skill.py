@@ -199,7 +199,7 @@ async def _resolve_env_var(value: str) -> str:
 
 
 async def setup_gh_config() -> bool:
-    """Configure GitHub CLI (gh) from config.
+    """Configure GitHub CLI (gh) from github config.
     
     Sets up ~/.config/gh/hosts.yml for GitHub authentication.
     Supports both github.com (cloud) and enterprise instances.
@@ -208,9 +208,9 @@ async def setup_gh_config() -> bool:
     Returns:
         True if gh was configured successfully
     """
-    gh_config = config.get("gh", {})
-    if not gh_config.get("enabled", False):
-        logger.debug("GH config not enabled (gh.enabled=false)")
+    github_config = config.get("github", {})
+    if not github_config.get("enabled", False):
+        logger.debug("GitHub config not enabled (github.enabled=false)")
         return False
     
     # Get current hostname
@@ -221,17 +221,16 @@ async def setup_gh_config() -> bool:
     hosts_config = {}
     
     # Process cloud (github.com) configuration
-    cloud_config = gh_config.get("cloud", {})
-    cloud_token = await _resolve_env_var(cloud_config.get("token", ""))
+    cloud_token = await _resolve_env_var(github_config.get("api_token", ""))
     if cloud_token:
         hosts_config["github.com"] = {
             "oauth_token": cloud_token,
             "user": "",  # Will be populated by gh auth login
         }
-        logger.info("GH cloud (github.com) token configured")
+        logger.info("GitHub cloud (github.com) token configured")
     
     # Process enterprise configuration
-    enterprise_config = gh_config.get("enterprise", {})
+    enterprise_config = github_config.get("enterprise", {})
     if enterprise_config.get("enabled", False):
         enterprise_hosts = enterprise_config.get("hosts", [])
         for host_entry in enterprise_hosts:
@@ -260,7 +259,7 @@ async def setup_gh_config() -> bool:
                         "api_url": resolved_api_url,
                         "git_protocol": "ssh",
                     }
-                    logger.info(f"GH enterprise config matched for hostname: {current_hostname}")
+                    logger.info(f"GitHub enterprise config matched for hostname: {current_hostname}")
     
     if not hosts_config:
         logger.debug("No gh tokens configured")

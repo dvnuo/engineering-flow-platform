@@ -118,13 +118,13 @@ async def main() -> None:
     except Exception as e:
         logger.warning(f"Failed to setup git user: {e}")
 
-    # Setup GitHub CLI (gh) configuration (from config)
+    # Setup GitHub CLI (gh) configuration (from github config)
     try:
         gh_configured = await setup_gh_config()
         if gh_configured:
             logger.info("GitHub CLI (gh) configured successfully")
         else:
-            logger.debug("GitHub CLI not configured (gh.enabled=false or no tokens)")
+            logger.debug("GitHub CLI not configured (github.enabled=false or no tokens)")
     except Exception as e:
         logger.warning(f"Failed to setup GitHub CLI: {e}")
 
