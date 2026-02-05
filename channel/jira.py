@@ -71,6 +71,14 @@ class JiraChannel(_JiraChannel):
         # Add auth header
         headers.update(self._auth_header)
         return headers
+    
+    def is_test_case_command(self, text: str) -> bool:
+        """Check if text is a test case generation command (backward compatibility)."""
+        english_keywords = ['test case', 'test cases', 'generate test', 'create test']
+        chinese_keywords = ['测试用例', '创建测试', '生成测试']
+        
+        text_lower = text.lower()
+        return any(kw in text_lower for kw in english_keywords) or any(kw in text for kw in chinese_keywords)
 
 # Global instance for backward compatibility
 jira_channel = JiraChannel()

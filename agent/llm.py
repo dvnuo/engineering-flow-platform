@@ -468,6 +468,9 @@ class OllamaProvider(BaseProvider):
 class LLMClient:
     """Unified LLM client supporting multiple providers."""
     
+    # Backward compatibility constants
+    COPILOT_API_BASE = "https://api.github.com/copilot"
+    
     def __init__(self):
         self.providers: Dict[str, BaseProvider] = {}
         self.default_provider = None
@@ -491,6 +494,19 @@ class LLMClient:
         self.providers['ollama'] = OllamaProvider()
         
         logger.info(f"LLMClient initialized with providers: {list(self.providers.keys())}")
+    
+    # Backward compatibility methods
+    def _get_headers(self) -> Dict[str, str]:
+        """Get headers for API requests (backward compatibility)."""
+        return self.providers.get('github_copilot', GitHubCopilotProvider())._get_headers()
+    
+    def _get_chat_endpoint(self) -> str:
+        """Get the chat API endpoint (backward compatibility)."""
+        return self.COPILOT_API_BASE + "/chat"
+    
+    def is_github_copilot(self) -> bool:
+        """Check if GitHub Copilot is configured as provider."""
+        return 'github_copilot' in self.providers
     
     async def chat(
         self,
