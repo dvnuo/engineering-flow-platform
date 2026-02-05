@@ -519,20 +519,33 @@ def _load_function_tools():
             confluence_add_comment,
             confluence_list_spaces,
         )
+        from tools.subagent import (
+            sessions_list,
+            sessions_history,
+            sessions_send,
+            sessions_spawn,
+        )
         FUNCTION_TOOLS = {
+            # Jira tools
             "jira_get_issue": jira_get_issue,
             "jira_search": jira_search,
             "jira_add_comment": jira_add_comment,
             "jira_create_issue": jira_create_issue,
             "jira_transition": jira_transition,
             "jira_get_transitions": jira_get_transitions,
-            "jira_get_comments": jira_get_comments,  # New: Get comments tool
+            "jira_get_comments": jira_get_comments,
+            # Confluence tools
             "confluence_get_page": confluence_get_page,
             "confluence_search": confluence_search,
             "confluence_create_page": confluence_create_page,
             "confluence_update_page": confluence_update_page,
             "confluence_add_comment": confluence_add_comment,
             "confluence_list_spaces": confluence_list_spaces,
+            # Sub-agent session tools
+            "sessions_list": sessions_list,
+            "sessions_history": sessions_history,
+            "sessions_send": sessions_send,
+            "sessions_spawn": sessions_spawn,
         }
 
 
@@ -551,8 +564,9 @@ def get_tools_schema() -> list:
     """Get all tool schemas for LLM."""
     _load_function_tools()
     from tools.integration import INTEGRATION_TOOLS
+    from tools.subagent_schemas import SUBAGENT_TOOLS
     class_schemas = [tool.get_schema() for tool in TOOLS.values()]
-    return class_schemas + INTEGRATION_TOOLS
+    return class_schemas + INTEGRATION_TOOLS + SUBAGENT_TOOLS
 
 
 async def execute_tool(name: str, **kwargs) -> ToolResult:
