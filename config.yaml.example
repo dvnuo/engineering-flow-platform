@@ -109,6 +109,9 @@ confluence:
 github:
   enabled: false  # Set to true to enable GitHub integration
   api_token: "${GITHUB_TOKEN}"  # GitHub Personal Access Token
+  # Enterprise GitHub instance hostname (e.g., "github.company.com")
+  # Used by gh (GitHub CLI) config - leave empty for github.com
+  base_url: ""
 
 # ============================================
 # Mention Polling Configuration (OPTIONAL)
@@ -173,7 +176,7 @@ ssh:
 git:
   user:
     name: ""  # Git user name (e.g., "OpsClaw Bot")
-    email: ""  # Git user email (e.g., "bot@example.com")
+    email: ""  # Git user email (e.g., "bot@company.com")
 
 # Example usage:
 # git:
