@@ -72,10 +72,9 @@ class TestSessionsList:
     def test_sessions_list_empty(self):
         """Test sessions_list with no sessions."""
         from tools.subagent import sessions_list
-        from session.manager import session_manager
         
-        # Mock session_manager
-        with patch('tools.subagent.session_manager') as mock_sm:
+        # Mock session_manager - patch where it's imported from, not where it's used
+        with patch('session.manager.session_manager') as mock_sm:
             mock_sm.get_session_info.return_value = None
             
             result = sessions_list()
@@ -87,9 +86,8 @@ class TestSessionsList:
     def test_sessions_list_with_limit(self):
         """Test sessions_list with limit parameter."""
         from tools.subagent import sessions_list
-        from session.manager import session_manager
         
-        with patch('tools.subagent.session_manager') as mock_sm:
+        with patch('session.manager.session_manager') as mock_sm:
             mock_sm.get_session_info.return_value = {
                 "updated_at": datetime.now().isoformat()
             }
@@ -106,9 +104,8 @@ class TestSessionsHistory:
     def test_sessions_history_empty(self):
         """Test sessions_history with non-existent session."""
         from tools.subagent import sessions_history
-        from session.manager import session_manager
         
-        with patch('tools.subagent.session_manager') as mock_sm:
+        with patch('session.manager.session_manager') as mock_sm:
             mock_sm.get_history.return_value = []
             
             result = sessions_history("non-existent")
