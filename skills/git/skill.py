@@ -22,12 +22,8 @@ import shlex
 import logging
 import os
 import shutil
-import socket
-import fnmatch
-import yaml
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
 
 from skills.executor import SkillResult, skill
 from config import config
@@ -202,8 +198,7 @@ async def setup_gh_config() -> bool:
     """Configure GitHub CLI (gh) from github config.
     
     Sets up ~/.config/gh/hosts.yml for GitHub authentication.
-    Supports both github.com (cloud) and enterprise instances.
-    Configuration is selected based on current hostname.
+    Uses base_url to configure enterprise GitHub instances.
     
     Returns:
         True if gh was configured successfully
@@ -213,57 +208,36 @@ async def setup_gh_config() -> bool:
         logger.debug("GitHub config not enabled (github.enabled=false)")
         return False
     
-    # Get current hostname
-    current_hostname = socket.gethostname()
-    logger.debug(f"Current hostname: {current_hostname}")
+    # Get token
+    token = await _resolve_env_var(github_config.get("api_token", ""))
+    if not token:
+        logger.debug("No GitHub token configured")
+        return False
+    
+    # Get base_url (hostname for gh config)
+    base_url = await _resolve_env_var(github_config.get("base_url", ""))
     
     # Build hosts configuration
     hosts_config = {}
     
-    # Process cloud (github.com) configuration
-    cloud_token = await _resolve_env_var(github_config.get("api_token", ""))
-    if cloud_token:
+    if base_url:
+        # Enterprise GitHub - use base_url as hostname
+        # Remove https:// prefix if present
+        gh_hostname = base_url.replace("https://", "").replace("http://", "")
+        hosts_config[gh_hostname] = {
+            "oauth_token": token,
+            "user": "",
+            "api_url": f"https://{gh_hostname}",
+            "git_protocol": "ssh",
+        }
+        logger.info(f"GitHub enterprise config: {gh_hostname}")
+    else:
+        # Default to github.com
         hosts_config["github.com"] = {
-            "oauth_token": cloud_token,
-            "user": "",  # Will be populated by gh auth login
+            "oauth_token": token,
+            "user": "",
         }
         logger.info("GitHub cloud (github.com) token configured")
-    
-    # Process enterprise configuration
-    enterprise_config = github_config.get("enterprise", {})
-    if enterprise_config.get("enabled", False):
-        enterprise_hosts = enterprise_config.get("hosts", [])
-        for host_entry in enterprise_hosts:
-            hostname_pattern = host_entry.get("hostname", "")
-            if _match_hostname(hostname_pattern, current_hostname):
-                api_url = await _resolve_env_var(host_entry.get("api_url", ""))
-                token = await _resolve_env_var(host_entry.get("token", ""))
-                
-                if token:
-                    # Parse hostname for gh config
-                    if "{hostname}" in api_url:
-                        # Handle dynamic hostname substitution
-                        actual_hostname = current_hostname
-                        resolved_api_url = api_url.replace("{hostname}", actual_hostname)
-                    else:
-                        resolved_api_url = api_url
-                    
-                    # Extract hostname from API URL for gh config
-                    from urllib.parse import urlparse
-                    parsed = urlparse(resolved_api_url)
-                    gh_hostname = parsed.netloc.split(":")[0]  # Remove port if present
-                    
-                    hosts_config[gh_hostname] = {
-                        "oauth_token": token,
-                        "user": "",
-                        "api_url": resolved_api_url,
-                        "git_protocol": "ssh",
-                    }
-                    logger.info(f"GitHub enterprise config matched for hostname: {current_hostname}")
-    
-    if not hosts_config:
-        logger.debug("No gh tokens configured")
-        return False
     
     # Create gh config directory
     gh_config_dir = Path.home() / ".config" / "gh"

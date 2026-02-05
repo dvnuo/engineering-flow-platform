@@ -106,24 +106,12 @@ confluence:
 # ============================================
 # GitHub Configuration (OPTIONAL)
 # ============================================
-  github:
 github:
-  enabled: false
-  api_token: "${GITHUB_TOKEN}"
-
-
-  # Enterprise GitHub instances (per-hostname)
-  # When hostname matches, use this configuration
-  enterprise:
-    enabled: true
-    hosts:
-      - hostname: "github.company.com"
-        api_url: "https://github.company.com"
-        token: "${GH_ENTERPRISE_TOKEN}"
-
-      - hostname: "*.company.com"
-        api_url: "https://{hostname}"
-        token: "${GH_INTERNAL_TOKEN}"
+  enabled: false  # Set to true to enable GitHub integration
+  api_token: "${GITHUB_TOKEN}"  # GitHub Personal Access Token
+  # Enterprise GitHub instance URL (e.g., "github.company.com")
+  # This will be used as the hostname in gh config
+  base_url: ""
 
     enabled: false
     repos:  # Repositories to monitor
