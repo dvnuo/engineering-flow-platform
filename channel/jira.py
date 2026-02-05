@@ -4,7 +4,73 @@ Jira Channel - Backward compatible API.
 This module re-exports from src/integrations/jira/ for backward compatibility.
 """
 
-from src.integrations.jira import JiraChannel
+import logging
+from typing import Dict
+
+# Re-export config for backward compatibility (for tests that mock channel.jira.config)
+from config import config
+
+from src.integrations.jira.api import JiraChannel as _JiraChannel
+
+logger = logging.getLogger(__name__)
+
+# Valid API versions
+VALID_API_VERSIONS = ("2", "3")
+
+class JiraChannel(_JiraChannel):
+    """JiraChannel that uses config from this module for backward compatibility."""
+    
+    def __init__(self):
+        # Use config from this module (channel.jira.config) for backward compatibility
+        # This allows tests to mock channel.jira.config
+        # Don't call super().__init__() - we handle initialization ourselves
+        jira_cfg = getattr(config, 'jira', {}) or {}
+        
+        # Initialize attributes directly from config.jira
+        # Support both 'url' and 'base_url' for backward compatibility
+        self.base_url = jira_cfg.get('url', jira_cfg.get('base_url', '')).rstrip('/')
+        self.username = jira_cfg.get('username', jira_cfg.get('email', ''))
+        self.api_token = jira_cfg.get('api_token', '')
+        self.password = jira_cfg.get('password', '')
+        self.bearer_token = jira_cfg.get('bearer_token', '')
+        self.project = jira_cfg.get('project', jira_cfg.get('project_key', ''))
+        self.enabled = jira_cfg.get('enabled', False)
+        
+        # API version with validation
+        api_version = jira_cfg.get('api_version', '2')
+        if api_version not in VALID_API_VERSIONS:
+            api_version = '2'
+        self.api_version = api_version
+        
+        # Configurable timeout
+        self.timeout = float(jira_cfg.get('timeout', 30.0))
+        
+        # Create HTTP client
+        import httpx
+        self.client = httpx.AsyncClient(timeout=self.timeout)
+        
+        # Initialize auth
+        self._auth_header = self._get_auth_header()
+        self._auth_type = self._get_auth_type()
+        
+        # Add backward compatibility properties
+        self.email = self.username
+        self.project_key = self.project
+        
+        # Add headers property for backward compatibility
+        self.headers = self._get_headers()
+        
+        logger.info(f"JiraChannel initialized: version={self.api_version}, timeout={self.timeout}s, auth={self._auth_type}")
+    
+    def _get_headers(self) -> Dict[str, str]:
+        """Get headers for API requests (for backward compatibility)."""
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        # Add auth header
+        headers.update(self._auth_header)
+        return headers
 
 # Global instance for backward compatibility
 jira_channel = JiraChannel()
