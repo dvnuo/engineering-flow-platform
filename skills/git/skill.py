@@ -170,22 +170,6 @@ async def setup_git_user() -> bool:
         return False
 
 
-import socket
-import fnmatch
-import yaml
-
-
-def _match_hostname(hostname_pattern: str, actual_hostname: str) -> bool:
-    """Check if hostname matches a pattern (supports wildcards)."""
-    if hostname_pattern == actual_hostname:
-        return True
-    # Handle glob patterns like "*.company.com"
-    if hostname_pattern.startswith("*"):
-        pattern = hostname_pattern[1:]  # Remove leading *
-        return actual_hostname.endswith(pattern)
-    return False
-
-
 async def _resolve_env_var(value: str) -> str:
     """Resolve environment variable in config value (e.g., "${VAR_NAME}" -> value)."""
     if value.startswith("${") and value.endswith("}"):
