@@ -14,7 +14,6 @@ from skills.executor import (
     get_tools_schemas,
     execute_tool_by_name,
 )
-from tools.integration import INTEGRATION_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +23,10 @@ class Agent:
 
     def __init__(self, system_prompt: Optional[str] = None, session_id: str = "default"):
         # Build OpsClaw-style system prompt
+        # NOTE: get_tools_schema() already includes INTEGRATION_TOOLS (JIRA + Confluence + GitHub tools)
+        # So we don't need to add INTEGRATION_TOOLS again
         base_tools = get_tools_schemas()
-        # Combine base tools with integration tools (Jira, Confluence)
-        self.tools = base_tools + INTEGRATION_TOOLS
+        self.tools = base_tools  # Already contains all tools from TOOLS + INTEGRATION_TOOLS
         
         # ===== DEBUG =====
         from config import config
