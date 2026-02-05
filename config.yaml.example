@@ -109,10 +109,29 @@ confluence:
 github:
   enabled: false  # Set to true to enable GitHub integration
   api_token: "${GITHUB_TOKEN}"  # GitHub Personal Access Token
-  # Enterprise GitHub instance URL (e.g., "github.company.com")
-  # This will be used as the hostname in gh config
+  # Enterprise GitHub instance hostname (e.g., "github.company.com")
+  # Used by gh (GitHub CLI) config - leave empty for github.com
   base_url: ""
 
+# ============================================
+# Mention Polling Configuration (OPTIONAL)
+# ============================================
+# Monitor @mentions across platforms and process commands
+polling:
+  enabled: false  # Set to true to enable mention polling
+
+  # Polling interval in seconds (default: 30)
+  interval_seconds: 30
+
+  # Usernames to monitor (the configured account usernames)
+  # When someone @mentions these users, the bot will process commands
+  monitored_usernames:
+    - "your-github-username"
+    - "your-jira-username"
+    - "your-confluence-username"
+
+  # GitHub polling settings
+  github:
     enabled: false
     repos:  # Repositories to monitor
       - "owner/repo1"
@@ -157,60 +176,10 @@ ssh:
 git:
   user:
     name: ""  # Git user name (e.g., "OpsClaw Bot")
-    email: ""  # Git user email (e.g., "bot@example.com")
+    email: ""  # Git user email (e.g., "bot@company.com")
 
 # Example usage:
 # git:
 #   user:
 #     name: "OpsClaw Bot"
 #     email: "bot@company.com"
-
-# ============================================
-# GitHub CLI (gh) Configuration (OPTIONAL)
-# ============================================
-# Configure gh (GitHub CLI) for enterprise and cloud GitHub instances
-# The gh config will be initialized at startup based on hostname
-
-gh:
-  enabled: false  # Set to true to enable gh configuration
-  
-  # Default GitHub instance (github.com)
-  cloud:
-    host: "github.com"
-    token: "${GH_TOKEN}"  # Token from environment variable
-  
-  # Enterprise GitHub instances (per-hostname)
-  # When hostname matches, use this configuration
-  enterprise:
-    enabled: true  # Enable enterprise configuration based on hostname
-    
-    # Hostname mapping - when hostname matches, use this config
-    # Supports glob patterns like "*.company.com"
-    hosts:
-      - hostname: "github.company.com"
-        # GitHub Enterprise Server/Cloud instance
-        api_url: "https://github.company.com/api/v3"
-        # For GitHub Enterprise Cloud, use a token with appropriate scopes
-        token: "${GH_ENTERPRISE_TOKEN}"
-        # Optionally set the default owner/repo for gh commands
-        default_repo_owner: ""
-        default_repo: ""
-        
-      - hostname: "*.company.com"
-        # Catch-all for other internal GitHub instances
-        api_url: "https://{hostname}/api/v3"
-        token: "${GH_INTERNAL_TOKEN}"
-        default_repo_owner: ""
-        default_repo: ""
-
-# Example usage:
-# gh:
-#   enabled: true
-#   cloud:
-#     token: "${GITHUB_TOKEN}"  # GitHub Personal Access Token
-#   enterprise:
-#     enabled: true
-#     hosts:
-#       - hostname: "github.company.com"
-#         api_url: "https://github.company.com"
-#         token: "${GH_ENTERPRISE_TOKEN}"
