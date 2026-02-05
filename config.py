@@ -68,7 +68,13 @@ class Config:
         return False
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Get a configuration value by key (supports dot notation)."""
+        """Get a configuration value by key (supports dot notation).
+        
+        Automatically reloads config if file has been modified.
+        """
+        # Auto-reload if file has been modified
+        self.reload()
+        
         keys = key.split(".")
         value = self._config
         for k in keys:
