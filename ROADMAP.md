@@ -51,7 +51,7 @@
 | canvas | ✅ A2UI | ❌ | TODO |
 | nodes | ✅ Device control | ❌ | TODO |
 | cron | ✅ | ❌ | TODO |
-| sessions_* | ✅ Multi-agent | ❌ | TODO |
+| sessions_* | ✅ Multi-agent | ✅ Basic | Complete |
 | message | ✅ All channels | ⚠️ Discord only | Partial |
 
 ### Agent Capabilities
@@ -63,7 +63,7 @@
 | System Prompt | ✅ Dynamic | ✅ Template | Complete |
 | Memory/Context | ✅ Compaction | ✅ Pruning + Compactor | Complete |
 | Multi-turn | ✅ | ✅ | Complete |
-| Thinking Levels | ✅ | ❌ | TODO |
+| Thinking Levels | ✅ | ✅ | Complete |
 | Usage Tracking | ✅ | ✅ Token + Cost | Complete |
 
 ### Apps & Nodes
