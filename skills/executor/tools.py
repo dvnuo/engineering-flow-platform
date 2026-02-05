@@ -484,13 +484,12 @@ class GhTool(Tool):
 
 
 # Registry of all available tools
+# Note: web_search and web_fetch removed for focused toolset
 TOOLS = {
     "exec": ExecTool(),
     "read": ReadTool(),
     "write": WriteTool(),
     "edit": EditTool(),
-    "web_search": WebSearchTool(),
-    "web_fetch": WebFetchTool(),
     "image": ImageTool(),
     "git": GitTool(),
     "gh": GhTool(),
