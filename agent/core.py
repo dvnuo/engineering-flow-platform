@@ -2,11 +2,13 @@
 
 import json
 import logging
+import platform
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from agent.llm import llm_client
 from agent.memory import memory_system
+from agent.thinking import ThinkLevel, normalize_think_level, format_runtime_info
 from session.manager import session_manager
 from skills.executor import (
     skills_executor,
@@ -21,10 +23,19 @@ logger = logging.getLogger(__name__)
 class Agent:
     """Agent for processing messages with ReAct pattern (Reasoning + Acting)."""
 
-    def __init__(self, system_prompt: Optional[str] = None, session_id: str = "default"):
+    def __init__(
+        self, 
+        system_prompt: Optional[str] = None, 
+        session_id: str = "default",
+        think_level: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+    ):
+        # Resolve thinking level
+        self.think_level = normalize_think_level(think_level) or ThinkLevel.OFF
+        
         # Build OpsClaw-style system prompt
         # NOTE: get_tools_schema() already includes INTEGRATION_TOOLS (JIRA + Confluence + GitHub tools)
-        # So we don't need to add INTEGRATION_TOOLS again
         base_tools = get_tools_schemas()
         self.tools = base_tools  # Already contains all tools from TOOLS + INTEGRATION_TOOLS
         
@@ -35,12 +46,12 @@ class Agent:
             print(f"\n{'='*60}")
             print(f"DEBUG: Tools Initialization")
             print(f"  Base tools count: {len(base_tools)}")
-            print(f"  Integration tools count: {len(INTEGRATION_TOOLS)}")
             print(f"  Total tools: {len(self.tools)}")
             print(f"  Tool names: {[t['function']['name'] for t in self.tools]}")
+            print(f"  Thinking level: {self.think_level.value}")
             print(f"{'='*60}\n")
         
-        # Human-readable tool list (following OpsClaw's Tooling section)
+        # Human-readable tool list (following OpenClaw's Tooling section)
         tools_list = "\n".join([
             f"- **{t['function']['name']}**: {t['function'].get('description', '')}"
             for t in self.tools
@@ -57,6 +68,19 @@ class Agent:
         # Current date/time for the prompt
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
         
+        # Build runtime info (following OpenClaw's Runtime format)
+        runtime_info = format_runtime_info(
+            host="opsclaw",
+            os_info=f"{platform.system()} {platform.release()}",
+            arch=platform.machine(),
+            node=platform.python_version(),
+            model=model or "",
+            default_model="",
+            channel="",
+            capabilities=[],
+            think_level=self.think_level,
+        )
+        
         if system_prompt:
             # Custom prompt provided
             self.system_prompt = system_prompt
@@ -71,13 +95,16 @@ You have access to the following tools. When a user asks you to do something tha
 
 {tools_list}
 
+## Runtime
+{runtime_info}
+
 ## Current Date & Time
 {current_time}
 """
             prompt_source = "memory"
         else:
             # Fallback to basic prompt
-            self.system_prompt = f"""You are a helpful AI assistant that can execute commands, read/write files, search the web, and more.
+            self.system_prompt = f"""You are a helpful AI assistant that can execute commands, read/write files, and more.
 
 ## Tooling
 
@@ -85,13 +112,14 @@ You have access to the following tools. When a user asks you to do something tha
 
 {tools_list}
 
+## Runtime
+{runtime_info}
+
 ## Guidelines
 
 - When a user asks to run a command → use the exec tool
 - When a user asks to read a file → use the read tool
 - When a user asks to write/edit a file → use the write/edit tool
-- When a user asks to search → use the appropriate search tool
-- When a user asks to fetch a webpage → use the appropriate fetch tool
 - Execute tools proactively—don't just talk about actions
 
 ## Current Date & Time
@@ -108,7 +136,7 @@ You have access to the following tools. When a user asks you to do something tha
             print(f"  Prompt source: {prompt_source}")
             print(f"  System prompt length: {len(self.system_prompt)} characters")
             print(f"  Tools count: {len(self.tools)}")
-            print(f"  Tools list length: {len(tools_list)} characters")
+            print(f"  Thinking level: {self.think_level.value}")
             print(f"{'='*60}\n")
         
         self.tools = self.tools  # Already set above
@@ -135,12 +163,6 @@ You have access to the following tools. When a user asks you to do something tha
         # instead of intercepting messages. This gives LLM flexibility while
         # still providing guidance on when skills might be useful.
         # Direct skill execution is still available if LLM chooses to use it.
-        # Original code (for reference):
-        # skill_name = skills_executor.match_skill(message)
-        # if skill_name:
-        #     logger.info(f"Matched skill: {skill_name}")
-        #     result = await self._execute_skill(skill_name, message, session_id)
-        #     return {"response": result, "usage": usage_data}
 
         # Add user message to history
         session_manager.add_message(session_id, "user", message)
@@ -306,31 +328,25 @@ You have access to the following tools. When a user asks you to do something tha
         """Execute a skill and return the result."""
         try:
             # Parse command and arguments from message
-            # Format: "git status" or "git log limit=5" or "git commit message='fix bug'"
-            #        or "git clone https://github.com/owner/repo.git"
             parts = message.split()
             if not parts:
                 return "Error: Empty message"
             
-            # Extract sub-command (second word) - e.g., "log" from "git log limit=3"
+            # Extract sub-command (second word)
             sub_command = parts[1] if len(parts) > 1 else parts[0]
             
             # Parse remaining parts as key=value arguments
             args = {}
-            for part in parts[2:]:  # Skip first two words (skill name and sub-command)
+            for part in parts[2:]:
                 if '=' in part:
                     key, value = part.split('=', 1)
-                    # Remove quotes if present
                     value = value.strip("'\"")
-                    # Try to convert to int if numeric
                     if value.isdigit():
                         value = int(value)
                     args[key] = value
                 elif part.startswith('http://') or part.startswith('https://') or part.startswith('git@'):
-                    # Handle URL as path argument for clone operations
                     args['path'] = part
                 elif part.startswith('/') or part.startswith('./') or part.startswith('../'):
-                    # Handle path arguments
                     args['path'] = part
             
             result = await skills_executor.execute_skill(
