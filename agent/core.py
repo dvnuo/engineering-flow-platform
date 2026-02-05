@@ -90,8 +90,8 @@ You have access to the following tools. When a user asks you to do something tha
 - When a user asks to run a command → use the exec tool
 - When a user asks to read a file → use the read tool
 - When a user asks to write/edit a file → use the write/edit tool
-- When a user asks to search → use web_search tool
-- When a user asks to fetch a webpage → use web_fetch tool
+- When a user asks to search → use the appropriate search tool
+- When a user asks to fetch a webpage → use the appropriate fetch tool
 - Execute tools proactively—don't just talk about actions
 
 ## Current Date & Time
