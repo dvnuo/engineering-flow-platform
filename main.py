@@ -22,7 +22,7 @@ from session.persistence import session_store
 from session.manager import session_manager
 from session.usage import usage_tracker
 from cron.mention_poller import start_polling, stop_polling, is_enabled
-from skills.git.skill import setup_ssh_key, setup_git_user
+from skills.git.skill import setup_ssh_key, setup_git_user, setup_gh_config
 
 
 def setup_logging(level: int = None) -> None:
@@ -117,6 +117,16 @@ async def main() -> None:
             logger.debug("Git user not configured (git.user.name/email not set)")
     except Exception as e:
         logger.warning(f"Failed to setup git user: {e}")
+
+    # Setup GitHub CLI (gh) configuration (from config)
+    try:
+        gh_configured = await setup_gh_config()
+        if gh_configured:
+            logger.info("GitHub CLI (gh) configured successfully")
+        else:
+            logger.debug("GitHub CLI not configured (gh.enabled=false or no tokens)")
+    except Exception as e:
+        logger.warning(f"Failed to setup GitHub CLI: {e}")
 
     try:
         await gateway.start()
