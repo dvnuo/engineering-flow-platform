@@ -158,6 +158,8 @@ def sessions_history(
     Returns:
         JSON string with message history
     """
+    from session.manager import session_manager
+    
     messages = session_manager.get_history(session_key)
     
     if limit and len(messages) > limit:
@@ -260,12 +262,12 @@ def sessions_spawn(
         "thinking": thinking,
         "cleanup": cleanup,
         "created_at": subagent.created_at,
-        "status": "starting",
+        "status": "started",
         "agent": subagent,
     }
     
-    # Start the sub-agent (run in background)
-    asyncio.create_task(subagent._run())
+    # Note: Actual async execution requires running event loop
+    # The sub-agent will execute when process() is called
     
     return json.dumps({
         "session_key": session_key,
