@@ -4,6 +4,7 @@
 import asyncio
 import logging
 import sys
+import yaml
 from pathlib import Path
 
 # Get the directory containing this script
