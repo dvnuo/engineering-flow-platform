@@ -1,68 +1,166 @@
-# GitHub Skill
+# GitHub Skill - GitHub CLI (gh)
 
-Use this skill to interact with GitHub using the `gh` CLI. This skill allows the AI to clone repositories, manage issues, PRs, and more.
+Execute any GitHub CLI command with flexible arguments.
 
-## Available Tools
+## Skill Signature
 
-| Tool | Description |
-|------|-------------|
-| `github_clone` | Clone a repository |
-| `github_repo_clone` | Clone using gh repo clone (with interactive selection) |
-| `github_issue_list` | List issues in a repository |
-| `github_pr_list` | List pull requests |
-| `github_pr_checks` | Check CI status on a PR |
-| `github_run_list` | List workflow runs |
-| `github_run_view` | View a workflow run |
-| `github_api` | Make arbitrary GitHub API calls |
-
-## Usage Examples
-
-```
-User: Clone the repo itwake/codew
-AI: → github_clone(repo="itwake/codew")
-
-User: Clone my fork of the project
-AI: → github_clone(repo="itwake/codew", repo="yourusername/codew")
-
-User: List open issues
-AI: → github_issue_list(owner="itwake", repo="codew")
-
-User: Check PR status
-AI: → github_pr_checks(pr_number=55, owner="itwake", repo="codew")
-
-User: View workflow run
-AI: → github_run_view(run_id="12345678", owner="itwake", repo="codew")
-
-User: Get repository info via API
-AI: → github_api(endpoint="repos/itwake/codew")
+```python
+github(command="repo list", args="--limit 10", hostname=None) -> SkillResult
 ```
 
-## Installation
+## Parameters
 
-### macOS (Homebrew)
-```bash
-brew install gh
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `command` | string | No | gh subcommand (default: "repo list") |
+| `args` | string | No | Additional arguments (space-separated) |
+| `hostname` | string | No | GitHub Enterprise hostname (optional) |
+
+## Examples
+
+### Repository Operations
+
+```python
+# List repositories
+github(command="repo", args="list --limit 10")
+
+# Clone a repository
+github(command="repo", args="clone owner/repo")
+
+# Clone to specific directory
+github(command="repo", args="clone owner/repo --path ./my-repo")
+
+# View repository
+github(command="repo", args="view owner/repo")
+
+# Create repository
+github(command="repo", args="create --name my-repo --public")
 ```
 
-### Linux (apt)
-```bash
-apt install gh
+### Issue Operations
+
+```python
+# List issues
+github(command="issue", args="list --repo owner/repo --state open --limit 10")
+
+# View an issue
+github(command="issue", args="view 123 --repo owner/repo")
+
+# Create an issue
+github(command="issue", args="create --repo owner/repo --title 'Bug: fix required' --body 'Description'")
+
+# Close an issue
+github(command="issue", args="close 123 --repo owner/repo")
+
+# Comment on an issue
+github(command="issue", args="comment 123 --repo owner/repo --body 'Thanks for reporting!'")
 ```
 
-### Verify Installation
-```bash
-gh --version
+### Pull Request Operations
+
+```python
+# List PRs
+github(command="pr", args="list --repo owner/repo --state open --limit 10")
+
+# View a PR
+github(command="pr", args="view 123 --repo owner/repo")
+
+# Checkout a PR locally
+github(command="pr", args="checkout 123 --repo owner/repo")
+
+# Check CI status on PR
+github(command="pr", args="checks 123 --repo owner/repo")
+
+# Create a PR
+github(command="pr", args="create --repo owner/repo --title 'feat: new feature' --body 'Description'")
+
+# Merge a PR
+github(command="pr", args="merge 123 --repo owner/repo --admin --subject 'Merge PR'")
+
+# Review a PR
+github(command="pr", args="review 123 --repo owner/repo --approve")
+```
+
+### Workflow/Action Operations
+
+```python
+# List workflow runs
+github(command="run", args="list --repo owner/repo --limit 10")
+
+# View a specific run
+github(command="run", args="view 12345678 --repo owner/repo")
+
+# View run logs
+github(command="run", args="view 12345678 --repo owner/repo --log")
+
+# Rerun a workflow
+github(command="run", args="rerun 12345678 --repo owner/repo")
+
+# List workflows
+github(command="run", args="list --repo owner/repo")
+
+# Disable a workflow
+github(command="run", args="disable 12345 --repo owner/repo")
+```
+
+### GitHub API Calls
+
+```python
+# Get repository info
+github(command="api", args="repos/owner/repo")
+
+# List contributors
+github(command="api", args="repos/owner/repo/contributors")
+
+# Get commit
+github(command="api", args="repos/owner/repo/commits/sha")
+
+# Search code
+github(command="api", args="search/code?q=repo:owner/repo+function_name")
+
+# Get workflow runs via API
+github(command="api", args="repos/owner/repo/actions/runs")
+
+# Create issue via API
+github(command="api", args="repos/owner/repo/issues --method POST --input -", body='{"title":"Bug"}')
+```
+
+### Enterprise GitHub
+
+```python
+# Use with GitHub Enterprise
+github(command="repo", args="list --enterprise mycompany", hostname="github.enterprise.com")
 ```
 
 ## Authentication
 
-The AI will automatically use `gh auth` if needed. Users can authenticate with:
 ```bash
+# Login to GitHub
 gh auth login
+
+# Check status
+gh auth status
+
+# Refresh token
+gh auth refresh
 ```
 
-## Notes
+## Tips
 
-- Always specify `--repo owner/repo` when not in a git directory
-- Use `gh api` for data not available through other subcommands
-- Most commands support `--json` for structured output
+1. **Use `--repo owner/repo`** when not in a git directory
+2. **Use `--json`** for structured output in API calls
+3. **Combine commands**: List → View → Create workflow
+4. **Use `-` for stdin** with `--input -` for API POST/PUT
+5. **Most subcommands support `--limit`** to control output
+
+## Common Workflows
+
+```python
+# Find and checkout a PR
+github(command="pr", args="list --repo owner/repo --state open")
+github(command="pr", args="checkout 123 --repo owner/repo")
+
+# Check CI, then merge
+github(command="pr", args="checks 123 --repo owner/repo")
+github(command="pr", args="merge 123 --repo owner/repo --admin")
+```

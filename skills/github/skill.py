@@ -8,6 +8,7 @@ Configuration: github.hostname in config.yaml (default: github.com)
 """
 
 import asyncio
+import shlex
 from pathlib import Path
 from typing import Optional
 
@@ -53,206 +54,39 @@ async def _run_gh_command(args: list, cwd: str = None, hostname: str = None) -> 
         return False, f"Error: {e}"
 
 
-@skill(name="github_clone", description="Clone a GitHub repository using gh CLI")
-async def github_clone(repo: str, directory: str = None, branch: str = None, 
-                       hostname: str = None) -> SkillResult:
-    """Clone a GitHub repository.
+@skill(
+    name="github",
+    description="Execute any GitHub CLI (gh) command. Supports: repo clone/list, issue list/create, pr list/checkout/checks, run list/view, api, and any other gh command."
+)
+async def github(command: str = "repo list", args: str = None, hostname: str = None) -> SkillResult:
+    """Execute GitHub CLI commands.
     
     Args:
-        repo: Repository in 'owner/repo' format
-        directory: Target directory (optional)
-        branch: Branch to clone (optional)
+        command: gh subcommand (repo, issue, pr, run, api, etc.)
+        args: Additional arguments for the command (space-separated)
         hostname: GitHub hostname (for GitHub Enterprise)
-    """
-    args = ["repo", "clone", repo]
-    if branch:
-        args.extend(["--branch", branch])
-    if directory:
-        args.append(directory)
     
-    success, output = await _run_gh_command(args, hostname=hostname)
+    Examples:
+        github(command="repo", args="clone owner/repo")
+        github(command="issue", args="list --repo owner/repo --state open")
+        github(command="pr", args="list --repo owner/repo")
+        github(command="run", args="list --repo owner/repo")
+        github(command="api", args="repos/owner/repo")
+    """
+    if not command:
+        command = "repo list"
+    
+    # Build the gh command
+    cmd_list = ["gh", command]
+    if args:
+        try:
+            parsed_args = shlex.split(args)
+            cmd_list.extend(parsed_args)
+        except ValueError:
+            cmd_list.extend(args.split())
+    
+    success, output = await _run_gh_command(cmd_list, hostname=hostname)
     
     if success:
-        return SkillResult(success=True, output=f"✅ Cloned {repo}")
-    return SkillResult(success=False, error=output)
-
-
-@skill(name="github_repo_clone", description="Clone a repository with interactive selection or specified owner/repo")
-async def github_repo_clone(owner: str = None, repo: str = None, 
-                           select: bool = False, hostname: str = None) -> SkillResult:
-    """Clone a repository with interactive selection or specified owner/repo.
-    
-    Args:
-        owner: Repository owner
-        repo: Repository name
-        select: Use interactive selection
-        hostname: GitHub hostname (for GitHub Enterprise)
-    """
-    if select:
-        success, output = await _run_gh_command(["repo", "clone", "--select", "--web"], hostname=hostname)
-        if success:
-            return SkillResult(success=True, output="✅ Opened GitHub for repository selection")
-        return SkillResult(success=False, error=output)
-    
-    if owner and repo:
-        success, output = await _run_gh_command(["repo", "clone", f"{owner}/{repo}"], hostname=hostname)
-        if success:
-            return SkillResult(success=True, output=f"✅ Cloned {owner}/{repo}")
-        return SkillResult(success=False, error=output)
-    
-    return SkillResult(success=False, error="Please specify owner/repo or use select=true")
-
-
-@skill(name="github_issue_list", description="List issues in a GitHub repository")
-async def github_issue_list(owner: str, repo: str, state: str = "open", 
-                           limit: int = 10, hostname: str = None) -> SkillResult:
-    """List issues in a repository.
-    
-    Args:
-        owner: Repository owner
-        repo: Repository name
-        state: Issue state (open, closed, all)
-        limit: Maximum results
-        hostname: GitHub hostname (for GitHub Enterprise)
-    """
-    success, output = await _run_gh_command([
-        "issue", "list",
-        "--repo", f"{owner}/{repo}",
-        "--state", state,
-        "--limit", str(limit)
-    ], hostname=hostname)
-    
-    if success:
-        lines = output.split("\n") if output else []
-        if lines and lines[0]:
-            result = [f"**Issues** ({state})\n"]
-            for line in lines:
-                parts = line.split("\t")
-                if len(parts) >= 3:
-                    num, title, labels = parts[0], parts[1], parts[2] if len(parts) > 2 else ""
-                    result.append(f"- #{num} {title} {labels}")
-            return SkillResult(success=True, output="\n".join(result))
-        return SkillResult(success=True, output=f"No {state} issues found")
-    return SkillResult(success=False, error=output)
-
-
-@skill(name="github_pr_list", description="List pull requests in a GitHub repository")
-async def github_pr_list(owner: str, repo: str, state: str = "open", 
-                         limit: int = 10, hostname: str = None) -> SkillResult:
-    """List pull requests in a repository.
-    
-    Args:
-        owner: Repository owner
-        repo: Repository name
-        state: PR state (open, closed, all)
-        limit: Maximum results
-        hostname: GitHub hostname (for GitHub Enterprise)
-    """
-    success, output = await _run_gh_command([
-        "pr", "list",
-        "--repo", f"{owner}/{repo}",
-        "--state", state,
-        "--limit", str(limit)
-    ], hostname=hostname)
-    
-    if success:
-        lines = output.split("\n") if output else []
-        if lines and lines[0]:
-            result = [f"**Pull Requests** ({state})\n"]
-            for line in lines:
-                parts = line.split("\t")
-                if len(parts) >= 3:
-                    num, title, state_pr = parts[0], parts[1], parts[2]
-                    result.append(f"- #{num} {title} [{state_pr}]")
-            return SkillResult(success=True, output="\n".join(result))
-        return SkillResult(success=True, output=f"No {state} PRs found")
-    return SkillResult(success=False, error=output)
-
-
-@skill(name="github_pr_checks", description="Check CI status on a pull request")
-async def github_pr_checks(owner: str, repo: str, pr_number: int, 
-                           hostname: str = None) -> SkillResult:
-    """Check CI status on a PR.
-    
-    Args:
-        owner: Repository owner
-        repo: Repository name
-        pr_number: PR number
-        hostname: GitHub hostname (for GitHub Enterprise)
-    """
-    success, output = await _run_gh_command([
-        "pr", "checks",
-        "--repo", f"{owner}/{repo}",
-        str(pr_number)
-    ], hostname=hostname)
-    
-    if success:
-        return SkillResult(success=True, output=f"**PR #{pr_number} Checks**\n\n{output}")
-    return SkillResult(success=False, error=output)
-
-
-@skill(name="github_run_list", description="List recent workflow runs in a GitHub repository")
-async def github_run_list(owner: str, repo: str, limit: int = 10, 
-                          hostname: str = None) -> SkillResult:
-    """List recent workflow runs.
-    
-    Args:
-        owner: Repository owner
-        repo: Repository name
-        limit: Maximum results
-        hostname: GitHub hostname (for GitHub Enterprise)
-    """
-    success, output = await _run_gh_command([
-        "run", "list",
-        "--repo", f"{owner}/{repo}",
-        "--limit", str(limit)
-    ], hostname=hostname)
-    
-    if success:
-        return SkillResult(success=True, output=f"**Workflow Runs**\n\n{output}")
-    return SkillResult(success=False, error=output)
-
-
-@skill(name="github_run_view", description="View a workflow run in detail")
-async def github_run_view(owner: str, repo: str, run_id: str, 
-                          log_failed: bool = False, hostname: str = None) -> SkillResult:
-    """View a workflow run.
-    
-    Args:
-        owner: Repository owner
-        repo: Repository name
-        run_id: Run ID or number
-        log_failed: Show only failed steps
-        hostname: GitHub hostname (for GitHub Enterprise)
-    """
-    args = ["run", "view", "--repo", f"{owner}/{repo}", run_id]
-    if log_failed:
-        args.append("--log-failed")
-    
-    success, output = await _run_gh_command(args, hostname=hostname)
-    
-    if success:
-        return SkillResult(success=True, output=f"**Run {run_id}**\n\n{output}")
-    return SkillResult(success=False, error=output)
-
-
-@skill(name="github_api", description="Make an arbitrary GitHub API call")
-async def github_api(endpoint: str, method: str = "GET", 
-                     body: str = None, hostname: str = None) -> SkillResult:
-    """Make an arbitrary GitHub API call.
-    
-    Args:
-        endpoint: API endpoint (e.g., 'repos/owner/repo')
-        method: HTTP method
-        body: Request body (JSON)
-        hostname: GitHub hostname (for GitHub Enterprise)
-    """
-    args = ["api", endpoint, "--method", method]
-    if body:
-        args.extend(["--input", "-"])
-    
-    success, output = await _run_gh_command(args, hostname=hostname)
-    
-    if success:
-        return SkillResult(success=True, output=f"**API Response**\n\n{output}")
+        return SkillResult(success=True, output=output if output else f"✅ gh {command} completed")
     return SkillResult(success=False, error=output)

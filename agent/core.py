@@ -131,12 +131,16 @@ You have access to the following tools. When a user asks you to do something tha
         """
         usage_data = {}
         
-        # Check if message matches a skill first
-        skill_name = skills_executor.match_skill(message)
-        if skill_name:
-            logger.info(f"Matched skill: {skill_name}")
-            result = await self._execute_skill(skill_name, message, session_id)
-            return {"response": result, "usage": usage_data}
+        # NOTE: Skill matching is now optional - we add skill hints to system prompt
+        # instead of intercepting messages. This gives LLM flexibility while
+        # still providing guidance on when skills might be useful.
+        # Direct skill execution is still available if LLM chooses to use it.
+        # Original code (for reference):
+        # skill_name = skills_executor.match_skill(message)
+        # if skill_name:
+        #     logger.info(f"Matched skill: {skill_name}")
+        #     result = await self._execute_skill(skill_name, message, session_id)
+        #     return {"response": result, "usage": usage_data}
 
         # Add user message to history
         session_manager.add_message(session_id, "user", message)
