@@ -131,9 +131,11 @@ You have access to the following tools. When a user asks you to do something tha
         """
         usage_data = {}
         
-        # NOTE: Skill matching is disabled to let LLM decide when to use skills
-        # This allows LLM to leverage skills more flexibly
-        # Re-enable if needed:
+        # NOTE: Skill matching is now optional - we add skill hints to system prompt
+        # instead of intercepting messages. This gives LLM flexibility while
+        # still providing guidance on when skills might be useful.
+        # Direct skill execution is still available if LLM chooses to use it.
+        # Original code (for reference):
         # skill_name = skills_executor.match_skill(message)
         # if skill_name:
         #     logger.info(f"Matched skill: {skill_name}")

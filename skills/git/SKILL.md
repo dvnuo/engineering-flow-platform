@@ -1,117 +1,152 @@
 # Git Skill - Local Git Management
 
-Use this skill to manage local git repositories. The AI has access to shell commands via `exec` tool, but this skill provides structured git operations.
+Execute any git command with flexible arguments.
 
-## Available Commands
+## Skill Signature
 
-Use the `git` tool with different commands:
-
+```python
+git(command="status", args="", cwd=None) -> SkillResult
 ```
+
+## Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `command` | string | No | Git subcommand (default: "status") |
+| `args` | string | No | Additional arguments (space-separated) |
+| `cwd` | string | No | Working directory |
+
+## Examples
+
+### Basic Commands
+
+```python
+# Check repository status
 git(command="status")
-git(command="clone", path="https://github.com/owner/repo.git")
-git(command="commit", message="Update")
-git(command="push", branch="master")
-git(command="pull")
-git(command="branch", name="feature/new")
-git(command="log", limit=10)
-git(command="checkout", branch="master")
+
+# View current branch and changes
+git(command="status", args="--short")
+
+# List all branches
+git(command="branch", args="-a")
+
+# View recent commits
+git(command="log", args="--oneline -10")
+
+# Show differences
 git(command="diff")
-git(command="add", path=".")
+
+# Stage all changes
+git(command="add", args="-A")
 ```
 
-## Command Reference
+### Common Operations
 
-| Command | Description | Parameters |
-|---------|-------------|-----------|
-| `status` | Show working tree status | - |
-| `clone` | Clone a repository | `path` (repo URL), `repo_path` (target dir) |
-| `commit` | Commit staged changes | `message` |
-| `push` | Push to remote | `branch` |
-| `pull` | Pull from remote | - |
-| `branch` | List/create/delete branches | `name`, `delete` |
-| `log` | Show commit history | `limit` |
-| `checkout` | Switch branches | `branch` |
-| `diff` | Show unstaged changes | - |
-| `add` | Stage files | `path` |
+```python
+# Clone a repository (HTTPS)
+git(command="clone", args="https://github.com/owner/repo.git")
 
-## Usage Examples
+# Clone a repository (SSH)
+git(command="clone", args="git@github.com:owner/repo.git")
 
-```
-User: Clone a repository
-AI: git(command="clone", path="https://github.com/itwake/opsclaw.git")
+# Commit with message
+git(command="commit", args="-m 'feat: add new feature'")
 
-User: Check git status
-AI: git(command="status")
+# Push to remote
+git(command="push", args="origin main")
 
-User: Commit my changes
-AI: git(command="commit", message="Update README")
+# Pull from remote
+git(command="pull", args="origin main")
 
-User: Push to master
-AI: git(command="push", branch="master")
+# Create and switch to new branch
+git(command="checkout", args="-b feature/new-feature")
 
-User: Create a new branch
-AI: git(command="branch", name="feature/new-feature")
+# Switch to existing branch
+git(command="checkout", args="develop")
 
-User: Show recent commits
-AI: git(command="log", limit=10)
-
-User: Switch to master branch
-AI: git(command="checkout", branch="master")
+# Delete a branch
+git(command="branch", args="-d feature/old-feature")
 ```
 
-## Best Practices
+### Advanced Commands
 
-1. **Always check status first** before committing
-2. **Use meaningful commit messages**
-3. **Pull before pushing** to avoid conflicts
-4. **Create feature branches** for new work
+```python
+# Rebase onto main branch
+git(command="rebase", args="main")
 
-## Configuration
+# Stash changes
+git(command="stash", args="push -m 'WIP: work in progress'")
 
-No configuration required - uses local git installed on the system.
+# List stashes
+git(command="stash", args="list")
 
-## SSH vs HTTPS Clone
+# Apply stash
+git(command="stash", args="apply stash@{0}")
 
+# Cherry-pick a commit
+git(command="cherry-pick", args="abc123def")
+
+# Reset to previous commit (soft)
+git(command="reset", args="HEAD~1")
+
+# Reset hard (discard changes)
+git(command="reset", args="--hard HEAD~1")
+
+# Merge a branch
+git(command="merge", args="feature-branch")
+
+# Fetch all remotes
+git(command="fetch", args="--all --prune")
+
+# View tags
+git(command="tag", args="-l")
+
+# Create tag
+git(command="tag", args="v1.0.0")
+
+# Show remote URLs
+git(command="remote", args="-v")
+
+# Add remote
+git(command="remote", args="add origin https://github.com/owner/repo.git")
+
+# Blame a file
+git(command="blame", args="README.md")
+
+# Search in history
+git(command="grep", args="'TODO' -- '*.py'")
+
+# Show file at specific commit
+git(command="show", args="abc123:path/to/file.py")
+
+# Start bisect
+git(command="bisect", args="start")
 ```
-# SSH clone (requires SSH key configured)
-git(command="clone", path="git@github.com:owner/repo.git")
 
-# HTTPS clone
-git(command="clone", path="https://github.com/owner/repo.git")
+## Working Directory
+
+By default, git commands run in `~/.opsclaw/workspace`. Override with `cwd`:
+
+```python
+# Run in specific directory
+git(command="status", cwd="/path/to/my/repo")
 ```
 
-## SSH Key Configuration
+## SSH Key Setup
 
-For private repository access, configure SSH key in `config.yaml`:
+For private repositories, configure SSH key in `config.yaml`:
 
 ```yaml
 ssh:
   enabled: true
-  private_key_path: "/path/to/private_key"
+  private_key_path: "/run/secrets/github_ssh_key"
 ```
 
-### How It Works
+The SSH key is automatically copied to `~/.ssh/` with proper permissions (600) at startup.
 
-1. On first git operation (clone, push, pull), the skill checks `config.yaml`
-2. If `ssh.enabled` is true and `private_key_path` is set, the key is:
-   - Copied from configured path to `~/.ssh/id_ed25519`
-   - Permissions set to `600` (required by SSH)
-3. Subsequent git operations use the configured SSH key
+## Tips
 
-### Security Notes
-
-- **Do NOT commit private keys** to version control
-- Use Docker secrets or environment variables for key paths
-- The key is only accessible by the current user (600 permissions)
-
-### Manual SSH Setup
-
-To manually setup SSH key:
-
-```bash
-# Setup SSH key from config
-git(command="ssh_setup")
-
-# Verify SSH connection
-ssh -T git@github.com
-```
+1. **Use `--` to separate file paths from options**: `git(command="log", args="--oneline -10 -- .")`
+2. **Quote arguments with spaces**: `args="-m 'commit message'"`
+3. **Use `-` for stdin**: `git(command="apply", args="- < patch.diff")`
+4. **Combine commands**: Stage → Commit → Push in one flow
