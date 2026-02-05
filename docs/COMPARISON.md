@@ -41,8 +41,6 @@ OpsClaw 有 **54 个 skills**，CodeW 只有 **2 个**：
 ```
 高优先级 Skills:
 ├── 📝 summarize - 消息摘要
-├── 🔍 web_search - 网页搜索 (已有)
-├── 📄 web_fetch - 网页抓取 (已有)
 ├── 📷 image - 图片分析
 ├── 🔧 exec - 命令执行 (已有)
 ├── 📁 read - 文件读取 (已有)

@@ -47,8 +47,6 @@
 | read | ✅ | ✅ | Complete |
 | write | ✅ | ✅ | Complete |
 | edit | ✅ apply_patch | ✅ | Complete |
-| web_search | ✅ Brave | ✅ Brave | Complete |
-| web_fetch | ✅ | ✅ | Complete |
 | browser | ✅ CDP control | ❌ | TODO |
 | canvas | ✅ A2UI | ❌ | TODO |
 | nodes | ✅ Device control | ❌ | TODO |
