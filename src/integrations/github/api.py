@@ -35,6 +35,11 @@ INITIAL_BACKOFF = 1.0  # seconds
 MAX_BACKOFF = 60.0  # seconds
 
 
+def _is_debug_enabled() -> bool:
+    """Check if debug mode is enabled."""
+    return _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG)
+
+
 def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
     """Remove sensitive headers for logging."""
     sanitized = {}
@@ -93,8 +98,8 @@ class GitHubChannel:
         url = f"{self.base_url}{endpoint}"
         
         # Debug: Log request
-        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"=== GITHUB REQUEST ===")
+        if _is_debug_enabled():
+            logger.debug(f"=== [GITHUB] REQUEST ===")
             logger.debug(f"Method: {method}")
             logger.debug(f"URL: {url}")
             logger.debug(f"Headers: {json.dumps(_sanitize_headers(self._headers))}")
@@ -113,10 +118,9 @@ class GitHubChannel:
                 )
                 
                 # Debug: Log response
-                if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"=== GITHUB RESPONSE ===")
+                if _is_debug_enabled():
+                    logger.debug(f"=== [GITHUB] RESPONSE ===")
                     logger.debug(f"Status: {response.status_code}")
-                    logger.debug(f"Headers: {json.dumps(dict(response.headers), default=str)}")
                 
                 # Handle rate limiting (403)
                 if response.status_code == 403:
@@ -150,7 +154,7 @@ class GitHubChannel:
                 result = response.json()
                 
                 # Debug: Log response body
-                if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+                if _is_debug_enabled():
                     logger.debug(f"Body: {_truncate_json(result)}")
                 
                 return result

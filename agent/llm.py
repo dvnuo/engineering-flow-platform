@@ -29,6 +29,33 @@ logger = logging.getLogger(__name__)
 _DEBUG_MODE = os.environ.get("DEBUG_LLM", "").lower() in ("1", "true", "yes")
 
 
+def _is_debug_enabled() -> bool:
+    """Check if debug mode is enabled."""
+    return _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG)
+
+
+def _log_request(component: str, url: str, method: str = "POST", headers: Dict = None, payload: Dict = None):
+    """Log request with consistent format."""
+    logger.debug(f"=== [{component}] REQUEST ===")
+    logger.debug(f"Method: {method}")
+    logger.debug(f"URL: {url}")
+    if headers:
+        logger.debug(f"Headers: {json.dumps(_sanitize_headers(headers))}")
+    if payload:
+        logger.debug(f"Payload: {json.dumps(payload, indent=2, default=str)}")
+
+
+def _log_response(component: str, status: int, body: Any = None):
+    """Log response with consistent format."""
+    logger.debug(f"=== [{component}] RESPONSE ===")
+    logger.debug(f"Status: {status}")
+    if body:
+        body_str = json.dumps(body, indent=2, default=str) if isinstance(body, (dict, list)) else str(body)
+        if len(body_str) > 1000:
+            body_str = body_str[:1000] + f"... [{len(body_str) - 1000} chars truncated]"
+        logger.debug(f"Body: {body_str}")
+
+
 def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
     """Remove sensitive headers for logging."""
     sanitized = {}
@@ -78,12 +105,8 @@ class BaseProvider:
         url = f"{self.api_base}{endpoint}"
         
         # Debug: Log request
-        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
-            sanitized_headers = _sanitize_headers(headers)
-            logger.debug(f"=== LLM REQUEST ===")
-            logger.debug(f"URL: {url}")
-            logger.debug(f"Headers: {json.dumps(sanitized_headers)}")
-            logger.debug(f"Payload: {json.dumps(payload, indent=2, default=str)}")
+        if _is_debug_enabled():
+            _log_request("LLM", url, "POST", headers, payload)
         
         last_error = None
         max_retries = config.llm.get('max_retries', 3)
@@ -99,10 +122,8 @@ class BaseProvider:
                     )
                     
                     # Debug: Log response
-                    if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(f"=== LLM RESPONSE ===")
-                        logger.debug(f"Status: {response.status_code}")
-                        logger.debug(f"Headers: {dict(response.headers)}")
+                    if _is_debug_enabled():
+                        _log_response("LLM", response.status_code, response.headers)
                     
                     response.raise_for_status()
                     result = response.json()
@@ -116,8 +137,9 @@ class BaseProvider:
                     
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
                 last_error = e
-                if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"=== LLM ERROR (attempt {attempt + 1}/{max_retries}) ===")
+                if _is_debug_enabled():
+                    logger.debug(f"=== [LLM] ERROR ===")
+                    logger.debug(f"Attempt: {attempt + 1}/{max_retries}")
                     logger.debug(f"Error: {type(e).__name__}: {e}")
                 
                 if attempt < max_retries - 1:
@@ -166,17 +188,17 @@ class OpenAIProvider(BaseProvider):
             payload["tool_choice"] = "auto"
         
         # Debug: Log chat request details
-        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"=== LLM CHAT REQUEST ===")
+        if _is_debug_enabled():
+            logger.debug(f"=== [LLM] CHAT REQUEST ===")
             logger.debug(f"Provider: {self.name}")
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(all_messages)}")
             if system_prompt:
-                logger.debug(f"System prompt: {_truncate_text(system_prompt, 200)}")
+                logger.debug(f"System prompt: {system_prompt[:200]}...")
             logger.debug(f"Messages preview:")
-            for i, msg in enumerate(all_messages[:5]):  # First 5 messages
+            for i, msg in enumerate(all_messages[:5]):
                 role = msg.get("role", "unknown")
-                content = _truncate_text(msg.get("content", ""), 100)
+                content = msg.get("content", "")[:100]
                 logger.debug(f"  [{i}] {role}: {content}")
             if len(all_messages) > 5:
                 logger.debug(f"  ... [{len(all_messages) - 5} more messages]")
@@ -193,12 +215,12 @@ class OpenAIProvider(BaseProvider):
         message = choice["message"]
         
         # Debug: Log response details
-        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"=== LLM CHAT RESPONSE ===")
+        if _is_debug_enabled():
+            logger.debug(f"=== [LLM] CHAT RESPONSE ===")
             logger.debug(f"Finish reason: {choice.get('finish_reason', 'unknown')}")
             content = message.get("content", "")
             logger.debug(f"Content length: {len(content)} chars")
-            logger.debug(f"Content preview: {_truncate_text(content, 200)}")
+            logger.debug(f"Content preview: {content[:200]}...")
             
             tool_calls = message.get("tool_calls", [])
             logger.debug(f"Tool calls: {len(tool_calls)}")

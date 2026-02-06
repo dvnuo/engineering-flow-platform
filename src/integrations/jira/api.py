@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 _DEBUG_MODE = os.environ.get("DEBUG_JIRA", "").lower() in ("1", "true", "yes")
 
 
+def _is_debug_enabled() -> bool:
+    """Check if debug mode is enabled."""
+    return _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG)
+
+
 def _truncate_json(data: Any, max_length: int = 500) -> str:
     """Truncate JSON for logging."""
     text = json.dumps(data, indent=2, default=str)
@@ -137,8 +142,8 @@ class JiraChannel:
         url = f"{self.base_url}/rest/api/{self.api_version}{endpoint}"
         
         # Debug: Log request
-        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"=== JIRA REQUEST ===")
+        if _is_debug_enabled():
+            logger.debug(f"=== [JIRA] REQUEST ===")
             logger.debug(f"Method: {method}")
             logger.debug(f"URL: {url}")
             if params:
@@ -157,16 +162,15 @@ class JiraChannel:
         )
         
         # Debug: Log response
-        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"=== JIRA RESPONSE ===")
+        if _is_debug_enabled():
+            logger.debug(f"=== [JIRA] RESPONSE ===")
             logger.debug(f"Status: {response.status_code}")
-            logger.debug(f"Headers: {dict(response.headers)}")
         
         response.raise_for_status()
         result = response.json() if response.text else {}
         
         # Debug: Log response body
-        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+        if _is_debug_enabled():
             logger.debug(f"Body: {_truncate_json(result)}")
         
         return result

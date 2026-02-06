@@ -618,7 +618,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     
     # Debug: Log tool execution
     if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(f"=== TOOL EXECUTION ===")
+        logger.debug(f"=== [TOOL] EXECUTION ===")
         logger.debug(f"Tool: {name}")
         logger.debug(f"Args: {kwargs}")
     
@@ -632,7 +632,11 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
             
             # Debug: Log result
             if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"Result: {_truncate_text(str(result), 200)}")
+                logger.debug(f"Result: success={not result.startswith('Error')}")
+                if len(str(result)) > 200:
+                    logger.debug(f"Result preview: {str(result)[:200]}...")
+                else:
+                    logger.debug(f"Result: {result}")
             
             return ToolResult(success=not result.startswith("Error"), content=result)
         except Exception as e:
@@ -649,12 +653,11 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
 
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(f"Type: class-based")
-        logger.debug(f"Args: {kwargs}")
     
     result = await tool.execute(**kwargs)
     
     # Debug: Log result
     if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(f"Result: {result.success} - {_truncate_text(str(result), 200)}")
+        logger.debug(f"Result: success={result.success}")
     
     return result
