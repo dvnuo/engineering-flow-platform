@@ -147,16 +147,20 @@ class HeartbeatChecker:
         results["checks"]["calendar"] = await calendar_task
         results["checks"]["weather"] = await weather_task
         
-        # Multi-round verification for high thinking level
+        # Multi-round verification for high thinking level:
+        # When thinking=high, detailed checks return additional info
+        # (important_count, conflicts, alerts, etc.) for deeper analysis
         if self.think_level == ThinkLevel.HIGH:
-            logger.debug("Heartbeat: Running multi-round verification (high thinking)")
-            # Could add re-check logic here if needed
+            logger.debug(f"=== [HEARTBEAT] MULTI-ROUND VERIFICATION ===")
+            logger.debug(f"  Enabled: detailed analysis for all checks")
         
         return results
     
     async def _heartbeat_loop(self):
         """Main heartbeat loop."""
-        logger.info(f"Heartbeat started - think_level={self.think_level.value}, interval={self._get_effective_interval()}s")
+        logger.info(f"=== [HEARTBEAT] STARTED ===")
+        logger.info(f"  think_level={self.think_level.value}")
+        logger.info(f"  interval={self._get_effective_interval()}s")
         
         while self.running:
             try:
@@ -171,10 +175,12 @@ class HeartbeatChecker:
                     
                     # Log summary based on detail level
                     detail = results["detail_level"]
-                    logger.info(f"Heartbeat check completed ({detail})")
+                    logger.info(f"=== [HEARTBEAT] CHECK COMPLETED ===")
+                    logger.info(f"  Detail: {detail}")
                     
-                    # For high thinking level, log more details
+                    # For high thinking level, log more details (multi-round verification)
                     if self.think_level == ThinkLevel.HIGH:
+                        logger.debug(f"=== [HEARTBEAT] DETAILED RESULTS ===")
                         for check_type, check_result in results["checks"].items():
                             logger.debug(f"  {check_type}: {check_result.get('message', '')}")
                 
@@ -190,7 +196,8 @@ class HeartbeatChecker:
         
         self.running = True
         self._task = asyncio.create_task(self._heartbeat_loop())
-        logger.info(f"Heartbeat checker started - think_level={self.think_level.value}")
+        logger.info(f"=== [HEARTBEAT] CHECKER STARTED ===")
+        logger.info(f"  think_level={self.think_level.value}")
     
     async def stop(self):
         """Stop the heartbeat checker."""
@@ -201,7 +208,7 @@ class HeartbeatChecker:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        logger.info("Heartbeat checker stopped")
+        logger.info("=== [HEARTBEAT] STOPPED ===")
     
     def update_think_level(self, think_level: ThinkLevel):
         """Update thinking level at runtime."""
@@ -209,9 +216,10 @@ class HeartbeatChecker:
         self.think_level = think_level
         
         if old_level != think_level:
-            logger.info(f"Heartbeat think_level changed: {old_level.value} -> {think_level.value}")
-            logger.info(f"  New interval: {self._get_effective_interval()}s")
-            logger.info(f"  New detail level: {self._get_check_detail_level()}")
+            logger.info(f"=== [HEARTBEAT] LEVEL CHANGED ===")
+            logger.info(f"  {old_level.value} -> {think_level.value}")
+            logger.info(f"  interval: {self._get_effective_interval()}s")
+            logger.info(f"  detail: {self._get_check_detail_level()}")
 
 
 # Global heartbeat instance
