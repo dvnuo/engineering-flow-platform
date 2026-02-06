@@ -10,7 +10,9 @@ Features:
 """
 
 import base64
+import json
 import logging
+import os
 import re
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +21,18 @@ import httpx
 from config import config
 
 logger = logging.getLogger(__name__)
+
+# Debug mode flag
+_DEBUG_MODE = os.environ.get("DEBUG_JIRA", "").lower() in ("1", "true", "yes")
+
+
+def _truncate_json(data: Any, max_length: int = 500) -> str:
+    """Truncate JSON for logging."""
+    text = json.dumps(data, indent=2, default=str)
+    if len(text) <= max_length:
+        return text
+    return text[:max_length] + f"... [{len(text) - max_length} chars truncated]"
+
 
 # Security: JQL injection patterns to block
 JQL_DANGEROUS_PATTERNS = [
@@ -115,12 +129,23 @@ class JiraChannel:
         data: Optional[Dict] = None,
         params: Optional[Dict] = None
     ) -> Dict[str, Any]:
-        """Make authenticated request to Jira API."""
+        """Make authenticated request to Jira API with debug logging."""
         if not self.is_configured():
             raise RuntimeError("Jira not configured")
         
-        # Use configured API version
+        # Build URL
         url = f"{self.base_url}/rest/api/{self.api_version}{endpoint}"
+        
+        # Debug: Log request
+        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"=== JIRA REQUEST ===")
+            logger.debug(f"Method: {method}")
+            logger.debug(f"URL: {url}")
+            if params:
+                logger.debug(f"Params: {json.dumps(params)}")
+            if data:
+                logger.debug(f"Data: {_truncate_json(data)}")
+        
         headers = {
             **self._auth_header,
             "Content-Type": "application/json",
@@ -130,8 +155,21 @@ class JiraChannel:
         response = await self.client.request(
             method, url, json=data, params=params, headers=headers
         )
+        
+        # Debug: Log response
+        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"=== JIRA RESPONSE ===")
+            logger.debug(f"Status: {response.status_code}")
+            logger.debug(f"Headers: {dict(response.headers)}")
+        
         response.raise_for_status()
-        return response.json() if response.text else {}
+        result = response.json() if response.text else {}
+        
+        # Debug: Log response body
+        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Body: {_truncate_json(result)}")
+        
+        return result
     
     # ========== Issue Operations ==========
     
@@ -145,7 +183,15 @@ class JiraChannel:
             Issue details including fields, status, assignee
         """
         logger.info(f"Fetching issue: {issue_key}")
-        return await self._request("GET", f"/issue/{issue_key}")
+        result = await self._request("GET", f"/issue/{issue_key}")
+        
+        # Debug: Log issue summary
+        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+            summary = result.get("fields", {}).get("summary", "No summary")
+            status = result.get("fields", {}).get("status", {}).get("name", "Unknown")
+            logger.debug(f"Issue {issue_key}: {status} - {summary}")
+        
+        return result
     
     async def search_issues(
         self,

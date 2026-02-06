@@ -6,10 +6,17 @@ Features:
 - Add comments to issues/PRs
 - Search issues
 - Rate limit handling with exponential backoff
+
+Debug Logging:
+- All HTTP requests/responses are logged with full details
+- Request: URL, method, headers (sanitized), params, json
+- Response: status, headers, body (truncated if too large)
 """
 
 import asyncio
+import json
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -19,10 +26,32 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
+# Debug mode flag
+_DEBUG_MODE = os.environ.get("DEBUG_GITHUB", "").lower() in ("1", "true", "yes")
+
 # Rate limit settings
 RATE_LIMIT_RETRIES = 5
 INITIAL_BACKOFF = 1.0  # seconds
 MAX_BACKOFF = 60.0  # seconds
+
+
+def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
+    """Remove sensitive headers for logging."""
+    sanitized = {}
+    for k, v in headers.items():
+        if "authorization" in k.lower():
+            sanitized[k] = f"[REDACTED:{len(v)} chars]"
+        else:
+            sanitized[k] = v
+    return sanitized
+
+
+def _truncate_json(data: Any, max_length: int = 500) -> str:
+    """Truncate JSON for logging."""
+    text = json.dumps(data, indent=2, default=str)
+    if len(text) <= max_length:
+        return text
+    return text[:max_length] + f"... [{len(text) - max_length} chars truncated]"
 
 
 class GitHubChannel:
@@ -63,6 +92,17 @@ class GitHubChannel:
         """Make an API request with rate limit handling and exponential backoff."""
         url = f"{self.base_url}{endpoint}"
         
+        # Debug: Log request
+        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"=== GITHUB REQUEST ===")
+            logger.debug(f"Method: {method}")
+            logger.debug(f"URL: {url}")
+            logger.debug(f"Headers: {json.dumps(_sanitize_headers(self._headers))}")
+            if kwargs.get("params"):
+                logger.debug(f"Params: {json.dumps(kwargs['params'])}")
+            if kwargs.get("json"):
+                logger.debug(f"JSON: {_truncate_json(kwargs['json'])}")
+        
         backoff = INITIAL_BACKOFF
         last_error = None
         
@@ -71,6 +111,12 @@ class GitHubChannel:
                 response = await self.client.request(
                     method, url, headers=self._headers, **kwargs
                 )
+                
+                # Debug: Log response
+                if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"=== GITHUB RESPONSE ===")
+                    logger.debug(f"Status: {response.status_code}")
+                    logger.debug(f"Headers: {json.dumps(dict(response.headers), default=str)}")
                 
                 # Handle rate limiting (403)
                 if response.status_code == 403:
@@ -101,7 +147,13 @@ class GitHubChannel:
                 if response.status_code == 204:
                     return {}
                 
-                return response.json()
+                result = response.json()
+                
+                # Debug: Log response body
+                if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Body: {_truncate_json(result)}")
+                
+                return result
                 
             except asyncio.CancelledError:
                 raise

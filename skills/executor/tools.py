@@ -14,6 +14,13 @@ from config import config
 logger = logging.getLogger(__name__)
 
 
+def _truncate_text(text: str, max_length: int = 200) -> str:
+    """Truncate text for logging."""
+    if len(text) <= max_length:
+        return text
+    return text[:max_length] + f"... [{len(text) - max_length} chars truncated]"
+
+
 class ToolResult:
     """Result from tool execution."""
 
@@ -606,21 +613,48 @@ def get_tools_schema() -> list:
 
 
 async def execute_tool(name: str, **kwargs) -> ToolResult:
-    """Execute a tool by name."""
+    """Execute a tool by name with debug logging."""
     _load_function_tools()
+    
+    # Debug: Log tool execution
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"=== TOOL EXECUTION ===")
+        logger.debug(f"Tool: {name}")
+        logger.debug(f"Args: {kwargs}")
     
     # Check function-based tools first
     if name in FUNCTION_TOOLS:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Type: function-based")
+        
         try:
             result = await FUNCTION_TOOLS[name](**kwargs)
+            
+            # Debug: Log result
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"Result: {_truncate_text(str(result), 200)}")
+            
             return ToolResult(success=not result.startswith("Error"), content=result)
         except Exception as e:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"Error: {type(e).__name__}: {e}")
             return ToolResult(success=False, error=str(e))
     
     # Fall back to class-based tools
     tool = TOOLS.get(name)
     if not tool:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Result: Tool not found")
         return ToolResult(success=False, error=f"Tool not found: {name}")
 
-    logger.info(f"Executing tool: {name} with args: {kwargs}")
-    return await tool.execute(**kwargs)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"Type: class-based")
+        logger.debug(f"Args: {kwargs}")
+    
+    result = await tool.execute(**kwargs)
+    
+    # Debug: Log result
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"Result: {result.success} - {_truncate_text(str(result), 200)}")
+    
+    return result

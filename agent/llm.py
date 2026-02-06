@@ -6,11 +6,17 @@ Providers:
 - GitHub Copilot
 - Claude (Anthropic)
 - Ollama (Local)
+
+Debug Logging:
+- All HTTP requests/responses are logged with full details
+- Request: URL, headers (sanitized), payload, tools
+- Response: status, body (truncated if too large)
 """
 
 import asyncio
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -18,6 +24,27 @@ import httpx
 from config import config
 
 logger = logging.getLogger(__name__)
+
+# Debug mode flag - enable with DEBUG_LLM=true
+_DEBUG_MODE = os.environ.get("DEBUG_LLM", "").lower() in ("1", "true", "yes")
+
+
+def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
+    """Remove sensitive headers for logging."""
+    sanitized = {}
+    for k, v in headers.items():
+        if "authorization" in k.lower() or "api-key" in k.lower() or "token" in k.lower():
+            sanitized[k] = f"[REDACTED:{len(v)} chars]"
+        else:
+            sanitized[k] = v
+    return sanitized
+
+
+def _truncate_text(text: str, max_length: int = 500) -> str:
+    """Truncate text for logging."""
+    if len(text) <= max_length:
+        return text
+    return text[:max_length] + f"... [{len(text) - max_length} chars truncated]"
 
 
 class BaseProvider:
@@ -31,7 +58,6 @@ class BaseProvider:
     
     def _get_headers(self) -> Dict[str, str]:
         """Get request headers."""
-        import os
         api_key = os.environ.get(self.api_key_env) if self.api_key_env else ''
         if not api_key:
             api_key = config.llm.get('api_key', '')
@@ -47,8 +73,18 @@ class BaseProvider:
         return []
     
     async def _call_api(self, endpoint: str, payload: Dict) -> Dict:
-        """Make API call with retry logic."""
+        """Make API call with retry logic and debug logging."""
         headers = self._get_headers()
+        url = f"{self.api_base}{endpoint}"
+        
+        # Debug: Log request
+        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+            sanitized_headers = _sanitize_headers(headers)
+            logger.debug(f"=== LLM REQUEST ===")
+            logger.debug(f"URL: {url}")
+            logger.debug(f"Headers: {json.dumps(sanitized_headers)}")
+            logger.debug(f"Payload: {json.dumps(payload, indent=2, default=str)}")
+        
         last_error = None
         max_retries = config.llm.get('max_retries', 3)
         retry_delay = config.llm.get('retry_delay', 1)
@@ -57,15 +93,33 @@ class BaseProvider:
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     response = await client.post(
-                        f"{self.api_base}{endpoint}",
+                        url,
                         headers=headers,
                         json=payload
                     )
+                    
+                    # Debug: Log response
+                    if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f"=== LLM RESPONSE ===")
+                        logger.debug(f"Status: {response.status_code}")
+                        logger.debug(f"Headers: {dict(response.headers)}")
+                    
                     response.raise_for_status()
-                    return response.json()
+                    result = response.json()
+                    
+                    # Debug: Log response body (truncated)
+                    if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+                        result_str = json.dumps(result, indent=2, default=str)
+                        logger.debug(f"Body: {_truncate_text(result_str, 1000)}")
+                    
+                    return result
                     
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
                 last_error = e
+                if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"=== LLM ERROR (attempt {attempt + 1}/{max_retries}) ===")
+                    logger.debug(f"Error: {type(e).__name__}: {e}")
+                
                 if attempt < max_retries - 1:
                     delay = retry_delay * (2 ** attempt)
                     logger.warning(f"API error, retrying in {delay}s: {e}")
@@ -94,7 +148,7 @@ class OpenAIProvider(BaseProvider):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Call OpenAI Chat Completions API."""
+        """Call OpenAI Chat Completions API with debug logging."""
         all_messages = []
         if system_prompt:
             all_messages.append({"role": "system", "content": system_prompt})
@@ -111,10 +165,47 @@ class OpenAIProvider(BaseProvider):
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
         
+        # Debug: Log chat request details
+        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"=== LLM CHAT REQUEST ===")
+            logger.debug(f"Provider: {self.name}")
+            logger.debug(f"Model: {payload['model']}")
+            logger.debug(f"Messages count: {len(all_messages)}")
+            if system_prompt:
+                logger.debug(f"System prompt: {_truncate_text(system_prompt, 200)}")
+            logger.debug(f"Messages preview:")
+            for i, msg in enumerate(all_messages[:5]):  # First 5 messages
+                role = msg.get("role", "unknown")
+                content = _truncate_text(msg.get("content", ""), 100)
+                logger.debug(f"  [{i}] {role}: {content}")
+            if len(all_messages) > 5:
+                logger.debug(f"  ... [{len(all_messages) - 5} more messages]")
+            
+            if tools:
+                logger.debug(f"Tools count: {len(tools)}")
+                for i, tool in enumerate(tools):
+                    tool_name = tool.get("function", {}).get("name", f"tool_{i}")
+                    logger.debug(f"  Tool {i}: {tool_name}")
+        
         data = await self._call_api("/chat/completions", payload)
         
         choice = data["choices"][0]
         message = choice["message"]
+        
+        # Debug: Log response details
+        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"=== LLM CHAT RESPONSE ===")
+            logger.debug(f"Finish reason: {choice.get('finish_reason', 'unknown')}")
+            content = message.get("content", "")
+            logger.debug(f"Content length: {len(content)} chars")
+            logger.debug(f"Content preview: {_truncate_text(content, 200)}")
+            
+            tool_calls = message.get("tool_calls", [])
+            logger.debug(f"Tool calls: {len(tool_calls)}")
+            for tc in tool_calls:
+                tc_id = tc.get("id", "unknown")
+                tc_name = tc.get("function", {}).get("name", "unknown")
+                logger.debug(f"  - {tc_name} (id={tc_id})")
         
         result = {
             "content": message.get("content", ""),
