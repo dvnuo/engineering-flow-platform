@@ -7,11 +7,11 @@ Calls src/integrations/github/api.py and cli.py
 from src.integrations.github import GitHubClient
 from src.integrations.github.cli import GitHubCLI
 
-# 全局实例
+# Global client instances
 github_client = GitHubClient()
 github_cli = GitHubCLI()
 
-# ========== 工具函数 ==========
+# ========== Tool Functions ==========
 
 async def github_get_issue(owner: str, repo: str, issue_number: int) -> str:
     """Get GitHub issue or PR details."""

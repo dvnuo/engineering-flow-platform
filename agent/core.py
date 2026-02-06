@@ -1,4 +1,4 @@
-"""Agent core for OpsClaw Mini - Following OpsClaw's Agent Loop pattern."""
+"""Agent core for OpsClaw - Following OpsClaw's Agent Loop pattern."""
 
 import json
 import logging

@@ -1,4 +1,4 @@
-"""Configuration loader for OpsClaw Mini."""
+"""Configuration loader for OpsClaw."""
 
 import os
 import time

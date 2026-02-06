@@ -1,4 +1,4 @@
-"""Agent package for OpsClaw Mini."""
+"""Agent package for OpsClaw."""
 
 from .core import agent, Agent
 from .llm import llm_client, LLMClient

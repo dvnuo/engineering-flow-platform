@@ -1,4 +1,4 @@
-"""Usage tracking for OpsClaw Mini.
+"""Usage tracking for OpsClaw.
 
 Tracks token usage and estimates costs.
 """

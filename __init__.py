@@ -1,4 +1,4 @@
-"""OpsClaw Mini - A simple version of OpsClaw written in Python."""
+"""OpsClaw - A simple version of OpsClaw written in Python."""
 
 __version__ = "0.1.0"
 
