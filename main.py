@@ -23,7 +23,8 @@ from session.persistence import session_store
 from session.manager import session_manager
 from session.usage import usage_tracker
 from cron.mention_poller import start_polling, stop_polling, is_enabled
-from skills.git.skill import setup_ssh_key, setup_git_user, setup_gh_config
+from skills.git.skill import setup_ssh_key, setup_git_user
+from src.integrations.git import setup_gh_config
 
 
 def setup_logging(level: int = None) -> None:
