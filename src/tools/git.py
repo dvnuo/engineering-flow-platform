@@ -39,7 +39,7 @@ async def git_push(workspace: str = ".") -> str:
 
 
 def get_tools_schemas() -> list:
-    """返回 Git 工具的 OpenAI Schema。"""
+    """Return Git tool schemas for OpenAI."""
     return [
         {
             "type": "function",

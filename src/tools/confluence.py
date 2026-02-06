@@ -41,7 +41,7 @@ async def confluence_search(query: str, max_results: int = 10) -> str:
 
 
 def get_tools_schemas() -> list:
-    """返回 Confluence 工具的 OpenAI Schema。"""
+    """Return Confluence tool schemas for OpenAI."""
     return [
         {
             "type": "function",

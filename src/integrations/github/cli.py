@@ -1,8 +1,8 @@
 """
-GitHub CLI Wrapper - gh 命令封装。
+GitHub CLI Wrapper - gh command wrapper.
 
-提供与 GitHub REST API 等价的功能，
-但使用 gh CLI 执行（支持 Enterprise）。
+Provides functionality equivalent to GitHub REST API,
+but executes using gh CLI (supports Enterprise).
 """
 
 import asyncio

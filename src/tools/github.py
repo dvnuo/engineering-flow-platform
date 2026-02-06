@@ -1,7 +1,7 @@
 """
-GitHub Tools - Agent 调用入口。
+GitHub Tools - Agent entry point.
 
-调用 src/integrations/github/api.py 和 cli.py
+Calls src/integrations/github/api.py and cli.py
 """
 
 from src.integrations.github import GitHubClient
@@ -55,7 +55,7 @@ async def github_add_comment(owner: str, repo: str, issue_number: int, comment: 
 
 
 def get_tools_schemas() -> list:
-    """返回 GitHub 工具的 OpenAI Schema。"""
+    """Return GitHub tool schemas for OpenAI."""
     return [
         {
             "type": "function",
