@@ -25,11 +25,13 @@ class SubAgent:
         task: str,
         model: Optional[str] = None,
         thinking: Optional[str] = None,
+        disable_tools: bool = False,
     ):
         self.session_key = session_key
         self.task = task
         self.model = model
         self.thinking = thinking
+        self.disable_tools = disable_tools
         self.created_at = datetime.now().isoformat()
         self.status = "running"
         self.result: Optional[str] = None
@@ -47,6 +49,9 @@ class SubAgent:
                 think_level=self.thinking,
                 model=self.model,
             )
+            # Disable tools if requested
+            if self.disable_tools:
+                self._agent.tools = []
         return self._agent
     
     async def start(self):
@@ -80,6 +85,7 @@ class SubAgent:
             "task_preview": self.task[:100] + "..." if len(self.task) > 100 else self.task,
             "model": self.model,
             "thinking": self.thinking,
+            "disable_tools": self.disable_tools,
             "created_at": self.created_at,
             "status": self.status,
         }
@@ -226,6 +232,7 @@ def sessions_spawn(
     agent_id: Optional[str] = None,
     model: Optional[str] = None,
     thinking: Optional[str] = None,
+    disable_tools: bool = False,
     cleanup: str = "delete",
     label: Optional[str] = None,
     run_timeout_seconds: Optional[int] = None,
@@ -238,6 +245,7 @@ def sessions_spawn(
         agent_id: Agent ID to use (reserved for future use)
         model: Model to use for the sub-agent
         thinking: Thinking level (off, minimal, low, medium, high)
+        disable_tools: If true, tools are disabled (pure thinking mode)
         cleanup: What to do after completion ("delete" or "keep")
         label: Human-readable label for the session
         run_timeout_seconds: Maximum runtime in seconds
@@ -255,6 +263,7 @@ def sessions_spawn(
         task=task,
         model=model,
         thinking=thinking,
+        disable_tools=disable_tools,
     )
     
     # Store it
@@ -281,6 +290,7 @@ def sessions_spawn(
         "task_preview": task[:100] + "..." if len(task) > 100 else task,
         "model": model,
         "thinking": thinking,
+        "disable_tools": disable_tools,
         "cleanup": cleanup,
         "message": f"Sub-agent session '{session_key}' started",
     }, indent=2)

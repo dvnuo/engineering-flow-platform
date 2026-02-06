@@ -226,3 +226,109 @@ class TestSubAgentIntegration:
         
         # Verify cleaned up
         assert len(_subagent_sessions) == 0
+
+
+class TestSubAgentDisableTools:
+    """Tests for sub-agent tools disable functionality."""
+    
+    def test_subagent_disable_tools_initialization(self):
+        """Test SubAgent initialization with disable_tools=True."""
+        from tools.subagent import SubAgent
+        
+        subagent = SubAgent(
+            session_key="test-think-only",
+            task="Think about this problem deeply",
+            thinking="high",
+            disable_tools=True
+        )
+        
+        assert subagent.session_key == "test-think-only"
+        assert subagent.disable_tools is True
+        assert subagent.thinking == "high"
+    
+    def test_subagent_tools_disabled_when_flag_set(self):
+        """Test that tools are disabled when disable_tools=True."""
+        from tools.subagent import SubAgent
+        
+        subagent = SubAgent(
+            session_key="test-tools-disabled",
+            task="Just think, don't execute",
+            disable_tools=True
+        )
+        
+        # Get the agent (creates it)
+        agent = subagent.agent
+        
+        # Tools should be empty
+        assert agent.tools == []
+    
+    def test_subagent_tools_enabled_by_default(self):
+        """Test that tools are enabled by default when disable_tools=False."""
+        from tools.subagent import SubAgent
+        
+        subagent = SubAgent(
+            session_key="test-tools-enabled",
+            task="Execute normally",
+            disable_tools=False
+        )
+        
+        # Get the agent (creates it)
+        agent = subagent.agent
+        
+        # Tools should NOT be empty
+        assert len(agent.tools) > 0
+    
+    def test_sessions_spawn_disable_tools(self):
+        """Test sessions_spawn with disable_tools parameter."""
+        from tools.subagent import sessions_spawn, _subagent_sessions
+        
+        _subagent_sessions.clear()
+        
+        result = sessions_spawn(
+            task="Deep thinking task",
+            thinking="high",
+            disable_tools=True,
+            label="think-only-task"
+        )
+        
+        data = json.loads(result)
+        
+        assert data["status"] == "started"
+        assert data["disable_tools"] is True
+        assert data["thinking"] == "high"
+        
+        # Cleanup
+        _subagent_sessions.clear()
+    
+    def test_sessions_spawn_schema_has_disable_tools(self):
+        """Test that sessions_spawn schema includes disable_tools."""
+        from tools.subagent_schemas import SUBAGENT_TOOLS
+        
+        # Find sessions_spawn schema
+        spawn_schema = None
+        for tool in SUBAGENT_TOOLS:
+            if tool["function"]["name"] == "sessions_spawn":
+                spawn_schema = tool
+                break
+        
+        assert spawn_schema is not None
+        assert "disable_tools" in spawn_schema["function"]["parameters"]["properties"]
+        
+        props = spawn_schema["function"]["parameters"]["properties"]["disable_tools"]
+        assert props["type"] == "boolean"
+        assert "pure thinking" in props["description"].lower()
+    
+    def test_subagent_to_dict_includes_disable_tools(self):
+        """Test that to_dict includes disable_tools field."""
+        from tools.subagent import SubAgent
+        
+        subagent = SubAgent(
+            session_key="test-dict",
+            task="Test task",
+            disable_tools=True
+        )
+        
+        result = subagent.to_dict()
+        
+        assert "disable_tools" in result
+        assert result["disable_tools"] is True
