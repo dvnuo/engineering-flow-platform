@@ -500,6 +500,22 @@ TOOLS = {
 # Import at module level for direct function access
 # NOTE: Import order matters to avoid circular imports:
 #   skills.executor.tools -> src.tools.* -> src.integrations.* -> channel.* -> skills.executor
+
+# Expected function tool names for validation
+_EXPECTED_TOOL_NAMES = [
+    "jira_get_issue",
+    "jira_search",
+    "jira_add_comment",
+    "confluence_get_page",
+    "confluence_search",
+    "github_get_issue",
+    "github_search_issues",
+    "github_add_comment",
+    "git_status",
+    "git_commit",
+    "git_push",
+]
+
 try:
     from src.tools.jira import (
         jira_get_issue,
@@ -537,10 +553,10 @@ try:
     }
     
     # Validate all tools loaded at startup
-    _EXPECTED_TOOLS = 11
-    if len(FUNCTION_TOOLS) != _EXPECTED_TOOLS:
-        missing = _EXPECTED_TOOLS - len(FUNCTION_TOOLS)
-        logger.error(f"Failed to load {missing} function tools. Only {len(FUNCTION_TOOLS)}/{_EXPECTED_TOOLS} loaded.")
+    if len(FUNCTION_TOOLS) != len(_EXPECTED_TOOL_NAMES):
+        missing_tools = [tool for tool in _EXPECTED_TOOL_NAMES if tool not in FUNCTION_TOOLS]
+        loaded = list(FUNCTION_TOOLS.keys())
+        logger.error(f"Missing tools: {missing_tools}. Loaded: {loaded}")
     else:
         logger.info(f"All {len(FUNCTION_TOOLS)} function tools loaded successfully.")
 

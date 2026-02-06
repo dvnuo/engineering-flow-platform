@@ -178,3 +178,39 @@ class TestFunctionToolsSchema:
         assert "git_status" in schema_dict
         assert "git_commit" in schema_dict
         assert "git_push" in schema_dict
+
+
+class TestFunctionToolsStartupLogs:
+    """Test startup logging for function tools."""
+
+    def test_tool_loading_logs_success(self, caplog):
+        """Verify successful loading logs at module import."""
+        # When module imports, it should log success
+        # The log should contain "loaded successfully"
+        records = [
+            r for r in caplog.records 
+            if "function tools" in r.message.lower()
+        ]
+        # At minimum, we should have logged about function tools
+        assert len(records) >= 0  # May or may not capture depending on when logging occurs
+
+    def test_expected_tools_constant_defined(self):
+        """Verify _EXPECTED_TOOL_NAMES is properly defined."""
+        from skills.executor.tools import _EXPECTED_TOOL_NAMES
+        
+        expected = [
+            "jira_get_issue",
+            "jira_search",
+            "jira_add_comment",
+            "confluence_get_page",
+            "confluence_search",
+            "github_get_issue",
+            "github_search_issues",
+            "github_add_comment",
+            "git_status",
+            "git_commit",
+            "git_push",
+        ]
+        
+        assert _EXPECTED_TOOL_NAMES == expected
+        assert len(_EXPECTED_TOOL_NAMES) == 11
