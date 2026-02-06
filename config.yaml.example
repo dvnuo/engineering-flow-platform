@@ -183,3 +183,24 @@ git:
 #   user:
 #     name: "OpsClaw Bot"
 #     email: "bot@company.com"
+
+# ============================================
+# Heartbeat Configuration (OPTIONAL)
+# ============================================
+# Periodic background checks with thinking-level awareness
+# The thinking level affects:
+# - Check frequency: thinking=high (2x frequent), thinking=off (2x slower)
+# - Detail level: thinking=high (detailed), thinking=off (simplified)
+
+heartbeat:
+  enabled: false  # Set to true to enable heartbeat checks
+  check_interval: 300  # Base interval between checks in seconds (default: 5 minutes)
+
+  # Example behavior:
+  # - thinking=high: 2x more frequent (150s), detailed analysis
+  # - thinking=off: 2x less frequent (600s), simplified checks
+
+# Example usage:
+# heartbeat:
+#   enabled: true
+#   check_interval: 300
