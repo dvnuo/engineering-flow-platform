@@ -1,4 +1,4 @@
-# OpsClaw Mini
+# OpsClaw
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![pytest](https://img.shields.io/badge/pytest-76%20tests-green.svg)](tests/)
@@ -468,7 +468,7 @@ Create `/etc/systemd/system/opsclaw.service`:
 
 ```ini
 [Unit]
-Description=OpsClaw Mini - Discord Bot
+Description=OpsClaw - Discord Bot
 After=network.target
 
 [Service]

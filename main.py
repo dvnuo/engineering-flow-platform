@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpsClaw Mini - A simple version of OpsClaw written in Python."""
+"""OpsClaw - A simple version of OpsClaw written in Python."""
 
 import asyncio
 import logging
@@ -77,7 +77,7 @@ async def main() -> None:
     setup_logging()
 
     logger = logging.getLogger(__name__)
-    logger.info("Starting OpsClaw Mini...")
+    logger.info("Starting OpsClaw...")
 
     # Check configuration
     can_start, warnings = check_config()
@@ -139,7 +139,7 @@ async def main() -> None:
             logger.info("Starting mention polling...")
             polling_task = asyncio.create_task(start_polling())
         
-        logger.info("OpsClaw Mini is running. Press Ctrl+C to stop.")
+        logger.info("OpsClaw is running. Press Ctrl+C to stop.")
 
         # Keep running
         while True:
