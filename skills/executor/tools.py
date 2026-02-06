@@ -504,10 +504,41 @@ def _load_function_tools():
     """Lazy load function-based tools to avoid circular imports."""
     global FUNCTION_TOOLS
     if not FUNCTION_TOOLS:
-        from src.tools import get_all_tools
-        # get_all_tools returns schemas, not functions
-        # We'll skip function-based tools for now
-        pass
+        # Import tool functions directly from src.tools
+        from src.tools.jira import (
+            jira_get_issue,
+            jira_search,
+            jira_add_comment,
+        )
+        from src.tools.confluence import (
+            confluence_get_page,
+            confluence_search,
+        )
+        from src.tools.github import (
+            github_get_issue,
+            github_search_issues,
+            github_add_comment,
+        )
+        from src.tools.git import (
+            git_status,
+            git_commit,
+            git_push,
+        )
+        
+        # Map function names to functions for execution
+        FUNCTION_TOOLS = {
+            "jira_get_issue": jira_get_issue,
+            "jira_search": jira_search,
+            "jira_add_comment": jira_add_comment,
+            "confluence_get_page": confluence_get_page,
+            "confluence_search": confluence_search,
+            "github_get_issue": github_get_issue,
+            "github_search_issues": github_search_issues,
+            "github_add_comment": github_add_comment,
+            "git_status": git_status,
+            "git_commit": git_commit,
+            "git_push": git_push,
+        }
 
 
 def get_tool_names() -> list:
