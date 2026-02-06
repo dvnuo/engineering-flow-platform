@@ -6,7 +6,7 @@ Calls src/integrations/jira/api.py
 
 from src.integrations.jira import JiraChannel
 
-# Global client instance
+# Global instance
 jira_client = JiraChannel()
 
 # ========== Tool Functions ==========

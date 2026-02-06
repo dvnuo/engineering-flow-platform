@@ -6,7 +6,7 @@ Calls src/integrations/git/api.py
 
 from src.integrations.git import GitClient, setup_ssh_key, setup_git_user
 
-# Global client instance
+# Global instance
 git_client = GitClient()
 
 # ========== Tool Functions ==========

@@ -6,7 +6,7 @@ Calls src/integrations/confluence/api.py
 
 from src.integrations.confluence import ConfluenceChannel
 
-# Global client instance
+# Global instance
 confluence_client = ConfluenceChannel()
 
 # ========== Tool Functions ==========
