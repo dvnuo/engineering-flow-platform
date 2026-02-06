@@ -699,6 +699,58 @@ class TelegramChannel:
 
 ---
 
+## Heartbeat (Periodic Background Checks)
+
+The heartbeat feature provides periodic background checks for emails, calendar, and weather. The behavior is influenced by the **thinking level**.
+
+### Configuration
+
+Enable heartbeat in `config.yaml`:
+
+```yaml
+heartbeat:
+  enabled: true
+  check_interval: 300  # Base interval in seconds (default: 5 minutes)
+```
+
+### Thinking Level Effects
+
+| Thinking Level | Check Interval | Detail Level |
+|---------------|----------------|---------------|
+| `high` | 2x more frequent (150s) | Detailed analysis with importance, conflicts, alerts |
+| `medium` | Normal (300s) | Standard detail |
+| `minimal` | Normal (300s) | Simplified checks |
+| `off` | 2x less frequent (600s) | Just unread count / summary |
+
+### Behavior Examples
+
+**thinking=high**:
+- Emails: Returns `important_count`, `action_required`, detailed analysis
+- Calendar: Returns `conflicts`, `upcoming_important`
+- Weather: Returns `forecast`, `alerts`, `recommendations`
+
+**thinking=off**:
+- Emails: Returns only `unread_count`
+- Calendar: Returns only `today_count`
+- Weather: Returns only `current_condition`
+
+### Log Output
+
+```
+=== [HEARTBEAT] STARTED ===
+  think_level=high
+  interval=150s
+
+=== [HEARTBEAT] CHECK COMPLETED ===
+  Detail: detailed
+
+=== [HEARTBEAT] LEVEL CHANGED ===
+  off -> high
+  interval: 150s
+```
+
+---
+
 ## Troubleshooting
 
 ### Bot Not Responding
