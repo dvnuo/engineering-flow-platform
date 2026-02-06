@@ -496,18 +496,67 @@ TOOLS = {
 }
 
 
-# Registry of function-based tools (Jira, Confluence)
-FUNCTION_TOOLS = {}
+# Registry of function-based tools (Jira, Confluence, GitHub, Git)
+# Import at module level for direct function access
+# NOTE: Import order matters to avoid circular imports:
+#   skills.executor.tools -> src.tools.* -> src.integrations.* -> channel.* -> skills.executor
+try:
+    from src.tools.jira import (
+        jira_get_issue,
+        jira_search,
+        jira_add_comment,
+    )
+    from src.tools.confluence import (
+        confluence_get_page,
+        confluence_search,
+    )
+    from src.tools.github import (
+        github_get_issue,
+        github_search_issues,
+        github_add_comment,
+    )
+    from src.tools.git import (
+        git_status,
+        git_commit,
+        git_push,
+    )
+    
+    # Map function names to functions for execution
+    FUNCTION_TOOLS = {
+        "jira_get_issue": jira_get_issue,
+        "jira_search": jira_search,
+        "jira_add_comment": jira_add_comment,
+        "confluence_get_page": confluence_get_page,
+        "confluence_search": confluence_search,
+        "github_get_issue": github_get_issue,
+        "github_search_issues": github_search_issues,
+        "github_add_comment": github_add_comment,
+        "git_status": git_status,
+        "git_commit": git_commit,
+        "git_push": git_push,
+    }
+    
+    # Validate all tools loaded at startup
+    _EXPECTED_TOOLS = 11
+    if len(FUNCTION_TOOLS) != _EXPECTED_TOOLS:
+        missing = _EXPECTED_TOOLS - len(FUNCTION_TOOLS)
+        logger.error(f"Failed to load {missing} function tools. Only {len(FUNCTION_TOOLS)}/{_EXPECTED_TOOLS} loaded.")
+    else:
+        logger.info(f"All {len(FUNCTION_TOOLS)} function tools loaded successfully.")
+
+except ImportError as e:
+    logger.error(f"FATAL: Failed to load function tools: {e}")
+    logger.error("All Jira/Confluence/GitHub/Git tools will be UNUSABLE.")
+    FUNCTION_TOOLS = {}
 
 
 def _load_function_tools():
-    """Lazy load function-based tools to avoid circular imports."""
-    global FUNCTION_TOOLS
-    if not FUNCTION_TOOLS:
-        from src.tools import get_all_tools
-        # get_all_tools returns schemas, not functions
-        # We'll skip function-based tools for now
-        pass
+    """Lazy load function-based tools to avoid circular imports.
+    
+    NOTE: FUNCTION_TOOLS is now loaded at module level.
+    This function kept for backward compatibility.
+    """
+    pass
 
 
 def get_tool_names() -> list:
@@ -522,11 +571,22 @@ def get_tool(name: str) -> Optional[Tool]:
 
 
 def get_tools_schema() -> list:
-    """Get all tool schemas for LLM."""
+    """Get all tool schemas for LLM.
+    
+    Returns a list of OpenAI function call schemas.
+    Each schema is a dict with 'type' and 'function' keys.
+    """
     _load_function_tools()
     from src.tools import get_all_tools
+    
+    # Class-based tools (edit, exec, read, write, image, etc.)
     class_schemas = [tool.get_schema() for tool in TOOLS.values()]
-    return class_schemas + list(FUNCTION_TOOLS.values()) + get_all_tools()
+    
+    # Function-based tools (Jira, Confluence, GitHub, Git)
+    # get_all_tools() already returns proper schema dicts
+    function_schemas = get_all_tools()
+    
+    return class_schemas + function_schemas
 
 
 async def execute_tool(name: str, **kwargs) -> ToolResult:
