@@ -120,6 +120,11 @@ class Config:
     def debug(self) -> Dict[str, Any]:
         """Get debug configuration."""
         return self._config.get("debug", {})
+    
+    @property
+    def heartbeat(self) -> Dict[str, Any]:
+        """Get heartbeat configuration."""
+        return self._config.get("heartbeat", {})
 
 
 # Global config instance

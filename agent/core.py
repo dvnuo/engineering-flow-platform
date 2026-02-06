@@ -1,4 +1,4 @@
-"""Agent core for OpsClaw - Following OpsClaw's Agent Loop pattern."""
+"""Agent core for OpsClaw - Following OpenClaw's Agent Loop pattern."""
 
 import json
 import logging
@@ -6,9 +6,11 @@ import platform
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from agent.heartbeat import get_heartbeat, start_heartbeat, stop_heartbeat
 from agent.llm import llm_client
 from agent.memory import memory_system
 from agent.thinking import ThinkLevel, normalize_think_level, format_runtime_info
+from config import config
 from session.manager import session_manager
 from skills.executor import (
     skills_executor,
@@ -34,13 +36,21 @@ class Agent:
         # Resolve thinking level
         self.think_level = normalize_think_level(think_level) or ThinkLevel.OFF
         
+        # Initialize heartbeat if enabled
+        self._heartbeat_enabled = config.heartbeat.get("enabled", False)
+        if self._heartbeat_enabled:
+            check_interval = config.heartbeat.get("check_interval", 300)
+            self._heartbeat = get_heartbeat(self.think_level)
+            # Set the check interval from config
+            self._heartbeat.check_interval = check_interval
+            logger.info(f"Heartbeat enabled - think_level={self.think_level.value}, interval={check_interval}s")
+        
         # Build OpsClaw-style system prompt
         # NOTE: get_tools_schema() already includes INTEGRATION_TOOLS (JIRA + Confluence + GitHub tools)
         base_tools = get_tools_schemas()
         self.tools = base_tools  # Already contains all tools from TOOLS + INTEGRATION_TOOLS
         
         # ===== DEBUG =====
-        from config import config
         self.debug_enabled = config.debug.get("enabled", False)
         if self.debug_enabled:
             print(f"\n{'='*60}")
