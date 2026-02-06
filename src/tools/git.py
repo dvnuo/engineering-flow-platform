@@ -1,5 +1,5 @@
 """
-Git Tools - Agent entry point。
+Git Tools - Agent entry point.
 
 Calls src/integrations/git/api.py
 """

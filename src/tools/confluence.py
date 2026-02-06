@@ -1,5 +1,5 @@
 """
-Confluence Tools - Agent entry point。
+Confluence Tools - Agent entry point.
 
 Calls src/integrations/confluence/api.py
 """
