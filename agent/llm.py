@@ -169,12 +169,21 @@ class OpenAIProvider(BaseProvider):
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """Call OpenAI Chat Completions API with debug logging."""
+        """Call OpenAI Chat Completions API with reasoning_replay support.
+        
+        Args:
+            reasoning_replay: Enable reasoning_replay to see model's internal reasoning.
+                When enabled, includes model's thinking process in response.
+        """
         all_messages = []
         if system_prompt:
             all_messages.append({"role": "system", "content": system_prompt})
         all_messages.extend(messages)
+        
+        # Use config setting if not explicitly provided
+        enable_reasoning = reasoning_replay if reasoning_replay is not None else config.llm.get('reasoning_replay', False)
         
         payload = {
             "model": model or self.default_model,
@@ -182,6 +191,12 @@ class OpenAIProvider(BaseProvider):
             "temperature": temperature,
             "max_tokens": max_tokens or config.llm.get('max_tokens', 1000),
         }
+        
+        # Add reasoning_replay if enabled (for o1/o3 style reasoning)
+        if enable_reasoning:
+            payload["reasoning"] = {"type": "text"}
+            if _is_debug_enabled():
+                logger.debug(f"Reasoning replay: enabled")
         
         if tools:
             payload["tools"] = tools
@@ -222,6 +237,12 @@ class OpenAIProvider(BaseProvider):
             logger.debug(f"Content length: {len(content)} chars")
             logger.debug(f"Content preview: {content[:200]}...")
             
+            # Log reasoning if present
+            reasoning = message.get("reasoning")
+            if reasoning:
+                logger.debug(f"Reasoning length: {len(reasoning)} chars")
+                logger.debug(f"Reasoning preview: {reasoning[:200]}...")
+            
             tool_calls = message.get("tool_calls", [])
             logger.debug(f"Tool calls: {len(tool_calls)}")
             for tc in tool_calls:
@@ -229,11 +250,16 @@ class OpenAIProvider(BaseProvider):
                 tc_name = tc.get("function", {}).get("name", "unknown")
                 logger.debug(f"  - {tc_name} (id={tc_id})")
         
+        # Build result with reasoning if available
         result = {
             "content": message.get("content", ""),
             "tool_calls": message.get("tool_calls", []),
             "usage": data.get("usage", {}),
         }
+        
+        # Include reasoning if present
+        if message.get("reasoning"):
+            result["reasoning"] = message.get("reasoning")
         
         # Calculate cost (simplified)
         model_name = data.get("model", "")
@@ -274,6 +300,7 @@ class GitHubCopilotProvider(BaseProvider):
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Call GitHub Copilot Chat API."""
         import os
@@ -309,9 +336,10 @@ class GitHubCopilotProvider(BaseProvider):
             response.raise_for_status()
             data = response.json()
         
-        # Parse response - check for tool calls
+        # Parse response - check for tool calls and reasoning
         message_data = data.get("choices", [{}])[0].get("message", {})
         content = message_data.get("content", "")
+        reasoning = message_data.get("reasoning", "")
         
         # GitHub Copilot may return tool_calls
         tool_calls = message_data.get("tool_calls", [])
@@ -320,7 +348,7 @@ class GitHubCopilotProvider(BaseProvider):
         prompt_tokens = sum(len(str(m).split()) for m in all_messages) * 4  # Rough estimate
         completion_tokens = len(content.split()) * 4  # Rough estimate
         
-        return {
+        result = {
             "content": content,
             "tool_calls": tool_calls,
             "usage": {
@@ -329,6 +357,12 @@ class GitHubCopilotProvider(BaseProvider):
                 "total_tokens": prompt_tokens + completion_tokens,
             }
         }
+        
+        # Include reasoning if present
+        if reasoning:
+            result["reasoning"] = reasoning
+        
+        return result
     
     def list_models(self) -> List[str]:
         return ["gpt-4", "gpt-4-turbo"]
@@ -362,6 +396,7 @@ class ClaudeProvider(BaseProvider):
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Call Anthropic Claude API."""
         all_messages = []
@@ -407,14 +442,18 @@ class ClaudeProvider(BaseProvider):
         return claude_tools
     
     def _parse_response(self, data: Dict) -> Dict[str, Any]:
-        """Parse Claude response."""
+        """Parse Claude response with reasoning support."""
         content_blocks = data.get("content", [])
         text_content = ""
+        reasoning_content = ""
         tool_calls = []
         
         for block in content_blocks:
             if block.get("type") == "text":
                 text_content = block.get("text", "")
+            elif block.get("type") == "reasoning":
+                # Claude's reasoning content
+                reasoning_content = block.get("text", "")
             elif block.get("type") == "tool_use":
                 tool_calls.append({
                     "id": block.get("id", ""),
@@ -426,7 +465,7 @@ class ClaudeProvider(BaseProvider):
                 })
         
         usage = data.get("usage", {})
-        return {
+        result = {
             "content": text_content,
             "tool_calls": tool_calls,
             "usage": {
@@ -435,6 +474,12 @@ class ClaudeProvider(BaseProvider):
                 "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
             }
         }
+        
+        # Include reasoning if present
+        if reasoning_content:
+            result["reasoning"] = reasoning_content
+        
+        return result
     
     def list_models(self) -> List[str]:
         return [
@@ -466,6 +511,7 @@ class OllamaProvider(BaseProvider):
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Call Ollama API."""
         full_messages = []
@@ -519,9 +565,10 @@ class OllamaProvider(BaseProvider):
         return self._parse_response(data)
     
     def _parse_response(self, data: Dict) -> Dict[str, Any]:
-        """Parse Ollama response."""
+        """Parse Ollama response with reasoning support."""
         message = data.get("message", {})
         content = message.get("content", "")
+        reasoning = message.get("reasoning", "") or data.get("reasoning", "")
         
         # Parse tool_calls from Ollama response
         tool_calls = []
@@ -542,7 +589,7 @@ class OllamaProvider(BaseProvider):
                 }
             })
         
-        return {
+        result = {
             "content": content,
             "tool_calls": tool_calls,
             "usage": {
@@ -551,6 +598,12 @@ class OllamaProvider(BaseProvider):
                 "total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
             }
         }
+        
+        # Include reasoning if present
+        if reasoning:
+            result["reasoning"] = reasoning
+        
+        return result
     
     def list_models(self) -> List[str]:
         """List available Ollama models."""
