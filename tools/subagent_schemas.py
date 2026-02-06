@@ -104,6 +104,10 @@ SUBAGENT_TOOLS = [
                         "type": "string",
                         "description": "Thinking level: off, minimal, low, medium, high",
                     },
+                    "disable_tools": {
+                        "type": "boolean",
+                        "description": "If true, tools are disabled (pure thinking mode, no tool execution)",
+                    },
                     "cleanup": {
                         "type": "string",
                         "enum": ["delete", "keep"],
