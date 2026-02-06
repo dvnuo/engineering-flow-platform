@@ -162,14 +162,14 @@ class TestMemorySystemIntegration:
   2. Second
 - > Blockquote
 
-中文测试
+Chinese Test
 """)
             
             memory = MemorySystem(tmpdir)
             soul = memory.load_soul()
             
             assert "Special Characters Test" in soul
-            assert "中文测试" in soul
+            assert "Chinese Test" in soul
 
 
 if __name__ == "__main__":

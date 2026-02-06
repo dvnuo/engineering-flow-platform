@@ -171,7 +171,7 @@ class TestSessionManagerEdgeCases:
         session_id = f"special_test_{uuid.uuid4().hex[:8]}"
         
         session_manager.clear_history(session_id)
-        special_content = "Hello! 🌍 你好\n\tSpecial: \"quotes\" 'single' \\backslash"
+        special_content = "Hello! 🌍 Hello\n\tSpecial: \"quotes\" 'single' \\backslash"
         session_manager.add_message(session_id, "user", special_content)
         history = session_manager.get_history(session_id)
         

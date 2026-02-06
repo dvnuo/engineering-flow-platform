@@ -1,15 +1,15 @@
 """
-Jira Tools - Agent 调用入口。
+Jira Tools - Agent entry point.
 
-调用 src/integrations/jira/api.py
+Calls src/integrations/jira/api.py
 """
 
 from src.integrations.jira import JiraChannel
 
-# 全局实例
+# Global instance
 jira_client = JiraChannel()
 
-# ========== 工具函数 ==========
+# ========== Tool Functions ==========
 
 async def jira_get_issue(issue_key: str) -> str:
     """Get a Jira issue by key."""
@@ -48,7 +48,7 @@ async def jira_add_comment(issue_key: str, comment: str) -> str:
 
 
 def get_tools_schemas() -> list:
-    """返回 Jira 工具的 OpenAI Schema。"""
+    """Return Jira tool schemas for OpenAI."""
     return [
         {
             "type": "function",

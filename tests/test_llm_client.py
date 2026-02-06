@@ -332,7 +332,7 @@ class TestLLMClientEdgeCases:
         mock_client = MockHttpClient(mock_response)
         
         special_history = [
-            {"role": "user", "content": "Hello with emoji 🌍 and 中文\n\tTab"}
+            {"role": "user", "content": "Hello with emoji 🌍 and Chinese\n\tTab"}
         ]
         
         with patch('httpx.AsyncClient', return_value=mock_client):
