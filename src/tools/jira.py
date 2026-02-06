@@ -6,10 +6,10 @@ Calls src/integrations/jira/api.py
 
 from src.integrations.jira import JiraChannel
 
-# 全局实例
+# Global instance
 jira_client = JiraChannel()
 
-# ========== 工具函数 ==========
+# ========== Tool Functions ==========
 
 async def jira_get_issue(issue_key: str) -> str:
     """Get a Jira issue by key."""
