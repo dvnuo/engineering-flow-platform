@@ -497,48 +497,52 @@ TOOLS = {
 
 
 # Registry of function-based tools (Jira, Confluence)
-FUNCTION_TOOLS = {}
+# Initialize function tools at module level to avoid circular import issues
+try:
+    from src.tools.jira import (
+        jira_get_issue,
+        jira_search,
+        jira_add_comment,
+    )
+    from src.tools.confluence import (
+        confluence_get_page,
+        confluence_search,
+    )
+    from src.tools.github import (
+        github_get_issue,
+        github_search_issues,
+        github_add_comment,
+    )
+    from src.tools.git import (
+        git_status,
+        git_commit,
+        git_push,
+    )
+    
+    # Map function names to functions for execution
+    FUNCTION_TOOLS = {
+        "jira_get_issue": jira_get_issue,
+        "jira_search": jira_search,
+        "jira_add_comment": jira_add_comment,
+        "confluence_get_page": confluence_get_page,
+        "confluence_search": confluence_search,
+        "github_get_issue": github_get_issue,
+        "github_search_issues": github_search_issues,
+        "github_add_comment": github_add_comment,
+        "git_status": git_status,
+        "git_commit": git_commit,
+        "git_push": git_push,
+    }
+except ImportError as e:
+    logger.warning(f"Failed to load function tools: {e}")
+    FUNCTION_TOOLS = {}
 
 
 def _load_function_tools():
     """Lazy load function-based tools to avoid circular imports."""
-    global FUNCTION_TOOLS
-    if not FUNCTION_TOOLS:
-        # Import tool functions directly from src.tools
-        from src.tools.jira import (
-            jira_get_issue,
-            jira_search,
-            jira_add_comment,
-        )
-        from src.tools.confluence import (
-            confluence_get_page,
-            confluence_search,
-        )
-        from src.tools.github import (
-            github_get_issue,
-            github_search_issues,
-            github_add_comment,
-        )
-        from src.tools.git import (
-            git_status,
-            git_commit,
-            git_push,
-        )
-        
-        # Map function names to functions for execution
-        FUNCTION_TOOLS = {
-            "jira_get_issue": jira_get_issue,
-            "jira_search": jira_search,
-            "jira_add_comment": jira_add_comment,
-            "confluence_get_page": confluence_get_page,
-            "confluence_search": confluence_search,
-            "github_get_issue": github_get_issue,
-            "github_search_issues": github_search_issues,
-            "github_add_comment": github_add_comment,
-            "git_status": git_status,
-            "git_commit": git_commit,
-            "git_push": git_push,
-        }
+    # FUNCTION_TOOLS is now loaded at module level
+    # This function kept for backward compatibility
+    pass
 
 
 def get_tool_names() -> list:
