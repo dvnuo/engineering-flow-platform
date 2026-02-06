@@ -184,6 +184,9 @@ You have access to the following tools. When a user asks you to do something tha
 
         # ===== REACT PATTERN =====
 
+        # Log thinking level for subagent tracking
+        logger.info(f"[{session_id}] think_level={self.think_level.value}, model={model or ''}")
+        
         # Step 1: Call LLM with tools
         logger.debug(f"Calling LLM with {len(self.tools)} tools")
         
