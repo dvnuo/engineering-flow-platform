@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional
 # Import Agent lazily to avoid circular imports
 _subagent_sessions: Dict[str, Dict[str, Any]] = {}
 
+logger = logging.getLogger(__name__)
+
 
 class SubAgent:
     """Represents a running sub-agent session."""
@@ -54,7 +56,8 @@ class SubAgent:
     async def _run(self):
         """Run the sub-agent task."""
         try:
-            logger.info(f"Sub-agent {self.session_key} started with task: {self.task[:100]}...")
+            logger.info(f"Sub-agent {self.session_key} started - think_level={self.thinking}, model={self.model}")
+            logger.debug(f"Task: {self.task[:200]}...")
             
             result = await self.agent.process(
                 message=self.task,
@@ -265,6 +268,9 @@ def sessions_spawn(
         "status": "started",
         "agent": subagent,
     }
+    
+    # Log subagent creation with thinking level
+    logger.info(f"Spawn subagent: session={session_key}, think_level={thinking}, model={model}")
     
     # Note: Actual async execution requires running event loop
     # The sub-agent will execute when process() is called
