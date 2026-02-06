@@ -1,4 +1,4 @@
-"""Session pruning for OpsClaw Mini.
+"""Session pruning for OpsClaw.
 
 Automatically prunes old tool results from session context while preserving key information.
 """

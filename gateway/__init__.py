@@ -1,4 +1,4 @@
-"""Gateway package for OpsClaw Mini."""
+"""Gateway package for OpsClaw."""
 
 from .server import gateway, Gateway
 

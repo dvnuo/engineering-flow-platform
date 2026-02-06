@@ -1,4 +1,4 @@
-"""Skills and Tools executor for OpsClaw Mini.
+"""Skills and Tools executor for OpsClaw.
 
 This module provides the ability to execute skills and tools based on user requests.
 """
