@@ -1,15 +1,15 @@
 """
-Confluence Tools - Agent 调用入口。
+Confluence Tools - Agent entry point。
 
-调用 src/integrations/confluence/api.py
+Calls src/integrations/confluence/api.py
 """
 
 from src.integrations.confluence import ConfluenceChannel
 
-# 全局实例
+# Global instance
 confluence_client = ConfluenceChannel()
 
-# ========== 工具函数 ==========
+# ========== Tool Functions ==========
 
 async def confluence_get_page(space: str, title: str) -> str:
     """Get a Confluence page by space and title."""

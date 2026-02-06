@@ -1,15 +1,15 @@
 """
-Git Tools - Agent 调用入口。
+Git Tools - Agent entry point。
 
-调用 src/integrations/git/api.py
+Calls src/integrations/git/api.py
 """
 
 from src.integrations.git import GitClient, setup_ssh_key, setup_git_user
 
-# 全局实例
+# Global instance
 git_client = GitClient()
 
-# ========== 工具函数 ==========
+# ========== Tool Functions ==========
 
 async def git_status(workspace: str = ".") -> str:
     """Get git status of a repository."""
