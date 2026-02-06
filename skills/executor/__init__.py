@@ -144,7 +144,12 @@ class SkillsExecutor:
             skill_file = skill_dir / "skill.py"
             if skill_file.exists():
                 logger.debug(f"Found skill file: {skill_file}")
-                self._import_skill(skill_dir.name)
+                # Import skill in isolated try-except to avoid failing entire load
+                try:
+                    self._import_skill(skill_dir.name)
+                except Exception as e:
+                    logger.warning(f"Failed to load skill {skill_dir.name}: {e}")
+                    continue
 
     def _import_skill(self, skill_name: str):
         """Import a skill module."""
