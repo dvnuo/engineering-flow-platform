@@ -160,7 +160,7 @@ You have access to the following tools. When a user asks you to do something tha
     ) -> Dict[str, Any]:
         """Process a user message with ReAct pattern.
         
-        Flow: User → LLM (with tools) → Tool Call → Execute → Result → LLM → Final Response
+        Flow: User → Fast Lane Commands → LLM (with tools) → Tool Call → Execute → Result → LLM → Final Response
         
         Returns:
             Dict with:
@@ -169,16 +169,21 @@ You have access to the following tools. When a user asks you to do something tha
         """
         usage_data = {}
         
-        # NOTE: Skill matching is now optional - we add skill hints to system prompt
-        # instead of intercepting messages. This gives LLM flexibility while
-        # still providing guidance on when skills might be useful.
-        # Direct skill execution is still available if LLM chooses to use it.
-
         # Add user message to history
         session_manager.add_message(session_id, "user", message)
 
         # Get conversation history
         messages = session_manager.get_history(session_id)
+
+        # ===== FAST LANE COMMANDS =====
+        from agent.fastlane import process_fastlane_command
+        
+        fastlane_response = await process_fastlane_command(message, self)
+        if fastlane_response:
+            # Fast lane command processed, return the response
+            session_manager.add_message(session_id, "assistant", fastlane_response)
+            return {"response": fastlane_response, "usage": usage_data}
+        # ===== END FAST LANE =====
 
         # ===== DEBUG =====
         if self.debug_enabled:
