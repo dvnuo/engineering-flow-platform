@@ -235,7 +235,7 @@ Based on comparison with Engineering Flow Platform and enterprise needs:
 
 ### Engineering Flow Platform Structure
 ```
-openclaw/
+engineering-flow-platform/
 ├── src/
 │   ├── agent/          # Pi agent runtime
 │   ├── gateway/        # WS control plane
@@ -247,7 +247,7 @@ openclaw/
 └── packages/           # npm packages
 ```
 
-### CodeW Structure (Current - Updated 2026-02-02)
+### Engineering Flow Platform Structure (Current - Updated 2026-02-02)
 ```
 engineering-flow-platform/
 ├── main.py             # Entry point
@@ -287,9 +287,6 @@ engineering-flow-platform/
 
 ## References
 
-- Engineering Flow Platform Docs: https://docs.efp.ai
-- Engineering Flow Platform GitHub: https://github.com/openclaw/openclaw
-- Engineering Flow Platform Discord: https://discord.gg/clawd
 - **CodeW vs Engineering Flow Platform Comparison**: [docs/COMPARISON.md](docs/COMPARISON.md)
 - **Reference Implementation**: /root/.efp/workspace (original source for reference)
 

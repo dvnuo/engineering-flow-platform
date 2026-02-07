@@ -371,4 +371,3 @@ python3 skills/skill_creator/scripts/package_skill.py skills/my-skill/ --validat
 
 - `skills/decorator.py` - Skill decorator for registering skills
 - `skills/executor/` - Skill execution engine
-- OpenClaw skill-creator: https://github.com/openclaw/openclaw/tree/main/skills/skill-creator
