@@ -185,6 +185,78 @@ You have access to the following tools. When a user asks you to do something tha
             return {"response": fastlane_response, "usage": usage_data}
         # ===== END FAST LANE =====
 
+        # ===== MESSAGE COMPACTION =====
+        # Check if messages need compaction to fit within token limits
+        from agent.compaction import (
+            compact_messages,
+            estimate_messages_tokens,
+            resolve_context_window_tokens,
+            CompactionStats,
+        )
+        
+        # Get max tokens from config or use default
+        max_tokens = config.llm.get("max_tokens", 4000)
+        
+        # Estimate current token count
+        # Convert session messages to AgentMessage format
+        from agent.compaction import AgentMessage
+        
+        agent_messages = [
+            AgentMessage(
+                role=msg.get("role", "user"),
+                content=msg.get("content", ""),
+                timestamp=msg.get("timestamp"),
+            )
+            for msg in messages
+        ]
+        
+        current_tokens = estimate_messages_tokens(agent_messages)
+        
+        # Log compaction info
+        logger.info(
+            f"[{session_id}] Compaction check: "
+            f"current_tokens={current_tokens}, max_tokens={max_tokens}"
+        )
+        
+        # Compact messages if over limit
+        compaction_stats: CompactionStats = None
+        if current_tokens > max_tokens:
+            logger.info(
+                f"[{session_id}] Messages exceed token limit, compacting..."
+            )
+            
+            # Get context window for the model
+            context_window = resolve_context_window_tokens(
+                config.llm.get("model", "gpt-3.5-turbo")
+            )
+            
+            # Compact messages
+            compacted_messages, compaction_stats = await compact_messages(
+                messages=agent_messages,
+                max_tokens=max_tokens,
+                context_window=context_window,
+                recent_count=5,
+            )
+            
+            # Update messages for LLM call
+            # Convert back to dict format for LLM
+            messages = [
+                {
+                    "role": msg.role,
+                    "content": msg.content,
+                    "timestamp": msg.timestamp,
+                }
+                for msg in compacted_messages
+            ]
+            
+            logger.info(
+                f"[{session_id}] Compaction complete: "
+                f"kept_tokens={compaction_stats.kept_tokens}, "
+                f"dropped_messages={compaction_stats.dropped_messages}, "
+                f"summary={compaction_stats.summary[:100] if compaction_stats.summary else 'N/A'}..."
+            )
+        # ===== END MESSAGE COMPACTION =====
+
         # ===== DEBUG =====
         if self.debug_enabled:
             print(f"\n{'='*60}")
