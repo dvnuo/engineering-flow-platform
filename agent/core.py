@@ -36,6 +36,9 @@ class Agent:
         # Resolve thinking level
         self.think_level = normalize_think_level(think_level) or ThinkLevel.OFF
         
+        # Store model for later use
+        self.model = model
+        
         # Initialize heartbeat if enabled
         self._heartbeat_enabled = config.heartbeat.get("enabled", False)
         if self._heartbeat_enabled:
@@ -84,7 +87,7 @@ class Agent:
             os_info=f"{platform.system()} {platform.release()}",
             arch=platform.machine(),
             node=platform.python_version(),
-            model=model or "",
+            model=self.model or "",
             default_model="",
             channel="",
             capabilities=[],
@@ -272,7 +275,7 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== REACT PATTERN =====
 
         # Log thinking level for subagent tracking
-        logger.info(f"[{session_id}] think_level={self.think_level.value}, model={model or ''}")
+        logger.info(f"[{session_id}] think_level={self.think_level.value}, model={self.model or ''}")
         
         # Step 1: Call LLM with tools
         logger.debug(f"Calling LLM with {len(self.tools)} tools")
