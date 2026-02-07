@@ -566,7 +566,8 @@ opsclaw/
 │   ├── __init__.py
 │   ├── core.py          # Agent logic
 │   ├── llm.py           # LLM client (OpenAI + GitHub Copilot)
-│   └── memory.py        # Memory system for MD files
+│   ├── memory.py        # Memory system for MD files
+│   └── model_fallback.py # Automatic model degradation
 ├── channel/
 │   ├── __init__.py
 │   └── discord.py       # Discord adapter
@@ -580,7 +581,8 @@ opsclaw/
     ├── test_gateway.py
     ├── test_llm_client.py
     ├── test_session_manager.py
-    └── test_memory.py   # Memory system tests
+    ├── test_memory.py        # Memory system tests
+    └── test_model_fallback.py # Model fallback tests
 ```
 
 ---
@@ -748,6 +750,153 @@ heartbeat:
   off -> high
   interval: 150s
 ```
+
+---
+
+## Model Fallback (Automatic Model Degradation)
+
+The model fallback feature automatically switches to alternative models when the primary model fails. This improves reliability by gracefully handling transient errors.
+
+### Overview
+
+When making LLM calls, sometimes the primary model may fail due to:
+- Network timeouts
+- Server errors
+- Model overloaded
+
+Instead of completely failing, the system can automatically try the next model in the fallback list.
+
+### Usage
+
+```python
+from agent.model_fallback import (
+    with_model_fallback,
+    FALLBACK_ORDER,
+    FAST_FALLBACK,
+    BUDGET_FALLBACK,
+    LOCAL_FALLBACK,
+)
+
+# Use with async tasks
+result = await with_model_fallback(
+    task=lambda: agent.process(message="Analyze this code"),
+    candidates=FALLBACK_ORDER
+)
+```
+
+### Predefined Fallback Orders
+
+| Order | Sequence | Use Case |
+|-------|----------|----------|
+| `FALLBACK_ORDER` | gpt-4o → gpt-4o-mini → claude-sonnet-4 | Balanced reliability and cost |
+| `FAST_FALLBACK` | gpt-4o → gpt-4o-mini | Speed prioritized |
+| `BUDGET_FALLBACK` | gpt-4o-mini → claude-haiku-3-5 → ollama/llama3 | Cost minimized |
+| `LOCAL_FALLBACK` | ollama/llama3 → ollama/mistral → gpt-4o-mini | Local models first |
+
+### Custom Fallback Order
+
+```python
+from agent.model_fallback import ModelCandidate, with_model_fallback
+
+# Create custom fallback order
+my_fallback = [
+    ModelCandidate(provider="openai", model="gpt-4o", priority=0),
+    ModelCandidate(provider="anthropic", model="claude-sonnet-4", priority=1),
+    ModelCandidate(provider="ollama", model="llama3", priority=2),
+]
+
+result = await with_model_fallback(
+    task=lambda: agent.process(message="..."),
+    candidates=my_fallback
+)
+```
+
+### Error Classification
+
+**Skip Fallback** (changing models won't help):
+- Authentication errors (invalid API key)
+- Rate limit exceeded
+- Quota exceeded
+- Context length exceeded
+- Permission denied
+
+**Trigger Fallback** (different model may succeed):
+- Connection refused
+- Request timeout
+- Service unavailable
+- Server error
+- Model overloaded
+
+### Configuration via YAML
+
+```yaml
+model_fallback:
+  enabled: true
+  default_order: "FALLBACK_ORDER"  # FALLBACK_ORDER, FAST_FALLBACK, BUDGET_FALLBACK, LOCAL_FALLBACK
+  max_retries: 3
+```
+
+### Programmatic Configuration
+
+```python
+from agent.model_fallback import get_fallback_order
+
+# Get predefined order
+order = get_fallback_order("fast")
+
+# Or get default
+order = get_fallback_order()  # Returns FALLBACK_ORDER
+```
+
+### ModelCandidate Properties
+
+```python
+candidate = ModelCandidate(
+    provider="openai",    # Provider name
+    model="gpt-4o",       # Model name
+    priority=0,           # Priority (lower = higher priority)
+    weight=1.0,           # Weight for load balancing
+)
+```
+
+### Error Handling
+
+```python
+from agent.model_fallback import FallbackError
+
+try:
+    result = await with_model_fallback(task, candidates)
+except FallbackError as e:
+    # All models failed
+    print(f"Attempts: {len(e.attempts)}")
+    for attempt in e.attempts:
+        print(f"{attempt['provider']}/{attempt['model']}: {attempt['error']}")
+```
+
+### Integration with Agent
+
+```python
+from agent.model_fallback import FALLBACK_ORDER
+
+# Simple integration
+async def robust_process(agent, message):
+    return await with_model_fallback(
+        task=lambda: agent.process(message=message),
+        candidates=FALLBACK_ORDER[1:]  # Skip first (already tried)
+    )
+```
+
+### Testing
+
+```bash
+pytest tests/test_model_fallback.py -v
+```
+
+All 30 tests pass covering:
+- Error classification
+- Fallback logic
+- Predefined orders
+- Edge cases
 
 ---
 
