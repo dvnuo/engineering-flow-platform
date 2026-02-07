@@ -4,7 +4,184 @@
 [![pytest](https://img.shields.io/badge/pytest-76%20tests-green.svg)](tests/)
 [![MIT License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
-An Engineering Flow Platform implementation written in Python, inspired by the open-source community.
+## ⚠️ Research Use Only
+
+**This project is currently under active development and is intended for research purposes only.**
+
+### 🚀 Running Requirements
+
+**Docker is required to run this project.**
+
+All services and dependencies must be run within Docker containers. Local Python installation is not supported for production use.
+
+```bash
+# Clone and setup
+git clone https://github.com/dvnuo/engineering-flow-platform.git
+cd engineering-flow-platform
+
+# Start with Docker Compose
+docker-compose up -d
+```
+
+---
+
+## About Engineering Flow Platform
+
+Engineering Flow Platform is an agentic platform designed to improve software delivery flow by reducing waiting time, orchestrating asynchronous workflows, and enabling intent-driven product engineering across the SDLC.
+
+It is not a coding assistant or a standalone AI tool, but a platform capability that reshapes how engineering work progresses when humans are offline.
+
+### Why Engineering Flow Platform?
+
+Traditional developer productivity efforts focus on helping individuals work faster — writing code quicker, fixing bugs sooner, or generating documentation automatically.
+
+However, in modern software delivery, the primary bottleneck is not how fast developers work, but how long work items spend waiting across the SDLC.
+
+Engineering Flow Platform is built on a different premise:
+
+> **Productivity is a flow problem, not a speed problem.**
+
+---
+
+## Core Principles
+
+### 1. Flow First
+The platform optimizes for flow efficiency rather than individual efficiency.
+
+- Focus on lead time and cycle time
+- Reduce waiting, handoffs, and coordination delays
+- Treat SDLC as a value stream, not a task list
+
+### 2. Intent Over Instructions
+Humans declare intent; the platform determines execution.
+
+Instead of specifying step-by-step instructions, users describe:
+- The desired outcome
+- Constraints and risk tolerance
+- Required approval or oversight
+
+The platform translates intent into executable workflows.
+
+### 3. Asynchronous by Default
+Engineering work should continue even when no one is online.
+
+- Agents operate asynchronously
+- Workflows are event-driven and long-running
+- Humans review outcomes instead of driving execution
+
+### 4. Platform, Not Bots
+Engineering Flow Platform is not a collection of independent bots.
+
+It provides:
+- Central orchestration
+- Shared context and memory
+- Unified governance and auditability
+- Consistent interaction surfaces
+
+### 5. Governance-Embedded Autonomy
+Autonomy is introduced gradually and safely.
+
+- Role-based access control
+- Auditable actions and decisions
+- Human-in-the-loop checkpoints
+- Explicit escalation and rollback paths
+
+---
+
+## What Is an Engineering Flow?
+
+An engineering flow represents a unit of work moving through the SDLC — from intent to outcome.
+
+Examples include:
+- Release failure analysis
+- Dependency or framework migration
+- Backlog refinement and impact analysis
+- CI/CD quality triage
+- Incident root cause investigation
+
+Each flow:
+- Is goal-oriented
+- May span multiple tools and systems
+- Advances state asynchronously
+- Produces verifiable outcomes
+
+---
+
+## High-Level Architecture
+
+Engineering Flow Platform is composed of five logical layers:
+
+### 1. Intent Layer
+The single entry point for human interaction.
+
+Users express what they want to achieve, not how to achieve it.
+
+### 2. Flow Orchestration Layer
+The core engine of the platform.
+
+- Decomposes intent into flow steps
+- Coordinates task-specific agents
+- Tracks state, dependencies, and progress
+- Manages retries, failures, and rollbacks
+
+### 3. Asynchronous Execution Layer
+Enables long-running, event-driven workflows.
+
+- Agents operate independently of human presence
+- Execution continues across time boundaries
+- Supports delegation followed by review
+
+### 4. Context and Control Layer
+Provides the foundation for safe and effective agent execution.
+
+Includes:
+- Tool integrations (e.g. Git, CI/CD, issue tracking, cloud)
+- Knowledge sources (documentation, runbooks, repositories)
+- Standards and policies
+- Historical memory and decision traces
+- Governance and guardrails
+
+### 5. Interaction Surfaces
+Agents operate where work already happens.
+
+Supported surfaces may include:
+- CLI and API
+- Issue and documentation systems
+- Chat and collaboration tools
+- Developer portals
+
+---
+
+## What Engineering Flow Platform Is Not
+
+- Not a chat-based assistant
+- Not an IDE plugin
+- Not a prompt library
+- Not a replacement for engineers
+
+It augments engineering organizations by removing friction from workflows, not by replacing human judgment.
+
+---
+
+## Expected Outcomes
+
+By introducing agentic, asynchronous workflows, Engineering Flow Platform aims to:
+
+- Reduce lead time across the SDLC
+- Minimize waiting caused by handoffs and coordination
+- Improve consistency and reliability of complex engineering tasks
+- Enable faster iteration from idea to outcome
+- Support a shift from project delivery to product engineering
+
+---
+
+## Status
+
+This project is under active development.
+
+The initial focus is on high-value, low-risk internal engineering workflows where asynchronous execution and governance-aware autonomy provide immediate benefits.
+
+---
 
 ## Features
 
@@ -17,7 +194,12 @@ An Engineering Flow Platform implementation written in Python, inspired by the o
 
 ## Table of Contents
 
-- [Quick Start](#quick-start-guide-5-minutes)
+- [⚠️ Research Use Only](#️-research-use-only)
+- [🚀 Running Requirements](#-running-requirements)
+- [About Engineering Flow Platform](#about-engineering-flow-platform)
+- [Core Principles](#core-principles)
+- [What Is an Engineering Flow?](#what-is-an-engineering-flow)
+- [High-Level Architecture](#high-level-architecture)
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Running](#running)
@@ -32,77 +214,28 @@ An Engineering Flow Platform implementation written in Python, inspired by the o
 
 ---
 
-## Submodule Documentation
-
-Each core module has detailed documentation in its `README.md`:
-
-| Module | Path | Description |
-|--------|------|-------------|
-| **Agent** | [`agent/README.md`](agent/README.md) | Agent core logic, LLM providers, model fallback, heartbeat |
-| **Channel** | [`channel/README.md`](channel/README.md) | Multi-channel adapters (Discord, WhatsApp, Telegram, Slack, Google Chat) |
-| **Skills** | [`skills/README.md`](skills/README.md) | Skill framework, @skill decorator, executor |
-| **Tools** | [`tools/README.md`](tools/README.md) | Sub-agent management, shell execution, process management |
-| **Tests** | [`tests/README.md`](tests/README.md) | Test framework, pytest configuration, CI/CD integration |
-| **Cron** | [`cron/README.md`](cron/README.md) | Scheduled task scheduler, mention poller, cleanup jobs |
-| **Gateway** | [`gateway/README.md`](gateway/README.md) | Web API server, authentication, rate limiting, WebSocket |
-| **Memory** | [`memory/README.md`](memory/README.md) | Persistent memory storage, semantic search, context management |
-| **Session** | [`session/README.md`](session/README.md) | Session lifecycle, state persistence, context isolation |
-| **Docs** | [`docs/README.md`](docs/README.md) | Documentation standards, guides, API reference templates |
-
-### When to Read Each Documentation
-
-| Scenario | Read This |
-|----------|-----------|
-| Adding new LLM provider | [`agent/README.md`](agent/README.md) |
-| Adding new channel | [`channel/README.md`](channel/README.md) |
-| Creating new skill | [`skills/README.md`](skills/README.md) |
-| Running background tasks | [`cron/README.md`](cron/README.md) |
-| Managing user sessions | [`session/README.md`](session/README.md) |
-| Understanding memory system | [`memory/README.md`](memory/README.md) |
-| Adding tools/sub-agents | [`tools/README.md`](tools/README.md) |
-| Writing tests | [`tests/README.md`](tests/README.md) |
-| Configuring web server | [`gateway/README.md`](gateway/README.md) |
-| Writing documentation | [`docs/README.md`](docs/README.md) |
-
----
-
 ## Installation
 
-### 1. Virtual Environment (Recommended)
+### Docker Required
 
-Create an isolated Python environment:
-
-```bash
-# Create virtual environment
-# Run from project root
-python -m venv venv
-
-# Activate (Linux/macOS)
-source venv/bin/activate
-
-# Activate (Windows)
-venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-To deactivate the environment when done:
-```bash
-deactivate
-```
-
-### 2. Docker
+**This project must be run using Docker.**
 
 ```bash
-# Build the image
-# Run from project root
-docker build -t engineering-flow-platform .
+# Clone the repository
+git clone https://github.com/dvnuo/engineering-flow-platform.git
+cd engineering-flow-platform
+
+# Create workspace directory
+mkdir -p workspace/memory
+
+# Copy example configuration
+cp workspace/*.example workspace/
+
+# Start with Docker Compose
+docker-compose up -d
 ```
 
-**Docker Compose (recommended)**:
-
-Create `docker-compose.yml`:
+### Docker Compose Configuration
 
 ```yaml
 version: '3.8'
@@ -110,17 +243,12 @@ version: '3.8'
 services:
   engineering-flow-platform:
     build: .
-    container_name: engineering-flow-platform-bot
+    container_name: efp-bot
     ports:
       - "8000:8000"
     volumes:
-      # Config file - required
-      - ./config.yaml:/app/config.yaml:ro
-      
       # Workspace directory for memory files - persists across restarts
-      # Contains: SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, memory/
       - ./workspace:/root/.efp/workspace
-      
       # Optional: logs directory
       - ./logs:/app/logs
     environment:
@@ -130,39 +258,53 @@ services:
     restart: unless-stopped
 ```
 
-```bash
-# Create workspace directory with template files
-mkdir -p workspace/memory
-cp workspace/*.example workspace/
+### Environment Variables
 
-# Start the container
+Create a `.env` file:
+
+```bash
+EFP_DISCORD_BOT_TOKEN=your_discord_bot_token
+EFP_DISCORD_CHANNEL_ID=your_discord_channel_id
+EFP_LLM_API_KEY=your_openai_api_key
+```
+
+---
+
+## Quick Start Guide
+
+### Step 1: Prepare Discord Bot
+
+1. Create Discord Application at https://discord.com/developers/applications
+2. Create Bot and get Token
+3. Enable "Message Content Intent"
+4. Invite Bot to server
+5. Copy Channel ID (enable Developer Mode in Discord)
+
+### Step 2: Get OpenAI API Key
+
+1. Visit https://platform.openai.com/api-keys
+2. Create new secret key
+3. Copy API Key (format: `sk-...`)
+
+### Step 3: Configure Project
+
+```bash
+# Create .env file
+cat > .env << EOF
+EFP_DISCORD_BOT_TOKEN=your_bot_token
+EFP_DISCORD_CHANNEL_ID=your_channel_id
+EFP_LLM_API_KEY=your_api_key
+EOF
+
+# Start with Docker Compose
 docker-compose up -d
 ```
 
-**Important: Workspace Volume**
-
-Without the `./workspace:/root/.efp/workspace` volume mount:
-- Memory files (SOUL.md, USER.md, MEMORY.md, etc.) will be lost on restart
-- Conversation context and learned preferences won't persist
-
-**Directory Structure After Setup**:
-
-```
-./workspace/
-├── SOUL.md        # Agent persona (copy from SOUL.md.example)
-├── USER.md        # User preferences (copy from USER.md.example)
-├── AGENTS.md      # Workspace conventions (copy from AGENTS.md.example)
-├── TOOLS.md       # Tool configurations (optional)
-├── MEMORY.md      # Long-term memory (copy from MEMORY.md.example)
-└── memory/
-    └── 2026-02-02.md  # Daily notes (auto-created)
-```
-
-### 3. System-wide
+### Step 4: Verify
 
 ```bash
-# Run from project root
-pip install -r requirements.txt
+# Check logs
+docker-compose logs -f
 ```
 
 ---
@@ -171,46 +313,7 @@ pip install -r requirements.txt
 
 ### Basic Configuration
 
-Edit `config.yaml` with your settings:
-
-```yaml
-# config.yaml
-discord:
-  bot_token: "YOUR_DISCORD_BOT_TOKEN"
-  channel_id: "YOUR_CHANNEL_ID"
-
-llm:
-  provider: "openai"  # or "github_copilot"
-  api_base: "https://api.openai.com/v1"
-  api_key: "YOUR_API_KEY"
-  model: "gpt-3.5-turbo"
-  max_tokens: 1000
-  temperature: 0.7
-  max_retries: 3
-  retry_delay: 1
-
-server:
-  host: "0.0.0.0"
-  port: 8000
-```
-
-### Environment Variables (Recommended)
-
-For sensitive data, use environment variables:
-
-```bash
-# Linux/macOS
-export EFP_DISCORD_BOT_TOKEN="your_bot_token"
-export EFP_DISCORD_CHANNEL_ID="your_channel_id"
-export EFP_LLM_API_KEY="your_api_key"
-
-# Windows (PowerShell)
-$env:EFP_DISCORD_BOT_TOKEN="your_bot_token"
-$env:EFP_DISCORD_CHANNEL_ID="your_channel_id"
-$env:EFP_LLM_API_KEY="your_api_key"
-```
-
-Then in `config.yaml`:
+Edit `config.yaml`:
 
 ```yaml
 discord:
@@ -218,314 +321,53 @@ discord:
   channel_id: "${EFP_DISCORD_CHANNEL_ID}"
 
 llm:
-  api_key: "${EFP_LLM_API_KEY}"
-```
-
-### GitHub Copilot Configuration
-
-```yaml
-llm:
-  provider: "github_copilot"
-  api_key: "ghp_YOUR_GITHUB_TOKEN"
-  model: "gpt-4"
-  # GitHub Copilot uses: https://api.github.com/copilot/chat/completions
-```
-
-### Configuration Options
-
-#### Discord Configuration
-
-| Key | Type | Required | Default | Description | Example |
-|-----|------|----------|---------|-------------|---------|
-| `discord.bot_token` | string | Yes* | - | Discord Bot Token from Developer Portal | `MTIzNDU2Nzg5MC5xyz...` |
-| `discord.channel_id` | int/string | Yes* | - | Target channel ID (right-click channel to copy) | `123456789012345678` |
-| `discord.webhook_url` | string | No | - | Discord Webhook URL for receiving messages (optional) | `https://discord.com/api/webhooks/...` |
-
-**Note**: At least one of `bot_token` or `webhook_url` is required
-
-**Getting bot_token**:
-1. Visit [Discord Developer Portal](https://discord.com/developers/applications)
-2. Create Application → Bot → Reset Token → Copy
-
-**Getting channel_id**:
-1. Discord Settings → Advanced → Developer Mode
-2. Right-click channel → Copy ID
-
-#### LLM Configuration
-
-| Key | Type | Required | Default | Description | Example |
-|-----|------|----------|---------|-------------|---------|
-| `llm.provider` | string | No | `openai` | LLM provider | `openai` / `github_copilot` |
-| `llm.api_base` | string | No | OpenAI URL | API base URL | `https://api.openai.com/v1` |
-| `llm.api_key` | string | Yes | - | API key | `sk-...` |
-| `llm.model` | string | No | `gpt-3.5-turbo` | Model name | `gpt-3.5-turbo` / `gpt-4` |
-| `llm.max_tokens` | int | No | 1000 | Max response tokens | 500 / 2000 |
-| `llm.temperature` | float | No | 0.7 | Response randomness (0.0-1.0) | 0.5 / 0.9 |
-| `llm.max_retries` | int | No | 3 | API retry attempts | 3 / 5 |
-| `llm.retry_delay` | float | No | 1 | Retry delay in seconds (exponential backoff) | 1 / 2 |
-
-**Provider Notes**:
-- `openai`: OpenAI official API (ChatGPT)
-- `github_copilot`: GitHub Copilot API
-
-**Model Recommendations**:
-- `gpt-3.5-turbo`: Cheap and fast, suitable for daily conversations
-- `gpt-4`: Stronger reasoning, suitable for complex tasks
-
-**Temperature Notes**:
-- `0.0`: Most deterministic output
-- `0.7`: Balanced creativity
-- `1.0`: Highest randomness
-
-#### Session Configuration
-
-| Key | Type | Required | Default | Description | Example |
-|-----|------|----------|---------|-------------|---------|
-| `session.max_history` | int | No | 5 | Conversation turns to retain | 5 / 10 |
-
-**Note**: Session history is stored in memory and cleared on server restart
-
-#### Server Configuration
-
-| Key | Type | Required | Default | Description | Example |
-|-----|------|----------|---------|-------------|---------|
-| `server.host` | string | No | `0.0.0.0` | Listen address | `0.0.0.0` / `127.0.0.1` |
-| `server.port` | int | No | 8000 | Listen port | 8000 / 8080 |
-
-**Notes**:
-- `0.0.0.0`: Listen on all network interfaces
-- `127.0.0.1`: Local only (more secure)
-
-#### Complete Configuration Example
-
-```yaml
-# Basic configuration
-discord:
-  bot_token: "YOUR_BOT_TOKEN"
-  channel_id: "1234567890"
-
-# OpenAI configuration
-llm:
   provider: "openai"
-  api_base: "https://api.openai.com/v1"
-  api_key: "sk-..."
+  api_key: "${EFP_LLM_API_KEY}"
   model: "gpt-3.5-turbo"
   max_tokens: 1000
   temperature: 0.7
-  max_retries: 3
-  retry_delay: 1
 
-# Session configuration
-session:
-  max_history: 5
-
-# Server configuration
 server:
   host: "0.0.0.0"
   port: 8000
 ```
 
-#### Docker Environment Variables Configuration
+### Configuration Options
 
-```yaml
-# docker-compose.yml
-services:
-  engineering-flow-platform:
-    environment:
-      - EFP_DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
-      - EFP_DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
-      - EFP_LLM_API_KEY=${OPENAI_API_KEY}
-```
-
-```bash
-# .env file
-DISCORD_BOT_TOKEN=your_bot_token
-DISCORD_CHANNEL_ID=your_channel_id
-OPENAI_API_KEY=sk-your-api-key
-```
-
----
-
-## Quick Start Guide (5 Minutes)
-
-### Step 1: Prepare Discord Bot
-
-#### 1.1 Create Discord Application
-
-1. Open browser, visit https://discord.com/developers/applications
-2. Click "New Application" in top-right
-3. Enter application name (e.g., `Engineering Flow Platform-Bot`)
-4. Click "Create"
-
-#### 1.2 Create Bot
-
-1. Click "Bot" in left menu
-2. Click "Add Bot"
-3. Click "Yes, do it!" to confirm
-
-#### 1.3 Get Bot Token (Important!)
-
-1. On Bot page, find "Token" section
-2. Click "Reset Token"
-3. Click "Copy"
-4. **Save securely**, don't share!
-
-#### 1.4 Enable Required Permissions
-
-1. On Bot page, find "Privileged Gateway Intents"
-2. Enable "Message Content Intent" (Required to receive messages)
-3. Click "Save Changes"
-
-#### 1.5 Invite Bot to Server
-
-1. Click "OAuth2" → "URL Generator" in left menu
-2. In "Scopes", check `bot`
-3. In "Bot Permissions", check:
-   - Send Messages
-   - Read Message History
-   - View Channel
-4. Scroll down, copy "Generated URL"
-5. Open in browser, select your Discord server, click "Authorize"
-
-### Step 2: Get Channel ID
-
-1. Open Discord
-2. Click gear icon (User Settings) bottom-left
-3. Select "Advanced"
-4. Enable "Developer Mode"
-5. Right-click the channel where bot should respond
-6. Select "Copy ID"
-
-### Step 3: Get OpenAI API Key
-
-1. Open https://platform.openai.com/api-keys
-2. Login/Register OpenAI account
-3. Click "Create new secret key"
-4. Copy API Key (format: `sk-...`)
-
-**Notes**:
-- ChatGPT Plus users can use directly
-- Payment method required
-- Free tier available ($5)
-
-### Step 4: Configure Project
-
-```bash
-# Run from project root
-nano config.yaml
-```
-
-Fill in configuration:
-
-```yaml
-discord:
-  bot_token: "Bot Token you copied"
-  channel_id: "Channel ID you copied"
-
-llm:
-  provider: "openai"
-  api_key: "OpenAI API Key you copied"
-  model: "gpt-3.5-turbo"  # Recommended: cheap and effective
-```
-
-Verify configuration:
-
-```bash
-python main.py --help
-```
-
-### Step 5: Run Bot
-
-```bash
-# Method 1: Run in foreground (for testing)
-python main.py
-
-# When you see "Gateway started on http://0.0.0.0:8000", it's successful!
-```
-
-### Step 6: Test
-
-1. Send `Hello` in Discord channel
-2. Bot should reply!
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `discord.bot_token` | string | - | Discord Bot Token |
+| `discord.channel_id` | string | - | Target channel ID |
+| `llm.provider` | string | `openai` | LLM provider |
+| `llm.api_key` | string | - | API key |
+| `llm.model` | string | `gpt-3.5-turbo` | Model name |
+| `server.host` | string | `0.0.0.0` | Listen address |
+| `server.port` | int | `8000` | Listen port |
 
 ---
 
 ## Running
 
-### Important: Run from Correct Directory
-
-Must run from `engineering-flow-platform` directory:
+### Start Services
 
 ```bash
-cd /root/engineering-flow-platform
-```
-
-If you see this error:
-```
-ModuleNotFoundError: No module named 'engineering-flow-platform'
-```
-Your current directory is wrong.
-
-### Basic Run
-
-```bash
-# Run from project root
-python main.py
-
-# Success output:
-# Gateway started on http://0.0.0.0:8000
-```
-
-### Run with Custom Config
-
-```bash
-python main.py --config /path/to/config.yaml
-```
-
-### Run in Background (Linux/macOS)
-
-```bash
-# Create logs directory
-mkdir -p logs
-
-# Run in background with nohup
-nohup python main.py > logs/app.log 2>&1 &
+# Build and start
+docker-compose build
+docker-compose up -d
 
 # View logs
-tail -f logs/app.log
+docker-compose logs -f
 
-# Stop service
-pkill -f "python main.py"
+# Stop services
+docker-compose down
 ```
 
-### Run as a Service (systemd)
+### Health Check
 
-Create `/etc/systemd/system/engineering-flow-platform.service`:
-
-```ini
-[Unit]
-Description=Engineering Flow Platform - Discord Bot
-After=network.target
-
-[Service]
-Type=simple
-User=your_user
-WorkingDirectory=/path/to/engineering-flow-platform
-ExecStart=/path/to/venv/bin/python main.py
-Restart=on-failure
-RestartSec=5
-Environment=EFP_LLM_API_KEY=your_api_key
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then:
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable engineering-flow-platform
-sudo systemctl start engineering-flow-platform
-sudo systemctl status engineering-flow-platform
+curl http://localhost:8000/health
+
+# Response: {"status": "ok", "service": "engineering-flow-platform"}
 ```
 
 ---
@@ -539,35 +381,6 @@ sudo systemctl status engineering-flow-platform
 | GET | `/health` | Health check |
 | POST | `/webhook/discord` | Discord webhook receiver |
 | GET | `/api/sessions` | List all active sessions |
-| GET | `/api/sessions/{id}` | Get session info |
-| POST | `/api/sessions/{id}/clear` | Clear session history |
-
-### Health Check
-
-```bash
-curl http://localhost:8000/health
-
-# Response
-{"status": "ok", "service": "engineering-flow-platform"}
-```
-
-### List Sessions
-
-```bash
-curl http://localhost:8000/api/sessions
-
-# Response
-{"sessions": ["discord:123:456"], "count": 1}
-```
-
-### Clear Session
-
-```bash
-curl -X POST http://localhost:8000/api/sessions/discord:123:456/clear
-
-# Response
-{"status": "cleared", "session_id": "discord:123:456"}
-```
 
 ---
 
@@ -586,363 +399,104 @@ curl -X POST http://localhost:8000/api/sessions/discord:123:456/clear
                     +----------+     +-------------+
 ```
 
-## Project Structure
+---
 
-```
-engineering-flow-platform/
-├── main.py              # Entry point
-├── config.yaml          # Configuration
-├── config.py            # Config loader
-├── requirements.txt     # Python dependencies
-├── pytest.ini           # pytest configuration
-├── README.md           # This file
-├── agent/              # Agent core (see agent/README.md)
-│   ├── README.md       # Detailed agent documentation
-│   ├── core.py
-│   ├── llm.py
-│   ├── model_fallback.py
-│   └── heartbeat/
-├── channel/            # Channel adapters (see channel/README.md)
-│   ├── README.md       # Detailed channel documentation
-│   ├── discord.py
-│   └── (other channels)
-├── skills/            # Skills framework (see skills/README.md)
-│   ├── README.md       # Detailed skills documentation
-│   ├── decorator.py
-│   ├── executor/
-│   ├── coding_agent/
-│   └── (other skills)
-├── tools/              # Tools (see tools/README.md)
-│   ├── README.md       # Detailed tools documentation
-│   ├── subagent.py
-│   └── exec.py
-├── tests/              # Tests (see tests/README.md)
-│   ├── README.md       # Detailed testing documentation
-│   ├── test_*.py
-│   └── fixtures/
-├── cron/              # Cron jobs (see cron/README.md)
-│   ├── README.md       # Detailed cron documentation
-│   ├── scheduler.py
-│   └── jobs/
-├── gateway/            # Web server (see gateway/README.md)
-│   ├── README.md       # Detailed gateway documentation
-│   ├── main.py
-│   ├── routes/
-│   └── middleware/
-├── memory/             # Memory system (see memory/README.md)
-│   ├── README.md       # Detailed memory documentation
-│   ├── base.py
-│   └── sqlite_store.py
-├── session/            # Session management (see session/README.md)
-│   ├── README.md       # Detailed session documentation
-│   ├── base.py
-│   └── session_manager.py
-└── docs/               # Documentation (see docs/README.md)
-    └── README.md        # Documentation standards
-```
+## Submodule Documentation
+
+Each core module has detailed documentation in its `README.md`:
+
+| Module | Path | Description |
+|--------|------|-------------|
+| **Agent** | [`agent/README.md`](agent/README.md) | Agent core logic, LLM providers, model fallback, heartbeat |
+| **Channel** | [`channel/README.md`](channel/README.md) | Multi-channel adapters |
+| **Skills** | [`skills/README.md`](skills/README.md) | Skill framework, @skill decorator |
+| **Tools** | [`tools/README.md`](tools/README.md) | Sub-agent management, shell execution |
+| **Tests** | [`tests/README.md`](tests/README.md) | Test framework, pytest configuration |
+| **Cron** | [`cron/README.md`](cron/README.md) | Scheduled task scheduler |
+| **Gateway** | [`gateway/README.md`](gateway/README.md) | Web API server |
+| **Memory** | [`memory/README.md`](memory/README.md) | Persistent memory storage |
+| **Session** | [`session/README.md`](session/README.md) | Session lifecycle management |
+| **Docs** | [`docs/README.md`](docs/README.md) | Documentation standards |
 
 ---
 
 ## Memory System
 
-CodeW loads context from workspace MD files, similar to Engineering Flow Platform's memory system.
-
-### Workspace Files
-
-| File | Description | Required |
-|------|-------------|----------|
-| `SOUL.md` | Agent persona and behavior guidelines | No |
-| `USER.md` | User preferences and context | No |
-| `AGENTS.md` | Workspace conventions and rules | No |
-| `TOOLS.md` | Tool configurations and aliases | No |
-| `MEMORY.md` | Long-term curated memory | No |
-| `memory/YYYY-MM-DD.md` | Daily notes and logs | No |
-
-### Memory Files Location
-
-By default, memory files are loaded from `~/.efp/workspace/`:
+Workspace files loaded from `~/.efp/workspace/`:
 
 ```bash
 ~/.efp/workspace/
-├── SOUL.md        # Agent identity
-├── USER.md        # User info
-├── AGENTS.md      # Workspace rules
-├── TOOLS.md       # Tool configs
+├── SOUL.md        # Agent persona
+├── USER.md        # User preferences
+├── AGENTS.md      # Workspace conventions
+├── TOOLS.md       # Tool configurations
 ├── MEMORY.md      # Long-term memory
 └── memory/
-    ├── 2026-01-31.md
-    └── 2026-02-01.md
-```
-
-### Security
-
-- **MEMORY.md** is only loaded for main sessions (main, webchat, discord)
-- Other sessions exclude sensitive memory content for privacy
-- Set `cache_ttl_seconds=0` in MemorySystem to disable caching
-
-### API Usage
-
-```python
-from agent.memory import memory_system
-
-# Build complete system prompt
-prompt = memory_system.build_system_prompt(include_memory=True)
-
-# Load individual files
-soul = memory_system.load_soul()
-user = memory_system.load_user()
-memory = memory_system.load_memory()
-
-# Configure cache (default: 60 seconds)
-memory_system = MemorySystem(cache_ttl_seconds=120)
+    └── YYYY-MM-DD.md
 ```
 
 ---
 
 ## Development
 
-### Setup Development Environment
+### Prerequisites
+
+- Docker and Docker Compose
+- Git
+- Discord Developer Account (for testing)
+- OpenAI API Key (for testing)
+
+### Local Development
 
 ```bash
-# Clone and setup
-git clone https://github.com/itwake/engineering-flow-platform.git
+# Clone repository
+git clone https://github.com/dvnuo/engineering-flow-platform.git
 cd engineering-flow-platform
-git checkout -b feature/your-feature
 
-# Create virtual environment
-# Run from project root
-python -m venv venv
-source venv/bin/activate
+# Create environment file
+cp .env.example .env
 
-# Install dev dependencies
-pip install -r requirements.txt
-pip install pytest pytest-asyncio httpx
+# Edit .env with your credentials
+nano .env
 
-# Run tests
-pytest tests/ -v
-
-# Run with hot reload (requires entr or similar)
-echo "*.py" | entr -r python main.py
+# Start development environment
+docker-compose up -d
 ```
 
-### Add New Channel
+### Testing
 
-See [`channel/README.md`](channel/README.md) for detailed guide.
-
-### Add New LLM Provider
-
-See [`agent/README.md`](agent/README.md) for detailed guide.
-
-### Add New Skill
-
-See [`skills/README.md`](skills/README.md) for detailed guide.
-
-### Code Style
-
-- Follow PEP 8
-- Use type hints
-- Add docstrings
-- Write tests for new features
-- See [`tests/README.md`](tests/README.md) for testing standards
+```bash
+# Run tests in Docker
+docker-compose exec engineering-flow-platform pytest tests/ -v
+```
 
 ---
 
 ## Heartbeat (Periodic Background Checks)
 
-The heartbeat feature provides periodic background checks for emails, calendar, and weather. The behavior is influenced by the **thinking level**.
+The heartbeat feature provides periodic background checks.
 
 ### Configuration
-
-Enable heartbeat in `config.yaml`:
 
 ```yaml
 heartbeat:
   enabled: true
-  check_interval: 300  # Base interval in seconds (default: 5 minutes)
-```
-
-### Thinking Level Effects
-
-| Thinking Level | Check Interval | Detail Level |
-|---------------|----------------|---------------|
-| `high` | 2x more frequent (150s) | Detailed analysis with importance, conflicts, alerts |
-| `medium` | Normal (300s) | Standard detail |
-| `minimal` | Normal (300s) | Simplified checks |
-| `off` | 2x less frequent (600s) | Just unread count / summary |
-
-### Behavior Examples
-
-**thinking=high**:
-- Emails: Returns `important_count`, `action_required`, detailed analysis
-- Calendar: Returns `conflicts`, `upcoming_important`
-- Weather: Returns `forecast`, `alerts`, `recommendations`
-
-**thinking=off**:
-- Emails: Returns only `unread_count`
-- Calendar: Returns only `today_count`
-- Weather: Returns only `current_condition`
-
-### Log Output
-
-```
-=== [HEARTBEAT] STARTED ===
-  think_level=high
-  interval=150s
-
-=== [HEARTBEAT] CHECK COMPLETED ===
-  Detail: detailed
-
-=== [HEARTBEAT] LEVEL CHANGED ===
-  off -> high
-  interval: 150s
+  check_interval: 300  # seconds
 ```
 
 ---
 
 ## Model Fallback (Automatic Model Degradation)
 
-The model fallback feature automatically switches to alternative models when the primary model fails. This improves reliability by gracefully handling transient errors.
-
-### Overview
-
-When making LLM calls, sometimes the primary model may fail due to:
-- Network timeouts
-- Server errors
-- Model overloaded
-
-Instead of completely failing, the system can automatically try the next model in the fallback list.
-
-### Usage
-
-```python
-from agent.model_fallback import (
-    with_model_fallback,
-    FALLBACK_ORDER,
-    FAST_FALLBACK,
-    BUDGET_FALLBACK,
-    LOCAL_FALLBACK,
-)
-
-# Use with async tasks
-result = await with_model_fallback(
-    task=lambda: agent.process(message="Analyze this code"),
-    candidates=FALLBACK_ORDER
-)
-```
+Automatically switches to alternative models when the primary model fails.
 
 ### Predefined Fallback Orders
 
 | Order | Sequence | Use Case |
 |-------|----------|----------|
-| `FALLBACK_ORDER` | gpt-4o → gpt-4o-mini → claude-sonnet-4 | Balanced reliability and cost |
+| `FALLBACK_ORDER` | gpt-4o → gpt-4o-mini | Balanced reliability |
 | `FAST_FALLBACK` | gpt-4o → gpt-4o-mini | Speed prioritized |
-| `BUDGET_FALLBACK` | gpt-4o-mini → claude-haiku-3-5 → ollama/llama3 | Cost minimized |
-| `LOCAL_FALLBACK` | ollama/llama3 → ollama/mistral → gpt-4o-mini | Local models first |
-
-### Custom Fallback Order
-
-```python
-from agent.model_fallback import ModelCandidate, with_model_fallback
-
-# Create custom fallback order
-my_fallback = [
-    ModelCandidate(provider="openai", model="gpt-4o", priority=0),
-    ModelCandidate(provider="anthropic", model="claude-sonnet-4", priority=1),
-    ModelCandidate(provider="ollama", model="llama3", priority=2),
-]
-
-result = await with_model_fallback(
-    task=lambda: agent.process(message="..."),
-    candidates=my_fallback
-)
-```
-
-### Error Classification
-
-**Skip Fallback** (changing models won't help):
-- Authentication errors (invalid API key)
-- Rate limit exceeded
-- Quota exceeded
-- Context length exceeded
-- Permission denied
-
-**Trigger Fallback** (different model may succeed):
-- Connection refused
-- Request timeout
-- Service unavailable
-- Server error
-- Model overloaded
-
-### Configuration via YAML
-
-```yaml
-model_fallback:
-  enabled: true
-  default_order: "FALLBACK_ORDER"  # FALLBACK_ORDER, FAST_FALLBACK, BUDGET_FALLBACK, LOCAL_FALLBACK
-  max_retries: 3
-```
-
-### Programmatic Configuration
-
-```python
-from agent.model_fallback import get_fallback_order
-
-# Get predefined order
-order = get_fallback_order("fast")
-
-# Or get default
-order = get_fallback_order()  # Returns FALLBACK_ORDER
-```
-
-### ModelCandidate Properties
-
-```python
-candidate = ModelCandidate(
-    provider="openai",    # Provider name
-    model="gpt-4o",       # Model name
-    priority=0,           # Priority (lower = higher priority)
-    weight=1.0,           # Weight for load balancing
-)
-```
-
-### Error Handling
-
-```python
-from agent.model_fallback import FallbackError
-
-try:
-    result = await with_model_fallback(task, candidates)
-except FallbackError as e:
-    # All models failed
-    print(f"Attempts: {len(e.attempts)}")
-    for attempt in e.attempts:
-        print(f"{attempt['provider']}/{attempt['model']}: {attempt['error']}")
-```
-
-### Integration with Agent
-
-```python
-from agent.model_fallback import FALLBACK_ORDER
-
-# Simple integration
-async def robust_process(agent, message):
-    return await with_model_fallback(
-        task=lambda: agent.process(message=message),
-        candidates=FALLBACK_ORDER[1:]  # Skip first (already tried)
-    )
-```
-
-### Testing
-
-```bash
-pytest tests/test_model_fallback.py -v
-```
-
-All 30 tests pass covering:
-- Error classification
-- Fallback logic
-- Predefined orders
-- Edge cases
+| `BUDGET_FALLBACK` | gpt-4o-mini → local | Cost minimized |
 
 ---
 
@@ -950,193 +504,30 @@ All 30 tests pass covering:
 
 ### Bot Not Responding
 
-**Check in this order**:
-
-1. Is Bot Online?
-   - Check Discord server member list, bot avatar should be online with green indicator
-
-2. Is Message Content Intent Enabled?
-   - Visit Discord Developer Portal → Bot
-   - Confirm "Message Content Intent" is enabled
-   - Click "Save Changes"
-
-3. Is config.yaml Correct?
-   ```bash
-   cat config.yaml
-   ```
-   Confirm `bot_token` and `channel_id` are correct without extra spaces
-
-4. Is Bot Token Correct?
-   - Token format: characters like `MTIzNDU2Nzg5MC5xyz...`
-   - Don't include quotes or extra characters
-
-5. Is Channel ID Correct?
-   - Must be pure numbers, like `123456789012345678`
-   - Don't include `<` `>` symbols
-
-6. Check Console Logs
-   ```bash
-   python main.py
-   ```
-   Look for error messages
+1. Check bot is online in Discord
+2. Verify Message Content Intent is enabled
+3. Check configuration file
+4. Review logs: `docker-compose logs`
 
 ### Error "401 Unauthorized"
 
-**Cause**: Wrong API Key
-
-**Solution**:
-```bash
-# 1. Get new API key
-# Visit https://platform.openai.com/api-keys
-
-# 2. Confirm format (starts with sk-)
-# 3. Update config.yaml
-```
+Wrong API Key. Get new key from https://platform.openai.com/api-keys
 
 ### Error "429 Too Many Requests"
 
-**Cause**: API rate limit exceeded
+API rate limit exceeded. Wait and retry.
 
-**Solution**:
-```bash
-# 1. Wait 1 minute and retry
-# 2. Or reduce max_tokens in config.yaml
-# 3. Or increase temperature value
-```
-
-### Error "Connection Error" or "Failed to connect"
-
-**Cause**: Network issue
-
-**Solution**:
-```bash
-# 1. Check network connection
-ping api.openai.com
-
-# 2. Confirm OpenAI access
-curl https://api.openai.com/v1/models
-
-# 3. Try using proxy
-```
-
-### Bot Response is Slow
-
-**Possible causes**:
-1. Network latency
-2. API server busy
-3. Using `gpt-4` (slower than gpt-3.5-turbo)
-
-**Solution**:
-```yaml
-# Use faster model in config.yaml
-llm:
-  model: "gpt-3.5-turbo"  # Faster and cheaper than gpt-4
-  max_tokens: 500         # Reduce response length
-```
-
-### Port 8000 Already in Use
+### Docker Issues
 
 ```bash
-# 1. Check process using port
-lsof -i :8000
+# Check container status
+docker-compose ps
 
-# 2. Kill process
-kill <PID>
+# View container logs
+docker-compose logs -f
 
-# 3. Or change port in config.yaml
-server:
-  port: 8080  # Use different port
-```
-
-### Docker Permission Denied
-
-```bash
-# Method 1: Use sudo (not recommended)
-sudo docker-compose up -d
-
-# Method 2: Add user to docker group (recommended)
-sudo usermod -aG docker $USER
-# Log out and back in to take effect
-```
-
-### No Log Output
-
-```bash
-# 1. Run in foreground
-python main.py
-
-# 2. Enable detailed logging (modify main.py)
-# Find logging.basicConfig, change to:
-logging.basicConfig(level=logging.DEBUG)
-
-# 3. Restart program
-```
-
-### Bot Replies "I encountered an error"
-
-**Possible causes**:
-1. OpenAI account has insufficient balance
-2. API Key expired
-3. Network timeout
-
-**Solution**:
-```bash
-# 1. Check OpenAI account balance
-# Visit https://platform.openai.com/account/usage
-
-# 2. Check console for specific error
-python main.py
-```
-
----
-
-## Quick Checklist
-
-Before running bot, confirm all items:
-
-- [ ] Discord Bot created
-- [ ] Message Content Intent enabled
-- [ ] Bot Token copied and saved
-- [ ] Bot invited to server
-- [ ] Channel ID obtained (pure numbers)
-- [ ] OpenAI API Key obtained (starts with sk-)
-- [ ] config.yaml configured correctly
-- [ ] Dependencies installed: `pip install -r requirements.txt`
-- [ ] Bot online and can send messages
-
----
-
-## Getting Help
-
-1. Check logs: Console error messages usually indicate the problem
-2. Search errors: Paste error message into search engine
-3. Create Issue: Submit problem in GitHub repository
-
----
-
-## Contributing
-
-1. Create a feature branch: `git checkout -b feature/xxx`
-2. Make changes and add tests
-3. Run tests: `pytest tests/ -v`
-4. Commit: `git commit -m "feat: description"`
-5. Push: `git push origin feature/xxx`
-6. Create PR and request review
-
-### Pull Request Template
-
-```markdown
-## Summary
-Brief description of changes
-
-## Testing
-- [ ] Tests pass
-- [ ] Manual testing completed
-
-## Checklist
-- [ ] Code follows style guide
-- [ ] Self-review completed
-- [ ] Documentation updated (if needed)
+# Restart services
+docker-compose restart
 ```
 
 ---
@@ -1147,8 +538,15 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-## Support
+## Vision
 
-- Create an issue for bugs
-- Join our Discord community
-- Read the full documentation
+Engineering Flow Platform represents a step toward a zero-friction SDLC, where:
+
+- Humans specify intent
+- Agents execute and observe
+- Systems govern and learn
+- Engineering flow never stops
+
+---
+
+**⚠️ This project is for research purposes only. Not for production use.**
