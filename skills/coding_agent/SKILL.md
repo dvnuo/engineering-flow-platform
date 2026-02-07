@@ -249,7 +249,7 @@ git worktree remove /tmp/issue-99
 5. **Monitor with process:log** - check progress without interfering
 6. **--full-auto for building** - auto-approves changes
 7. **Parallel is OK** - run many agents at once for batch work
-8. **Never run in critical directories** - avoid ~/Projects/openclaw/
+8. **Never run in critical directories** - avoid ~/Projects/engineering-flow-platform/
 
 ---
 
@@ -369,4 +369,3 @@ cd /tmp && SCRATCH=$(mktemp -d) && cd $SCRATCH && git init && codex exec "Your p
 
 - `tools/exec.md` - Bash tool documentation
 - `tools/process.md` - Process monitoring tool
-- OpenClaw coding-agent: https://github.com/openclaw/openclaw/tree/main/skills/coding-agent
