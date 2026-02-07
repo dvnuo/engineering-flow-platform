@@ -2,7 +2,7 @@
 
 import pytest
 import sys
-sys.path.insert(0, '/root/.openclaw/workspace/engineering-flow-platform')
+sys.path.insert(0, '/root/.efp/workspace/engineering-flow-platform')
 
 from agent.thinking import (
     ThinkLevel,
