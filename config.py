@@ -13,12 +13,12 @@ class Config:
     
     Searches for config.yaml in the following order:
     1. Project directory (same directory as this file)
-    2. ~/.engineering-flow-platform/config.yaml
+    2. ~/.efp/config.yaml
     """
     
     DEFAULT_PATHS = [
         Path(__file__).parent / "config.yaml",  # Project directory
-        Path.home() / ".engineering-flow-platform" / "config.yaml",  # User config directory
+        Path.home() / ".efp" / "config.yaml",  # User config directory
     ]
 
     def __init__(self, config_path: Optional[str] = None):

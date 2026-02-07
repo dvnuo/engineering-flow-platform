@@ -15,7 +15,7 @@ from config import config
 logger = logging.getLogger(__name__)
 
 # Default workspace path using home directory
-DEFAULT_WORKSPACE = Path.home() / ".engineering-flow-platform" / "workspace"
+DEFAULT_WORKSPACE = Path.home() / ".efp" / "workspace"
 
 
 class GitClient:

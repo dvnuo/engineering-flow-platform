@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Default workspace paths
-DEFAULT_WORKSPACE = Path.home() / ".engineering-flow-platform" / "workspace"
+DEFAULT_WORKSPACE = Path.home() / ".efp" / "workspace"
 
 
 class MemorySystem:
@@ -22,7 +22,7 @@ class MemorySystem:
         """Initialize memory system.
         
         Args:
-            workspace_path: Path to workspace directory. Defaults to ~/.engineering-flow-platform/workspace
+            workspace_path: Path to workspace directory. Defaults to ~/.efp/workspace
             cache_ttl_seconds: Cache TTL in seconds (default: 60). Set to 0 to disable caching.
         """
         self.workspace = Path(workspace_path) if workspace_path else DEFAULT_WORKSPACE

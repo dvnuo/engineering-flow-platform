@@ -119,7 +119,7 @@ services:
       
       # Workspace directory for memory files - persists across restarts
       # Contains: SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, memory/
-      - ./workspace:/root/.engineering-flow-platform/workspace
+      - ./workspace:/root/.efp/workspace
       
       # Optional: logs directory
       - ./logs:/app/logs
@@ -141,7 +141,7 @@ docker-compose up -d
 
 **Important: Workspace Volume**
 
-Without the `./workspace:/root/.engineering-flow-platform/workspace` volume mount:
+Without the `./workspace:/root/.efp/workspace` volume mount:
 - Memory files (SOUL.md, USER.md, MEMORY.md, etc.) will be lost on restart
 - Conversation context and learned preferences won't persist
 
@@ -660,10 +660,10 @@ CodeW loads context from workspace MD files, similar to Engineering Flow Platfor
 
 ### Memory Files Location
 
-By default, memory files are loaded from `~/.engineering-flow-platform/workspace/`:
+By default, memory files are loaded from `~/.efp/workspace/`:
 
 ```bash
-~/.engineering-flow-platform/workspace/
+~/.efp/workspace/
 ├── SOUL.md        # Agent identity
 ├── USER.md        # User info
 ├── AGENTS.md      # Workspace rules

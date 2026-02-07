@@ -287,11 +287,11 @@ engineering-flow-platform/
 
 ## References
 
-- Engineering Flow Platform Docs: https://docs.engineering-flow-platform.ai
+- Engineering Flow Platform Docs: https://docs.efp.ai
 - Engineering Flow Platform GitHub: https://github.com/openclaw/openclaw
 - Engineering Flow Platform Discord: https://discord.gg/clawd
 - **CodeW vs Engineering Flow Platform Comparison**: [docs/COMPARISON.md](docs/COMPARISON.md)
-- **Engineering Flow Platform Original**: `/root/.engineering-flow-platform/workspace/openclaw_original/`
+- **Engineering Flow Platform Original**: `/root/.efp/workspace/openclaw_original/`
 
 ## Comparison Summary (2026-02-02)
 
@@ -340,7 +340,7 @@ Based on Engineering Flow Platform's memory system design, implement SQLite + ve
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    ~/.engineering-flow-platform/memory/                       │
+│                    ~/.efp/memory/                       │
 │                    <agentId>.sqlite                          │
 ├─────────────────────────────────────────────────────────────┤
 │ Layer 1: Daily Notes                                         │
@@ -354,7 +354,7 @@ Based on Engineering Flow Platform's memory system design, implement SQLite + ve
 │   - Context: Only load in main private session              │
 ├─────────────────────────────────────────────────────────────┤
 │ Layer 3: Session Transcripts (Optional)                     │
-│   - File: ~/.engineering-flow-platform/agents/<agentId>/sessions/*.jsonl    │
+│   - File: ~/.efp/agents/<agentId>/sessions/*.jsonl    │
 │   - Purpose: Index session history for semantic search      │
 │   - Note: Opt-in, debounced async indexing                  │
 └─────────────────────────────────────────────────────────────┘

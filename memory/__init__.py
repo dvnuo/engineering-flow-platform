@@ -48,7 +48,7 @@ memory:
 
 1. Daily Notes: memory/YYYY-MM-DD.md
 2. Long-term Memory: MEMORY.md
-3. Session Transcripts: ~/.engineering-flow-platform/sessions/*.jsonl (future)
+3. Session Transcripts: ~/.efp/sessions/*.jsonl (future)
 """
 
 import logging
@@ -58,8 +58,8 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Default memory paths
-DEFAULT_MEMORY_DIR = Path.home() / ".engineering-flow-platform/memory"
-DEFAULT_WORKSPACE = Path.home() / ".engineering-flow-platform/workspace"
+DEFAULT_MEMORY_DIR = Path.home() / ".efp/memory"
+DEFAULT_WORKSPACE = Path.home() / ".efp/workspace"
 
 
 class MemoryConfig:
