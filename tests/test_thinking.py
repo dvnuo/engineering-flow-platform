@@ -2,7 +2,7 @@
 
 import pytest
 import sys
-sys.path.insert(0, '/root/.openclaw/workspace/opsclaw')
+sys.path.insert(0, '/root/.openclaw/workspace/engineering-flow-platform')
 
 from agent.thinking import (
     ThinkLevel,
@@ -201,12 +201,12 @@ class TestFormatRuntimeInfo:
     def test_basic_runtime(self):
         """Test basic runtime info output."""
         result = format_runtime_info(
-            host="opsclaw",
+            host="engineering-flow-platform",
             os_info="Linux 5.14.0",
             arch="x86_64",
             node="3.12.0",
         )
-        assert "host=opsclaw" in result
+        assert "host=engineering-flow-platform" in result
         assert "os=Linux 5.14.0" in result
         assert "node=3.12.0" in result
         assert "thinking=off" in result  # default

@@ -1,4 +1,4 @@
-"""Sub-agent Sessions Tools for OpsClaw.
+"""Sub-agent Sessions Tools for Engineering Flow Platform.
 
 Provides tools for spawning and managing sub-agent sessions.
 """

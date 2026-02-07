@@ -1,1 +1,1 @@
-"""Tests package for OpsClaw."""
+"""Tests package for Engineering Flow Platform."""

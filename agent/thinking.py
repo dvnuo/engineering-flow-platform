@@ -1,4 +1,4 @@
-"""Thinking levels for OpsClaw Agent - Following OpenClaw's Thinking pattern."""
+"""Thinking levels for Engineering Flow Platform Agent - Following OpenClaw's Thinking pattern."""
 
 from enum import Enum
 from typing import Optional
@@ -110,7 +110,7 @@ def format_thinking_levels(provider: Optional[str] = None, model: Optional[str] 
 
 
 def format_runtime_info(
-    host: str = "opsclaw",
+    host: str = "engineering-flow-platform",
     os_info: str = "",
     arch: str = "",
     node: str = "",

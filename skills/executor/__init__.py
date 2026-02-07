@@ -1,4 +1,4 @@
-"""Skills and Tools executor for OpsClaw.
+"""Skills and Tools executor for Engineering Flow Platform.
 
 This module provides the ability to execute skills and tools based on user requests.
 """

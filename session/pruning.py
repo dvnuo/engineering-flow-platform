@@ -1,4 +1,4 @@
-"""Session pruning for OpsClaw.
+"""Session pruning for Engineering Flow Platform.
 
 Automatically prunes old tool results from session context while preserving key information.
 """

@@ -1,4 +1,4 @@
-# OpsClaw 重构指引 - 学习 OpenClaw 架构
+# Engineering Flow Platform 重构指引 - 学习 OpenClaw 架构
 
 ## 现状分析
 
@@ -23,7 +23,7 @@
 ## 目标架构
 
 ```
-opsclaw/
+engineering-flow-platform/
 ├── src/                           # 核心源码 (借鉴 OpenClaw)
 │   ├── channels/                  # Channel 适配器 (复用)
 │   │   ├── github.py              # GitHub REST API

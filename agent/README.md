@@ -179,7 +179,7 @@ class Heartbeat:
 # config.yaml
 agent:
   # Core settings
-  name: "opsclaw"
+  name: "engineering-flow-platform"
   mode: "auto"              # auto, manual, readonly
   
   # Default model settings
@@ -234,7 +234,7 @@ agent:
   context:
     max_tokens: 128000
     strategy: "truncate"     # truncate, summarize, window
-    system_prompt: "You are OpsClaw, a helpful AI assistant."
+    system_prompt: "You are Engineering Flow Platform, a helpful AI assistant."
   
   # Reasoning replay (OpenAI o1/o3 style)
   reasoning_replay:

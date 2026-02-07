@@ -1,4 +1,4 @@
-"""WebChat UI and HTTP server for OpsClaw.
+"""WebChat UI and HTTP server for Engineering Flow Platform.
 
 A simple web interface to chat with the agent directly.
 """

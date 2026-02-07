@@ -1,5 +1,5 @@
 """
-LLM client for OpsClaw - Supports multiple providers.
+LLM client for Engineering Flow Platform - Supports multiple providers.
 
 Providers:
 - OpenAI (GPT-3.5, GPT-4)

@@ -181,7 +181,7 @@ gateway:
   ui:
     enabled: true
     theme: "dark"
-    title: "OpsClaw Dashboard"
+    title: "Engineering Flow Platform Dashboard"
     favicon: "/static/favicon.ico"
   
   # Logging

@@ -191,7 +191,7 @@ class TestGatewayRequestHandling:
         import json
         data = json.loads(response.body)
         assert data["status"] == "ok"
-        assert data["service"] == "opsclaw"
+        assert data["service"] == "engineering-flow-platform"
 
 
 class TestGatewayIntegration:

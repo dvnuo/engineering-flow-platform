@@ -79,7 +79,7 @@ Send a message to a channel.
 
 ### `agent.name`
 - **Type**: `string`
-- **Default**: `"opsclaw"`
+- **Default**: `"engineering-flow-platform"`
 - **Description**: The name of the agent.
 
 ### `agent.default_model`
@@ -101,7 +101,7 @@ Send a message to a channel.
 
 ## Overview
 
-OpsClaw is a multi-channel AI assistant framework...
+Engineering Flow Platform is a multi-channel AI assistant framework...
 
 ## Components
 
@@ -129,15 +129,15 @@ OpsClaw is a multi-channel AI assistant framework...
 ## Installation
 
 ```bash
-git clone https://github.com/opsclaw/opsclaw.git
-cd opsclaw
+git clone https://github.com/engineering-flow-platform/engineering-flow-platform.git
+cd engineering-flow-platform
 pip install -r requirements.txt
 ```
 
 ## Quick Start
 
 ```python
-from opsclaw import Agent
+from engineering-flow-platform import Agent
 
 agent = Agent()
 agent.run()
@@ -182,7 +182,7 @@ docs:
   # API documentation
   api:
     enabled: true
-    source: "opsclaw/"
+    source: "engineering-flow-platform/"
     output: "docs/api/"
     style: "google"    # google, numpy, sphinx
 ```
@@ -217,7 +217,7 @@ mkdocs build
 sphinx-build -b html docs/ docs/build/
 
 # Using pdoc
-pdoc --output-dir docs/api/ opsclaw/
+pdoc --output-dir docs/api/ engineering-flow-platform/
 ```
 
 ### Serve Documentation Locally
@@ -229,13 +229,13 @@ mkdocs serve
 sphinx-autobuild docs/ docs/build/
 
 # pdoc
-pdoc --serve opsclaw
+pdoc --serve engineering-flow-platform
 ```
 
 ### Build All Documentation
 ```bash
 # Build API docs
-pdoc --output-dir docs/api/ opsclaw/
+pdoc --output-dir docs/api/ engineering-flow-platform/
 
 # Build guides
 mkdocs build
@@ -395,7 +395,7 @@ For more information, refer to [API Reference](api/agent-api.md).
 ### MkDocs
 ```yaml
 # mkdocs.yml
-site_name: OpsClaw Documentation
+site_name: Engineering Flow Platform Documentation
 nav:
   - Home: index.md
   - Guides:
@@ -410,7 +410,7 @@ theme:
 ### Sphinx
 ```rst
 # conf.py
-project = 'OpsClaw'
+project = 'Engineering Flow Platform'
 extensions = ['sphinx.ext.autodoc']
 html_theme = 'alabaster'
 ```
@@ -476,7 +476,7 @@ mkdocs build
 ### Code Examples Outdated
 ```bash
 # Run tests on code examples
-pytest --doctest-modules opsclaw/
+pytest --doctest-modules engineering-flow-platform/
 ```
 
 ### Build Failures

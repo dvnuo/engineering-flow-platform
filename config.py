@@ -1,4 +1,4 @@
-"""Configuration loader for OpsClaw."""
+"""Configuration loader for Engineering Flow Platform."""
 
 import os
 import time
@@ -13,12 +13,12 @@ class Config:
     
     Searches for config.yaml in the following order:
     1. Project directory (same directory as this file)
-    2. ~/.opsclaw/config.yaml
+    2. ~/.engineering-flow-platform/config.yaml
     """
     
     DEFAULT_PATHS = [
         Path(__file__).parent / "config.yaml",  # Project directory
-        Path.home() / ".opsclaw" / "config.yaml",  # User config directory
+        Path.home() / ".engineering-flow-platform" / "config.yaml",  # User config directory
     ]
 
     def __init__(self, config_path: Optional[str] = None):

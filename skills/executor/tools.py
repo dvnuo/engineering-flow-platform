@@ -1,4 +1,4 @@
-"""Tools for OpsClaw - Enable the agent to execute actions."""
+"""Tools for Engineering Flow Platform - Enable the agent to execute actions."""
 
 import asyncio
 import json

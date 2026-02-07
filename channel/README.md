@@ -230,7 +230,7 @@ channels:
     enabled: false
     webhook_url: ${GC_WEBHOOK_URL}
     space_id: ${GC_SPACE_ID}
-    bot_name: "OpsClaw"
+    bot_name: "Engineering Flow Platform"
     mentions: true
     format: "cardsV2"
 ```

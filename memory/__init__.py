@@ -1,4 +1,4 @@
-"""Memory module for OpsClaw-style long-term memory.
+"""Memory module for Engineering Flow Platform-style long-term memory.
 
 Features:
 - SQLite storage for memory chunks
@@ -12,7 +12,7 @@ Current: FTS5 full-text search only (BM25)
 
 For semantic/vector search, choose one:
 
-### Option A: sqlite-vec (Recommended by OpsClaw)
+### Option A: sqlite-vec (Recommended by Engineering Flow Platform)
 - Native SQLite extension for vector storage
 - Fast in-process vector operations
 - Requires: `pip install sqlite-vec`
@@ -48,7 +48,7 @@ memory:
 
 1. Daily Notes: memory/YYYY-MM-DD.md
 2. Long-term Memory: MEMORY.md
-3. Session Transcripts: ~/.opsclaw/sessions/*.jsonl (future)
+3. Session Transcripts: ~/.engineering-flow-platform/sessions/*.jsonl (future)
 """
 
 import logging
@@ -58,8 +58,8 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Default memory paths
-DEFAULT_MEMORY_DIR = Path.home() / ".opsclaw/memory"
-DEFAULT_WORKSPACE = Path.home() / ".opsclaw/workspace"
+DEFAULT_MEMORY_DIR = Path.home() / ".engineering-flow-platform/memory"
+DEFAULT_WORKSPACE = Path.home() / ".engineering-flow-platform/workspace"
 
 
 class MemoryConfig:

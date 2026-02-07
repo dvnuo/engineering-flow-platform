@@ -1,4 +1,4 @@
-"""Discord channel adapter for OpsClaw - Bot API Mode."""
+"""Discord channel adapter for Engineering Flow Platform - Bot API Mode."""
 
 import asyncio
 import logging

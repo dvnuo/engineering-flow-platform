@@ -1,5 +1,5 @@
 """
-Tools - Unified tool exports for OpsClaw.
+Tools - Unified tool exports for Engineering Flow Platform.
 
 This module exports all tools from src/tools/* for agent use.
 """

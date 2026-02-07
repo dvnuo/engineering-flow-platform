@@ -1,4 +1,4 @@
-"""Channel package for OpsClaw."""
+"""Channel package for Engineering Flow Platform."""
 
 from .discord import discord_channel, DiscordChannel
 from .jira import (
