@@ -1,12 +1,23 @@
+---
+name: github
+description: Execute GitHub CLI (gh) commands for repository management, issues, PRs, and workflows
+metadata:
+  emoji: 🐙
+  requires:
+    bins: [gh]
+    anyBins: []
+    env: [GITHUB_TOKEN, GITHUB_API_KEY]
+    config: [~/.config/gh.yml]
+---
 # GitHub Skill - GitHub CLI (gh)
 
 Execute any GitHub CLI command with flexible arguments.
 
 ## Skill Signature
 
-```python
+\`\`\`python
 github(command="repo list", args="--limit 10", hostname=None) -> SkillResult
-```
+\`\`\`
 
 ## Parameters
 
@@ -20,7 +31,7 @@ github(command="repo list", args="--limit 10", hostname=None) -> SkillResult
 
 ### Repository Operations
 
-```python
+\`\`\`python
 # List repositories
 github(command="repo", args="list --limit 10")
 
@@ -35,11 +46,11 @@ github(command="repo", args="view owner/repo")
 
 # Create repository
 github(command="repo", args="create --name my-repo --public")
-```
+\`\`\`
 
 ### Issue Operations
 
-```python
+\`\`\`python
 # List issues
 github(command="issue", args="list --repo owner/repo --state open --limit 10")
 
@@ -54,11 +65,11 @@ github(command="issue", args="close 123 --repo owner/repo")
 
 # Comment on an issue
 github(command="issue", args="comment 123 --repo owner/repo --body 'Thanks for reporting!'")
-```
+\`\`\`
 
 ### Pull Request Operations
 
-```python
+\`\`\`python
 # List PRs
 github(command="pr", args="list --repo owner/repo --state open --limit 10")
 
@@ -79,11 +90,11 @@ github(command="pr", args="merge 123 --repo owner/repo --admin --subject 'Merge 
 
 # Review a PR
 github(command="pr", args="review 123 --repo owner/repo --approve")
-```
+\`\`\`
 
 ### Workflow/Action Operations
 
-```python
+\`\`\`python
 # List workflow runs
 github(command="run", args="list --repo owner/repo --limit 10")
 
@@ -101,11 +112,11 @@ github(command="run", args="list --repo owner/repo")
 
 # Disable a workflow
 github(command="run", args="disable 12345 --repo owner/repo")
-```
+\`\`\`
 
 ### GitHub API Calls
 
-```python
+\`\`\`python
 # Get repository info
 github(command="api", args="repos/owner/repo")
 
@@ -123,18 +134,18 @@ github(command="api", args="repos/owner/repo/actions/runs")
 
 # Create issue via API
 github(command="api", args="repos/owner/repo/issues --method POST --input -", body='{"title":"Bug"}')
-```
+\`\`\`
 
 ### Enterprise GitHub
 
-```python
+\`\`\`python
 # Use with GitHub Enterprise
 github(command="repo", args="list --enterprise mycompany", hostname="github.enterprise.com")
-```
+\`\`\`
 
 ## Authentication
 
-```bash
+\`\`\`bash
 # Login to GitHub
 gh auth login
 
@@ -143,7 +154,7 @@ gh auth status
 
 # Refresh token
 gh auth refresh
-```
+\`\`\`
 
 ## Tips
 
@@ -155,7 +166,7 @@ gh auth refresh
 
 ## Common Workflows
 
-```python
+\`\`\`python
 # Find and checkout a PR
 github(command="pr", args="list --repo owner/repo --state open")
 github(command="pr", args="checkout 123 --repo owner/repo")
@@ -163,4 +174,4 @@ github(command="pr", args="checkout 123 --repo owner/repo")
 # Check CI, then merge
 github(command="pr", args="checks 123 --repo owner/repo")
 github(command="pr", args="merge 123 --repo owner/repo --admin")
-```
+\`\`\`

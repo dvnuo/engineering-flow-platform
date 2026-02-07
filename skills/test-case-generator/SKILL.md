@@ -1,3 +1,14 @@
+---
+name: test-case-generator
+description: Generate pytest-compatible test cases from natural language requirements or Jira ticket descriptions
+metadata:
+  emoji: 🧪
+  requires:
+    bins: []
+    anyBins: []
+    env: []
+    config: []
+---
 # Test Case Generator Skill
 
 *Generate automated test cases from requirements.*
@@ -6,7 +17,18 @@
 
 This skill generates pytest-compatible test cases based on requirements described in natural language or Jira ticket descriptions.
 
-## Inputs
+## Skill Signature
+
+\`\`\`python
+test_case_skill.generate(
+    requirements: str,
+    framework: str = "pytest",
+    language: str = "python",
+    test_type: str = "unit"
+) -> SkillResult
+\`\`\`
+
+## Parameters
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -26,13 +48,13 @@ Returns a formatted test code block with:
 ## Examples
 
 **Input:**
-```yaml
+\`\`\`yaml
 requirements: "用户应该能够通过邮箱和密码登录系统，登录成功后跳转到仪表板"
 framework: "pytest"
-```
+\`\`\`
 
 **Output:**
-```python
+\`\`\`python
 import pytest
 
 class TestUserLogin:
@@ -56,7 +78,7 @@ class TestUserLogin:
     def test_login_empty_fields(self):
         """Test login with empty email or password."""
         pass
-```
+\`\`\`
 
 ## Usage Notes
 

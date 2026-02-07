@@ -1,12 +1,23 @@
+---
+name: git
+description: Execute git commands for repository management, version control, and collaborative workflows
+metadata:
+  emoji: 🔀
+  requires:
+    bins: [git]
+    anyBins: []
+    env: []
+    config: []
+---
 # Git Skill - Local Git Management
 
 Execute any git command with flexible arguments.
 
 ## Skill Signature
 
-```python
+\`\`\`python
 git(command="status", args="", cwd=None) -> SkillResult
-```
+\`\`\`
 
 ## Parameters
 
@@ -20,7 +31,7 @@ git(command="status", args="", cwd=None) -> SkillResult
 
 ### Basic Commands
 
-```python
+\`\`\`python
 # Check repository status
 git(command="status")
 
@@ -38,11 +49,11 @@ git(command="diff")
 
 # Stage all changes
 git(command="add", args="-A")
-```
+\`\`\`
 
 ### Common Operations
 
-```python
+\`\`\`python
 # Clone a repository (HTTPS)
 git(command="clone", args="https://github.com/owner/repo.git")
 
@@ -66,11 +77,11 @@ git(command="checkout", args="develop")
 
 # Delete a branch
 git(command="branch", args="-d feature/old-feature")
-```
+\`\`\`
 
 ### Advanced Commands
 
-```python
+\`\`\`python
 # Rebase onto main branch
 git(command="rebase", args="main")
 
@@ -121,26 +132,26 @@ git(command="show", args="abc123:path/to/file.py")
 
 # Start bisect
 git(command="bisect", args="start")
-```
+\`\`\`
 
 ## Working Directory
 
 By default, git commands run in `~/.opsclaw/workspace`. Override with `cwd`:
 
-```python
+\`\`\`python
 # Run in specific directory
 git(command="status", cwd="/path/to/my/repo")
-```
+\`\`\`
 
 ## SSH Key Setup
 
 For private repositories, configure SSH key in `config.yaml`:
 
-```yaml
+\`\`\`yaml
 ssh:
   enabled: true
   private_key_path: "/run/secrets/github_ssh_key"
-```
+\`\`\`
 
 The SSH key is automatically copied to `~/.ssh/` with proper permissions (600) at startup.
 
