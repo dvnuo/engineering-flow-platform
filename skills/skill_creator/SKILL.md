@@ -12,188 +12,363 @@ metadata:
 
 # Skill Creator
 
-Create or update AgentSkills with proper structure and packaging.
+Create, update, and package AgentSkills with scripts, references, and assets.
 
-## About Skills
+## What This Skill Does
 
-Skills are modular packages that extend agent capabilities with specialized knowledge, workflows, and tools.
+This skill helps you create and manage other skills. It provides:
+1. **init** - Initialize a new skill from template
+2. **package** - Package a skill into a distributable .skill file
+3. **validate** - Validate skill structure and requirements
+4. **list** - List all existing skills
 
-### What Skills Provide
+## When to Use This Skill
 
-1. **Specialized workflows** - Multi-step procedures for specific domains
-2. **Tool integrations** - Instructions for working with specific file formats or APIs
-3. **Domain expertise** - Company-specific knowledge, schemas, business logic
-4. **Bundled resources** - Scripts, references, and assets for complex tasks
+Use this skill when:
+- Creating a new skill from scratch
+- Packaging a developed skill for distribution
+- Validating skill structure before sharing
+- Listing available skills in a directory
 
-## Skill Structure
+## Quick Start
 
+### Option 1: Use the Skill Function
+
+```python
+from skills.skill_creator.skill import skill_creator
+
+# Create a new skill
+result = skill_creator(
+    command="init",
+    name="pdf-editor",
+    path="skills/"
+)
+
+# Package a skill
+result = skill_creator(
+    command="package",
+    path="skills/pdf-editor"
+)
+
+# Validate a skill
+result = skill_creator(
+    command="validate",
+    path="skills/pdf-editor"
+)
+
+# List skills
+result = skill_creator(
+    command="list",
+    path="skills/"
+)
 ```
-skill-name/
-├── SKILL.md           # YAML frontmatter + Markdown (必需)
-├── scripts/           # 可执行脚本 (Python/Bash)
-├── references/        # 参考文档 (按需加载)
-└── assets/           # 资源文件 (模板、图片)
-```
 
-### SKILL.md Format
-
-```yaml
----
-name: <skill-name>
-description: <skill-description>
-metadata:
-  emoji: <emoji>
-  requires:
-    bins: [<cli-tools>]
-    anyBins: [<alternative-tools>]
-    env: [<required-env-vars>]
-    config: [<required-config-files>]
----
-```
-
-## Progressive Disclosure
-
-Skills use three-level loading:
-
-1. **Metadata (~100 words)** - Always in context
-2. **SKILL.md body (<5000 words)** - When skill triggers
-3. **Bundled resources** - As needed (scripts can run without loading)
-
-## Creating a New Skill
-
-### Step 1: Initialize Skill
+### Option 2: Use Scripts Directly
 
 ```bash
-python3 skills/skill-creator/scripts/init_skill.py <skill-name> --path skills/
+# Initialize a new skill
+python3 skills/skill_creator/scripts/init_skill.py pdf-editor --path skills/
+
+# Package a skill
+python3 skills/skill_creator/scripts/package_skill.py skills/pdf-editor/
+
+# Validate without packaging
+python3 skills/skill_creator/scripts/package_skill.py skills/pdf-editor/ --validate-only
 ```
 
-Creates:
-- `skills/<skill-name>/SKILL.md` - Template with frontmatter
-- `skills/<skill-name>/scripts/` - Scripts directory
-- `skills/<skill-name>/references/` - References directory
-- `skills/<skill-name>/assets/` - Assets directory
+## Creating a New Skill: Step by Step
+
+### Step 1: Initialize the Skill Template
+
+Run the initialization script:
+
+```bash
+python3 skills/skill_creator/scripts/init_skill.py my-new-skill --path skills/
+```
+
+This creates:
+
+```
+skills/my-new-skill/
+├── SKILL.md           # Template with frontmatter
+├── scripts/          # Empty directory
+├── references/        # Empty directory
+└── assets/           # Empty directory
+```
 
 ### Step 2: Edit SKILL.md
 
-Update frontmatter:
+Update the YAML frontmatter:
+
 ```yaml
 ---
-name: my-skill
-description: What this skill does and when to use it
+name: my-new-skill
+description: A description of what this skill does. Include what it does and when to use it.
 metadata:
   emoji: 🎯
   requires:
     bins: [git, python3]
+    anyBins: []
+    env: []
+    config: []
 ---
 ```
 
-Write body with:
-- Quick start examples
-- Detailed workflows
-- Links to reference files
+Write the skill body with:
 
-### Step 3: Add Resources
+```markdown
+# My New Skill
 
-**scripts/** - Executable code:
-- `scripts/rotate_pdf.py` - PDF rotation
-- Scripts run without loading into context
+Brief description.
 
-**references/** - Documentation:
-- API docs, schemas, policies
-- Loaded as needed
-- Keep SKILL.md lean
+## Quick Start
 
-**assets/** - Output files:
-- Templates, icons, boilerplate
-- Used in final output
+\`\`\`
+my-new-skill command="help"
+\`\`\`
 
-### Step 4: Package Skill
+## Commands
 
-```bash
-python3 skills/skill-creator/scripts/package_skill.py skills/<skill-name>/
-```
-
-Validates and creates distributable package.
-
-## Skill Naming
-
-- Lowercase letters, digits, hyphens only
-- Under 64 characters
-- Verb-led phrases: `git-branch-manager`, `jira-issue-creator`
-- Namespace by tool: `gh-address-comments`, `linear-address-issue`
+| Command | Description |
+|---------|-------------|
+| help | Show help |
+| run | Run the task |
 
 ## Examples
 
-### Initialize a new skill:
-```
-skill-creator init name="pdf-editor" path="skills/"
+Example usage patterns.
+
+## See Also
+
+- references/additional.md for more info
 ```
 
-### Package an existing skill:
+### Step 3: Add Resources
+
+Add files to the appropriate directories:
+
+**scripts/** - For executable code:
 ```
-skill-creator package path="skills/pdf-editor/"
+skills/my-new-skill/scripts/
+├── main.py           # Main script
+└── utils.py          # Utility functions
 ```
 
-### Update skill resources:
+**references/** - For documentation:
 ```
-skill-creator add-script name="pdf-editor" script="scripts/rotate.py"
+skills/my-new-skill/references/
+├── api.md            # API documentation
+└── examples.md       # Usage examples
+```
+
+**assets/** - For output files:
+```
+skills/my-new-skill/assets/
+├── template.html     # HTML template
+└── config.json       # Default config
+```
+
+### Step 4: Package the Skill
+
+```bash
+python3 skills/skill_creator/scripts/package_skill.py skills/my-new-skill/
+```
+
+This validates the skill and creates:
+```
+skills/my-new-skill.skill    # Distributable package
+```
+
+## Skill Structure Explained
+
+### SKILL.md (Required)
+
+Every skill must have a SKILL.md file with:
+
+1. **YAML Frontmatter** (Required):
+   ```yaml
+   ---
+   name: skill-name
+   description: What the skill does and when to use it
+   metadata:
+     emoji: 🎯
+     requires:
+       bins: [python3, git]
+       anyBins: [curl, wget]
+       env: [API_KEY]
+       config: [~/.config/app]
+   ---
+   ```
+
+2. **Markdown Body** (Required):
+   - Quick start examples
+   - Command reference
+   - Usage patterns
+
+### scripts/ (Optional)
+
+Executable scripts that can be run without loading into context.
+
+Example: `scripts/process.py`
+```python
+#!/usr/bin/env python3
+"""Process files."""
+
+import sys
+
+def main():
+    print("Processing files...")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+### references/ (Optional)
+
+Documentation loaded as needed when the skill is triggered.
+
+Example: `references/api.md`
+```markdown
+# API Reference
+
+## Functions
+
+### process_file(input, output)
+
+Process a file from input to output.
+
+**Parameters:**
+- `input` (str): Input file path
+- `output` (str): Output file path
+
+**Returns:**
+- bool: Success status
+```
+
+### assets/ (Optional)
+
+Files used in output but not loaded into context.
+
+Example: `assets/template.html`
+```html
+<!DOCTYPE html>
+<html>
+<head><title>{{title}}</title></head>
+<body>{{content}}</body>
+</html>
+```
+
+## Naming Conventions
+
+### Good Names
+- `pdf-editor` - Lowercase with hyphens
+- `git-branch-manager` - Verb-noun pattern
+- `jira-issue-creator` - Tool-noun pattern
+- `docker-deploy` - Tool-action pattern
+
+### Bad Names
+- `GitBranchManager` - Uppercase not allowed
+- `git_branch` - Underscores not allowed
+- `my--skill` - Double hyphens not allowed
+
+## Validation
+
+The package script validates:
+
+1. **SKILL.md exists**
+2. **YAML frontmatter has name and description**
+3. **Skill name is valid (lowercase, hyphens, max 64 chars)**
+4. **Directories exist if created**
+
+## Packaging
+
+When packaging, the script:
+
+1. Validates the skill structure
+2. Creates a `.skill` file (zip format)
+3. Includes all files in the skill directory
+
+Example:
+```
+skills/pdf-editor.skill
 ```
 
 ## Best Practices
 
-1. **Concise is key** - Challenge every piece of information
-2. **Set appropriate freedom**:
-   - Low freedom: Specific scripts with few parameters
-   - Medium freedom: Pseudocode with parameters
-   - High freedom: Text-based instructions
-3. **Progressive disclosure** - Keep SKILL.md under 500 lines
-4. **Reference files** - Link to detailed docs from SKILL.md
+### 1. Keep SKILL.md Concise
 
-## Common Patterns
+Only include essential information. Move detailed docs to references/.
 
-### Pattern 1: High-level guide with references
-```markdown
-# PDF Processing
+### 2. Use Progressive Disclosure
 
-Quick start:
-\`\`\`python
-extract_text("file.pdf")
-\`\`\`
-
-Advanced features:
-- Forms: See [FORMS.md](references/FORMS.md)
-- API: See [REFERENCE.md](references/REFERENCE.md)
+```
+SKILL.md         -> ~100 words (always loaded)
+references/*.md  -> Detailed docs (loaded when needed)
+scripts/*.py     -> Executable (run without loading)
 ```
 
-### Pattern 2: Domain-specific organization
+### 3. Clear Naming
+
+Use descriptive names that indicate the skill's purpose.
+
+### 4. Test Scripts
+
+Ensure all scripts work correctly before packaging.
+
+## Examples
+
+### Example 1: PDF Editor Skill
+
+```bash
+# Initialize
+python3 skills/skill_creator/scripts/init_skill.py pdf-editor --path skills/
+
+# Edit SKILL.md
+# Add scripts/rotate.py, scripts/merge.py
+# Add references/api.md
+
+# Package
+python3 skills/skill_creator/scripts/package_skill.py skills/pdf-editor/
 ```
-bigquery-skill/
-├── SKILL.md
-└── references/
-    ├── finance.md
-    ├── sales.md
-    └── product.md
+
+### Example 2: Git Branch Manager
+
+```bash
+# Initialize
+python3 skills/skill_creator/scripts/init_skill.py git-branch-manager --path skills/
+
+# Edit SKILL.md
+# Add scripts/create_branch.py
+# Add references/commands.md
+
+# Package
+python3 skills/skill_creator/scripts/package_skill.py skills/git-branch-manager/
 ```
 
-## Integration with Agent
+## Troubleshooting
 
-Skills are loaded based on:
-1. **name** - Matched against user requests
-2. **description** - Used for context matching
-3. **metadata.requires** - Checked before execution
+### "SKILL.md is required"
 
-Use the skill decorator:
-```python
-from skills.decorator import skill
+Make sure SKILL.md exists in the skill directory.
 
-@skill
-def my_skill(command="help"):
-    """Execute my custom skill."""
-    ...
+### "Invalid skill name"
+
+Check that the name:
+- Contains only lowercase letters, digits, and hyphens
+- Doesn't start or end with a hyphen
+- Has no consecutive hyphens
+- Is 64 characters or less
+
+### "Validation failed"
+
+Run with `--validate-only` to see all errors:
+```bash
+python3 skills/skill_creator/scripts/package_skill.py skills/my-skill/ --validate-only
 ```
 
 ## See Also
 
-- `skills/decorator.py` - Skill decorator and utilities
+- `skills/decorator.py` - Skill decorator for registering skills
 - `skills/executor/` - Skill execution engine
 - OpenClaw skill-creator: https://github.com/openclaw/openclaw/tree/main/skills/skill-creator
