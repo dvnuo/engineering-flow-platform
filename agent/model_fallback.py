@@ -1,7 +1,7 @@
 """Model Fallback - Automatic Model Degradation
 
 Automatically fallback to alternative models when the primary model fails.
-Inspired by OpenClaw's model-fallback.ts.
+Model fallback implementation based on agent framework best practices.
 
 Usage:
 ```python

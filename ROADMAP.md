@@ -1,8 +1,8 @@
-# OpsClaw vs CodeW Feature Comparison & Roadmap
+# Engineering Flow Platform vs CodeW Feature Comparison & Roadmap
 
 ## Overview
 
-| Aspect | OpsClaw (Original) | CodeW (Our Implementation) |
+| Aspect | Engineering Flow Platform (Original) | CodeW (Our Implementation) |
 |--------|---------------------|---------------------------|
 | **Language** | TypeScript/Node.js | Python |
 | **License** | MIT | MIT |
@@ -15,7 +15,7 @@
 
 ### Core Platform
 
-| Feature | OpsClaw | CodeW | Status |
+| Feature | Engineering Flow Platform | CodeW | Status |
 |---------|----------|-------|--------|
 | Gateway WS Control Plane | ✅ | ⚠️ HTTP only | TODO |
 | Sessions Management | ✅ | ✅ Persistent + Queue | Complete |
@@ -29,7 +29,7 @@
 
 ### Channels
 
-| Feature | OpsClaw | CodeW | Status |
+| Feature | Engineering Flow Platform | CodeW | Status |
 |---------|----------|-------|--------|
 | Discord | ✅ | ✅ Bot API | Complete |
 | Slack | ✅ Bolt | ❌ | TODO |
@@ -41,7 +41,7 @@
 
 ### Tools & Automation
 
-| Feature | OpsClaw | CodeW | Status |
+| Feature | Engineering Flow Platform | CodeW | Status |
 |---------|----------|-------|--------|
 | exec | ✅ | ✅ | Complete |
 | read | ✅ | ✅ | Complete |
@@ -56,7 +56,7 @@
 
 ### Agent Capabilities
 
-| Feature | OpsClaw | CodeW | Status |
+| Feature | Engineering Flow Platform | CodeW | Status |
 |---------|----------|-------|--------|
 | Tool Calling | ✅ Claude-native | ✅ OpenAI Function | Complete |
 | ReAct Pattern | ✅ pi-agent-core | ✅ Custom | Complete |
@@ -68,7 +68,7 @@
 
 ### Apps & Nodes
 
-| Feature | OpsClaw | CodeW | Status |
+| Feature | Engineering Flow Platform | CodeW | Status |
 |---------|----------|-------|--------|
 | macOS App | ✅ Menu bar | ❌ | TODO |
 | iOS Node | ✅ | ❌ | TODO |
@@ -79,7 +79,7 @@
 
 ### Security
 
-| Feature | OpsClaw | CodeW | Status |
+| Feature | Engineering Flow Platform | CodeW | Status |
 |---------|----------|-------|--------|
 | DM Pairing | ✅ | ❌ | TODO |
 | Sandbox Mode | ✅ Docker | ❌ | TODO |
@@ -88,7 +88,7 @@
 
 ### DevOps
 
-| Feature | OpsClaw | CodeW | Status |
+| Feature | Engineering Flow Platform | CodeW | Status |
 |---------|----------|-------|--------|
 | Health Checks | ✅ | ✅ /health | Complete |
 | Config Reload | ✅ | ✅ API | Complete |
@@ -141,7 +141,7 @@
 - [x] Execution Queue
 
 ### Phase 2: Channel Expansion (Next - Updated 2026-02-03)
-Based on comparison with OpsClaw and enterprise needs:
+Based on comparison with Engineering Flow Platform and enterprise needs:
 
 | Priority | Channel | Library | Status |
 |----------|---------|---------|--------|
@@ -173,7 +173,7 @@ Full Jira REST API v2/v3 support with 8 tools:
 | `jira_get_comments` | Get comments |
 
 ### Phase 3: Tool Enhancement (Updated 2026-02-03)
-Based on comparison with OpsClaw and enterprise needs:
+Based on comparison with Engineering Flow Platform and enterprise needs:
 
 | Priority | Tool | Status |
 |----------|------|--------|
@@ -233,7 +233,7 @@ Based on comparison with OpsClaw and enterprise needs:
 
 ## Code Structure Comparison
 
-### OpsClaw Structure
+### Engineering Flow Platform Structure
 ```
 openclaw/
 ├── src/
@@ -249,7 +249,7 @@ openclaw/
 
 ### CodeW Structure (Current - Updated 2026-02-02)
 ```
-opsclaw/
+engineering-flow-platform/
 ├── main.py             # Entry point
 ├── config.py          # YAML config loader
 ├── Dockerfile         # Container image
@@ -280,22 +280,22 @@ opsclaw/
 │   └── memory/        # Daily notes
 ├── tests/             # Unit tests (76+ tests)
 └── docs/              # Documentation
-    └── COMPARISON.md  # CodeW vs OpsClaw analysis
+    └── COMPARISON.md  # CodeW vs Engineering Flow Platform analysis
 ```
 
 ---
 
 ## References
 
-- OpsClaw Docs: https://docs.opsclaw.ai
-- OpsClaw GitHub: https://github.com/openclaw/openclaw
-- OpsClaw Discord: https://discord.gg/clawd
-- **CodeW vs OpsClaw Comparison**: [docs/COMPARISON.md](docs/COMPARISON.md)
-- **OpsClaw Original**: `/root/.opsclaw/workspace/openclaw_original/`
+- Engineering Flow Platform Docs: https://docs.efp.ai
+- Engineering Flow Platform GitHub: https://github.com/openclaw/openclaw
+- Engineering Flow Platform Discord: https://discord.gg/clawd
+- **CodeW vs Engineering Flow Platform Comparison**: [docs/COMPARISON.md](docs/COMPARISON.md)
+- **Reference Implementation**: /root/.efp/workspace (original source for reference)
 
 ## Comparison Summary (2026-02-02)
 
-| Dimension | OpsClaw | CodeW | Gap |
+| Dimension | Engineering Flow Platform | CodeW | Gap |
 |-----------|----------|-------|-----|
 | Lines of Code | ~87,000 | ~5,000 | 17x |
 | Channels | 26 | 2 | 24 |
@@ -322,11 +322,11 @@ See [docs/COMPARISON.md](docs/COMPARISON.md) for detailed analysis.
 
 ## Phase 6: Long-term Memory Enhancement (NEW - 2026-02-03)
 
-Based on OpsClaw's memory system design, implement SQLite + vector search for durable memory.
+Based on Engineering Flow Platform's memory system design, implement SQLite + vector search for durable memory.
 
-### Reference: OpsClaw Memory System
+### Reference: Engineering Flow Platform Memory System
 
-| Component | OpsClaw | CodeW (Current) | Implementation |
+| Component | Engineering Flow Platform | CodeW (Current) | Implementation |
 |-----------|----------|-----------------|----------------|
 | **Storage** | SQLite | ✅ SQLite | Complete |
 | **Full-text Search** | ✅ FTS5 | ✅ FTS5 | Complete |
@@ -336,11 +336,11 @@ Based on OpsClaw's memory system design, implement SQLite + vector search for du
 | **Embedding Cache** | SQLite-based | ✅ Metadata only | Partial |
 | **Session Indexing** | Optional | ❌ | TODO |
 
-### Memory Layers (Reference from OpsClaw)
+### Memory Layers (Reference from Engineering Flow Platform)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    ~/.opsclaw/memory/                       │
+│                    ~/.efp/memory/                       │
 │                    <agentId>.sqlite                          │
 ├─────────────────────────────────────────────────────────────┤
 │ Layer 1: Daily Notes                                         │
@@ -354,7 +354,7 @@ Based on OpsClaw's memory system design, implement SQLite + vector search for du
 │   - Context: Only load in main private session              │
 ├─────────────────────────────────────────────────────────────┤
 │ Layer 3: Session Transcripts (Optional)                     │
-│   - File: ~/.opsclaw/agents/<agentId>/sessions/*.jsonl    │
+│   - File: ~/.efp/agents/<agentId>/sessions/*.jsonl    │
 │   - Purpose: Index session history for semantic search      │
 │   - Note: Opt-in, debounced async indexing                  │
 └─────────────────────────────────────────────────────────────┘
@@ -370,7 +370,7 @@ Based on OpsClaw's memory system design, implement SQLite + vector search for du
 
 #### Step 2: Vector Search Integration 📋 NEXT
 - [ ] Evaluate embedding providers:
-  - Option A: **sqlite-vec** (native, recommended by OpsClaw)
+  - Option A: **sqlite-vec** (native, recommended by Engineering Flow Platform)
     - Fast in-process vector operations
     - Requires: `pip install sqlite-vec`
   - Option B: **External Vector DB** (ChromaDB, Weaviate, etc.)

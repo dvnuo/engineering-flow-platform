@@ -1,4 +1,4 @@
-"""Session management for OpsClaw with persistence."""
+"""Session management for Engineering Flow Platform with persistence."""
 
 import asyncio
 import json
@@ -140,7 +140,7 @@ class SessionManager:
     def _run_compaction(self):
         """Run compaction - extract important info and write to memory."""
         try:
-            workspace_path = Path.home() / ".opsclaw" / "workspace"
+            workspace_path = Path.home() / ".efp" / "workspace"
             memory_file = workspace_path / "MEMORY.md"
             
             # Collect important information from all sessions

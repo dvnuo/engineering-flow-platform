@@ -1,4 +1,4 @@
-# OpenClaw Mini Configuration Template
+# Engineering Flow Platform Configuration Template
 # COPY THIS FILE TO config.yaml AND FILL IN YOUR VALUES!
 
 # ============================================
@@ -160,7 +160,7 @@ polling:
 
 ssh:
   enabled: false  # Set to true to enable SSH key setup
-  private_key_path: ""  # Path to private key file (e.g., "/etc/opsclaw/id_ed25519")
+  private_key_path: ""  # Path to private key file (e.g., "/etc/engineering-flow-platform/id_ed25519")
 
 # Example usage:
 # ssh:
@@ -175,13 +175,13 @@ ssh:
 
 git:
   user:
-    name: ""  # Git user name (e.g., "OpsClaw Bot")
+    name: ""  # Git user name (e.g., "Engineering Flow Platform Bot")
     email: ""  # Git user email (e.g., "bot@company.com")
 
 # Example usage:
 # git:
 #   user:
-#     name: "OpsClaw Bot"
+#     name: "Engineering Flow Platform Bot"
 #     email: "bot@company.com"
 
 # ============================================

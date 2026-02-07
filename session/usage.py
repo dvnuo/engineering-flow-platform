@@ -1,4 +1,4 @@
-"""Usage tracking for OpsClaw.
+"""Usage tracking for Engineering Flow Platform.
 
 Tracks token usage and estimates costs.
 """
@@ -71,7 +71,7 @@ def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
 class UsageTracker:
     """Tracks token usage per session and globally."""
     
-    def __init__(self, base_path: str = "~/.opsclaw/usage"):
+    def __init__(self, base_path: str = "~/.efp/usage"):
         self.base_path = Path(base_path).expanduser()
         self.base_path.mkdir(parents=True, exist_ok=True)
         self.session_file = self.base_path / "sessions.jsonl"

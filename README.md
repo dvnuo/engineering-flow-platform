@@ -1,10 +1,10 @@
-# OpsClaw
+# Engineering Flow Platform
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![pytest](https://img.shields.io/badge/pytest-76%20tests-green.svg)](tests/)
 [![MIT License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
-A simple version of [OpsClaw](https://github.com/openclaw/openclaw) written in Python.
+An Engineering Flow Platform implementation written in Python, inspired by the open-source community.
 
 ## Features
 
@@ -97,7 +97,7 @@ deactivate
 ```bash
 # Build the image
 # Run from project root
-docker build -t opsclaw .
+docker build -t engineering-flow-platform .
 ```
 
 **Docker Compose (recommended)**:
@@ -108,9 +108,9 @@ Create `docker-compose.yml`:
 version: '3.8'
 
 services:
-  opsclaw:
+  engineering-flow-platform:
     build: .
-    container_name: opsclaw-bot
+    container_name: engineering-flow-platform-bot
     ports:
       - "8000:8000"
     volumes:
@@ -119,14 +119,14 @@ services:
       
       # Workspace directory for memory files - persists across restarts
       # Contains: SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, memory/
-      - ./workspace:/root/.opsclaw/workspace
+      - ./workspace:/root/.efp/workspace
       
       # Optional: logs directory
       - ./logs:/app/logs
     environment:
-      - OPENCLAW_DISCORD_BOT_TOKEN=${OPENCLAW_DISCORD_BOT_TOKEN}
-      - OPENCLAW_DISCORD_CHANNEL_ID=${OPENCLAW_DISCORD_CHANNEL_ID}
-      - OPENCLAW_LLM_API_KEY=${OPENCLAW_LLM_API_KEY}
+      - EFP_DISCORD_BOT_TOKEN=${EFP_DISCORD_BOT_TOKEN}
+      - EFP_DISCORD_CHANNEL_ID=${EFP_DISCORD_CHANNEL_ID}
+      - EFP_LLM_API_KEY=${EFP_LLM_API_KEY}
     restart: unless-stopped
 ```
 
@@ -141,7 +141,7 @@ docker-compose up -d
 
 **Important: Workspace Volume**
 
-Without the `./workspace:/root/.opsclaw/workspace` volume mount:
+Without the `./workspace:/root/.efp/workspace` volume mount:
 - Memory files (SOUL.md, USER.md, MEMORY.md, etc.) will be lost on restart
 - Conversation context and learned preferences won't persist
 
@@ -200,25 +200,25 @@ For sensitive data, use environment variables:
 
 ```bash
 # Linux/macOS
-export OPENCLAW_DISCORD_BOT_TOKEN="your_bot_token"
-export OPENCLAW_DISCORD_CHANNEL_ID="your_channel_id"
-export OPENCLAW_LLM_API_KEY="your_api_key"
+export EFP_DISCORD_BOT_TOKEN="your_bot_token"
+export EFP_DISCORD_CHANNEL_ID="your_channel_id"
+export EFP_LLM_API_KEY="your_api_key"
 
 # Windows (PowerShell)
-$env:OPENCLAW_DISCORD_BOT_TOKEN="your_bot_token"
-$env:OPENCLAW_DISCORD_CHANNEL_ID="your_channel_id"
-$env:OPENCLAW_LLM_API_KEY="your_api_key"
+$env:EFP_DISCORD_BOT_TOKEN="your_bot_token"
+$env:EFP_DISCORD_CHANNEL_ID="your_channel_id"
+$env:EFP_LLM_API_KEY="your_api_key"
 ```
 
 Then in `config.yaml`:
 
 ```yaml
 discord:
-  bot_token: "${OPENCLAW_DISCORD_BOT_TOKEN}"
-  channel_id: "${OPENCLAW_DISCORD_CHANNEL_ID}"
+  bot_token: "${EFP_DISCORD_BOT_TOKEN}"
+  channel_id: "${EFP_DISCORD_CHANNEL_ID}"
 
 llm:
-  api_key: "${OPENCLAW_LLM_API_KEY}"
+  api_key: "${EFP_LLM_API_KEY}"
 ```
 
 ### GitHub Copilot Configuration
@@ -330,11 +330,11 @@ server:
 ```yaml
 # docker-compose.yml
 services:
-  opsclaw:
+  engineering-flow-platform:
     environment:
-      - OPENCLAW_DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
-      - OPENCLAW_DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
-      - OPENCLAW_LLM_API_KEY=${OPENAI_API_KEY}
+      - EFP_DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - EFP_DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
+      - EFP_LLM_API_KEY=${OPENAI_API_KEY}
 ```
 
 ```bash
@@ -354,7 +354,7 @@ OPENAI_API_KEY=sk-your-api-key
 
 1. Open browser, visit https://discord.com/developers/applications
 2. Click "New Application" in top-right
-3. Enter application name (e.g., `OpsClaw-Bot`)
+3. Enter application name (e.g., `Engineering Flow Platform-Bot`)
 4. Click "Create"
 
 #### 1.2 Create Bot
@@ -454,15 +454,15 @@ python main.py
 
 ### Important: Run from Correct Directory
 
-Must run from `opsclaw` directory:
+Must run from `engineering-flow-platform` directory:
 
 ```bash
-cd /root/opsclaw
+cd /root/engineering-flow-platform
 ```
 
 If you see this error:
 ```
-ModuleNotFoundError: No module named 'opsclaw'
+ModuleNotFoundError: No module named 'engineering-flow-platform'
 ```
 Your current directory is wrong.
 
@@ -500,21 +500,21 @@ pkill -f "python main.py"
 
 ### Run as a Service (systemd)
 
-Create `/etc/systemd/system/opsclaw.service`:
+Create `/etc/systemd/system/engineering-flow-platform.service`:
 
 ```ini
 [Unit]
-Description=OpsClaw - Discord Bot
+Description=Engineering Flow Platform - Discord Bot
 After=network.target
 
 [Service]
 Type=simple
 User=your_user
-WorkingDirectory=/path/to/opsclaw
+WorkingDirectory=/path/to/engineering-flow-platform
 ExecStart=/path/to/venv/bin/python main.py
 Restart=on-failure
 RestartSec=5
-Environment=OPENCLAW_LLM_API_KEY=your_api_key
+Environment=EFP_LLM_API_KEY=your_api_key
 
 [Install]
 WantedBy=multi-user.target
@@ -523,9 +523,9 @@ WantedBy=multi-user.target
 Then:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable opsclaw
-sudo systemctl start opsclaw
-sudo systemctl status opsclaw
+sudo systemctl enable engineering-flow-platform
+sudo systemctl start engineering-flow-platform
+sudo systemctl status engineering-flow-platform
 ```
 
 ---
@@ -548,7 +548,7 @@ sudo systemctl status opsclaw
 curl http://localhost:8000/health
 
 # Response
-{"status": "ok", "service": "opsclaw"}
+{"status": "ok", "service": "engineering-flow-platform"}
 ```
 
 ### List Sessions
@@ -589,7 +589,7 @@ curl -X POST http://localhost:8000/api/sessions/discord:123:456/clear
 ## Project Structure
 
 ```
-opsclaw/
+engineering-flow-platform/
 ├── main.py              # Entry point
 ├── config.yaml          # Configuration
 ├── config.py            # Config loader
@@ -645,7 +645,7 @@ opsclaw/
 
 ## Memory System
 
-CodeW loads context from workspace MD files, similar to OpsClaw's memory system.
+CodeW loads context from workspace MD files, similar to Engineering Flow Platform's memory system.
 
 ### Workspace Files
 
@@ -660,10 +660,10 @@ CodeW loads context from workspace MD files, similar to OpsClaw's memory system.
 
 ### Memory Files Location
 
-By default, memory files are loaded from `~/.opsclaw/workspace/`:
+By default, memory files are loaded from `~/.efp/workspace/`:
 
 ```bash
-~/.opsclaw/workspace/
+~/.efp/workspace/
 ├── SOUL.md        # Agent identity
 ├── USER.md        # User info
 ├── AGENTS.md      # Workspace rules
@@ -705,8 +705,8 @@ memory_system = MemorySystem(cache_ttl_seconds=120)
 
 ```bash
 # Clone and setup
-git clone https://github.com/itwake/opsclaw.git
-cd opsclaw
+git clone https://github.com/itwake/engineering-flow-platform.git
+cd engineering-flow-platform
 git checkout -b feature/your-feature
 
 # Create virtual environment

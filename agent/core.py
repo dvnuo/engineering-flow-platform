@@ -1,4 +1,4 @@
-"""Agent core for OpsClaw - Following OpenClaw's Agent Loop pattern."""
+"""Agent core implementation following modern agent loop patterns."""
 
 import json
 import logging
@@ -45,7 +45,7 @@ class Agent:
             self._heartbeat.check_interval = check_interval
             logger.info(f"Heartbeat enabled - think_level={self.think_level.value}, interval={check_interval}s")
         
-        # Build OpsClaw-style system prompt
+        # Build Engineering Flow Platform-style system prompt
         # NOTE: get_tools_schema() already includes INTEGRATION_TOOLS (JIRA + Confluence + GitHub tools)
         base_tools = get_tools_schemas()
         self.tools = base_tools  # Already contains all tools from TOOLS + INTEGRATION_TOOLS
@@ -61,7 +61,7 @@ class Agent:
             print(f"  Thinking level: {self.think_level.value}")
             print(f"{'='*60}\n")
         
-        # Human-readable tool list (following OpenClaw's Tooling section)
+        # Human-readable tool list
         tools_list = "\n".join([
             f"- **{t['function']['name']}**: {t['function'].get('description', '')}"
             for t in self.tools
@@ -78,9 +78,9 @@ class Agent:
         # Current date/time for the prompt
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
         
-        # Build runtime info (following OpenClaw's Runtime format)
+        # Build runtime information
         runtime_info = format_runtime_info(
-            host="opsclaw",
+            host="engineering-flow-platform",
             os_info=f"{platform.system()} {platform.release()}",
             arch=platform.machine(),
             node=platform.python_version(),

@@ -392,7 +392,7 @@ print(SKILL_REGISTRY.keys())
 ### Import Errors
 ```bash
 # Ensure skills package is in PYTHONPATH
-export PYTHONPATH=/path/to/opsclaw:$PYTHONPATH
+export PYTHONPATH=/path/to/engineering-flow-platform:$PYTHONPATH
 ```
 
 ### Timeout Issues

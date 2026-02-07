@@ -1,4 +1,4 @@
-"""Session package for OpsClaw."""
+"""Session package for Engineering Flow Platform."""
 
 from .manager import session_manager, SessionManager
 

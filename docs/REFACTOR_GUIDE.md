@@ -1,4 +1,4 @@
-# OpsClaw 重构指引 - 学习 OpenClaw 架构
+# Engineering Flow Platform 重构指引 - 学习现代 Agent 框架架构
 
 ## 现状分析
 
@@ -23,8 +23,8 @@
 ## 目标架构
 
 ```
-opsclaw/
-├── src/                           # 核心源码 (借鉴 OpenClaw)
+engineering-flow-platform/
+├── src/                           # 核心源码 (参考业界最佳实践)
 │   ├── channels/                  # Channel 适配器 (复用)
 │   │   ├── github.py              # GitHub REST API
 │   │   ├── jira.py                # Jira REST API

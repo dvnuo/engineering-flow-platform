@@ -1,4 +1,4 @@
-"""Skill decorator and utilities for OpsClaw."""
+"""Skill decorator and utilities for Engineering Flow Platform."""
 
 from typing import Any, Dict, Optional
 

@@ -1,6 +1,6 @@
 """Message Compaction - Compress conversation history for token optimization.
 
-Inspired by OpenClaw's compaction.ts:
+Inspired by community compaction patterns:
 https://github.com/openclaw/openclaw/blob/main/src/agents/compaction.ts
 
 ## Core Functions
@@ -28,7 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Constants from OpenClaw
+# Constants for message compaction
 BASE_CHUNK_RATIO = 0.4
 MIN_CHUNK_RATIO = 0.15
 SAFETY_MARGIN = 1.2  # 20% buffer for estimation inaccuracy

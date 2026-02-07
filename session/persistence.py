@@ -1,4 +1,4 @@
-"""Session persistence layer for OpsClaw.
+"""Session persistence layer for Engineering Flow Platform.
 
 Manages JSONL transcript files and sessions.json store.
 """
@@ -23,7 +23,7 @@ class SessionStore:
             └── <sessionId>.jsonl
     """
     
-    def __init__(self, base_path: str = "~/.opsclaw/sessions"):
+    def __init__(self, base_path: str = "~/.efp/sessions"):
         self.base_path = Path(base_path).expanduser()
         self.sessions_file = self.base_path / "sessions.json"
         self._lock = None  # Created lazily in ensure_dir

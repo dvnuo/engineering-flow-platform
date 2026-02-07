@@ -125,7 +125,7 @@ git(command="bisect", args="start")
 
 ## Working Directory
 
-By default, git commands run in `~/.opsclaw/workspace`. Override with `cwd`:
+By default, git commands run in `~/.efp/workspace`. Override with `cwd`:
 
 ```python
 # Run in specific directory

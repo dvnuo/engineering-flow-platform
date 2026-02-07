@@ -121,7 +121,7 @@ polling:
 ### Files
 
 ```
-opsclaw/
+engineering-flow-platform/
 ├── cron/
 │   └── mention_poller.py      # Main polling logic
 ├── channel/

@@ -1,8 +1,8 @@
-# CodeW vs OpsClaw 功能对比与优先开发建议
+# CodeW vs Engineering Flow Platform 功能对比与优先开发建议
 
 ## 概览对比
 
-| 维度 | OpsClaw | CodeW | 差距 |
+| 维度 | Engineering Flow Platform | CodeW | 差距 |
 |------|----------|-------|------|
 | **语言** | TypeScript/Node.js | Python | 语言不同 |
 | **代码行数** | ~87,000 行 | ~2,500 行 | 35x |
@@ -17,10 +17,10 @@
 
 ### 1. 多 Channel 支持 (最重要)
 
-OpsClaw 有 **26 个 channel**，CodeW 只有 **2 个**：
+Engineering Flow Platform 有 **26 个 channel**，CodeW 只有 **2 个**：
 
 ```
-OpsClaw Channels (按优先级):
+Engineering Flow Platform Channels (按优先级):
 ├── ✅ Discord (已有)
 ├── ✅ Jira (已有)
 ├── 🚀 Telegram (高优先级 - 用户常用)
@@ -36,7 +36,7 @@ OpsClaw Channels (按优先级):
 
 ### 2. Skill 系统完善
 
-OpsClaw 有 **54 个 skills**，CodeW 只有 **2 个**：
+Engineering Flow Platform 有 **54 个 skills**，CodeW 只有 **2 个**：
 
 ```
 高优先级 Skills:
@@ -58,7 +58,7 @@ OpsClaw 有 **54 个 skills**，CodeW 只有 **2 个**：
 **现状**: CodeW 只有内存存储
 
 ```
-OpsClaw 持久化方案:
+Engineering Flow Platform 持久化方案:
 ├── ✅ SQLite 持久化 (已有 persistence.py)
 ├── 🚀 磁盘持久化 (需要完善)
 ├── 📂 会话导入/导出
@@ -73,7 +73,7 @@ OpsClaw 持久化方案:
 ### 4. 消息队列与任务调度
 
 ```
-OpsClaw Cron 系统:
+Engineering Flow Platform Cron 系统:
 ├── ⏰ 定时任务
 ├── 🔄 周期性检查
 ├── 📅 日历集成
@@ -88,7 +88,7 @@ CodeW 现状:
 ### 5. Hooks 系统
 
 ```
-OpsClaw Hooks:
+Engineering Flow Platform Hooks:
 ├── before_message
 ├── after_message
 ├── on_error
@@ -102,7 +102,7 @@ CodeW 现状:
 ### 6. 消息增强功能
 
 ```
-OpsClaw 消息能力:
+Engineering Flow Platform 消息能力:
 ├── ✅ 文本消息 (已有)
 ├── 🔗 链接预览
 ├── 🖼️ 图片/附件
@@ -121,7 +121,7 @@ CodeW 现状:
 ### 7. 权限与安全
 
 ```
-OpsClaw 安全:
+Engineering Flow Platform 安全:
 ├── 🔐 API Key 加密
 ├── 🛡️ 输入验证
 ├── 🚫 危险命令拦截
@@ -139,7 +139,7 @@ CodeW 现状:
 ### 8. 多模型支持
 
 ```
-OpsClaw Providers:
+Engineering Flow Platform Providers:
 ├── OpenAI (已有)
 ├── GitHub Copilot (已有)
 ├── Anthropic Claude
@@ -156,7 +156,7 @@ CodeW 现状:
 ### 9. 日志与调试
 
 ```
-OpsClaw 日志:
+Engineering Flow Platform 日志:
 ├── 🪵 结构化日志
 ├── 📊 使用追踪
 ├── 🔍 请求调试
@@ -170,7 +170,7 @@ CodeW 现状:
 ### 10. Web UI 改进
 
 ```
-OpsClaw Web:
+Engineering Flow Platform Web:
 ├── 完整 Web UI
 ├── 消息历史
 ├── 会话管理
@@ -231,7 +231,7 @@ CodeW 现状:
 
 ### 已完成 (✅)
 
-| 功能 | OpsClaw | CodeW | 状态 |
+| 功能 | Engineering Flow Platform | CodeW | 状态 |
 |------|----------|-------|------|
 | 内存系统 | ✅ | ✅ | PR #29 已合并 |
 | Discord | ✅ | ✅ | 基础可用 |
@@ -244,7 +244,7 @@ CodeW 现状:
 
 ### 待实现 (🚧)
 
-| 功能 | OpsClaw | CodeW | 优先级 |
+| 功能 | Engineering Flow Platform | CodeW | 优先级 |
 |------|----------|-------|--------|
 | Telegram | ✅ | ❌ | P0 |
 | Slack | ✅ | ❌ | P0 |
@@ -269,4 +269,4 @@ CodeW 现状:
 ---
 
 *生成时间: 2026-02-02*
-*对比版本: OpsClaw latest vs CodeW main*
+*对比版本: Engineering Flow Platform latest vs CodeW main*

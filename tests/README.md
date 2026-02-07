@@ -195,7 +195,7 @@ addopts = [
 asyncio_mode = "auto"
 
 [tool.pytest_coverage.html]
-title = "OpsClaw Test Coverage"
+title = "Engineering Flow Platform Test Coverage"
 ```
 
 ### Test-Specific Configuration
@@ -468,7 +468,7 @@ pytest --collect-only
 ls tests/test_*.py
 
 # Check PYTHONPATH
-export PYTHONPATH=/path/to/opsclaw:$PYTHONPATH
+export PYTHONPATH=/path/to/engineering-flow-platform:$PYTHONPATH
 ```
 
 ### Import Errors

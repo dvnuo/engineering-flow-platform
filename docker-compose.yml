@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  opsclaw:
+  engineering-flow-platform:
     build: .
-    container_name: opsclaw-bot
+    container_name: engineering-flow-platform-bot
     ports:
       - "8000:8000"
     volumes:
@@ -12,14 +12,14 @@ services:
       
       # Workspace directory for memory files - persists across restarts
       # Contains: SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, memory/
-      - ./workspace:/root/.opsclaw/workspace
+      - ./workspace:/root/.engineering-flow-platform/workspace
       
       # Optional: logs directory
       - ./logs:/app/logs
     environment:
-      - OPENCLAW_DISCORD_BOT_TOKEN=${OPENCLAW_DISCORD_BOT_TOKEN}
-      - OPENCLAW_DISCORD_CHANNEL_ID=${OPENCLAW_DISCORD_CHANNEL_ID}
-      - OPENCLAW_LLM_API_KEY=${OPENCLAW_LLM_API_KEY}
+      - EFP_DISCORD_BOT_TOKEN=${EFP_DISCORD_BOT_TOKEN}
+      - EFP_DISCORD_CHANNEL_ID=${EFP_DISCORD_CHANNEL_ID}
+      - EFP_LLM_API_KEY=${EFP_LLM_API_KEY}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

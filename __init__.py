@@ -1,4 +1,4 @@
-"""OpsClaw - A simple version of OpsClaw written in Python."""
+"""Engineering Flow Platform - A simple version of Engineering Flow Platform written in Python."""
 
 __version__ = "0.1.0"
 

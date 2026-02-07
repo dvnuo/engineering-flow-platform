@@ -1,11 +1,11 @@
-"""Thinking levels for OpsClaw Agent - Following OpenClaw's Thinking pattern."""
+"""Thinking levels for the Agent - Following best practices from open-source agent frameworks."""
 
 from enum import Enum
 from typing import Optional
 
 
 class ThinkLevel(str, Enum):
-    """Thinking level enum matching OpenClaw's ThinkLevel."""
+    """Thinking level enum for the agent system."""
     OFF = "off"
     MINIMAL = "minimal"
     LOW = "low"
@@ -110,7 +110,7 @@ def format_thinking_levels(provider: Optional[str] = None, model: Optional[str] 
 
 
 def format_runtime_info(
-    host: str = "opsclaw",
+    host: str = "engineering-flow-platform",
     os_info: str = "",
     arch: str = "",
     node: str = "",

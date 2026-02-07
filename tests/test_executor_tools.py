@@ -95,7 +95,7 @@ class TestFunctionToolsRegistration:
             result = await execute_tool(
                 "github_get_issue",
                 owner="itwake",
-                repo="opsclaw",
+                repo="engineering-flow-platform",
                 issue_number=1
             )
             
