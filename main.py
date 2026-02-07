@@ -25,23 +25,28 @@ from session.usage import usage_tracker
 from cron.mention_poller import start_polling, stop_polling, is_enabled
 from skills.git.skill import setup_ssh_key, setup_git_user
 from src.integrations.git import setup_gh_config
+from utils.logger import setup_logging, get_logger
 
 
-def setup_logging(level: int = None) -> None:
-    """Configure logging.
+def setup_logging_config() -> logging.Logger:
+    """Configure comprehensive logging with detailed output.
     
-    Args:
-        level: Logging level. If None, reads from config.debug.log_level.
+    Returns:
+        Logger instance
     """
-    # Determine log level from config if not specified
-    if level is None:
-        log_level_str = config.debug.get("log_level", "INFO").upper()
-        level = getattr(logging, log_level_str, logging.INFO)
+    # Determine log level from config
+    log_level_str = config.debug.get("log_level", "INFO").upper()
     
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    # Setup enhanced logging
+    logger = setup_logging(
+        level=log_level_str,
+        log_dir="logs",
+        log_file="efp.log",
+        max_size_mb=10,
+        backup_count=5
     )
+    
+    return logger
 
 
 def check_config() -> tuple[bool, list[str]]:
@@ -61,7 +66,7 @@ def check_config() -> tuple[bool, list[str]]:
     # Check LLM configuration
     llm_api_key = config.llm.get("api_key")
     if not llm_api_key:
-        warnings.append("LLM api_key not configured (Agent will not respond to messages)")
+        warnings.append("LLM api_key is not configured (Agent will not respond to messages)")
         can_start = False
     
     # Check if any channel is configured
@@ -74,11 +79,12 @@ def check_config() -> tuple[bool, list[str]]:
 
 async def main() -> None:
     """Main entry point."""
-    setup_logging()
-
-    logger = logging.getLogger(__name__)
-    logger.info("Starting Engineering Flow Platform...")
-
+    logger = setup_logging_config()
+    logger.info("=" * 60)
+    logger.info("Engineering Flow Platform - Starting...")
+    logger.info(f"Python version: {sys.version}")
+    logger.info(f"Working directory: {Path.cwd()}")
+    
     # Check configuration
     can_start, warnings = check_config()
     
@@ -89,16 +95,18 @@ async def main() -> None:
         logger.error("Cannot start: LLM api_key is required")
         return
 
+    logger.info("Configuration check passed")
+
     # Initialize session store and usage tracker
     try:
         await session_store.ensure_dir()
-        logger.info("Session store initialized")
+        logger.info(f"Session store initialized | path={session_store.base_path}")
         await usage_tracker.ensure_dir()
-        logger.info("Usage tracker initialized")
+        logger.info(f"Usage tracker initialized | path={usage_tracker.base_path}")
         await session_manager.initialize()
-        logger.info("Session manager initialized")
+        logger.info("Session manager initialized successfully")
     except Exception as e:
-        logger.warning(f"Failed to initialize session/usage tracking: {e}")
+        logger.error(f"Failed to initialize session/usage tracking | error={e}", exc_info=True)
 
     # Setup SSH key for git operations (from config)
     try:
@@ -108,7 +116,7 @@ async def main() -> None:
         else:
             logger.debug("SSH key not configured (ssh.enabled=false or no key path)")
     except Exception as e:
-        logger.warning(f"Failed to setup SSH key: {e}")
+        logger.warning(f"Failed to setup SSH key | error={e}", exc_info=True)
 
     # Setup git user configuration (from config)
     try:
@@ -118,7 +126,7 @@ async def main() -> None:
         else:
             logger.debug("Git user not configured (git.user.name/email not set)")
     except Exception as e:
-        logger.warning(f"Failed to setup git user: {e}")
+        logger.warning(f"Failed to setup git user | error={e}", exc_info=True)
 
     # Setup GitHub CLI (gh) configuration (from github config)
     try:
@@ -128,33 +136,50 @@ async def main() -> None:
         else:
             logger.debug("GitHub CLI not configured (github.enabled=false or no tokens)")
     except Exception as e:
-        logger.warning(f"Failed to setup GitHub CLI: {e}")
+        logger.warning(f"Failed to setup GitHub CLI | error={e}", exc_info=True)
 
     try:
         await gateway.start()
+        logger.info("Gateway server started")
         
         # Start mention polling if enabled
         polling_task = None
         if is_enabled():
             logger.info("Starting mention polling...")
             polling_task = asyncio.create_task(start_polling())
+            logger.info("Mention polling started")
+        else:
+            logger.debug("Mention polling is disabled")
         
-        logger.info("Engineering Flow Platform is running. Press Ctrl+C to stop.")
+        logger.info("=" * 60)
+        logger.info("Engineering Flow Platform is running")
+        logger.info("Press Ctrl+C to stop")
+        logger.info("=" * 60)
 
         # Keep running
         while True:
             await asyncio.sleep(1)
 
     except KeyboardInterrupt:
-        logger.info("Shutting down...")
+        logger.info("Shutdown signal received")
+    except Exception as e:
+        logger.error(f"Unexpected error in main loop | error={e}", exc_info=True)
     finally:
         # Stop mention polling
         if polling_task and not polling_task.done():
             logger.info("Stopping mention polling...")
             await stop_polling()
             await polling_task
+            logger.info("Mention polling stopped")
         
-        await gateway.stop()
+        try:
+            await gateway.stop()
+            logger.info("Gateway server stopped")
+        except Exception as e:
+            logger.error(f"Error stopping gateway | error={e}", exc_info=True)
+        
+        logger.info("Engineering Flow Platform shutdown complete")
+        logger.info("=" * 60)
 
 
 if __name__ == "__main__":
@@ -162,3 +187,8 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nShutdown complete.")
+    except Exception as e:
+        print(f"\nFatal error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

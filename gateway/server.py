@@ -5,6 +5,8 @@ import hashlib
 import hmac
 import json
 import logging
+import sys
+import traceback
 from typing import Any, Callable, Dict
 
 from aiohttp import web
@@ -31,6 +33,14 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def get_traceback_str() -> str:
+    """Get current exception traceback as string."""
+    exc_info = sys.exc_info()
+    if exc_info[0]:
+        return "".join(traceback.format_exception(*exc_info))
+    return "N/A"
+
+
 def verify_discord_signature(payload: bytes, signature: str, secret: str) -> bool:
     """Verify Discord webhook signature."""
     if not signature or not secret:
@@ -48,14 +58,18 @@ def verify_discord_signature(payload: bytes, signature: str, secret: str) -> boo
 async def handle_discord_message(message: str, session_id: str, user_name: str) -> str:
     """Handle a Discord message and return response."""
     try:
+        logger.info(f"Processing Discord message | session_id={session_id} | user={user_name}")
         result = await agent.process(
             message=message,
             session_id=session_id,
             user_name=user_name,
         )
-        return result["response"]
+        response = result["response"]
+        logger.info(f"Message processed successfully | session_id={session_id}")
+        return response
     except Exception as e:
-        logger.error(f"Error processing message: {e}")
+        tb_str = get_traceback_str()
+        logger.error(f"Error processing Discord message | session_id={session_id} | error={e}", exc_info=True)
         return f"Sorry, I encountered an error: {str(e)}"
 
 
@@ -67,6 +81,8 @@ async def handle_jira_message(
 ) -> str:
     """Handle a Jira comment and return response."""
     try:
+        logger.info(f"Processing Jira message | issue_key={issue_key} | session_id={session_id}")
+        
         # Check for test case generation command
         if jira_channel.is_test_case_command(message):
             return await handle_test_case_generation(issue_key, user_name)
@@ -77,9 +93,12 @@ async def handle_jira_message(
             session_id=session_id,
             user_name=user_name,
         )
-        return result["response"]
+        response = result["response"]
+        logger.info(f"Jira message processed successfully | issue_key={issue_key}")
+        return response
     except Exception as e:
-        logger.error(f"Error processing Jira comment: {e}")
+        tb_str = get_traceback_str()
+        logger.error(f"Error processing Jira comment | issue_key={issue_key} | error={e}", exc_info=True)
         return f"Sorry, I encountered an error: {str(e)}"
 
 
@@ -231,7 +250,8 @@ class Gateway:
             return web.json_response({"status": "ok"})
 
         except Exception as e:
-            logger.error(f"Webhook error: {e}")
+            tb_str = get_traceback_str()
+            logger.error(f"Discord webhook error | error={e} | traceback={tb_str[:200]}", exc_info=True)
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def handle_list_sessions(self, request: Request) -> web.Response:
@@ -433,7 +453,8 @@ class Gateway:
             })
 
         except Exception as e:
-            logger.error(f"Jira webhook error: {e}")
+            tb_str = get_traceback_str()
+            logger.error(f"Jira webhook error | error={e} | traceback={tb_str[:200]}", exc_info=True)
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def start(self) -> None:
