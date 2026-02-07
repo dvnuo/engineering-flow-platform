@@ -17,9 +17,9 @@ services:
       # Optional: logs directory
       - ./logs:/app/logs
     environment:
-      - OPENCLAW_DISCORD_BOT_TOKEN=${OPENCLAW_DISCORD_BOT_TOKEN}
-      - OPENCLAW_DISCORD_CHANNEL_ID=${OPENCLAW_DISCORD_CHANNEL_ID}
-      - OPENCLAW_LLM_API_KEY=${OPENCLAW_LLM_API_KEY}
+      - EFP_DISCORD_BOT_TOKEN=${EFP_DISCORD_BOT_TOKEN}
+      - EFP_DISCORD_CHANNEL_ID=${EFP_DISCORD_CHANNEL_ID}
+      - EFP_LLM_API_KEY=${EFP_LLM_API_KEY}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

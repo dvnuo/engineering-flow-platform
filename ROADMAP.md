@@ -291,7 +291,7 @@ engineering-flow-platform/
 - Engineering Flow Platform GitHub: https://github.com/openclaw/openclaw
 - Engineering Flow Platform Discord: https://discord.gg/clawd
 - **CodeW vs Engineering Flow Platform Comparison**: [docs/COMPARISON.md](docs/COMPARISON.md)
-- **Engineering Flow Platform Original**: `/root/.efp/workspace/openclaw_original/`
+- **Reference Implementation**: /root/.efp/workspace (original source for reference)
 
 ## Comparison Summary (2026-02-02)
 

@@ -4,7 +4,7 @@
 [![pytest](https://img.shields.io/badge/pytest-76%20tests-green.svg)](tests/)
 [![MIT License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
-A simple version of [Engineering Flow Platform](https://github.com/openclaw/openclaw) written in Python.
+An Engineering Flow Platform implementation written in Python, inspired by the open-source community.
 
 ## Features
 
@@ -124,9 +124,9 @@ services:
       # Optional: logs directory
       - ./logs:/app/logs
     environment:
-      - OPENCLAW_DISCORD_BOT_TOKEN=${OPENCLAW_DISCORD_BOT_TOKEN}
-      - OPENCLAW_DISCORD_CHANNEL_ID=${OPENCLAW_DISCORD_CHANNEL_ID}
-      - OPENCLAW_LLM_API_KEY=${OPENCLAW_LLM_API_KEY}
+      - EFP_DISCORD_BOT_TOKEN=${EFP_DISCORD_BOT_TOKEN}
+      - EFP_DISCORD_CHANNEL_ID=${EFP_DISCORD_CHANNEL_ID}
+      - EFP_LLM_API_KEY=${EFP_LLM_API_KEY}
     restart: unless-stopped
 ```
 
@@ -200,25 +200,25 @@ For sensitive data, use environment variables:
 
 ```bash
 # Linux/macOS
-export OPENCLAW_DISCORD_BOT_TOKEN="your_bot_token"
-export OPENCLAW_DISCORD_CHANNEL_ID="your_channel_id"
-export OPENCLAW_LLM_API_KEY="your_api_key"
+export EFP_DISCORD_BOT_TOKEN="your_bot_token"
+export EFP_DISCORD_CHANNEL_ID="your_channel_id"
+export EFP_LLM_API_KEY="your_api_key"
 
 # Windows (PowerShell)
-$env:OPENCLAW_DISCORD_BOT_TOKEN="your_bot_token"
-$env:OPENCLAW_DISCORD_CHANNEL_ID="your_channel_id"
-$env:OPENCLAW_LLM_API_KEY="your_api_key"
+$env:EFP_DISCORD_BOT_TOKEN="your_bot_token"
+$env:EFP_DISCORD_CHANNEL_ID="your_channel_id"
+$env:EFP_LLM_API_KEY="your_api_key"
 ```
 
 Then in `config.yaml`:
 
 ```yaml
 discord:
-  bot_token: "${OPENCLAW_DISCORD_BOT_TOKEN}"
-  channel_id: "${OPENCLAW_DISCORD_CHANNEL_ID}"
+  bot_token: "${EFP_DISCORD_BOT_TOKEN}"
+  channel_id: "${EFP_DISCORD_CHANNEL_ID}"
 
 llm:
-  api_key: "${OPENCLAW_LLM_API_KEY}"
+  api_key: "${EFP_LLM_API_KEY}"
 ```
 
 ### GitHub Copilot Configuration
@@ -332,9 +332,9 @@ server:
 services:
   engineering-flow-platform:
     environment:
-      - OPENCLAW_DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
-      - OPENCLAW_DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
-      - OPENCLAW_LLM_API_KEY=${OPENAI_API_KEY}
+      - EFP_DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - EFP_DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
+      - EFP_LLM_API_KEY=${OPENAI_API_KEY}
 ```
 
 ```bash
@@ -514,7 +514,7 @@ WorkingDirectory=/path/to/engineering-flow-platform
 ExecStart=/path/to/venv/bin/python main.py
 Restart=on-failure
 RestartSec=5
-Environment=OPENCLAW_LLM_API_KEY=your_api_key
+Environment=EFP_LLM_API_KEY=your_api_key
 
 [Install]
 WantedBy=multi-user.target

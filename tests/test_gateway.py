@@ -242,7 +242,7 @@ class TestGatewayBotMode:
 
     def test_gateway_host_port_from_config(self):
         """Test Gateway uses config for host and port."""
-        with patch.dict('os.environ', {'OPENCLAW_CONFIG': ''}):
+        with patch.dict('os.environ', {'EFP_CONFIG': ''}):
             gateway = Gateway()
             # Should have host and port attributes
             assert hasattr(gateway, 'host')

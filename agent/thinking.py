@@ -1,11 +1,11 @@
-"""Thinking levels for Engineering Flow Platform Agent - Following OpenClaw's Thinking pattern."""
+"""Thinking levels for the Agent - Following best practices from open-source agent frameworks."""
 
 from enum import Enum
 from typing import Optional
 
 
 class ThinkLevel(str, Enum):
-    """Thinking level enum matching OpenClaw's ThinkLevel."""
+    """Thinking level enum for the agent system."""
     OFF = "off"
     MINIMAL = "minimal"
     LOW = "low"

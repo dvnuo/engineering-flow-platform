@@ -157,7 +157,7 @@ class OpenAIProvider(BaseProvider):
         super().__init__(
             name="openai",
             api_base=config.llm.get('api_base', 'https://api.openai.com/v1'),
-            api_key_env='OPENCLAW_LLM_API_KEY'
+            api_key_env='EFP_LLM_API_KEY'
         )
         self.default_model = config.llm.get('model', 'gpt-3.5-turbo')
     

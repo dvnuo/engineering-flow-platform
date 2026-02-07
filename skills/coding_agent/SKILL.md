@@ -273,7 +273,7 @@ For long-running tasks, append a wake trigger so notification arrives immediatel
 
 ```bash
 bash pty:true workdir:~/project background:true command:"codex --yolo 'Build a REST API.
-When finished, run: openclaw gateway wake --text \"Done: Built todos API\" --mode now'"
+When finished, run: efp gateway wake --text \"Done: Built todos API\" --mode now'"
 ```
 
 This triggers an immediate wake event.

@@ -1,4 +1,4 @@
-"""Agent core for Engineering Flow Platform - Following OpenClaw's Agent Loop pattern."""
+"""Agent core implementation following modern agent loop patterns."""
 
 import json
 import logging
@@ -61,7 +61,7 @@ class Agent:
             print(f"  Thinking level: {self.think_level.value}")
             print(f"{'='*60}\n")
         
-        # Human-readable tool list (following OpenClaw's Tooling section)
+        # Human-readable tool list
         tools_list = "\n".join([
             f"- **{t['function']['name']}**: {t['function'].get('description', '')}"
             for t in self.tools
@@ -78,7 +78,7 @@ class Agent:
         # Current date/time for the prompt
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
         
-        # Build runtime info (following OpenClaw's Runtime format)
+        # Build runtime information
         runtime_info = format_runtime_info(
             host="engineering-flow-platform",
             os_info=f"{platform.system()} {platform.release()}",
