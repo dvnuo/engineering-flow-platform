@@ -1,8 +1,5 @@
 """Message Compaction - Compress conversation history for token optimization.
 
-Inspired by community compaction patterns:
-https://github.com/openclaw/openclaw/blob/main/src/agents/compaction.ts
-
 ## Core Functions
 
 1. estimateMessagesTokens() - Estimate total tokens in messages
