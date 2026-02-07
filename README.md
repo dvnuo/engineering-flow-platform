@@ -17,16 +17,52 @@ A simple version of [OpsClaw](https://github.com/openclaw/openclaw) written in P
 
 ## Table of Contents
 
+- [Quick Start](#quick-start-guide-5-minutes)
 - [Installation](#installation)
-  - [Virtual Environment (Recommended)](#1-virtual-environment-recommended)
-  - [Docker](#2-docker)
-  - [System-wide](#3-system-wide)
 - [Configuration](#configuration)
-- [Discord Setup](#discord-setup)
 - [Running](#running)
 - [API Reference](#api-reference)
+- [Architecture](#architecture)
+- [Submodule Documentation](#submodule-documentation)
+- [Memory System](#memory-system)
 - [Development](#development)
+- [Heartbeat](#heartbeat-periodic-background-checks)
+- [Model Fallback](#model-fallback-automatic-model-degradation)
 - [Troubleshooting](#troubleshooting)
+
+---
+
+## Submodule Documentation
+
+Each core module has detailed documentation in its `README.md`:
+
+| Module | Path | Description |
+|--------|------|-------------|
+| **Agent** | [`agent/README.md`](agent/README.md) | Agent core logic, LLM providers, model fallback, heartbeat |
+| **Channel** | [`channel/README.md`](channel/README.md) | Multi-channel adapters (Discord, WhatsApp, Telegram, Slack, Google Chat) |
+| **Skills** | [`skills/README.md`](skills/README.md) | Skill framework, @skill decorator, executor |
+| **Tools** | [`tools/README.md`](tools/README.md) | Sub-agent management, shell execution, process management |
+| **Tests** | [`tests/README.md`](tests/README.md) | Test framework, pytest configuration, CI/CD integration |
+| **Cron** | [`cron/README.md`](cron/README.md) | Scheduled task scheduler, mention poller, cleanup jobs |
+| **Gateway** | [`gateway/README.md`](gateway/README.md) | Web API server, authentication, rate limiting, WebSocket |
+| **Memory** | [`memory/README.md`](memory/README.md) | Persistent memory storage, semantic search, context management |
+| **Session** | [`session/README.md`](session/README.md) | Session lifecycle, state persistence, context isolation |
+| **Docs** | [`docs/README.md`](docs/README.md) | Documentation standards, guides, API reference templates |
+
+### When to Read Each Documentation
+
+| Scenario | Read This |
+|----------|-----------|
+| Adding new LLM provider | [`agent/README.md`](agent/README.md) |
+| Adding new channel | [`channel/README.md`](channel/README.md) |
+| Creating new skill | [`skills/README.md`](skills/README.md) |
+| Running background tasks | [`cron/README.md`](cron/README.md) |
+| Managing user sessions | [`session/README.md`](session/README.md) |
+| Understanding memory system | [`memory/README.md`](memory/README.md) |
+| Adding tools/sub-agents | [`tools/README.md`](tools/README.md) |
+| Writing tests | [`tests/README.md`](tests/README.md) |
+| Configuring web server | [`gateway/README.md`](gateway/README.md) |
+| Writing documentation | [`docs/README.md`](docs/README.md) |
 
 ---
 
@@ -559,30 +595,50 @@ opsclaw/
 ├── config.py            # Config loader
 ├── requirements.txt     # Python dependencies
 ├── pytest.ini           # pytest configuration
-├── gateway/
-│   ├── __init__.py
-│   └── server.py        # HTTP/WebSocket server
-├── agent/
-│   ├── __init__.py
-│   ├── core.py          # Agent logic
-│   ├── llm.py           # LLM client (OpenAI + GitHub Copilot)
-│   ├── memory.py        # Memory system for MD files
-│   └── model_fallback.py # Automatic model degradation
-├── channel/
-│   ├── __init__.py
-│   └── discord.py       # Discord adapter
-├── session/
-│   ├── __init__.py
-│   └── manager.py       # Session management
-├── skills/
-│   └── ...              # Skill executors
-└── tests/
-    ├── test_config.py
-    ├── test_gateway.py
-    ├── test_llm_client.py
-    ├── test_session_manager.py
-    ├── test_memory.py        # Memory system tests
-    └── test_model_fallback.py # Model fallback tests
+├── README.md           # This file
+├── agent/              # Agent core (see agent/README.md)
+│   ├── README.md       # Detailed agent documentation
+│   ├── core.py
+│   ├── llm.py
+│   ├── model_fallback.py
+│   └── heartbeat/
+├── channel/            # Channel adapters (see channel/README.md)
+│   ├── README.md       # Detailed channel documentation
+│   ├── discord.py
+│   └── (other channels)
+├── skills/            # Skills framework (see skills/README.md)
+│   ├── README.md       # Detailed skills documentation
+│   ├── decorator.py
+│   ├── executor/
+│   ├── coding_agent/
+│   └── (other skills)
+├── tools/              # Tools (see tools/README.md)
+│   ├── README.md       # Detailed tools documentation
+│   ├── subagent.py
+│   └── exec.py
+├── tests/              # Tests (see tests/README.md)
+│   ├── README.md       # Detailed testing documentation
+│   ├── test_*.py
+│   └── fixtures/
+├── cron/              # Cron jobs (see cron/README.md)
+│   ├── README.md       # Detailed cron documentation
+│   ├── scheduler.py
+│   └── jobs/
+├── gateway/            # Web server (see gateway/README.md)
+│   ├── README.md       # Detailed gateway documentation
+│   ├── main.py
+│   ├── routes/
+│   └── middleware/
+├── memory/             # Memory system (see memory/README.md)
+│   ├── README.md       # Detailed memory documentation
+│   ├── base.py
+│   └── sqlite_store.py
+├── session/            # Session management (see session/README.md)
+│   ├── README.md       # Detailed session documentation
+│   ├── base.py
+│   └── session_manager.py
+└── docs/               # Documentation (see docs/README.md)
+    └── README.md        # Documentation standards
 ```
 
 ---
@@ -671,26 +727,15 @@ echo "*.py" | entr -r python main.py
 
 ### Add New Channel
 
-1. Create a new file in `channel/`
-2. Implement the channel adapter class
-3. Register routes in `gateway/server.py`
-
-Example:
-```python
-# channel/telegram.py
-from typing import Dict, Any
-
-class TelegramChannel:
-    async def send_message(self, content: str, channel_id: str) -> Dict[str, Any]:
-        # Implementation
-        pass
-```
+See [`channel/README.md`](channel/README.md) for detailed guide.
 
 ### Add New LLM Provider
 
-1. Add provider detection in `agent/llm.py`
-2. Implement provider-specific request handling
-3. Add configuration examples in `config.yaml`
+See [`agent/README.md`](agent/README.md) for detailed guide.
+
+### Add New Skill
+
+See [`skills/README.md`](skills/README.md) for detailed guide.
 
 ### Code Style
 
@@ -698,6 +743,7 @@ class TelegramChannel:
 - Use type hints
 - Add docstrings
 - Write tests for new features
+- See [`tests/README.md`](tests/README.md) for testing standards
 
 ---
 
