@@ -235,7 +235,7 @@ Based on comparison with Engineering Flow Platform and enterprise needs:
 
 ### Engineering Flow Platform Structure
 ```
-openclaw/
+engineering-flow-platform/
 ├── src/
 │   ├── agent/          # Pi agent runtime
 │   ├── gateway/        # WS control plane
