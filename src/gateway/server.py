@@ -15,7 +15,7 @@ from aiohttp.web import Request
 from src.agents.core import agent
 from src.channels.discord import discord_channel
 from src.channels.jira import jira_channel
-from config import config
+from src.config import config
 from src.sessions.manager import DISCORD_SESSION_PREFIX, JIRA_SESSION_PREFIX
 
 # Lazy import test_case_skill to avoid circular dependency
@@ -277,7 +277,7 @@ class Gateway:
         GET /api/settings
         Returns: {...config}
         """
-        from config import config
+        from src.config import config
         return web.json_response({
             "llm": {
                 "provider": config.llm.get("provider"),
@@ -357,7 +357,7 @@ class Gateway:
         POST /api/config/reload
         Returns: {"status": "ok", "reloaded": true|false}
         """
-        from config import config
+        from src.config import config
         reloaded = config.reload()
         return web.json_response({
             "status": "ok",

@@ -10,7 +10,7 @@ import shlex
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from config import config
+from src.config import config
 
 DEFAULT_HOSTNAME = "github.com"
 

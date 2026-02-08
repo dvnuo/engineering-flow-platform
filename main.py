@@ -18,14 +18,14 @@ if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
 from src.gateway.server import gateway
-from config import config
+from src.config import config
 from src.sessions.persistence import session_store
 from src.sessions.manager import session_manager
 from src.sessions.usage import usage_tracker
 from src.cron.mention_poller import start_polling, stop_polling, is_enabled
 from skills.git.skill import setup_ssh_key, setup_git_user
 from src.integrations.git import setup_gh_config
-from utils.logger import setup_logging, get_logger
+from src.utils.logger import setup_logging, get_logger
 
 
 def setup_logging_config() -> logging.Logger:

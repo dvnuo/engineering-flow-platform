@@ -10,7 +10,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from config import config
+from src.config import config
 
 logger = logging.getLogger(__name__)
 

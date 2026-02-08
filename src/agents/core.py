@@ -10,7 +10,7 @@ from src.agents.heartbeat import get_heartbeat, start_heartbeat, stop_heartbeat
 from src.agents.llm import llm_client
 from src.agents.memory import memory_system
 from src.agents.thinking import ThinkLevel, normalize_think_level, format_runtime_info
-from config import config
+from src.config import config
 from src.sessions.manager import session_manager
 from src.agents.executor import (
     skills_executor,

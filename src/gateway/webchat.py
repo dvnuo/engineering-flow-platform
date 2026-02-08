@@ -13,7 +13,7 @@ from typing import Any, Dict
 from aiohttp import web
 
 from src.agents.core import Agent as AgentCore
-from config import config
+from src.config import config
 from src.sessions.manager import session_manager
 from src.sessions.usage import usage_tracker
 

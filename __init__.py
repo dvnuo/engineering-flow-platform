@@ -2,11 +2,12 @@
 
 __version__ = "0.1.0"
 
-from .config import config
-from .agent import agent, llm_client
-from .gateway import gateway
-from .session import session_manager
-from .channel import discord_channel
+from .src.config import config
+from .src.agents.core import agent
+from .src.agents.llm import llm_client
+from .src.gateway.server import gateway
+from .src.sessions.manager import session_manager
+from .src.channels.discord import discord_channel
 
 __all__ = [
     "__version__",

@@ -151,7 +151,7 @@ class TestI18nConfiguration:
 
     def test_config_works_with_english(self):
         """Test that configuration works with English settings."""
-        from config import Config
+        from src.config import Config
         
         config = Config()
         assert isinstance(config._config, dict)
@@ -178,7 +178,7 @@ class TestOptionalConfig:
             test_config_path = f.name
             sys.path.insert(0, str(Path(test_config_path).parent))
             
-            from config import Config
+            from src.config import Config
             config = Config(test_config_path)
             
             # Simulate check_config behavior
@@ -211,7 +211,7 @@ class TestOptionalConfig:
             f.write("llm:\n  api_key: test_key\n")
             f.flush()
             
-            from config import Config
+            from src.config import Config
             config = Config(f.name)
             
             warnings = []
@@ -244,7 +244,7 @@ class TestOptionalConfig:
             f.write("discord:\n  bot_token: test_token\n")
             f.flush()
             
-            from config import Config
+            from src.config import Config
             config = Config(f.name)
             
             warnings = []
@@ -277,7 +277,7 @@ class TestOptionalConfig:
             f.write("")
             f.flush()
             
-            from config import Config
+            from src.config import Config
             config = Config(f.name)
             
             warnings = []

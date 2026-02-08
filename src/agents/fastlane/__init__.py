@@ -163,7 +163,7 @@ class FastLaneCommands:
         if not state or state not in self.REASONING_OPTIONS:
             return self._format_reasoning_help()
         
-        from config import config
+        from src.config import config
         
         if state == "on":
             # Enable reasoning replay

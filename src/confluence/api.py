@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from config import config
+from src.config import config
 
 logger = logging.getLogger(__name__)
 

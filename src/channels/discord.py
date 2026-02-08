@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, Optional
 import discord
 from discord.ext import commands
 
-from config import config
+from src.config import config
 
 logger = logging.getLogger(__name__)
 

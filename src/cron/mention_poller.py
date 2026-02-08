@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set
 from dataclasses import dataclass, field
 
-from config import config
+from src.config import config
 from src.channels.github import github_channel
 from src.channels.jira import jira_channel
 from src.channels.confluence import confluence_channel
