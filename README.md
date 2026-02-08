@@ -201,7 +201,8 @@ engineering-flow/
 ### Architecture Principles
 
 1. **skills/** - Declarative skill definitions only (SKILL.md)
-2. **src/** - All implementation code (following OpenClaw)
+2. **src/** - All implementation code (following OpenClaw pattern)
+3. **config.py** and **utils/** are also in src/
 3. No separate `tools/` or `integrations/` directories
 4. All modules (agents, channels, cron, gateway, memory, sessions) in `src/`
 
