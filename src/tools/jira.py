@@ -29,9 +29,10 @@ async def jira_search(jql: str, max_results: int = 10) -> str:
             return "No issues found."
         lines = [f"**Search Results** ({len(issues)}):\n"]
         for issue in issues:
-            key = issue.get("key")
-            summary = issue.get("fields", {}).get("summary", "No summary")[:40]
-            status = issue.get("fields", {}).get("status", {}).get("name", "Unknown")
+            key = issue.get("key") or ""
+            fields = issue.get("fields") or {}
+            summary = fields.get("summary", "No summary")[:40] if fields else "No summary"
+            status = fields.get("status", {}).get("name", "Unknown") if fields else "Unknown"
             lines.append(f"- **{key}** [{status}] {summary}")
         return "\n".join(lines)
     except Exception as e:
