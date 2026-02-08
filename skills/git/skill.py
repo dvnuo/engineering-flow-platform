@@ -4,6 +4,8 @@ Git Skill - Backward compatible API.
 This module re-exports from src/integrations/git/ for backward compatibility.
 """
 
+from pathlib import Path
+
 from skills.executor import SkillResult, skill
 from src.integrations.git import GitClient, setup_ssh_key, setup_git_user
 
@@ -38,7 +40,7 @@ async def git(command: str = "status", message: str = None, branch: str = None, 
     elif cmd == "push":
         output = await git_client.run(["push"], cwd)
         return SkillResult(success=True, output=output)
-    elif cmd == "pull":
+    elif cmd == "pull" or cmd == "update":
         output = await git_client.run(["pull"], cwd)
         return SkillResult(success=True, output=output)
     elif cmd == "clone" and repo_url:

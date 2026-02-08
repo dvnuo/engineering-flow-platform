@@ -252,7 +252,9 @@ class SkillsExecutor:
             "git status", "git commit", "git push", "git pull",
             "git branch", "git checkout", "git log", "git diff",
             "git add", "git clone", "git ssh",
-            "check git", "show git", "run git"
+            "check git", "show git", "run git",
+            "update repo", "update the repo", "update repository",
+            "sync repo", "sync the repo", "sync repository"
         ]):
             return "git"
         
