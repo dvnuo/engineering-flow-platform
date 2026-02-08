@@ -11,7 +11,7 @@ class TestSubAgent:
     
     def test_subagent_initialization(self):
         """Test SubAgent initialization."""
-        from tools.subagent import SubAgent
+        from src.agents.subagent import SubAgent
         
         subagent = SubAgent(
             session_key="test-session",
@@ -31,7 +31,7 @@ class TestSubAgent:
     
     def test_subagent_to_dict(self):
         """Test SubAgent to_dict method."""
-        from tools.subagent import SubAgent
+        from src.agents.subagent import SubAgent
         
         subagent = SubAgent(
             session_key="test-session",
@@ -51,7 +51,7 @@ class TestSubAgent:
     
     def test_subagent_short_task(self):
         """Test SubAgent with short task (no truncation)."""
-        from tools.subagent import SubAgent
+        from src.agents.subagent import SubAgent
         
         subagent = SubAgent(
             session_key="short-session",
@@ -71,7 +71,7 @@ class TestSessionsList:
     
     def test_sessions_list_empty(self):
         """Test sessions_list with no sessions."""
-        from tools.subagent import sessions_list
+        from src.agents.subagent import sessions_list
         
         # Mock session_manager - patch where it's imported from, not where it's used
         with patch('session.manager.session_manager') as mock_sm:
@@ -85,7 +85,7 @@ class TestSessionsList:
     
     def test_sessions_list_with_limit(self):
         """Test sessions_list with limit parameter."""
-        from tools.subagent import sessions_list
+        from src.agents.subagent import sessions_list
         
         with patch('session.manager.session_manager') as mock_sm:
             mock_sm.get_session_info.return_value = {
@@ -103,7 +103,7 @@ class TestSessionsHistory:
     
     def test_sessions_history_empty(self):
         """Test sessions_history with non-existent session."""
-        from tools.subagent import sessions_history
+        from src.agents.subagent import sessions_history
         
         with patch('session.manager.session_manager') as mock_sm:
             mock_sm.get_history.return_value = []
@@ -121,7 +121,7 @@ class TestSessionsSpawn:
     
     def test_sessions_spawn_basic(self):
         """Test basic session spawning."""
-        from tools.subagent import sessions_spawn, _subagent_sessions
+        from src.agents.subagent import sessions_spawn, _subagent_sessions
         
         # Clear any existing sessions
         _subagent_sessions.clear()
@@ -147,7 +147,7 @@ class TestSessionsSpawn:
     
     def test_sessions_spawn_auto_label(self):
         """Test session spawning with auto-generated label."""
-        from tools.subagent import sessions_spawn, _subagent_sessions
+        from src.agents.subagent import sessions_spawn, _subagent_sessions
         
         _subagent_sessions.clear()
         
@@ -167,14 +167,14 @@ class TestSubAgentSchemas:
     
     def test_subagent_tools_defined(self):
         """Test that SUBAGENT_TOOLS is defined."""
-        from tools.subagent_schemas import SUBAGENT_TOOLS
+        from src.agents.subagent_schemas import SUBAGENT_TOOLS
         
         assert isinstance(SUBAGENT_TOOLS, list)
         assert len(SUBAGENT_TOOLS) > 0
     
     def test_sessions_list_schema(self):
         """Test sessions_list tool schema."""
-        from tools.subagent_schemas import SUBAGENT_TOOLS
+        from src.agents.subagent_schemas import SUBAGENT_TOOLS
         
         schema = SUBAGENT_TOOLS[0]
         
@@ -184,7 +184,7 @@ class TestSubAgentSchemas:
     
     def test_sessions_spawn_schema(self):
         """Test sessions_spawn tool schema."""
-        from tools.subagent_schemas import SUBAGENT_TOOLS
+        from src.agents.subagent_schemas import SUBAGENT_TOOLS
         
         # Find sessions_spawn schema
         spawn_schema = None
@@ -202,13 +202,13 @@ class TestSubAgentIntegration:
     
     def test_subagent_sessions_registry(self):
         """Test that _subagent_sessions is properly initialized."""
-        from tools.subagent import _subagent_sessions
+        from src.agents.subagent import _subagent_sessions
         
         assert isinstance(_subagent_sessions, dict)
     
     def test_spawn_and_cleanup(self):
         """Test spawning and cleaning up a session."""
-        from tools.subagent import sessions_spawn, _subagent_sessions
+        from src.agents.subagent import sessions_spawn, _subagent_sessions
         
         # Spawn
         _subagent_sessions.clear()
@@ -233,7 +233,7 @@ class TestSubAgentDisableTools:
     
     def test_subagent_disable_tools_initialization(self):
         """Test SubAgent initialization with disable_tools=True."""
-        from tools.subagent import SubAgent
+        from src.agents.subagent import SubAgent
         
         subagent = SubAgent(
             session_key="test-think-only",
@@ -248,7 +248,7 @@ class TestSubAgentDisableTools:
     
     def test_subagent_tools_disabled_when_flag_set(self):
         """Test that tools are disabled when disable_tools=True."""
-        from tools.subagent import SubAgent
+        from src.agents.subagent import SubAgent
         
         subagent = SubAgent(
             session_key="test-tools-disabled",
@@ -264,7 +264,7 @@ class TestSubAgentDisableTools:
     
     def test_subagent_tools_enabled_by_default(self):
         """Test that tools are enabled by default when disable_tools=False."""
-        from tools.subagent import SubAgent
+        from src.agents.subagent import SubAgent
         
         subagent = SubAgent(
             session_key="test-tools-enabled",
@@ -280,7 +280,7 @@ class TestSubAgentDisableTools:
     
     def test_sessions_spawn_disable_tools(self):
         """Test sessions_spawn with disable_tools parameter."""
-        from tools.subagent import sessions_spawn, _subagent_sessions
+        from src.agents.subagent import sessions_spawn, _subagent_sessions
         
         _subagent_sessions.clear()
         
@@ -302,7 +302,7 @@ class TestSubAgentDisableTools:
     
     def test_sessions_spawn_schema_has_disable_tools(self):
         """Test that sessions_spawn schema includes disable_tools."""
-        from tools.subagent_schemas import SUBAGENT_TOOLS
+        from src.agents.subagent_schemas import SUBAGENT_TOOLS
         
         # Find sessions_spawn schema
         spawn_schema = None
@@ -320,7 +320,7 @@ class TestSubAgentDisableTools:
     
     def test_subagent_to_dict_includes_disable_tools(self):
         """Test that to_dict includes disable_tools field."""
-        from tools.subagent import SubAgent
+        from src.agents.subagent import SubAgent
         
         subagent = SubAgent(
             session_key="test-dict",

@@ -1,57 +1,69 @@
-"""
-Git Skill - Backward compatible API.
+"""Git Skill - Execute git commands."""
 
-This module re-exports from src/integrations/git/ for backward compatibility.
-"""
+import asyncio
+from typing import Optional
 
-from pathlib import Path
+from src.git.api import GitClient
+from src.agents.executor import skill
 
-from skills.executor import SkillResult, skill
-from src.integrations.git import GitClient, setup_ssh_key, setup_git_user
 
-# Global instance for backward compatibility
-git_client = GitClient()
+class SkillResult:
+    """Result from skill execution."""
+    
+    def __init__(self, success: bool, output: str = "", error: Optional[str] = None):
+        self.success = success
+        self.output = output
+        self.error = error
+    
+    def __str__(self) -> str:
+        if self.success:
+            return self.output
+        return f"Error: {self.error}"
 
 
 @skill(
     name="git",
-    description="Manage local git repositories. Commands: status, log, branch, commit, push, pull, clone, add"
+    description="Execute git commands. Use for cloning repositories, checking status, committing changes, pushing, pulling, and other git operations.",
+    parameters={
+        "command": {
+            "type": "string",
+            "description": "Git subcommand: status, clone, commit, push, pull, branch, log, diff, add, checkout, fetch, merge, rebase, stash"
+        },
+        "args": {
+            "type": "string", 
+            "description": "Additional arguments (space-separated). For clone, this is the repository URL."
+        },
+        "cwd": {
+            "type": "string",
+            "description": "Working directory for the git command"
+        }
+    }
 )
-async def git(command: str = "status", message: str = None, branch: str = None, limit: int = 10, repo_url: str = None, file_path: str = None, content: str = None, repo_path: str = None) -> SkillResult:
-    """Execute git commands."""
-    cmd = command.lower()
+async def git(command: str = "status", args: str = "", cwd: str = None) -> str:
+    """Execute a git command.
     
-    # Determine working directory: repo_path > workspace > default
-    workspace = str(Path.home() / ".efp" / "workspace")
-    cwd = repo_path if repo_path else workspace
+    Examples:
+        - git(command="status")
+        - git(command="clone", args="https://github.com/owner/repo.git")
+        - git(command="commit", args="-m 'feat: new feature'")
+        - git(command="push")
+        - git(command="pull")
+        - git(command="log", args="--oneline -10")
+    """
+    client = GitClient(cwd)
     
-    if cmd == "status":
-        output = await git_client.run(["status"], cwd)
-        return SkillResult(success=True, output=output)
-    elif cmd == "log":
-        output = await git_client.run(["log", f"-n{limit}", "--pretty=format:%h %s"], cwd)
-        return SkillResult(success=True, output=output)
-    elif cmd == "branch":
-        output = await git_client.run(["branch", "-a"], cwd)
-        return SkillResult(success=True, output=output)
-    elif cmd == "commit" and message:
-        output = await git_client.run(["commit", "-m", message], cwd)
-        return SkillResult(success=True, output=output)
-    elif cmd == "push":
-        output = await git_client.run(["push"], cwd)
-        return SkillResult(success=True, output=output)
-    elif cmd == "pull" or cmd == "update":
-        output = await git_client.run(["pull"], cwd)
-        return SkillResult(success=True, output=output)
-    elif cmd == "clone" and repo_url:
-        output = await git_client.clone(repo_url)
-        return SkillResult(success=True, output=output)
-    elif cmd == "add" and file_path:
-        output = await git_client.run(["add", file_path], cwd)
-        return SkillResult(success=True, output=output)
+    # Build git command
+    git_args = [command]
+    if args:
+        git_args.extend(args.split())
     
-    return SkillResult(success=False, error=f"Unknown command: {command}")
-
-
-# Export for backward compatibility
-__all__ = ["git", "git_client", "GitClient", "setup_ssh_key", "setup_git_user"]
+    # Handle clone specially - it needs a URL
+    if command == "clone" and args:
+        output = await client.clone(args.split()[0])
+        result = SkillResult(success="Error" not in output, output=output)
+        return str(result)
+    
+    # Run the command
+    output = await client.run(git_args)
+    result = SkillResult(success="Error" not in output, output=output)
+    return str(result)

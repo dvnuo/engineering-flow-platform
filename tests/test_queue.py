@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from agent.queue import ExecutionQueue
+from src.agents.queue import ExecutionQueue
 
 
 class TestExecutionQueue:

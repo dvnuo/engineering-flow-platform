@@ -87,7 +87,7 @@ class TestLLMClientImport:
 
     def test_llm_client_has_copilot_methods(self):
         """Test LLMClient has GitHub Copilot methods."""
-        from agent.llm import LLMClient
+        from src.agents.llm import LLMClient
         
         # Check methods exist
         assert hasattr(LLMClient, '_get_headers')
@@ -96,7 +96,7 @@ class TestLLMClientImport:
 
     def test_llm_client_copilot_api_base(self):
         """Test LLMClient has correct Copilot API base."""
-        from agent.llm import LLMClient
+        from src.agents.llm import LLMClient
         
         assert hasattr(LLMClient, 'COPILOT_API_BASE')
         assert "api.github.com/copilot" in LLMClient.COPILOT_API_BASE
@@ -107,7 +107,7 @@ class TestGatewayImport:
 
     def test_gateway_has_start_stop(self):
         """Test Gateway has start and stop methods."""
-        from gateway.server import Gateway
+        from src.gateway.server import Gateway
         
         assert hasattr(Gateway, 'start')
         assert hasattr(Gateway, 'stop')
@@ -115,7 +115,7 @@ class TestGatewayImport:
 
     def test_gateway_instantiation(self):
         """Test Gateway can be instantiated."""
-        from gateway.server import Gateway
+        from src.gateway.server import Gateway
         
         gateway = Gateway()
         assert gateway is not None
@@ -128,7 +128,7 @@ class TestDiscordChannelImport:
 
     def test_discord_channel_has_send_message(self):
         """Test DiscordChannel has send_message method."""
-        from channel.discord import DiscordChannel
+        from src.channels.discord import DiscordChannel
         
         assert hasattr(DiscordChannel, 'send_message')
         # start/stop methods are handled by discord_channel instance

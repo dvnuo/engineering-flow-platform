@@ -11,7 +11,7 @@ class TestSkillCreatorInit:
     
     def test_normalize_skill_name(self):
         """Test skill name normalization."""
-        from skills.skill_creator.scripts.init_skill import normalize_skill_name
+        from src.skill_creator.init_skill import normalize_skill_name
         
         assert normalize_skill_name("My Skill") == "my-skill"
         assert normalize_skill_name("PDF Editor") == "pdf-editor"
@@ -20,7 +20,7 @@ class TestSkillCreatorInit:
     
     def test_create_skill_template(self):
         """Test skill template creation."""
-        from skills.skill_creator.scripts.init_skill import create_skill_template
+        from src.skill_creator.init_skill import create_skill_template
         
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir)
@@ -42,7 +42,7 @@ class TestSkillCreatorPackage:
     
     def test_validate_skill_name(self):
         """Test skill name validation."""
-        from skills.skill_creator.scripts.package_skill import validate_skill_name
+        from src.skill_creator.package_skill import validate_skill_name
         
         assert validate_skill_name("my-skill") is True
         assert validate_skill_name("pdf-editor-v2") is True
@@ -55,7 +55,7 @@ class TestSkillCreatorPackage:
     
     def test_parse_frontmatter(self):
         """Test YAML frontmatter parsing."""
-        from skills.skill_creator.scripts.package_skill import parse_frontmatter
+        from src.skill_creator.package_skill import parse_frontmatter
         
         yaml_str = """
 name: test-skill
@@ -75,8 +75,10 @@ class TestSkillCreatorSkill:
     
     def test_help_command(self):
         """Test help command."""
-        from skills.skill_creator.skill import skill_creator
-        from skills.decorator import SkillResult
+        # skill_creator - functionality removed in PR #131
+# from src.skill_creator.skill import skill_creator
+        # SkillResult - functionality removed in PR #131
+# from skills.decorator import SkillResult
         
         result = skill_creator(command="help")
         
@@ -86,8 +88,10 @@ class TestSkillCreatorSkill:
     
     def test_list_command(self):
         """Test list command."""
-        from skills.skill_creator.skill import skill_creator
-        from skills.decorator import SkillResult
+        # skill_creator - functionality removed in PR #131
+# from src.skill_creator.skill import skill_creator
+        # SkillResult - functionality removed in PR #131
+# from skills.decorator import SkillResult
         
         result = skill_creator(command="list", path="/nonexistent")
         
@@ -97,8 +101,10 @@ class TestSkillCreatorSkill:
     
     def test_unknown_command(self):
         """Test unknown command."""
-        from skills.skill_creator.skill import skill_creator
-        from skills.decorator import SkillResult
+        # skill_creator - functionality removed in PR #131
+# from src.skill_creator.skill import skill_creator
+        # SkillResult - functionality removed in PR #131
+# from skills.decorator import SkillResult
         
         result = skill_creator(command="unknown")
         
@@ -112,7 +118,7 @@ class TestSkillNaming:
     
     def test_good_names(self):
         """Test good skill names."""
-        from skills.skill_creator.scripts.package_skill import validate_skill_name
+        from src.skill_creator.package_skill import validate_skill_name
         
         good_names = [
             "git-branch-manager",
@@ -126,7 +132,7 @@ class TestSkillNaming:
     
     def test_bad_names(self):
         """Test bad skill names."""
-        from skills.skill_creator.scripts.package_skill import validate_skill_name
+        from src.skill_creator.package_skill import validate_skill_name
         
         bad_names = [
             "GitBranch",  # Uppercase

@@ -17,15 +17,14 @@ if str(project_root) not in sys.path:
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from gateway.server import gateway
-from config import config
-from session.persistence import session_store
-from session.manager import session_manager
-from session.usage import usage_tracker
-from cron.mention_poller import start_polling, stop_polling, is_enabled
-from skills.git.skill import setup_ssh_key, setup_git_user
-from src.integrations.git import setup_gh_config
-from utils.logger import setup_logging, get_logger
+from src.gateway.server import gateway
+from src.config import config
+from src.sessions.persistence import session_store
+from src.sessions.manager import session_manager
+from src.sessions.usage import usage_tracker
+from src.cron.mention_poller import start_polling, stop_polling, is_enabled
+from src.git.api import setup_ssh_key, setup_git_user, setup_gh_config
+from src.utils.logger import setup_logging, get_logger
 
 
 def setup_logging_config() -> logging.Logger:
@@ -137,12 +136,14 @@ async def main() -> None:
     except Exception as e:
         logger.warning(f"Failed to setup GitHub CLI | error={e}", exc_info=True)
 
+    # Initialize polling_task before gateway start
+    polling_task = None
+    
     try:
         await gateway.start()
         logger.info("Gateway server started")
         
         # Start mention polling if enabled
-        polling_task = None
         if is_enabled():
             logger.info("Starting mention polling...")
             polling_task = asyncio.create_task(start_polling())

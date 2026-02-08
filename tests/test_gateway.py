@@ -8,7 +8,7 @@ import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 import json
 
-from gateway.server import Gateway, verify_discord_signature
+from src.gateway.server import Gateway, verify_discord_signature
 
 
 class TestDiscordSignature:
@@ -142,7 +142,7 @@ class TestGatewayRoutes:
         """Test Discord webhook route is registered for webhook mode."""
         # This test verifies the route registration logic exists
         # The actual behavior depends on config
-        from gateway.server import Gateway
+        from src.gateway.server import Gateway
         import inspect
         source = inspect.getsource(Gateway.__init__)
         
@@ -200,17 +200,17 @@ class TestGatewayIntegration:
     def test_gateway_has_session_manager(self):
         """Test Gateway imports session manager."""
         # Just ensure the import works
-        from gateway.server import DISCORD_SESSION_PREFIX
+        from src.gateway.server import DISCORD_SESSION_PREFIX
         assert DISCORD_SESSION_PREFIX == "discord:"
 
     def test_gateway_has_agent(self):
         """Test Gateway imports agent."""
-        from gateway.server import agent
+        from src.gateway.server import agent
         assert agent is not None
 
     def test_gateway_has_discord_channel(self):
         """Test Gateway imports discord channel."""
-        from gateway.server import discord_channel
+        from src.gateway.server import discord_channel
         assert discord_channel is not None
 
 

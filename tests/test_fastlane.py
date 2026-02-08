@@ -9,7 +9,7 @@ class TestFastLaneCommands:
     
     def test_is_command_with_slash(self):
         """Test is_command returns True for commands."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         commands = FastLaneCommands()
         
@@ -20,7 +20,7 @@ class TestFastLaneCommands:
     
     def test_is_command_without_slash(self):
         """Test is_command returns False for non-commands."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         commands = FastLaneCommands()
         
@@ -30,7 +30,7 @@ class TestFastLaneCommands:
     
     def test_parse_command_thinking(self):
         """Test parsing /thinking command."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         commands = FastLaneCommands()
         
@@ -42,7 +42,7 @@ class TestFastLaneCommands:
     
     def test_parse_command_with_full_arg(self):
         """Test parsing command with full argument."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         commands = FastLaneCommands()
         
@@ -54,7 +54,7 @@ class TestFastLaneCommands:
     
     def test_parse_command_reasoning(self):
         """Test parsing /reasoning command."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         commands = FastLaneCommands()
         
@@ -65,7 +65,7 @@ class TestFastLaneCommands:
     
     def test_parse_command_status(self):
         """Test parsing /status command."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         commands = FastLaneCommands()
         
@@ -77,7 +77,7 @@ class TestFastLaneCommands:
     
     def test_parse_command_empty(self):
         """Test parsing empty message."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         commands = FastLaneCommands()
         
@@ -88,7 +88,7 @@ class TestFastLaneCommands:
     
     def test_command_list(self):
         """Test COMMANDS list contains expected commands."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         assert "thinking" in FastLaneCommands.COMMANDS
         assert "reasoning" in FastLaneCommands.COMMANDS
@@ -97,7 +97,7 @@ class TestFastLaneCommands:
     
     def test_thinking_levels(self):
         """Test thinking levels are defined."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         assert "off" in FastLaneCommands.THINKING_LEVELS
         assert "minimal" in FastLaneCommands.THINKING_LEVELS
@@ -112,8 +112,8 @@ class TestFastLaneProcess:
     @pytest.mark.asyncio
     async def test_process_thinking_level(self):
         """Test processing /thinking command."""
-        from agent.fastlane import FastLaneCommands
-        from agent.thinking import ThinkLevel
+        from src.agents.fastlane import FastLaneCommands
+        from src.agents.thinking import ThinkLevel
         
         # Mock agent
         mock_agent = MagicMock()
@@ -130,7 +130,7 @@ class TestFastLaneProcess:
     @pytest.mark.asyncio
     async def test_process_thinking_invalid_level(self):
         """Test /thinking with invalid level."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         commands = FastLaneCommands()
         
@@ -142,7 +142,7 @@ class TestFastLaneProcess:
     @pytest.mark.asyncio
     async def test_process_thinking_no_level(self):
         """Test /thinking without level."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         commands = FastLaneCommands()
         
@@ -154,7 +154,7 @@ class TestFastLaneProcess:
     @pytest.mark.asyncio
     async def test_process_reasoning_on(self):
         """Test /reasoning on command."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         commands = FastLaneCommands()
         
@@ -165,7 +165,7 @@ class TestFastLaneProcess:
     @pytest.mark.asyncio
     async def test_process_reasoning_off(self):
         """Test /reasoning off command."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         commands = FastLaneCommands()
         
@@ -178,7 +178,7 @@ class TestFastLaneProcess:
     @pytest.mark.asyncio
     async def test_process_reasoning_invalid(self):
         """Test /reasoning with invalid argument."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         commands = FastLaneCommands()
         
@@ -189,8 +189,8 @@ class TestFastLaneProcess:
     
     def test_process_status(self):
         """Test /status command."""
-        from agent.fastlane import FastLaneCommands
-        from agent.thinking import ThinkLevel
+        from src.agents.fastlane import FastLaneCommands
+        from src.agents.thinking import ThinkLevel
         
         # Mock agent
         mock_agent = MagicMock()
@@ -206,7 +206,7 @@ class TestFastLaneProcess:
     
     def test_process_help(self):
         """Test /help command."""
-        from agent.fastlane import FastLaneCommands
+        from src.agents.fastlane import FastLaneCommands
         
         commands = FastLaneCommands()
         
@@ -223,7 +223,7 @@ class TestFastLaneGlobalFunctions:
     
     def test_get_fastlane(self):
         """Test getting global fastlane instance."""
-        from agent.fastlane import get_fastlane, _fastlane
+        from src.agents.fastlane import get_fastlane, _fastlane
         import agent.fastlane
         
         # Reset global
@@ -237,7 +237,7 @@ class TestFastLaneGlobalFunctions:
     @pytest.mark.asyncio
     async def test_process_fastlane_command(self):
         """Test process_fastlane_command function."""
-        from agent.fastlane import process_fastlane_command
+        from src.agents.fastlane import process_fastlane_command
         
         # Non-command should return None
         response = await process_fastlane_command("hello world")
@@ -246,7 +246,7 @@ class TestFastLaneGlobalFunctions:
     
     def test_is_fastlane_command(self):
         """Test is_fastlane_command function."""
-        from agent.fastlane import is_fastlane_command
+        from src.agents.fastlane import is_fastlane_command
         
         assert is_fastlane_command("/thinking high") is True
         assert is_fastlane_command("hello") is False
@@ -258,8 +258,8 @@ class TestFastLaneIntegration:
     @pytest.mark.asyncio
     async def test_process_with_fastlane_command(self):
         """Test Agent.process handles fastlane commands."""
-        from agent.core import Agent
-        from agent.fastlane import _fastlane
+        from src.agents.core import Agent
+        from src.agents.fastlane import _fastlane
         import agent.fastlane
         
         # Reset global
@@ -279,9 +279,9 @@ class TestFastLaneIntegration:
     @pytest.mark.asyncio
     async def test_process_thinking_updates_agent(self):
         """Test /thinking updates agent's think_level."""
-        from agent.core import Agent
-        from agent.thinking import ThinkLevel
-        from agent.fastlane import _fastlane
+        from src.agents.core import Agent
+        from src.agents.thinking import ThinkLevel
+        from src.agents.fastlane import _fastlane
         import agent.fastlane
         
         # Reset global

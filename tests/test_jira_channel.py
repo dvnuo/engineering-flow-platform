@@ -24,7 +24,7 @@ class TestJiraChannel:
                 'project_key': 'TEST',
             }
             
-            from channel.jira import JiraChannel
+            from src.channels.jira import JiraChannel
             
             channel = JiraChannel()
             assert channel.base_url == 'https://test.atlassian.net'
@@ -39,7 +39,7 @@ class TestJiraChannel:
         with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
             
-            from channel.jira import JiraChannel
+            from src.channels.jira import JiraChannel
             
             channel = JiraChannel()
             assert channel.base_url == ""
@@ -51,7 +51,7 @@ class TestJiraChannel:
         with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
             
-            from channel.jira import JiraChannel
+            from src.channels.jira import JiraChannel
             
             channel = JiraChannel()
             session_id = channel.create_session_id("PROJ-123")
@@ -62,7 +62,7 @@ class TestJiraChannel:
         with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
             
-            from channel.jira import JiraChannel
+            from src.channels.jira import JiraChannel
             
             channel = JiraChannel()
             payload = {
@@ -100,7 +100,7 @@ class TestJiraChannel:
         with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
             
-            from channel.jira import JiraChannel
+            from src.channels.jira import JiraChannel
             
             channel = JiraChannel()
             payload = {
@@ -120,7 +120,7 @@ class TestJiraChannel:
         with patch('channel.jira.config') as mock_config:
             mock_config.jira = {'project_key': 'PROJ'}
             
-            from channel.jira import JiraChannel
+            from src.channels.jira import JiraChannel
             
             channel = JiraChannel()
             
@@ -164,7 +164,7 @@ class TestJiraChannel:
                 'api_token': 'test_token',
             }
             
-            from channel.jira import JiraChannel
+            from src.channels.jira import JiraChannel
             
             channel = JiraChannel()
             channel.session = AsyncMock()
@@ -204,7 +204,7 @@ class TestJiraChannel:
         with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
             
-            from channel.jira import JiraChannel
+            from src.channels.jira import JiraChannel
             
             channel = JiraChannel()
             payload = {
@@ -245,7 +245,7 @@ class TestJiraChannel:
                 'api_token': 'test_token',
             }
             
-            from channel.jira import JiraChannel
+            from src.channels.jira import JiraChannel
             
             channel = JiraChannel()
             channel.session = AsyncMock()
@@ -274,7 +274,7 @@ class TestJiraChannel:
                 'api_token': 'test_token',
             }
             
-            from channel.jira import JiraChannel
+            from src.channels.jira import JiraChannel
             
             channel = JiraChannel()
             channel.session = AsyncMock()
@@ -309,7 +309,7 @@ class TestJiraAuth:
                 'api_token': 'test_token',
             }
             
-            from channel.jira import JiraChannel
+            from src.channels.jira import JiraChannel
             
             channel = JiraChannel()
             expected_auth = base64.b64encode(b'test@example.com:test_token').decode()
@@ -329,7 +329,7 @@ class TestJiraAPIEndpoints:
                 'api_token': 'test_token',
             }
             
-            from channel.jira import JiraChannel
+            from src.channels.jira import JiraChannel
             
             channel = JiraChannel()
             channel.session = AsyncMock()
@@ -355,7 +355,7 @@ class TestJiraSecurity:
 
     def test_jql_injection_blocked_semicolon(self):
         """Test that JQL injection with semicolon is blocked."""
-        from channel.jira import validate_jql
+        from src.channels.jira import validate_jql
         
         # These should be blocked
         assert validate_jql("project = PROJ; DELETE FROM issues") == False
@@ -365,14 +365,14 @@ class TestJiraSecurity:
 
     def test_jql_injection_blocked_exec(self):
         """Test that JQL injection with EXEC is blocked."""
-        from channel.jira import validate_jql
+        from src.channels.jira import validate_jql
         
         assert validate_jql("project = PROJ; exec xp_shell") == False
         assert validate_jql("project = PROJ; execute whatever") == False
 
     def test_valid_jql_allowed(self):
         """Test that valid JQL queries are allowed."""
-        from channel.jira import validate_jql
+        from src.channels.jira import validate_jql
         
         # These should be allowed
         assert validate_jql("project = PROJ AND status = Open") == True
@@ -388,7 +388,7 @@ class TestJiraSecurity:
                 'api_token': 'test_token',
             }
             
-            from channel.jira import JiraChannel, JIRA_MAX_COMMENT_LENGTH
+            from src.channels.jira import JiraChannel, JIRA_MAX_COMMENT_LENGTH
             
             channel = JiraChannel()
             channel.session = AsyncMock()

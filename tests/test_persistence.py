@@ -5,7 +5,7 @@ import tempfile
 import pytest
 from pathlib import Path
 
-from session.persistence import SessionStore
+from src.sessions.persistence import SessionStore
 
 
 class TestSessionStore:

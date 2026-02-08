@@ -8,21 +8,6 @@
 
 **This project is currently under active development and is intended for research purposes only.**
 
-### 🚀 Running Requirements
-
-**Docker is required to run this project.**
-
-All services and dependencies must be run within Docker containers. Local Python installation is not supported for production use.
-
-```bash
-# Clone and setup
-git clone https://github.com/dvnuo/engineering-flow-platform.git
-cd engineering-flow-platform
-
-# Start with Docker Compose
-docker-compose up -d
-```
-
 ---
 
 ## About Engineering Flow Platform
@@ -152,271 +137,212 @@ Supported surfaces may include:
 
 ---
 
-## What Engineering Flow Platform Is Not
+## Project Structure
 
-- Not a chat-based assistant
-- Not an IDE plugin
-- Not a prompt library
-- Not a replacement for engineers
+This project follows the [OpenClaw](https://github.com/openclaw/openclaw) architecture pattern:
 
-It augments engineering organizations by removing friction from workflows, not by replacing human judgment.
+```
+engineering-flow/
+├── skills/                    # 🎯 Skill Declarations (SKILL.md only)
+│   ├── coding_agent/
+│   │   └── SKILL.md
+│   ├── git/
+│   │   └── SKILL.md
+│   ├── github/
+│   │   └── SKILL.md
+│   ├── test_case_generator/
+│   │   └── SKILL.md
+│   └── skill_creator/
+│       ├── SKILL.md
+│       └── references/
+│
+├── main.py                    # Entry point
+├── __init__.py               # Package exports
+│
+└── src/                       # 🤖 All Implementation Code (OpenClaw Pattern)
+    ├── agents/                # Agent core + skill execution
+    │   ├── executor.py        # SkillsExecutor, execute_skill()
+    │   ├── subagent.py        # SubAgent spawning & management
+    │   ├── subagent_schemas.py
+    │   ├── core.py           # Agent with ReAct pattern
+    │   ├── llm.py           # LLM client
+    │   ├── heartbeat.py      # Periodic background checks
+    │   ├── memory.py        # Memory system
+    │   ├── model_fallback.py # Model fallback logic
+    │   ├── queue.py         # Message queue
+    │   ├── thinking.py      # Thinking levels
+    │   └── compaction.py     # Context compaction
+    │
+    ├── channels/             # Channel adapters
+    │   ├── discord.py
+ github.py
+       │   ├── │   ├── jira.py
+    │   └── confluence.py
+    │
+    ├── cron/                 # Scheduled tasks
+    │   └── mention_poller.py
+    │
+    ├── gateway/              # Web API server
+    │   ├── server.py
+    │   └── webchat.py
+    │
+    ├── memory/               # Memory storage
+    │   ├── __init__.py
+    │   └── sqlite_store.py
+    │
+    ├── sessions/             # Session management
+    │   └── manager.py
+    │
+    ├── git/                 # Git tool
+    ├── github/              # GitHub tool
+    ├── jira/                # Jira tool
+    ├── confluence/           # Confluence tool
+    ├── skill_creator/        # Skill creation tool
+    │   └── scripts/
+    ├── config.py            # Configuration
+    └── utils/               # Utilities
+        └── logger.py
+```
 
----
+### Architecture Principles
 
-## Expected Outcomes
+1. **skills/** - Declarative skill definitions only (SKILL.md)
+2. **src/** - All implementation code (following OpenClaw)
+3. **main.py** and **__init__.py** at root for easy execution
+4. All modules (agents, channels, cron, gateway, memory, sessions) in `src/`
 
-By introducing agentic, asynchronous workflows, Engineering Flow Platform aims to:
 
-- Reduce lead time across the SDLC
-- Minimize waiting caused by handoffs and coordination
-- Improve consistency and reliability of complex engineering tasks
-- Enable faster iteration from idea to outcome
-- Support a shift from project delivery to product engineering
+1. **skills/** - Declarative skill definitions only (SKILL.md)
+2. **src/** - All implementation code (following OpenClaw pattern)
+3. **config.py**, **main.py**, and **utils/** are also in src/
+3. No separate `tools/` or `integrations/` directories
+4. All modules (agents, channels, cron, gateway, memory, sessions) in `src/`
 
----
-
-## Status
-
-This project is under active development.
-
-The initial focus is on high-value, low-risk internal engineering workflows where asynchronous execution and governance-aware autonomy provide immediate benefits.
+1. **skills/** - Declarative skill definitions only (SKILL.md)
+2. **src/** - All implementation code (flat structure like OpenClaw)
+3. No separate `tools/` or `integrations/` directories
+4. Each tool module has its own directory with implementation
 
 ---
 
 ## Features
 
-- Simple Architecture - Core components: Gateway, Agent, Channel, Session
-- Discord Support - Receive and respond to messages via Discord Bot
-- LLM Integration - Supports OpenAI and GitHub Copilot APIs
-- Session Management - Maintain conversation history per user/channel
-- Memory System - Load context from workspace MD files (SOUL.md, USER.md, etc.)
-- Extensible - Easy to add new channels or tools
-
-## Table of Contents
-
-- [⚠️ Research Use Only](#️-research-use-only)
-- [🚀 Running Requirements](#-running-requirements)
-- [About Engineering Flow Platform](#about-engineering-flow-platform)
-- [Core Principles](#core-principles)
-- [What Is an Engineering Flow?](#what-is-an-engineering-flow)
-- [High-Level Architecture](#high-level-architecture)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Running](#running)
-- [API Reference](#api-reference)
-- [Architecture](#architecture)
-- [Submodule Documentation](#submodule-documentation)
-- [Memory System](#memory-system)
-- [Development](#development)
-- [Heartbeat](#heartbeat-periodic-background-checks)
-- [Model Fallback](#model-fallback-automatic-model-degradation)
-- [Troubleshooting](#troubleshooting)
+- **OpenClaw Architecture** - Follows the OpenClaw project structure pattern
+- **Declarative Skills** - Skills defined as SKILL.md, implementation in src/
+- **Tool Integration** - Git, GitHub, Jira, Confluence support
+- **SubAgent System** - Spawn and manage sub-agent sessions
+- **Session Management** - Persistent conversation context
+- **Memory System** - Load context from workspace files
+- **Heartbeat** - Periodic background checks
+- **Extensible** - Easy to add new channels or tools
 
 ---
 
-## Installation
+## Quick Start
 
-### Docker Required
+### Prerequisites
 
-**This project must be run using Docker.**
+- Docker and Docker Compose
+- Git
+
+### Running with Docker
 
 ```bash
-# Clone the repository
+# Clone and setup
 git clone https://github.com/dvnuo/engineering-flow-platform.git
 cd engineering-flow-platform
 
-# Create workspace directory
-mkdir -p workspace/memory
-
-# Copy example configuration
-cp workspace/*.example workspace/
-
 # Start with Docker Compose
 docker-compose up -d
 ```
 
-### Docker Compose Configuration
-
-```yaml
-version: '3.8'
-
-services:
-  engineering-flow-platform:
-    build: .
-    container_name: efp-bot
-    ports:
-      - "8000:8000"
-    volumes:
-      # Workspace directory for memory files - persists across restarts
-      - ./workspace:/root/.efp/workspace
-      # Optional: logs directory
-      - ./logs:/app/logs
-    environment:
-      - EFP_DISCORD_BOT_TOKEN=${EFP_DISCORD_BOT_TOKEN}
-      - EFP_DISCORD_CHANNEL_ID=${EFP_DISCORD_CHANNEL_ID}
-      - EFP_LLM_API_KEY=${EFP_LLM_API_KEY}
-    restart: unless-stopped
-```
-
-### Environment Variables
-
-Create a `.env` file:
+### Local Development
 
 ```bash
-EFP_DISCORD_BOT_TOKEN=your_discord_bot_token
-EFP_DISCORD_CHANNEL_ID=your_discord_channel_id
-EFP_LLM_API_KEY=your_openai_api_key
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run tests
+pytest tests/ -v
 ```
 
 ---
 
-## Quick Start Guide
+## Adding New Skills
 
-### Step 1: Prepare Discord Bot
+### 1. Create Skill Declaration
 
-1. Create Discord Application at https://discord.com/developers/applications
-2. Create Bot and get Token
-3. Enable "Message Content Intent"
-4. Invite Bot to server
-5. Copy Channel ID (enable Developer Mode in Discord)
+Create `skills/my_skill/SKILL.md`:
 
-### Step 2: Get OpenAI API Key
+```yaml
+---
+name: my-skill
+description: "Description of what my skill does"
+---
 
-1. Visit https://platform.openai.com/api-keys
-2. Create new secret key
-3. Copy API Key (format: `sk-...`)
+# My Skill
 
-### Step 3: Configure Project
+## Usage
 
-```bash
-# Create .env file
-cat > .env << EOF
-EFP_DISCORD_BOT_TOKEN=your_bot_token
-EFP_DISCORD_CHANNEL_ID=your_channel_id
-EFP_LLM_API_KEY=your_api_key
-EOF
-
-# Start with Docker Compose
-docker-compose up -d
+Describe how to use this skill...
 ```
 
-### Step 4: Verify
+### 2. Create Tool Implementation
 
-```bash
-# Check logs
-docker-compose logs -f
+Add tool to `src/my_skill/__init__.py`:
+
+```python
+from src import ToolResult
+
+async def my_tool(param: str) -> ToolResult:
+    """Tool implementation."""
+    return ToolResult(success=True, content="Result")
 ```
+
+### 3. Register Tool
+
+Export from `src/__init__.py` if needed.
+
+---
+
+## Module Documentation
+
+| Module | Path | Description |
+|--------|------|-------------|
+| **Agent** | [`agent/`](agent/) | Agent core logic, heartbeat |
+| **Channel** | [`channel/`](channel/) | Multi-channel adapters |
+| **Skills** | [`skills/`](skills/) | Skill framework, SKILL.md files |
+| **Src** | [`src/`](src/) | Tool implementations, executor |
+| **Tests** | [`tests/`](tests/) | Test suite |
+| **Cron** | [`cron/`](cron/) | Scheduled task scheduler |
+| **Gateway** | [`gateway/`](gateway/) | Web API server |
+| **Memory** | [`memory/`](memory/) | Persistent memory storage |
+| **Session** | [`session/`](session/) | Session lifecycle management |
 
 ---
 
 ## Configuration
 
-### Basic Configuration
-
 Edit `config.yaml`:
 
 ```yaml
 discord:
-  bot_token: "${EFP_DISCORD_BOT_TOKEN}"
-  channel_id: "${EFP_DISCORD_CHANNEL_ID}"
+  bot_token: "${DISCORD_BOT_TOKEN}"
+  channel_id: "${DISCORD_CHANNEL_ID}"
 
 llm:
   provider: "openai"
-  api_key: "${EFP_LLM_API_KEY}"
+  api_key: "${LLM_API_KEY}"
   model: "gpt-3.5-turbo"
-  max_tokens: 1000
-  temperature: 0.7
 
 server:
   host: "0.0.0.0"
   port: 8000
 ```
-
-### Configuration Options
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `discord.bot_token` | string | - | Discord Bot Token |
-| `discord.channel_id` | string | - | Target channel ID |
-| `llm.provider` | string | `openai` | LLM provider |
-| `llm.api_key` | string | - | API key |
-| `llm.model` | string | `gpt-3.5-turbo` | Model name |
-| `server.host` | string | `0.0.0.0` | Listen address |
-| `server.port` | int | `8000` | Listen port |
-
----
-
-## Running
-
-### Start Services
-
-```bash
-# Build and start
-docker-compose build
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop services
-docker-compose down
-```
-
-### Health Check
-
-```bash
-curl http://localhost:8000/health
-
-# Response: {"status": "ok", "service": "engineering-flow-platform"}
-```
-
----
-
-## API Reference
-
-### HTTP Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Health check |
-| POST | `/webhook/discord` | Discord webhook receiver |
-| GET | `/api/sessions` | List all active sessions |
-
----
-
-## Architecture
-
-```
-+-------------+     +----------+     +-------------+     +---------+
-| Discord     |---->| Gateway  |---->| Agent Core  |---->| LLM API |
-| (Webhook)   |     | (HTTP)   |     |             |     |          |
-+-------------+     +----------+     +-------------+     +---------+
-                         │                  ^
-                         │                  │
-                    +----------+     +-------------+
-                    | Session  |     |   LLM       |
-                    | Manager  |     |   Client    |
-                    +----------+     +-------------+
-```
-
----
-
-## Submodule Documentation
-
-Each core module has detailed documentation in its `README.md`:
-
-| Module | Path | Description |
-|--------|------|-------------|
-| **Agent** | [`agent/README.md`](agent/README.md) | Agent core logic, LLM providers, model fallback, heartbeat |
-| **Channel** | [`channel/README.md`](channel/README.md) | Multi-channel adapters |
-| **Skills** | [`skills/README.md`](skills/README.md) | Skill framework, @skill decorator |
-| **Tools** | [`tools/README.md`](tools/README.md) | Sub-agent management, shell execution |
-| **Tests** | [`tests/README.md`](tests/README.md) | Test framework, pytest configuration |
-| **Cron** | [`cron/README.md`](cron/README.md) | Scheduled task scheduler |
-| **Gateway** | [`gateway/README.md`](gateway/README.md) | Web API server |
-| **Memory** | [`memory/README.md`](memory/README.md) | Persistent memory storage |
-| **Session** | [`session/README.md`](session/README.md) | Session lifecycle management |
-| **Docs** | [`docs/README.md`](docs/README.md) | Documentation standards |
 
 ---
 
@@ -424,7 +350,7 @@ Each core module has detailed documentation in its `README.md`:
 
 Workspace files loaded from `~/.efp/workspace/`:
 
-```bash
+```
 ~/.efp/workspace/
 ├── SOUL.md        # Agent persona
 ├── USER.md        # User preferences
@@ -439,96 +365,23 @@ Workspace files loaded from `~/.efp/workspace/`:
 
 ## Development
 
-### Prerequisites
-
-- Docker and Docker Compose
-- Git
-- Discord Developer Account (for testing)
-- OpenAI API Key (for testing)
-
-### Local Development
+### Running Tests
 
 ```bash
-# Clone repository
-git clone https://github.com/dvnuo/engineering-flow-platform.git
-cd engineering-flow-platform
-
-# Create environment file
-cp .env.example .env
-
-# Edit .env with your credentials
-nano .env
-
-# Start development environment
-docker-compose up -d
+pytest tests/ -v
 ```
 
-### Testing
+### Adding Tests
 
-```bash
-# Run tests in Docker
-docker-compose exec engineering-flow-platform pytest tests/ -v
-```
+Create test files in `tests/` directory following the pattern `test_*.py`.
 
 ---
 
-## Heartbeat (Periodic Background Checks)
+## Status
 
-The heartbeat feature provides periodic background checks.
+This project is under active development.
 
-### Configuration
-
-```yaml
-heartbeat:
-  enabled: true
-  check_interval: 300  # seconds
-```
-
----
-
-## Model Fallback (Automatic Model Degradation)
-
-Automatically switches to alternative models when the primary model fails.
-
-### Predefined Fallback Orders
-
-| Order | Sequence | Use Case |
-|-------|----------|----------|
-| `FALLBACK_ORDER` | gpt-4o → gpt-4o-mini | Balanced reliability |
-| `FAST_FALLBACK` | gpt-4o → gpt-4o-mini | Speed prioritized |
-| `BUDGET_FALLBACK` | gpt-4o-mini → local | Cost minimized |
-
----
-
-## Troubleshooting
-
-### Bot Not Responding
-
-1. Check bot is online in Discord
-2. Verify Message Content Intent is enabled
-3. Check configuration file
-4. Review logs: `docker-compose logs`
-
-### Error "401 Unauthorized"
-
-Wrong API Key. Get new key from https://platform.openai.com/api-keys
-
-### Error "429 Too Many Requests"
-
-API rate limit exceeded. Wait and retry.
-
-### Docker Issues
-
-```bash
-# Check container status
-docker-compose ps
-
-# View container logs
-docker-compose logs -f
-
-# Restart services
-docker-compose restart
-```
+The initial focus is on high-value, low-risk internal engineering workflows where asynchronous execution and governance-aware autonomy provide immediate benefits.
 
 ---
 

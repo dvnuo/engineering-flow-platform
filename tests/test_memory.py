@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 try:
-    from agent.memory import MemorySystem
+    from src.agents.memory import MemorySystem
 except ImportError:
     pytest.skip("Memory module not available", allow_module_level=True)
 

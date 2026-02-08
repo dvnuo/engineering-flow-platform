@@ -4,7 +4,7 @@ import pytest
 import asyncio
 from typing import Any
 
-from agent.model_fallback import (
+from src.agents.model_fallback import (
     ModelCandidate,
     FallbackAttempt,
     FallbackError,

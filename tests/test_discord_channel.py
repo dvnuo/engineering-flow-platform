@@ -23,7 +23,7 @@ class TestDiscordChannel:
                 'webhook_url': ''
             }
             
-            from channel.discord import DiscordChannel
+            from src.channels.discord import DiscordChannel
             
             channel = DiscordChannel()
             assert channel.mode == 'bot'
@@ -32,7 +32,7 @@ class TestDiscordChannel:
 
     def test_verify_discord_signature_missing_values(self):
         """Test signature verification with missing values."""
-        from gateway.server import verify_discord_signature
+        from src.gateway.server import verify_discord_signature
         
         # Missing signature or secret should return True (skip verification)
         result = verify_discord_signature(b'test', '', '')
@@ -47,7 +47,7 @@ class TestDiscordChannel:
         with patch('channel.discord.config') as mock_config:
             mock_config.discord = {}
             
-            from channel.discord import DiscordChannel
+            from src.channels.discord import DiscordChannel
             
             channel = DiscordChannel()
             payload = {
@@ -76,7 +76,7 @@ class TestDiscordChannel:
                 'channel_id': '123456'
             }
             
-            from channel.discord import DiscordChannel
+            from src.channels.discord import DiscordChannel
             
             # Create mock bot and channel
             mock_channel = AsyncMock()
@@ -104,7 +104,7 @@ class TestDiscordChannel:
                 'channel_id': '123456'
             }
             
-            from channel.discord import DiscordChannel
+            from src.channels.discord import DiscordChannel
             
             mock_channel = AsyncMock()
             mock_channel.send = AsyncMock(return_value=MagicMock(id='sent456'))
@@ -125,7 +125,7 @@ class TestDiscordChannel:
         with patch('channel.discord.config') as mock_config:
             mock_config.discord = {'mode': 'bot', 'bot_token': 'test'}
             
-            from channel.discord import DiscordChannel
+            from src.channels.discord import DiscordChannel
             
             channel = DiscordChannel()
             callback = AsyncMock()
@@ -147,7 +147,7 @@ class TestDiscordBot:
                 'channel_id': '123456'
             }
             
-            from channel.discord import DiscordBot
+            from src.channels.discord import DiscordBot
             
             bot = DiscordBot(message_callback=None)
             assert bot.target_channel_id == '123456'
@@ -160,7 +160,7 @@ class TestRunBot:
     @pytest.mark.asyncio
     async def test_run_bot_function(self):
         """Test run_bot function exists and is callable."""
-        from channel.discord import run_bot
+        from src.channels.discord import run_bot
         import inspect
         
         assert inspect.iscoroutinefunction(run_bot)

@@ -10,8 +10,8 @@ class TestHeartbeatChecker:
     
     def test_heartbeat_initialization(self):
         """Test HeartbeatChecker initialization."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(
             think_level=ThinkLevel.HIGH,
@@ -25,8 +25,8 @@ class TestHeartbeatChecker:
     
     def test_get_effective_interval_high(self):
         """Test interval calculation for HIGH thinking level."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.HIGH, check_interval=300)
         interval = checker._get_effective_interval()
@@ -36,8 +36,8 @@ class TestHeartbeatChecker:
     
     def test_get_effective_interval_off(self):
         """Test interval calculation for OFF thinking level."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.OFF, check_interval=300)
         interval = checker._get_effective_interval()
@@ -47,8 +47,8 @@ class TestHeartbeatChecker:
     
     def test_get_effective_interval_medium(self):
         """Test interval calculation for MEDIUM thinking level."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.MEDIUM, check_interval=300)
         interval = checker._get_effective_interval()
@@ -58,8 +58,8 @@ class TestHeartbeatChecker:
     
     def test_get_check_detail_level_high(self):
         """Test detail level for HIGH thinking."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.HIGH)
         detail = checker._get_check_detail_level()
@@ -68,8 +68,8 @@ class TestHeartbeatChecker:
     
     def test_get_check_detail_level_off(self):
         """Test detail level for OFF thinking."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.OFF)
         detail = checker._get_check_detail_level()
@@ -78,8 +78,8 @@ class TestHeartbeatChecker:
     
     def test_get_check_detail_level_minimal(self):
         """Test detail level for MINIMAL thinking."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.MINIMAL)
         detail = checker._get_check_detail_level()
@@ -88,8 +88,8 @@ class TestHeartbeatChecker:
     
     def test_get_check_detail_level_medium(self):
         """Test detail level for MEDIUM thinking."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.MEDIUM)
         detail = checker._get_check_detail_level()
@@ -99,8 +99,8 @@ class TestHeartbeatChecker:
     @pytest.mark.asyncio
     async def test_check_emails_simplified(self):
         """Test email check with simplified detail level."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.OFF)
         result = await checker._check_emails()
@@ -112,8 +112,8 @@ class TestHeartbeatChecker:
     @pytest.mark.asyncio
     async def test_check_emails_detailed(self):
         """Test email check with detailed level."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.HIGH)
         result = await checker._check_emails()
@@ -126,8 +126,8 @@ class TestHeartbeatChecker:
     @pytest.mark.asyncio
     async def test_check_calendar_simplified(self):
         """Test calendar check with simplified level."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.OFF)
         result = await checker._check_calendar()
@@ -139,8 +139,8 @@ class TestHeartbeatChecker:
     @pytest.mark.asyncio
     async def test_check_calendar_detailed(self):
         """Test calendar check with detailed level."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.HIGH)
         result = await checker._check_calendar()
@@ -153,8 +153,8 @@ class TestHeartbeatChecker:
     @pytest.mark.asyncio
     async def test_check_weather_simplified(self):
         """Test weather check with simplified level."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.OFF)
         result = await checker._check_weather()
@@ -166,8 +166,8 @@ class TestHeartbeatChecker:
     @pytest.mark.asyncio
     async def test_check_weather_detailed(self):
         """Test weather check with detailed level."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.HIGH)
         result = await checker._check_weather()
@@ -180,8 +180,8 @@ class TestHeartbeatChecker:
     @pytest.mark.asyncio
     async def test_run_checks(self):
         """Test running all heartbeat checks."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.OFF)
         results = await checker.run_checks()
@@ -197,8 +197,8 @@ class TestHeartbeatChecker:
     @pytest.mark.asyncio
     async def test_run_checks_high_thinking_multi_round(self):
         """Test that HIGH thinking level enables multi-round verification."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.HIGH)
         
@@ -210,8 +210,8 @@ class TestHeartbeatChecker:
     
     def test_update_think_level(self):
         """Test updating thinking level at runtime."""
-        from agent.heartbeat import HeartbeatChecker
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import HeartbeatChecker
+        from src.agents.thinking import ThinkLevel
         
         checker = HeartbeatChecker(think_level=ThinkLevel.OFF)
         checker.update_think_level(ThinkLevel.HIGH)
@@ -225,8 +225,8 @@ class TestHeartbeatGlobalFunctions:
     
     def test_get_heartbeat(self):
         """Test getting global heartbeat instance."""
-        from agent.heartbeat import get_heartbeat, _heartbeat
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import get_heartbeat, _heartbeat
+        from src.agents.thinking import ThinkLevel
         
         # Reset global
         import agent.heartbeat
@@ -245,8 +245,8 @@ class TestHeartbeatGlobalFunctions:
         import agent.heartbeat
         agent.heartbeat._heartbeat = None
         
-        from agent.heartbeat import start_heartbeat, stop_heartbeat
-        from agent.thinking import ThinkLevel
+        from src.agents.heartbeat import start_heartbeat, stop_heartbeat
+        from src.agents.thinking import ThinkLevel
         
         # These should not raise
         import asyncio
