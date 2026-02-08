@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import platform
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -20,6 +21,25 @@ from src.agents.executor import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Debug mode: set DEBUG_AGENT=true or DEBUG_AGENT=full for complete output
+_DEBUG_MODE = os.environ.get("DEBUG_AGENT", "").lower()
+DEBUG_FULL_OUTPUT = _DEBUG_MODE == "full"
+_DEBUG_ENABLED = _DEBUG_MODE in ("1", "true", "yes", "full")
+
+
+def _should_truncate(max_length: int = 500) -> bool:
+    """Check if output should be truncated."""
+    return not DEBUG_FULL_OUTPUT
+
+
+def _format_content(content: str, prefix: str = "", max_length: int = 500) -> str:
+    """Format content for logging, with optional truncation."""
+    if not content:
+        return f"{prefix}(empty)"
+    if _should_truncate(max_length) and len(content) > max_length:
+        return f"{prefix}{content[:max_length]}... [{len(content) - max_length} chars truncated]"
+    return f"{prefix}{content}"
 
 
 class Agent:
@@ -254,9 +274,16 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== END MESSAGE COMPACTION =====
 
         # Debug logging for message received
-        logger.debug(f"Message received: session={session_id}, user={user_name}, "
-                    f"message_len={len(message)}, system_prompt_len={len(self.system_prompt)}, "
-                    f"tools={len(self.tools)}, history_msgs={len(messages)}")
+        if _DEBUG_ENABLED:
+            logger.debug(f"=== [AGENT] MESSAGE RECEIVED ===")
+            logger.debug(f"Session: {session_id}")
+            logger.debug(f"User: {user_name}")
+            logger.debug(f"Message length: {len(message)} chars")
+            logger.debug(f"Message preview: {_format_content(message, max_length=300)}")
+            logger.debug(f"System prompt length: {len(self.system_prompt)} chars")
+            logger.debug(f"System prompt preview: {_format_content(self.system_prompt, max_length=300)}")
+            logger.debug(f"Tools count: {len(self.tools)}")
+            logger.debug(f"History messages: {len(messages)}")
 
         # ===== REACT PATTERN =====
 
@@ -278,9 +305,27 @@ You have access to the following tools. When a user asks you to do something tha
         )
         
         # Debug logging for LLM response
-        logger.debug(f"LLM response: content_preview={llm_result.get('content')[:200] if llm_result.get('content') else '(empty)'}, "
-                    f"tool_calls={len(llm_result.get('tool_calls', []))}, "
-                    f"usage={llm_result.get('usage', {})}")
+        if _DEBUG_ENABLED:
+            logger.debug(f"=== [AGENT] LLM RESPONSE ===")
+            content = llm_result.get('content') or ''
+            logger.debug(f"Content length: {len(content)} chars")
+            logger.debug(f"Content: {_format_content(content, max_length=1000)}")
+            
+            # Log reasoning if present
+            reasoning = llm_result.get('reasoning')
+            if reasoning:
+                logger.debug(f"Reasoning length: {len(reasoning)} chars")
+                logger.debug(f"Reasoning: {_format_content(reasoning, max_length=2000)}")
+            
+            tool_calls = llm_result.get('tool_calls', [])
+            logger.debug(f"Tool calls: {len(tool_calls)}")
+            for tc in tool_calls:
+                tc_name = tc.get('function', {}).get('name', 'unknown')
+                tc_args = tc.get('function', {}).get('arguments', '')
+                logger.debug(f"  - {tc_name}: {_format_content(tc_args, max_length=300)}")
+            
+            usage = llm_result.get('usage', {})
+            logger.debug(f"Usage: {usage}")
         
         # Track usage if enabled
         if track_usage:
@@ -328,8 +373,11 @@ You have access to the following tools. When a user asks you to do something tha
             tool_result = await execute_tool_by_name(tool_name, **args)
             
             # Debug logging for tool result
-            logger.debug(f"Tool result: {tool_name}, success={tool_result.success}, "
-                        f"preview={str(tool_result)[:500]}...")
+            if _DEBUG_ENABLED:
+                logger.debug(f"=== [AGENT] TOOL RESULT ===")
+                logger.debug(f"Tool: {tool_name}")
+                logger.debug(f"Success: {tool_result.success}")
+                logger.debug(f"Result: {_format_content(str(tool_result), max_length=1000)}")
             
             # Add tool result - MUST follow the assistant message with tool_calls
             messages.append({
@@ -350,7 +398,11 @@ You have access to the following tools. When a user asks you to do something tha
         final_content = (final_result.get("content") or "").strip()
         
         # Debug logging for final response
-        logger.debug(f"Final response: content={final_content}, usage={final_result.get('usage', {})}")
+        if _DEBUG_ENABLED:
+            logger.debug(f"=== [AGENT] FINAL RESPONSE ===")
+            logger.debug(f"Content length: {len(final_content)} chars")
+            logger.debug(f"Content: {_format_content(final_content, max_length=1000)}")
+            logger.debug(f"Usage: {final_result.get('usage', {})}")
         
         # Track final usage and merge
         if track_usage:
