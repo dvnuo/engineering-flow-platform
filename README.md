@@ -139,7 +139,7 @@ Supported surfaces may include:
 
 ## Project Structure
 
-This project follows the [OpenClaw](https://github.com/openclaw/openclaw) architecture pattern:
+A modular, agentic platform with clear separation between skill declarations and implementation:
 
 ```
 engineering-flow/
@@ -159,7 +159,7 @@ engineering-flow/
 ├── main.py                    # Entry point
 ├── __init__.py               # Package exports
 │
-└── src/                       # 🤖 All Implementation Code (OpenClaw Pattern)
+└── src/                       # 🤖 All Implementation Code 
     ├── agents/                # Agent core + skill execution
     │   ├── executor.py        # SkillsExecutor, execute_skill()
     │   ├── subagent.py        # SubAgent spawning & management
@@ -207,19 +207,19 @@ engineering-flow/
 ### Architecture Principles
 
 1. **skills/** - Declarative skill definitions only (SKILL.md)
-2. **src/** - All implementation code (following OpenClaw)
+2. **src/** - All implementation code 
 3. **main.py** and **__init__.py** at root for easy execution
 4. All modules (agents, channels, cron, gateway, memory, sessions) in `src/`
 
 
 1. **skills/** - Declarative skill definitions only (SKILL.md)
-2. **src/** - All implementation code (following OpenClaw pattern)
+2. **src/** - All implementation code 
 3. **config.py**, **main.py**, and **utils/** are also in src/
 3. No separate `tools/` or `integrations/` directories
 4. All modules (agents, channels, cron, gateway, memory, sessions) in `src/`
 
 1. **skills/** - Declarative skill definitions only (SKILL.md)
-2. **src/** - All implementation code (flat structure like OpenClaw)
+2. **src/** - All implementation code (flat, modular structure)
 3. No separate `tools/` or `integrations/` directories
 4. Each tool module has its own directory with implementation
 
@@ -227,7 +227,7 @@ engineering-flow/
 
 ## Features
 
-- **OpenClaw Architecture** - Follows the OpenClaw project structure pattern
+- **Modular Architecture** - Clean separation of concerns
 - **Declarative Skills** - Skills defined as SKILL.md, implementation in src/
 - **Tool Integration** - Git, GitHub, Jira, Confluence support
 - **SubAgent System** - Spawn and manage sub-agent sessions

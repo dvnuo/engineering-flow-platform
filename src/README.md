@@ -1,7 +1,5 @@
 # src/ - Implementation Code
 
-All implementation code follows the OpenClaw architecture pattern.
-
 ## Structure
 
 ```
@@ -52,7 +50,6 @@ src/
 
 ## Architecture Principles
 
-All modules follow the OpenClaw pattern:
 - Flat structure within each module
 - Single responsibility per file
 - Clean imports via `from src.<module> import ...`
