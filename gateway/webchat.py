@@ -106,7 +106,7 @@ async def api_chat(request: web.Request) -> web.Response:
     """Handle chat API requests.
     
     POST /api/chat
-    Body: {"message": "...", "session_id": "optional"}
+    Body: {"message": "...", "session_id": "optional", "reasoning_replay": false}
     """
     try:
         data = await request.json()
@@ -114,6 +114,9 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Dynamic session_id with timestamp-based default for multi-session support
         session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
+        
+        # Get reasoning_replay setting
+        reasoning_replay = data.get('reasoning_replay', None)
         
         if not message:
             return web.json_response({'error': 'Empty message'}, status=400)
@@ -124,11 +127,13 @@ async def api_chat(request: web.Request) -> web.Response:
             message=message,
             session_id=session_id,
             user_name="webchat-user",
-            track_usage=True
+            track_usage=True,
+            reasoning_replay=reasoning_replay,
         )
         
         response = result.get("response", "")
         usage = result.get("usage", {})
+        reasoning = result.get("reasoning", "")
         
         # Record usage if available
         if usage:
@@ -139,11 +144,17 @@ async def api_chat(request: web.Request) -> web.Response:
                 channel='webchat'
             )
         
-        return web.json_response({
+        response_data = {
             'response': response,
             'session_id': session_id,
             'usage': usage
-        })
+        }
+        
+        # Include reasoning if available
+        if reasoning:
+            response_data['reasoning'] = reasoning
+        
+        return web.json_response(response_data)
         
     except json.JSONDecodeError:
         return web.json_response({'error': 'Invalid JSON'}, status=400)

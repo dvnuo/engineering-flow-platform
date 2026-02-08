@@ -160,14 +160,21 @@ You have access to the following tools. When a user asks you to do something tha
         session_id: str,
         user_name: Optional[str] = None,
         track_usage: bool = True,
+        reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Process a user message with ReAct pattern.
         
         Flow: User → Fast Lane Commands → LLM (with tools) → Tool Call → Execute → Result → LLM → Final Response
         
+        Args:
+            reasoning_replay: Enable reasoning_replay to see model's internal reasoning.
+                When enabled, includes model's thinking process in response.
+                Default: Uses config.llm.reasoning_replay setting.
+        
         Returns:
             Dict with:
                 - response: str - The assistant's response
+                - reasoning: str - Model's internal reasoning (if reasoning_replay enabled)
                 - usage: Dict - Token usage from LLM API (if track_usage=True)
         """
         usage_data = {}
@@ -277,6 +284,10 @@ You have access to the following tools. When a user asks you to do something tha
         # Log thinking level for subagent tracking
         logger.info(f"[{session_id}] think_level={self.think_level.value}, model={self.model or ''}")
         
+        # Resolve reasoning_replay from config if not provided
+        enable_reasoning = reasoning_replay if reasoning_replay is not None else config.llm.get('reasoning_replay', False)
+        logger.info(f"[{session_id}] reasoning_replay={enable_reasoning}")
+        
         # Step 1: Call LLM with tools
         logger.debug(f"Calling LLM with {len(self.tools)} tools")
         
@@ -286,6 +297,7 @@ You have access to the following tools. When a user asks you to do something tha
             print(f"DEBUG: LLM API Call")
             print(f"  Messages count: {len(messages)}")
             print(f"  Tools count: {len(self.tools)}")
+            print(f"  Reasoning replay: {enable_reasoning}")
             print(f"  System prompt preview (first 500 chars):")
             print(f"{self.system_prompt[:500]}")
             print(f"{'='*60}\n")
@@ -293,7 +305,8 @@ You have access to the following tools. When a user asks you to do something tha
         llm_result = await llm_client.chat(
             messages=messages,
             system_prompt=self.system_prompt,
-            tools=self.tools
+            tools=self.tools,
+            reasoning_replay=enable_reasoning,
         )
         
         # ===== DEBUG =====
@@ -319,7 +332,10 @@ You have access to the following tools. When a user asks you to do something tha
         # If no tool calls, return directly
         if not tool_calls:
             session_manager.add_message(session_id, "assistant", content)
-            return {"response": content, "usage": usage_data}
+            result = {"response": content, "usage": usage_data}
+            if enable_reasoning:
+                result["reasoning"] = llm_result.get("reasoning", "")
+            return result
         
         logger.info(f"LLM requested {len(tool_calls)} tool calls")
         
@@ -410,7 +426,12 @@ You have access to the following tools. When a user asks you to do something tha
         # Add final response to history
         session_manager.add_message(session_id, "assistant", final_content)
         
-        return {"response": final_content, "usage": usage_data}
+        # Return response with reasoning if enabled
+        result = {"response": final_content, "usage": usage_data}
+        if enable_reasoning:
+            result["reasoning"] = llm_result.get("reasoning", "")
+        
+        return result
 
     async def _execute_skill(
         self,

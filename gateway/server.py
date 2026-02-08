@@ -387,12 +387,13 @@ class Gateway:
         """Test endpoint for sending a message to the agent via HTTP.
         
         POST /api/test
-        Body: {"message": "your message here", "session_id": "optional-session-id"}
+        Body: {"message": "your message here", "session_id": "optional-session-id", "reasoning_replay": false}
         """
         try:
             data = await request.json()
             message = data.get("message", "")
             session_id = data.get("session_id", "test-session")
+            reasoning_replay = data.get("reasoning_replay", None)
             
             if not message:
                 return web.json_response({"status": "error", "message": "message required"}, status=400)
@@ -402,14 +403,25 @@ class Gateway:
                 message=message,
                 session_id=session_id,
                 user_name="http-tester",
+                reasoning_replay=reasoning_replay,
             )
             
-            return web.json_response({
+            response_data = {
                 "status": "ok",
                 "message": message,
                 "response": result["response"],
                 "session_id": session_id,
-            })
+            }
+            
+            # Include reasoning if available
+            if "reasoning" in result:
+                response_data["reasoning"] = result["reasoning"]
+            
+            # Include usage if available
+            if "usage" in result:
+                response_data["usage"] = result["usage"]
+            
+            return web.json_response(response_data)
             
         except Exception as e:
             logger.error(f"Test message error: {e}")
