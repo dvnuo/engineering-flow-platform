@@ -122,6 +122,7 @@ async def setup_gh_config() -> bool:
         return False
     
     token = github_config.get("api_token", "")
+    user = github_config.get("user", "")
     if not token:
         return False
     
@@ -133,7 +134,7 @@ async def setup_gh_config() -> bool:
     hostname = base_url.replace("https://", "").replace("http://", "") if base_url else "github.com"
     
     import yaml
-    hosts_config = {hostname: {"oauth_token": token, "user": ""}}
+    hosts_config = {hostname: {"oauth_token": token, "user": user}}
     if not base_url:
         hosts_config = {"github.com": {"oauth_token": token, "user": ""}}
     
