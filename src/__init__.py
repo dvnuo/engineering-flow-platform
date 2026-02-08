@@ -48,10 +48,10 @@ class Tool:
 TOOLS: Dict[str, Tool] = {}
 
 
-from .github_api import get_tools_schemas as get_github_tools
-from .jira_api import get_tools_schemas as get_jira_tools
-from .confluence_api import get_tools_schemas as get_confluence_tools
-from .git_api import get_tools_schemas as get_git_tools
+from .github import get_tools_schemas as get_github_tools
+from .jira import get_tools_schemas as get_jira_tools
+from .confluence import get_tools_schemas as get_confluence_tools
+from .git import get_tools_schemas as get_git_tools
 
 # Also export raw functions for backward compatibility
 from . import github
