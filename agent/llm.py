@@ -193,10 +193,16 @@ class OpenAIProvider(BaseProvider):
         }
         
         # Add reasoning_replay if enabled (for o1/o3 style reasoning)
+        # Only supported by specific models: o1, o3, o1-mini, o1-pro, etc.
         if enable_reasoning:
-            payload["reasoning"] = {"type": "text"}
-            if _is_debug_enabled():
-                logger.debug(f"Reasoning replay: enabled")
+            model_name = (model or self.default_model).lower()
+            # Check if model supports reasoning_effort/reasoning
+            if any(m in model_name for m in ['o1', 'o3', 'o2']):
+                payload["reasoning"] = {"type": "text"}
+                if _is_debug_enabled():
+                    logger.debug(f"Reasoning replay: enabled for model {model_name}")
+            else:
+                logger.warning(f"Model {model_name} does not support reasoning_replay parameter, ignoring")
         
         if tools:
             payload["tools"] = tools
@@ -683,8 +689,13 @@ class LLMClient:
         provider: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """Chat with LLM."""
+        """Chat with LLM.
+        
+        Args:
+            reasoning_replay: Enable reasoning_replay to see model's internal reasoning.
+        """
         provider = provider or self.default_provider or 'openai'
         
         if provider not in self.providers:
@@ -700,6 +711,7 @@ class LLMClient:
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
+            reasoning_replay=reasoning_replay,
         )
     
     def list_models(self, provider: Optional[str] = None) -> List[str]:
