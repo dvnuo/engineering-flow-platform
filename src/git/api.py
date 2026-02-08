@@ -54,9 +54,33 @@ class GitClient:
         """Pull from remote."""
         return await self.run(["pull"], cwd)
     
+    def convert_to_https(self, ssh_url: str) -> str:
+        """Convert SSH git URL to HTTPS URL.
+        
+        Supports formats:
+        - git@github.com:owner/repo.git -> https://github.com/owner/repo.git
+        - git@hostname:owner/repo.git -> https://hostname/owner/repo.git
+        """
+        # Match SSH URL pattern: git@hostname:path/repo.git
+        match = re.match(r'git@([^:]+):(.+\.git)$', ssh_url)
+        if match:
+            hostname = match.group(1)
+            path = match.group(2)
+            return f"https://{hostname}/{path}"
+        return ssh_url  # Return as-is if not SSH format
+    
     async def clone(self, repo_url: str, target_dir: str = None) -> str:
-        """Clone a repository."""
+        """Clone a repository.
+        
+        Supports both SSH and HTTPS URLs:
+        - SSH: git@github.com:owner/repo.git
+        - HTTPS: https://github.com/owner/repo.git
+        """
         import os
+        # Convert SSH URL to HTTPS if needed
+        if repo_url.startswith("git@"):
+            repo_url = self.convert_to_https(repo_url)
+        
         target = target_dir or self.workspace
         # Extract repo name from URL if no target_dir specified
         if not target_dir:
