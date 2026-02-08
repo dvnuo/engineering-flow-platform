@@ -158,7 +158,7 @@ def get_tools_schemas() -> list:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "repo_url": {"type": "string", "description": "Repository URL (https://github.com/owner/repo.git)"},
+                        "repo_url": {"type": "string", "description": "Repository URL (SSH: git@github.com:owner/repo.git or HTTPS: https://github.com/owner/repo.git)"},
                         "workspace": {"type": "string", "description": "Workspace path", "default": "."}
                     },
                     "required": ["repo_url"]
