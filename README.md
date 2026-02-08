@@ -211,20 +211,6 @@ engineering-flow/
 3. **main.py** and **__init__.py** at root for easy execution
 4. All modules (agents, channels, cron, gateway, memory, sessions) in `src/`
 
-
-1. **skills/** - Declarative skill definitions only (SKILL.md)
-2. **src/** - All implementation code 
-3. **config.py**, **main.py**, and **utils/** are also in src/
-3. No separate `tools/` or `integrations/` directories
-4. All modules (agents, channels, cron, gateway, memory, sessions) in `src/`
-
-1. **skills/** - Declarative skill definitions only (SKILL.md)
-2. **src/** - All implementation code (flat, modular structure)
-3. No separate `tools/` or `integrations/` directories
-4. Each tool module has its own directory with implementation
-
----
-
 ## Features
 
 - **Modular Architecture** - Clean separation of concerns
