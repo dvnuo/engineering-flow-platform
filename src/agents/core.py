@@ -53,16 +53,10 @@ class Agent:
         base_tools = get_tools_schemas()
         self.tools = base_tools  # Already contains all tools from TOOLS + INTEGRATION_TOOLS
         
-        # ===== DEBUG =====
-        self.debug_enabled = config.debug.get("enabled", False)
-        if self.debug_enabled:
-            print(f"\n{'='*60}")
-            print(f"DEBUG: Tools Initialization")
-            print(f"  Base tools count: {len(base_tools)}")
-            print(f"  Total tools: {len(self.tools)}")
-            print(f"  Tool names: {[t['function']['name'] for t in self.tools]}")
-            print(f"  Thinking level: {self.think_level.value}")
-            print(f"{'='*60}\n")
+        # Debug logging for tools initialization
+        logger.debug(f"Tools initialized: count={len(self.tools)}, "
+                    f"names={[t['function']['name'] for t in self.tools]}, "
+                    f"think_level={self.think_level.value}")
         
         # Human-readable tool list
         tools_list = "\n".join([
@@ -140,19 +134,11 @@ You have access to the following tools. When a user asks you to do something tha
 """
             prompt_source = "fallback"
         
-        # ===== DEBUG =====
-        if self.debug_enabled:
-            print(f"\n{'='*60}")
-            print(f"DEBUG: System Prompt Construction")
-            print(f"  Session: {session_id}")
-            print(f"  Include memory: {include_memory}")
-            print(f"  Prompt source: {prompt_source}")
-            print(f"  System prompt length: {len(self.system_prompt)} characters")
-            print(f"  Tools count: {len(self.tools)}")
-            print(f"  Thinking level: {self.think_level.value}")
-            print(f"{'='*60}\n")
-        
-        self.tools = self.tools  # Already set above
+        # Debug logging for system prompt construction
+        logger.debug(f"System prompt constructed: session={session_id}, "
+                    f"include_memory={include_memory}, source={prompt_source}, "
+                    f"length={len(self.system_prompt)}, tools={len(self.tools)}, "
+                    f"think_level={self.think_level.value}")
 
     async def process(
         self,
@@ -267,17 +253,10 @@ You have access to the following tools. When a user asks you to do something tha
             )
         # ===== END MESSAGE COMPACTION =====
 
-        # ===== DEBUG =====
-        if self.debug_enabled:
-            print(f"\n{'='*60}")
-            print(f"DEBUG: Message Received")
-            print(f"  Session: {session_id}")
-            print(f"  User: {user_name}")
-            print(f"  Message length: {len(message)} characters")
-            print(f"  System prompt length: {len(self.system_prompt)} characters")
-            print(f"  Tools count: {len(self.tools)}")
-            print(f"  History messages: {len(messages)}")
-            print(f"{'='*60}\n")
+        # Debug logging for message received
+        logger.debug(f"Message received: session={session_id}, user={user_name}, "
+                    f"message_len={len(message)}, system_prompt_len={len(self.system_prompt)}, "
+                    f"tools={len(self.tools)}, history_msgs={len(messages)}")
 
         # ===== REACT PATTERN =====
 
@@ -291,16 +270,6 @@ You have access to the following tools. When a user asks you to do something tha
         # Step 1: Call LLM with tools
         logger.debug(f"Calling LLM with {len(self.tools)} tools")
         
-        # ===== DEBUG =====
-        if self.debug_enabled:
-            print(f"\n{'='*60}")
-            print(f"DEBUG: LLM API Call")
-            print(f"  Messages count: {len(messages)}")
-            print(f"  Tools count: {len(self.tools)}")
-            print(f"  System prompt preview (first 500 chars):")
-            print(f"{self.system_prompt[:500]}")
-            print(f"{'='*60}\n")
-        
         llm_result = await llm_client.chat(
             messages=messages,
             system_prompt=self.system_prompt,
@@ -308,18 +277,10 @@ You have access to the following tools. When a user asks you to do something tha
             reasoning_replay=enable_reasoning,
         )
         
-        # ===== DEBUG =====
-        if self.debug_enabled:
-            print(f"\n{'='*60}")
-            print(f"DEBUG: LLM Response")
-            print(f"  Content: {llm_result.get('content')[:200] if llm_result.get('content') else '(empty)'}")
-            print(f"  Tool calls: {len(llm_result.get('tool_calls', []))}")
-            if llm_result.get('tool_calls'):
-                for tc in llm_result.get('tool_calls', []):
-                    func = tc.get('function', {})
-                    print(f"    - {func.get('name')}: {func.get('arguments')[:100]}...")
-            print(f"  Usage: {llm_result.get('usage', {})}")
-            print(f"{'='*60}\n")
+        # Debug logging for LLM response
+        logger.debug(f"LLM response: content_preview={llm_result.get('content')[:200] if llm_result.get('content') else '(empty)'}, "
+                    f"tool_calls={len(llm_result.get('tool_calls', []))}, "
+                    f"usage={llm_result.get('usage', {})}")
         
         # Track usage if enabled
         if track_usage:
@@ -363,26 +324,12 @@ You have access to the following tools. When a user asks you to do something tha
             
             logger.info(f"Executing tool: {tool_name} with args: {args}")
             
-            # ===== DEBUG =====
-            if self.debug_enabled:
-                print(f"\n{'='*60}")
-                print(f"DEBUG: Execute Tool")
-                print(f"  Tool: {tool_name}")
-                print(f"  Tool call ID: {tool_call_id}")
-                print(f"  Arguments: {args}")
-                print(f"{'='*60}\n")
-            
             # Execute the tool
             tool_result = await execute_tool_by_name(tool_name, **args)
             
-            # ===== DEBUG =====
-            if self.debug_enabled:
-                print(f"\n{'='*60}")
-                print(f"DEBUG: Tool Result")
-                print(f"  Tool: {tool_name}")
-                print(f"  Success: {tool_result.success}")
-                print(f"  Result preview: {str(tool_result)[:500]}...")
-                print(f"{'='*60}\n")
+            # Debug logging for tool result
+            logger.debug(f"Tool result: {tool_name}, success={tool_result.success}, "
+                        f"preview={str(tool_result)[:500]}...")
             
             # Add tool result - MUST follow the assistant message with tool_calls
             messages.append({
@@ -402,13 +349,8 @@ You have access to the following tools. When a user asks you to do something tha
         
         final_content = (final_result.get("content") or "").strip()
         
-        # ===== DEBUG =====
-        if self.debug_enabled:
-            print(f"\n{'='*60}")
-            print(f"DEBUG: Final Response")
-            print(f"  Content: {final_content}")
-            print(f"  Usage: {final_result.get('usage', {})}")
-            print(f"{'='*60}\n")
+        # Debug logging for final response
+        logger.debug(f"Final response: content={final_content}, usage={final_result.get('usage', {})}")
         
         # Track final usage and merge
         if track_usage:
