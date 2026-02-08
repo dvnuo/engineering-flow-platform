@@ -18,11 +18,6 @@ from src.channels.jira import jira_channel
 from src.config import config
 from src.sessions.manager import DISCORD_SESSION_PREFIX, JIRA_SESSION_PREFIX
 
-# Lazy import test_case_skill to avoid circular dependency
-try:
-    from skills.test_case_generator.skill import test_case_skill
-except ImportError:
-    test_case_skill = None
 
 # Lazy import webchat to avoid circular dependency
 try:
@@ -85,7 +80,10 @@ async def handle_jira_message(
         
         # Check for test case generation command
         if jira_channel.is_test_case_command(message):
-            return await handle_test_case_generation(issue_key, user_name)
+            # Test case generation feature removed in PR #131
+            # Inform user and skip
+            await jira_channel.send_message(issue_key, "Test case generation feature is temporarily unavailable.")
+            return ""
         
         # Normal conversation
         result = await agent.process(
@@ -102,31 +100,7 @@ async def handle_jira_message(
         return f"Sorry, I encountered an error: {str(e)}"
 
 
-async def handle_test_case_generation(issue_key: str, user_name: str) -> str:
-    """Handle test case generation request for a Jira issue."""
-    try:
-        # Get issue requirements from description
-        requirements = await jira_channel.get_issue_description(issue_key)
-        
-        if not requirements:
-            return f"I could not retrieve the description for issue {issue_key}. Please ensure the issue has a requirements description."
-        
-        # Generate test cases using the skill
-        logger.info(f"Generating test cases for {issue_key} based on requirements")
-        
-        test_cases = await test_case_skill.generate(
-            requirements=requirements,
-            framework="pytest",
-            language="python",
-            test_type="unit",
-        )
-        
-        # Send intro comment
-        intro = f"## Test Cases Generated ✅\n\nBased on the requirements description for **{issue_key}**, I have generated automated test cases for you."
-        await jira_channel.add_comment_text_only(issue_key, intro)
-        
-        # Send code block as separate comment
-        await jira_channel.add_comment_code_block(issue_key, test_cases, language="python")
+
         
         # Confirmation
         return f"Test cases for {issue_key} have been generated and added to the issue comments."
