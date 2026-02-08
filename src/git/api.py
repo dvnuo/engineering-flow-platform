@@ -59,13 +59,18 @@ class GitClient:
         
         Supports formats:
         - git@github.com:owner/repo.git -> https://github.com/owner/repo.git
-        - git@hostname:owner/repo.git -> https://hostname/owner/repo.git
+        - git@github.com:owner/repo -> https://github.com/owner/repo
+        - ssh://git@github.com/owner/repo.git -> https://github.com/owner/repo.git
         """
-        # Match SSH URL pattern: git@hostname:path/repo.git
-        match = re.match(r'git@([^:]+):(.+\.git)$', ssh_url)
+        # Match SSH URL pattern: git@hostname:path or ssh://git@hostname/path
+        # Pattern handles both formats with or without .git suffix
+        match = re.match(r'(?:git@|ssh://git@)([^/:]+):?/?(.+)$', ssh_url)
         if match:
             hostname = match.group(1)
             path = match.group(2)
+            # Remove .git suffix if present for clean URL
+            if path.endswith('.git'):
+                path = path[:-4]
             return f"https://{hostname}/{path}"
         return ssh_url  # Return as-is if not SSH format
     
@@ -78,7 +83,7 @@ class GitClient:
         """
         import os
         # Convert SSH URL to HTTPS if needed
-        if repo_url.startswith("git@"):
+        if repo_url.startswith("git@") or repo_url.startswith("ssh://"):
             repo_url = self.convert_to_https(repo_url)
         
         target = target_dir or self.workspace
