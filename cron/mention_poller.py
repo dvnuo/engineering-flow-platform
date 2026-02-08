@@ -17,7 +17,7 @@ from config import config
 from channel.github import github_channel
 from channel.jira import jira_channel
 from channel.confluence import confluence_channel
-from skills.executor import execute_tool
+from src.executor import execute_tool
 
 # Import memory module for tracking processed issues
 try:
