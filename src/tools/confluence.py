@@ -1,10 +1,10 @@
 """
 Confluence Tools - Agent entry point.
 
-Calls src/integrations/confluence/api.py
+Calls src/core/confluence/api.py
 """
 
-from src.integrations.confluence import ConfluenceChannel
+from src.core.confluence import ConfluenceChannel
 
 # Global instance
 confluence_client = ConfluenceChannel()

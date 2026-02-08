@@ -1,10 +1,10 @@
 """
 Confluence Channel - Backward compatible API.
 
-This module re-exports from src/integrations/confluence/ for backward compatibility.
+This module re-exports from src/core/confluence/ for backward compatibility.
 """
 
-from src.integrations.confluence import ConfluenceChannel
+from src.core.confluence import ConfluenceChannel
 
 # Global instance for backward compatibility
 confluence_channel = ConfluenceChannel()

@@ -1,7 +1,7 @@
 """
 Jira Channel - Backward compatible API.
 
-This module re-exports from src/integrations/jira/ for backward compatibility.
+This module re-exports from src/core/jira/ for backward compatibility.
 """
 
 import logging
@@ -10,7 +10,7 @@ from typing import Dict
 # Re-export config for backward compatibility (for tests that mock channel.jira.config)
 from config import config
 
-from src.integrations.jira.api import JiraChannel as _JiraChannel
+from src.core.jira.api import JiraChannel as _JiraChannel
 
 logger = logging.getLogger(__name__)
 
