@@ -32,7 +32,7 @@ class TestInternationalization:
     def test_english_system_prompt(self):
         """Test that system prompt is in English."""
         from agent.core import Agent
-        from src.executor import get_tools_schemas
+        from agent.executor import get_tools_schemas
         
         # Mock get_tools_schemas at module level
         with patch('skills.executor.get_tools_schemas', return_value=[]):

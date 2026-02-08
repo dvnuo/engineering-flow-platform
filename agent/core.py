@@ -12,7 +12,7 @@ from agent.memory import memory_system
 from agent.thinking import ThinkLevel, normalize_think_level, format_runtime_info
 from config import config
 from session.manager import session_manager
-from src.executor import (
+from agent.executor import (
     skills_executor,
     SkillResult,
     get_tools_schemas,
