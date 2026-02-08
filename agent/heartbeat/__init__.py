@@ -63,7 +63,7 @@ class HeartbeatChecker:
         detail_level = self._get_check_detail_level()
         
         try:
-            from src.tools.jira import jira_get_issue
+            from src.jira_api import jira_get_issue
         except ImportError:
             return {"status": "unavailable", "reason": "Jira not configured"}
         

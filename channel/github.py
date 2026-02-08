@@ -4,7 +4,7 @@ GitHub Channel - Backward compatible API.
 This module re-exports from src/integrations/github/ for backward compatibility.
 """
 
-from src.integrations.github import GitHubClient
+from src.github import GitHubClient
 
 # Global instance for backward compatibility
 github_channel = GitHubClient()

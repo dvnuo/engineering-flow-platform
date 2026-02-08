@@ -4,7 +4,7 @@ Jira Tools - Agent entry point.
 Calls src/core/jira/api.py
 """
 
-from src.core.jira import JiraChannel
+from src.jira import JiraChannel
 
 # Global instance
 jira_client = JiraChannel()

@@ -4,8 +4,8 @@ GitHub Tools - Agent entry point.
 Calls src/integrations/github/api.py and cli.py
 """
 
-from src.core.github import GitHubClient
-from src.core.github.cli import GitHubCLI
+from src.github import GitHubClient
+from src.github.cli import GitHubCLI
 
 # Global instance
 github_client = GitHubClient()

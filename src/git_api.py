@@ -4,7 +4,7 @@ Git Tools - Agent entry point.
 Calls src/integrations/git/api.py
 """
 
-from src.core.git import GitClient, setup_ssh_key, setup_git_user
+from src.git import GitClient, setup_ssh_key, setup_git_user
 
 # Global instance
 git_client = GitClient()

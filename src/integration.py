@@ -5,8 +5,8 @@ This module maintains backward compatibility by re-exporting from src/tools/*.
 """
 
 # Import from new location for backward compatibility
-from src.tools.jira import get_tools_schemas as get_jira_tools_schemas
-from src.tools.confluence import get_tools_schemas as get_confluence_tools_schemas
+from src.jira import get_tools_schemas as get_jira_tools_schemas
+from src.confluence import get_tools_schemas as get_confluence_tools_schemas
 
 # Jira Tools (backward compatible)
 JIRA_TOOLS = [

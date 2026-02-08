@@ -10,7 +10,7 @@ from typing import Dict
 # Re-export config for backward compatibility (for tests that mock channel.jira.config)
 from config import config
 
-from src.core.jira.api import JiraChannel as _JiraChannel
+from src.jira import JiraChannel as _JiraChannel
 
 logger = logging.getLogger(__name__)
 

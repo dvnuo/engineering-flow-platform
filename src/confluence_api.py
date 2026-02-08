@@ -4,7 +4,7 @@ Confluence Tools - Agent entry point.
 Calls src/core/confluence/api.py
 """
 
-from src.core.confluence import ConfluenceChannel
+from src.confluence import ConfluenceChannel
 
 # Global instance
 confluence_client = ConfluenceChannel()
