@@ -24,6 +24,15 @@ logger = logging.getLogger(__name__)
 
 # Debug mode: set DEBUG_AGENT=true or DEBUG_AGENT=full for complete output
 _DEBUG_MODE = os.environ.get("DEBUG_AGENT", "").lower()
+_VALID_DEBUG_VALUES = ("1", "true", "yes", "full")
+if _DEBUG_MODE and _DEBUG_MODE not in _VALID_DEBUG_VALUES:
+    import warnings
+    warnings.warn(
+        f"Invalid DEBUG_AGENT value: '{_DEBUG_MODE}'. Valid values: {_VALID_DEBUG_VALUES}. Debug disabled.",
+        UserWarning
+    )
+    _DEBUG_MODE = ""
+
 DEBUG_FULL_OUTPUT = _DEBUG_MODE == "full"
 _DEBUG_ENABLED = _DEBUG_MODE in ("1", "true", "yes", "full")
 

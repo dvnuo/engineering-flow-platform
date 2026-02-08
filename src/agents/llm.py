@@ -27,6 +27,15 @@ logger = logging.getLogger(__name__)
 
 # Debug mode flag - enable with DEBUG_LLM=true or DEBUG_LLM=full
 _DEBUG_MODE = os.environ.get("DEBUG_LLM", "").lower()
+_VALID_DEBUG_VALUES = ("1", "true", "yes", "full")
+if _DEBUG_MODE and _DEBUG_MODE not in _VALID_DEBUG_VALUES:
+    import warnings
+    warnings.warn(
+        f"Invalid DEBUG_LLM value: '{_DEBUG_MODE}'. Valid values: {_VALID_DEBUG_VALUES}. Debug disabled.",
+        UserWarning
+    )
+    _DEBUG_MODE = ""
+
 DEBUG_FULL_OUTPUT = _DEBUG_MODE == "full"
 _DEBUG_ENABLED = _DEBUG_MODE in ("1", "true", "yes", "full")
 
@@ -42,7 +51,9 @@ def _is_full_output() -> bool:
 
 
 def _log_request(component: str, url: str, method: str = "POST", headers: Dict = None, payload: Dict = None):
-    """Log request with consistent format."""
+    """Log request with consistent format. Only formats if debug is enabled."""
+    if not _DEBUG_ENABLED:
+        return
     logger.debug(f"=== [{component}] REQUEST ===")
     logger.debug(f"Method: {method}")
     logger.debug(f"URL: {url}")
@@ -53,7 +64,9 @@ def _log_request(component: str, url: str, method: str = "POST", headers: Dict =
 
 
 def _log_response(component: str, status: int, body: Any = None):
-    """Log response with consistent format. Full output if DEBUG_LLM=full."""
+    """Log response with consistent format. Only formats if debug is enabled."""
+    if not _DEBUG_ENABLED:
+        return
     logger.debug(f"=== [{component}] RESPONSE ===")
     logger.debug(f"Status: {status}")
     if body:
