@@ -156,32 +156,29 @@ engineering-flow/
 │       ├── SKILL.md
 │       └── references/
 │
-├── src/                      # 🔧 All Implementation Code (Flat Structure)
-│   ├── __init__.py           # Tool exports & utilities
-│   ├── executor/             # Skill & SubAgent execution
-│   │   ├── __init__.py       # SkillsExecutor
-│   │   ├── subagent.py       # SubAgent management
-│   │   └── subagent_schemas.py
-│   │
-│   ├── git/                  # Git tool
-│   │   └── __init__.py       # git_status, git_commit, git_push
-│   │
-│   ├── github/               # GitHub tool
-│   │   └── __init__.py       # github_get_issue, github_search_issues
-│   │
-│   ├── jira/                 # Jira tool
-│   │   └── __init__.py       # jira_get_issue, jira_search
-│   │
-│   ├── confluence/           # Confluence tool
-│   │   └── __init__.py       # confluence_get_page, confluence_search
-│   │
-│   └── skill_creator/       # Skill creation tool
-│       └── scripts/
-│           ├── init_skill.py
-│           └── package_skill.py
+├── agent/                    # 🤖 Agent Core + Skill Execution
+│   ├── executor.py           # SkillsExecutor, execute_skill()
+│   ├── subagent.py         # SubAgent spawning & management
+│   ├── subagent_schemas.py # SubAgent tool schemas
+│   ├── core.py             # Agent with ReAct pattern
+│   ├── llm.py             # LLM client
+│   ├── heartbeat.py        # Periodic background checks
+│   ├── memory.py           # Memory system
+│   ├── model_fallback.py   # Model fallback logic
+│   ├── queue.py            # Message queue
+│   ├── thinking.py         # Thinking levels
+│   └── compaction.py      # Context compaction
 │
-├── agent/                    # Agent core & heartbeat
-├── channel/                 # Channel adapters (Discord, etc.)
+├── src/                     # 🔧 Tool Implementations (Flat Structure)
+│   ├── __init__.py         # Tool exports (ToolResult, Tool, TOOLS)
+│   ├── git/                # Git tool
+│   ├── github/             # GitHub tool
+│   ├── jira/               # Jira tool
+│   ├── confluence/          # Confluence tool
+│   └── skill_creator/      # Skill creation tool
+│       └── scripts/
+│
+├── channel/                  # Channel adapters (Discord, etc.)
 ├── cron/                     # Scheduled tasks
 ├── gateway/                  # Web API server
 ├── memory/                   # Memory storage
