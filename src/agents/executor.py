@@ -133,8 +133,8 @@ class SkillsExecutor:
 
     def _load_skills(self):
         """Load all available skills."""
-        # Navigate up from executor/ to skills/
-        skills_dir = Path(__file__).parent.parent
+        # Navigate up from executor/ to project root, then to skills/
+        skills_dir = Path(__file__).parent.parent.parent / "skills"
         logger.debug(f"Loading skills from: {skills_dir}")
 
         for skill_dir in skills_dir.iterdir():
