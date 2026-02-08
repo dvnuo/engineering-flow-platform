@@ -99,9 +99,8 @@ async def main() -> None:
 
     # Initialize session store and usage tracker
     try:
-        await session_store.ensure_dir()
+        # Directory already created in __init__
         logger.info(f"Session store initialized | path={session_store.base_path}")
-        await usage_tracker.ensure_dir()
         logger.info(f"Usage tracker initialized | path={usage_tracker.base_path}")
         await session_manager.initialize()
         logger.info("Session manager initialized successfully")

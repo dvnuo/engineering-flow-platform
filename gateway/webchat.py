@@ -131,9 +131,9 @@ async def api_chat(request: web.Request) -> web.Response:
             reasoning_replay=reasoning_replay,
         )
         
-        response = result.get("response", "")
-        usage = result.get("usage", {})
-        reasoning = result.get("reasoning", "")
+        response = result.get("response", "") if result else ""
+        usage = result.get("usage", {}) if result else {}
+        reasoning = result.get("reasoning", "") if result else ""
         
         # Record usage if available
         if usage:
