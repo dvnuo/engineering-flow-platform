@@ -37,7 +37,8 @@ async def github_search_issues(query: str, max_results: int = 10) -> str:
             num = item.get("number")
             title = item.get("title", "")[:40]
             state = item.get("state")
-            repo = item.get("repository_url", "").split("/")[-1]
+            repo_url = item.get("repository_url") or ""
+            repo = repo_url.split("/")[-1] if repo_url else "unknown"
             lines.append(f"- **{repo}#{num}** [{state}] {title}")
         return "\n".join(lines)
     except Exception as e:

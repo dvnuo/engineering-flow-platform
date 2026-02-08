@@ -53,6 +53,22 @@ class GitClient:
     async def pull(self, cwd: str = None) -> str:
         """Pull from remote."""
         return await self.run(["pull"], cwd)
+    
+    async def clone(self, repo_url: str, target_dir: str = None) -> str:
+        """Clone a repository."""
+        import os
+        target = target_dir or self.workspace
+        # Extract repo name from URL if no target_dir specified
+        if not target_dir:
+            # Get repo name from URL (remove .git suffix and last path component)
+            repo_name = repo_url.split("/")[-1].replace(".git", "")
+            target = os.path.join(self.workspace, repo_name)
+        
+        # Clone into workspace/REPO_NAME
+        target = os.path.join(self.workspace, target.split("/")[-1].replace(".git", ""))
+        os.makedirs(self.workspace, exist_ok=True)
+        
+        return await self.run(["clone", repo_url, target], cwd=self.workspace)
 
 
 # Standalone functions for backward compatibility

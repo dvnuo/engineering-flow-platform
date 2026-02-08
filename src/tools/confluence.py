@@ -17,8 +17,11 @@ async def confluence_get_page(space: str, title: str) -> str:
         page = await confluence_client.get_page(space, title)
         if not page:
             return f"No page found: {space}:{title}"
-        content = page.get("body", {}).get("storage", {}).get("value", "")[:500]
-        return f"**{page.get('title', 'No title')}**\n\n{content}..."
+        body = page.get("body") or {}
+        storage = body.get("storage") or {}
+        content = (storage.get("value") or "")[:500]
+        page_title = page.get("title") or "No title"
+        return f"**{page_title}**\n\n{content}..."
     except Exception as e:
         return f"Error getting page: {e}"
 
@@ -32,8 +35,9 @@ async def confluence_search(query: str, max_results: int = 10) -> str:
             return "No pages found."
         lines = [f"**Search Results** ({len(results)}):\n"]
         for r in results:
-            title = r.get("title", "No title")[:40]
-            space = r.get("space", {}).get("key", "UNKNOWN")
+            title = (r.get("title") or "No title")[:40]
+            space_data = r.get("space")
+            space = space_data.get("key", "UNKNOWN") if space_data else "UNKNOWN"
             lines.append(f"- **{space}**: {title}")
         return "\n".join(lines)
     except Exception as e:

@@ -441,26 +441,30 @@ You have access to the following tools. When a user asks you to do something tha
         """Execute a skill and return the result."""
         try:
             # Parse command and arguments from message
+            # Support formats:
+            # - "git pull repo_path=/path" (natural language)
+            # - "git command=pull repo_path=/path" (explicit command)
             parts = message.split()
             if not parts:
                 return "Error: Empty message"
             
-            # Extract sub-command (second word)
-            sub_command = parts[1] if len(parts) > 1 else parts[0]
-            
-            # Parse remaining parts as key=value arguments
+            # Extract sub-command and arguments
+            sub_command = None
             args = {}
-            for part in parts[2:]:
+            for part in parts:
                 if '=' in part:
                     key, value = part.split('=', 1)
                     value = value.strip("'\"")
                     if value.isdigit():
                         value = int(value)
                     args[key] = value
-                elif part.startswith('http://') or part.startswith('https://') or part.startswith('git@'):
-                    args['path'] = part
-                elif part.startswith('/') or part.startswith('./') or part.startswith('../'):
-                    args['path'] = part
+                elif sub_command is None:
+                    # First non-key=value part is the command
+                    sub_command = part.lower()
+            
+            # Default command if not found
+            if sub_command is None:
+                sub_command = "status"
             
             result = await skills_executor.execute_skill(
                 skill_name,

@@ -382,15 +382,15 @@ class GitTool(Tool):
     """Execute git commands."""
 
     name = "git"
-    description = "Execute git commands (clone, status, commit, push, pull, branch, log, etc.)"
+    description = "Execute git commands (clone, status, commit, push, pull, branch, log, checkout, add, diff)"
     parameters = {
         "command": {
             "type": "string",
-            "description": "Git command to execute (e.g., 'clone', 'status', 'commit', 'push', 'pull', 'branch', 'log', 'checkout')",
+            "description": "Git command to execute (clone, status, commit, push, pull, branch, log, checkout, add, diff)",
         },
-        "args": {
+        "repo_path": {
             "type": "string",
-            "description": "Additional arguments for the command (space-separated)",
+            "description": "Repository path (optional, default: current directory)",
         },
         "timeout": {
             "type": "integer",
@@ -399,11 +399,19 @@ class GitTool(Tool):
         },
     }
 
-    async def execute(self, command: str, args: str = "", timeout: int = 30) -> ToolResult:
+    async def execute(self, command: str, repo_path: str = ".", timeout: int = 30) -> ToolResult:
         """Execute a git command."""
-        full_command = f"git {command}"
-        if args:
-            full_command += f" {args}"
+        import os
+        # Ensure repo_path exists
+        if not os.path.exists(repo_path):
+            return ToolResult(success=False, error=f"Repository path does not exist: {repo_path}")
+        
+        # Check if it's a git repository
+        git_dir = os.path.join(repo_path, ".git")
+        if not os.path.isdir(git_dir):
+            return ToolResult(success=False, error=f"Not a git repository (no .git folder): {repo_path}")
+        
+        full_command = f"git -C {repo_path} {command}"
         
         try:
             proc = await asyncio.create_subprocess_shell(

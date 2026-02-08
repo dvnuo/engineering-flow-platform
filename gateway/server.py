@@ -406,10 +406,13 @@ class Gateway:
                 reasoning_replay=reasoning_replay,
             )
             
+            if result is None:
+                return web.json_response({"status": "error", "message": "Agent returned None"}, status=500)
+            
             response_data = {
                 "status": "ok",
                 "message": message,
-                "response": result["response"],
+                "response": result.get("response", ""),
                 "session_id": session_id,
             }
             
@@ -424,7 +427,9 @@ class Gateway:
             return web.json_response(response_data)
             
         except Exception as e:
-            logger.error(f"Test message error: {e}")
+            import traceback
+            tb = traceback.format_exc()
+            logger.error(f"Test message error: {e}\nTraceback:\n{tb}")
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def handle_jira_webhook(self, request: Request) -> web.Response:
