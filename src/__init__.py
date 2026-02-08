@@ -122,23 +122,23 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     if name == "git_status":
         workspace = kwargs.get("workspace", ".")
         result = await git_module.git_status(workspace)
-        return ToolResult(success="Error" not in result, output=result)
+        return ToolResult(success="Error" not in result, content=result)
     
     elif name == "git_commit":
         message = kwargs.get("message", "")
         workspace = kwargs.get("workspace", ".")
         result = await git_module.git_commit(message, workspace)
-        return ToolResult(success="Error" not in result, output=result)
+        return ToolResult(success="Error" not in result, content=result)
     
     elif name == "git_push":
         workspace = kwargs.get("workspace", ".")
         result = await git_module.git_push(workspace)
-        return ToolResult(success="Error" not in result, output=result)
+        return ToolResult(success="Error" not in result, content=result)
     
     elif name == "git_clone":
         repo_url = kwargs.get("repo_url", "")
         workspace = kwargs.get("workspace", ".")
         result = await git_module.git_clone(repo_url, workspace)
-        return ToolResult(success="Error" not in result, output=result)
+        return ToolResult(success="Error" not in result, content=result)
     
     return ToolResult(success=False, error=f"Tool {name} not implemented")
