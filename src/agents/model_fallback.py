@@ -5,7 +5,7 @@ Model fallback implementation based on agent framework best practices.
 
 Usage:
 ```python
-from agent.model_fallback import with_model_fallback, FALLBACK_ORDER
+from src.agents.model_fallback import with_model_fallback, FALLBACK_ORDER
 
 result = await with_model_fallback(
     task=lambda: agent.process(message="..."),

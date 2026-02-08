@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from session.persistence import session_store
+from src.sessions.persistence import session_store
 
 logger = logging.getLogger(__name__)
 

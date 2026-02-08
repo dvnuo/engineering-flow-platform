@@ -4,8 +4,8 @@ import pytest
 import asyncio
 import os
 from unittest.mock import Mock, patch, AsyncMock
-from agent.core import Agent
-from agent.llm import OpenAIProvider
+from src.agents.core import Agent
+from src.agents.llm import OpenAIProvider
 
 
 class TestReasoningReplay:

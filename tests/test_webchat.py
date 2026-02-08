@@ -5,7 +5,7 @@ import pytest
 from pathlib import Path
 
 try:
-    from gateway.webchat import setup_webchat_routes, load_template
+    from src.gateway.webchat import setup_webchat_routes, load_template
 except ImportError:
     pytest.skip("WebChat module not available", allow_module_level=True)
 

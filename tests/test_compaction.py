@@ -3,7 +3,7 @@
 import pytest
 from typing import List
 
-from agent.compaction import (
+from src.agents.compaction import (
     AgentMessage,
     CompactionStats,
     estimate_tokens,

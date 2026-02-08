@@ -13,7 +13,7 @@ Supported commands:
 import logging
 from typing import Any, Dict, Optional, Tuple
 
-from agent.thinking import ThinkLevel, normalize_think_level
+from src.agents.thinking import ThinkLevel, normalize_think_level
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class FastLaneCommands:
     def agent(self):
         """Get agent instance (lazy initialization)."""
         if self._agent is None:
-            from agent.core import Agent
+            from src.agents.core import Agent
             self._agent = Agent()
         return self._agent
     
@@ -142,7 +142,7 @@ class FastLaneCommands:
             self._agent.think_level = normalized
             
             # Update heartbeat if enabled
-            from agent.heartbeat import update_heartbeat_think_level
+            from src.agents.heartbeat import update_heartbeat_think_level
             update_heartbeat_think_level(normalized)
             
             logger.info(f"FastLane: thinking level changed - {old_level.value} -> {normalized.value}")
@@ -178,7 +178,7 @@ class FastLaneCommands:
         Returns:
             Response message with current configuration
         """
-        from agent.heartbeat import _heartbeat
+        from src.agents.heartbeat import _heartbeat
         
         thinking_level = self._agent.think_level.value if self._agent else "unknown"
         

@@ -14,14 +14,14 @@ from typing import Any, Dict, List, Optional, Set
 from dataclasses import dataclass, field
 
 from config import config
-from channel.github import github_channel
-from channel.jira import jira_channel
-from channel.confluence import confluence_channel
-from agent.executor import execute_tool
+from src.channels.github import github_channel
+from src.channels.jira import jira_channel
+from src.channels.confluence import confluence_channel
+from src.agents.executor import execute_tool
 
 # Import memory module for tracking processed issues
 try:
-    from memory import get_memory_store
+    from src.memory import get_memory_store
     MEMORY_AVAILABLE = True
 except ImportError:
     MEMORY_AVAILABLE = False

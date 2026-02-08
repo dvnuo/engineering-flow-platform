@@ -4,7 +4,7 @@ import tempfile
 import pytest
 from pathlib import Path
 
-from session.usage import UsageTracker, UsageStats, estimate_cost
+from src.sessions.usage import UsageTracker, UsageStats, estimate_cost
 
 
 class TestUsageTracker:

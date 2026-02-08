@@ -10,7 +10,7 @@ import asyncio
 import httpx
 
 # Import after path setup
-from agent.llm import LLMClient
+from src.agents.llm import LLMClient
 
 
 class MockResponse:

@@ -17,12 +17,12 @@ if str(project_root) not in sys.path:
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from gateway.server import gateway
+from src.gateway.server import gateway
 from config import config
-from session.persistence import session_store
-from session.manager import session_manager
-from session.usage import usage_tracker
-from cron.mention_poller import start_polling, stop_polling, is_enabled
+from src.sessions.persistence import session_store
+from src.sessions.manager import session_manager
+from src.sessions.usage import usage_tracker
+from src.cron.mention_poller import start_polling, stop_polling, is_enabled
 from skills.git.skill import setup_ssh_key, setup_git_user
 from src.integrations.git import setup_gh_config
 from utils.logger import setup_logging, get_logger

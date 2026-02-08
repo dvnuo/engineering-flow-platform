@@ -3,8 +3,8 @@
 import pytest
 from datetime import datetime
 
-from session.pruning import SessionPruner, SessionCompactor
-from session.manager import session_manager
+from src.sessions.pruning import SessionPruner, SessionCompactor
+from src.sessions.manager import session_manager
 
 
 class TestSessionPruner:
@@ -167,7 +167,7 @@ class TestSessionPruningIntegration:
     @pytest.mark.asyncio
     async def test_prune_updates_session_manager(self):
         """Test that pruning properly updates session manager."""
-        from session.pruning import session_pruner
+        from src.sessions.pruning import session_pruner
         
         session_id = "integration-test-session"
         session_manager.clear_history(session_id)

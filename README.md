@@ -156,38 +156,54 @@ engineering-flow/
 │       ├── SKILL.md
 │       └── references/
 │
-├── agent/                    # 🤖 Agent Core + Skill Execution
-│   ├── executor.py           # SkillsExecutor, execute_skill()
-│   ├── subagent.py         # SubAgent spawning & management
-│   ├── subagent_schemas.py # SubAgent tool schemas
-│   ├── core.py             # Agent with ReAct pattern
-│   ├── llm.py             # LLM client
-│   ├── heartbeat.py        # Periodic background checks
-│   ├── memory.py           # Memory system
-│   ├── model_fallback.py   # Model fallback logic
-│   ├── queue.py            # Message queue
-│   ├── thinking.py         # Thinking levels
-│   └── compaction.py      # Context compaction
-│
-├── src/                     # 🔧 Tool Implementations (Flat Structure)
-│   ├── __init__.py         # Tool exports (ToolResult, Tool, TOOLS)
-│   ├── git/                # Git tool
-│   ├── github/             # GitHub tool
-│   ├── jira/               # Jira tool
-│   ├── confluence/          # Confluence tool
-│   └── skill_creator/      # Skill creation tool
-│       └── scripts/
-│
-├── channel/                  # Channel adapters (Discord, etc.)
-├── cron/                     # Scheduled tasks
-├── gateway/                  # Web API server
-├── memory/                   # Memory storage
-├── session/                  # Session management
-├── tests/                    # Test suite
-└── config.yaml               # Configuration
+└── src/                       # 🤖 All Implementation Code (OpenClaw Pattern)
+    ├── agents/                 # Agent core + skill execution
+    │   ├── executor.py         # SkillsExecutor, execute_skill()
+    │   ├── subagent.py        # SubAgent spawning & management
+    │   ├── subagent_schemas.py
+    │   ├── core.py            # Agent with ReAct pattern
+    │   ├── llm.py            # LLM client
+    │   ├── heartbeat.py       # Periodic background checks
+    │   ├── memory.py         # Memory system
+    │   ├── model_fallback.py # Model fallback logic
+    │   ├── queue.py          # Message queue
+    │   ├── thinking.py        # Thinking levels
+    │   └── compaction.py      # Context compaction
+    │
+    ├── channels/              # Channel adapters
+    │   ├── discord.py
+    │   ├── github.py
+    │   ├── jira.py
+    │   └── confluence.py
+    │
+    ├── cron/                  # Scheduled tasks
+    │   └── mention_poller.py
+    │
+    ├── gateway/                # Web API server
+    │   ├── server.py
+    │   └── webchat.py
+    │
+    ├── memory/                # Memory storage
+    │   ├── __init__.py
+    │   └── sqlite_store.py
+    │
+    ├── sessions/              # Session management
+    │   └── manager.py
+    │
+    ├── git/                  # Git tool
+    ├── github/               # GitHub tool
+    ├── jira/                 # Jira tool
+    ├── confluence/            # Confluence tool
+    └── skill_creator/         # Skill creation tool
+        └── scripts/
 ```
 
 ### Architecture Principles
+
+1. **skills/** - Declarative skill definitions only (SKILL.md)
+2. **src/** - All implementation code (following OpenClaw)
+3. No separate `tools/` or `integrations/` directories
+4. All modules (agents, channels, cron, gateway, memory, sessions) in `src/`
 
 1. **skills/** - Declarative skill definitions only (SKILL.md)
 2. **src/** - All implementation code (flat structure like OpenClaw)

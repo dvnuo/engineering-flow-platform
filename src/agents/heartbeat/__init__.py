@@ -15,7 +15,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from agent.thinking import ThinkLevel
+from src.agents.thinking import ThinkLevel
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ import pytest
 import sys
 sys.path.insert(0, '/root/.efp/workspace/engineering-flow-platform')
 
-from agent.thinking import (
+from src.agents.thinking import (
     ThinkLevel,
     ReasoningLevel,
     normalize_think_level,

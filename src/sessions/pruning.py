@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from session.manager import session_manager
+from src.sessions.manager import session_manager
 
 logger = logging.getLogger(__name__)
 

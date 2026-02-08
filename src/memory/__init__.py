@@ -161,7 +161,7 @@ def init_memory_store(config: Optional[MemoryConfig] = None, auto_init: bool = F
         Initialized memory store.
     """
     global memory_store, _memory_auto_init
-    from memory.sqlite_store import SqliteMemoryStore
+    from src.memory.sqlite_store import SqliteMemoryStore
     
     memory_store = SqliteMemoryStore(config)
     _memory_auto_init = auto_init

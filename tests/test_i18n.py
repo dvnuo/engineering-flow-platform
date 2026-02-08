@@ -31,8 +31,8 @@ class TestInternationalization:
 
     def test_english_system_prompt(self):
         """Test that system prompt is in English."""
-        from agent.core import Agent
-        from agent.executor import get_tools_schemas
+        from src.agents.core import Agent
+        from src.agents.executor import get_tools_schemas
         
         # Mock get_tools_schemas at module level
         with patch('skills.executor.get_tools_schemas', return_value=[]):
@@ -78,7 +78,7 @@ class TestInternationalization:
 
     def test_english_jira_messages(self):
         """Test that Jira-related messages are in English."""
-        from channel.jira import JiraChannel
+        from src.channels.jira import JiraChannel
         
         # Test command detection (should be English)
         # is_test_case_command is an instance method
@@ -130,7 +130,7 @@ class TestInternationalization:
 
     def test_english_log_messages(self):
         """Test that log messages are in English."""
-        from gateway.server import logger
+        from src.gateway.server import logger
         
         # Logger should use English (and not contain Chinese)
         assert "gateway" in logger.name or "server" in logger.name

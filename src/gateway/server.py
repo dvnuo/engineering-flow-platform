@@ -12,11 +12,11 @@ from typing import Any, Callable, Dict
 from aiohttp import web
 from aiohttp.web import Request
 
-from agent.core import agent
-from channel.discord import discord_channel
-from channel.jira import jira_channel
+from src.agents.core import agent
+from src.channels.discord import discord_channel
+from src.channels.jira import jira_channel
 from config import config
-from session.manager import DISCORD_SESSION_PREFIX, JIRA_SESSION_PREFIX
+from src.sessions.manager import DISCORD_SESSION_PREFIX, JIRA_SESSION_PREFIX
 
 # Lazy import test_case_skill to avoid circular dependency
 try:
@@ -256,13 +256,13 @@ class Gateway:
 
     async def handle_list_sessions(self, request: Request) -> web.Response:
         """List all active sessions."""
-        from session.manager import session_manager
+        from src.sessions.manager import session_manager
         sessions = session_manager.list_sessions()
         return web.json_response({"sessions": sessions, "count": len(sessions)})
 
     async def handle_clear_session(self, request: Request) -> web.Response:
         """Clear a session's history."""
-        from session.manager import session_manager
+        from src.sessions.manager import session_manager
         session_id = request.match_info.get("session_id", "")
 
         if session_id:
@@ -318,7 +318,7 @@ class Gateway:
         GET /api/settings/providers
         Returns: {provider: {name, default_model, models: [...]}}
         """
-        from agent.llm import llm_client
+        from src.agents.llm import llm_client
         return web.json_response(llm_client.get_provider_info())
 
     async def handle_ollama_models(self, request: Request) -> web.Response:
@@ -327,7 +327,7 @@ class Gateway:
         GET /api/settings/ollama/models
         Returns: {"status": "healthy", "models": [...]}
         """
-        from agent.llm import llm_client
+        from src.agents.llm import llm_client
         return web.json_response(await llm_client.check_provider_health('ollama'))
 
     async def handle_ollama_pull(self, request: Request) -> web.Response:
@@ -342,7 +342,7 @@ class Gateway:
             if not model:
                 return web.json_response({"status": "error", "message": "model required"}, status=400)
             
-            from agent.llm import llm_client
+            from src.agents.llm import llm_client
             if 'ollama' not in llm_client.providers:
                 return web.json_response({"status": "error", "message": "Ollama not configured"}, status=400)
             
@@ -372,7 +372,7 @@ class Gateway:
         Returns: {"status": "ok", "queues": {...}, "active_sessions": N}
         """
         try:
-            from agent.queue import execution_queue
+            from src.agents.queue import execution_queue
             queues = await execution_queue.list_all_queues()
             return web.json_response({
                 "status": "ok",

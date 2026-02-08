@@ -43,7 +43,7 @@ class SubAgent:
     def agent(self):
         """Get the agent instance (lazy initialization)."""
         if self._agent is None:
-            from agent.core import Agent
+            from src.agents.core import Agent
             self._agent = Agent(
                 session_id=self.session_key,
                 think_level=self.thinking,
@@ -108,7 +108,7 @@ def sessions_list(
     Returns:
         JSON string with session list
     """
-    from session.manager import session_manager
+    from src.sessions.manager import session_manager
     
     sessions = []
     
@@ -167,7 +167,7 @@ def sessions_history(
     Returns:
         JSON string with message history
     """
-    from session.manager import session_manager
+    from src.sessions.manager import session_manager
     
     messages = session_manager.get_history(session_key)
     
@@ -325,7 +325,7 @@ def cleanup_subagent(session_key: str) -> bool:
     Returns:
         True if cleaned up, False if not found
     """
-    from session.manager import session_manager
+    from src.sessions.manager import session_manager
     
     if session_key in _subagent_sessions:
         del _subagent_sessions[session_key]

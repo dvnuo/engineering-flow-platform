@@ -101,7 +101,7 @@ class TestTestCaseCommand:
 
     def test_is_test_case_command_chinese(self):
         """Test detecting Chinese test case commands."""
-        from channel.jira import JiraChannel
+        from src.channels.jira import JiraChannel
         
         with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
@@ -113,7 +113,7 @@ class TestTestCaseCommand:
 
     def test_is_test_case_command_english(self):
         """Test detecting English test case commands."""
-        from channel.jira import JiraChannel
+        from src.channels.jira import JiraChannel
         
         with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
@@ -125,7 +125,7 @@ class TestTestCaseCommand:
 
     def test_is_not_test_case_command(self):
         """Test negative case - regular messages."""
-        from channel.jira import JiraChannel
+        from src.channels.jira import JiraChannel
         
         with patch('channel.jira.config') as mock_config:
             mock_config.jira = {}
@@ -143,7 +143,7 @@ class TestTestCaseIntegration:
     async def test_full_generation_flow(self):
         """Test the complete flow from command to test cases."""
         from skills.test_case_generator.skill import TestCaseSkill
-        from channel.jira import JiraChannel
+        from src.channels.jira import JiraChannel
         
         # Mock dependencies
         with patch('skills.test_case_generator.skill.llm_client') as mock_llm, \

@@ -6,13 +6,13 @@ import platform
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from agent.heartbeat import get_heartbeat, start_heartbeat, stop_heartbeat
-from agent.llm import llm_client
-from agent.memory import memory_system
-from agent.thinking import ThinkLevel, normalize_think_level, format_runtime_info
+from src.agents.heartbeat import get_heartbeat, start_heartbeat, stop_heartbeat
+from src.agents.llm import llm_client
+from src.agents.memory import memory_system
+from src.agents.thinking import ThinkLevel, normalize_think_level, format_runtime_info
 from config import config
-from session.manager import session_manager
-from agent.executor import (
+from src.sessions.manager import session_manager
+from src.agents.executor import (
     skills_executor,
     SkillResult,
     get_tools_schemas,
@@ -186,7 +186,7 @@ You have access to the following tools. When a user asks you to do something tha
         messages = session_manager.get_history(session_id)
 
         # ===== FAST LANE COMMANDS =====
-        from agent.fastlane import process_fastlane_command
+        from src.agents.fastlane import process_fastlane_command
         
         fastlane_response = await process_fastlane_command(message, self)
         if fastlane_response:
@@ -197,7 +197,7 @@ You have access to the following tools. When a user asks you to do something tha
 
         # ===== MESSAGE COMPACTION =====
         # Check if messages need compaction to fit within token limits
-        from agent.compaction import (
+        from src.agents.compaction import (
             compact_messages,
             estimate_messages_tokens,
             resolve_context_window_tokens,
@@ -209,7 +209,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Estimate current token count
         # Convert session messages to AgentMessage format
-        from agent.compaction import AgentMessage
+        from src.agents.compaction import AgentMessage
         
         agent_messages = [
             AgentMessage(

@@ -12,10 +12,10 @@ from typing import Any, Dict
 
 from aiohttp import web
 
-from agent.core import Agent as AgentCore
+from src.agents.core import Agent as AgentCore
 from config import config
-from session.manager import session_manager
-from session.usage import usage_tracker
+from src.sessions.manager import session_manager
+from src.sessions.usage import usage_tracker
 
 logger = logging.getLogger(__name__)
 
