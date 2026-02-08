@@ -23,8 +23,7 @@ from src.sessions.persistence import session_store
 from src.sessions.manager import session_manager
 from src.sessions.usage import usage_tracker
 from src.cron.mention_poller import start_polling, stop_polling, is_enabled
-from skills.git.skill import setup_ssh_key, setup_git_user
-from src.integrations.git import setup_gh_config
+from src.git.api import setup_ssh_key, setup_git_user, setup_gh_config
 from src.utils.logger import setup_logging, get_logger
 
 
@@ -137,12 +136,14 @@ async def main() -> None:
     except Exception as e:
         logger.warning(f"Failed to setup GitHub CLI | error={e}", exc_info=True)
 
+    # Initialize polling_task before gateway start
+    polling_task = None
+    
     try:
         await gateway.start()
         logger.info("Gateway server started")
         
         # Start mention polling if enabled
-        polling_task = None
         if is_enabled():
             logger.info("Starting mention polling...")
             polling_task = asyncio.create_task(start_polling())
