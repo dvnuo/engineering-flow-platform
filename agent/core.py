@@ -297,7 +297,6 @@ You have access to the following tools. When a user asks you to do something tha
             print(f"DEBUG: LLM API Call")
             print(f"  Messages count: {len(messages)}")
             print(f"  Tools count: {len(self.tools)}")
-            print(f"  Reasoning replay: {enable_reasoning}")
             print(f"  System prompt preview (first 500 chars):")
             print(f"{self.system_prompt[:500]}")
             print(f"{'='*60}\n")

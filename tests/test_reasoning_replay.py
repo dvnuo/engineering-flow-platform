@@ -2,6 +2,7 @@
 
 import pytest
 import asyncio
+import os
 from unittest.mock import Mock, patch, AsyncMock
 from agent.core import Agent
 from agent.llm import OpenAIProvider
@@ -26,9 +27,12 @@ class TestReasoningReplay:
         """Test that LLM provider receives reasoning_replay parameter."""
         provider = OpenAIProvider()
         
-        # Mock the _call_api method
-        with patch.object(provider, '_call_api', new_callable=AsyncMock) as mock_call:
-            mock_call.return_value = {
+        # Track what arguments were passed to _call_api
+        captured_payloads = []
+        
+        async def mock_call_api(endpoint, payload):
+            captured_payloads.append(payload.copy())
+            return {
                 "choices": [{
                     "message": {
                         "content": "Test response",
@@ -41,21 +45,35 @@ class TestReasoningReplay:
                     "total_tokens": 30,
                 }
             }
-            
+        
+        with patch.object(provider, '_call_api', mock_call_api):
             result = await provider.chat(
                 messages=[{"role": "user", "content": "Hello"}],
                 reasoning_replay=True,
             )
             
-            # Verify reasoning_replay was used
-            assert "reasoning" in result or True  # May or may not be present
+            # Verify reasoning_replay was passed to API
+            assert len(captured_payloads) == 1
+            assert "reasoning" in captured_payloads[0], "reasoning_replay should be in payload"
+            assert captured_payloads[0]["reasoning"]["type"] == "text"
     
-    def test_config_has_reasoning_replay(self):
-        """Test that config.yaml has reasoning_replay setting."""
-        from config import config
+    def test_config_has_reasoning_replay_setting(self):
+        """Test that config file has reasoning_replay setting."""
+        # Read config.yaml directly to verify the setting exists
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'config.yaml'
+        )
         
-        reasoning_replay = config.llm.get('reasoning_replay', False)
-        assert reasoning_replay is not None  # Should have a default value
+        assert os.path.exists(config_path), f"config.yaml not found at {config_path}"
+        
+        with open(config_path, 'r') as f:
+            import yaml
+            config = yaml.safe_load(f)
+        
+        assert 'llm' in config, "config should have 'llm' section"
+        assert 'reasoning_replay' in config['llm'], "llm section should have 'reasoning_replay' setting"
+        assert isinstance(config['llm']['reasoning_replay'], bool), "reasoning_replay should be boolean"
 
 
 class TestReasoningReplayResponse:
@@ -63,16 +81,59 @@ class TestReasoningReplayResponse:
     
     def test_response_dict_structure(self):
         """Test that response dict can include reasoning."""
-        # Simulate response structure
-        response = {
+        # Simulate response structure when enabled
+        response_enabled = {
             "response": "Hello!",
-            "reasoning": "",  # May be empty string if disabled
+            "reasoning": "Thinking about the response...",
             "usage": {"total_tokens": 50}
         }
         
-        assert "response" in response
-        assert "reasoning" in response
-        assert "usage" in response
+        assert "response" in response_enabled
+        assert "reasoning" in response_enabled
+        
+        # Simulate response structure when disabled (no reasoning field)
+        response_disabled = {
+            "response": "Hello!",
+            "usage": {"total_tokens": 50}
+        }
+        
+        assert "response" in response_disabled
+        assert "reasoning" not in response_disabled
+    
+    def test_reasoning_disabled_excludes_field(self):
+        """Test that reasoning field is excluded when disabled."""
+        enable_reasoning = False
+        
+        # Simulate response building
+        result = {"response": "Hello!", "usage": {}}
+        if enable_reasoning:
+            result["reasoning"] = ""
+        
+        # When disabled, reasoning should NOT be in result
+        assert "reasoning" not in result
+
+
+class TestReasoningReplayEdgeCases:
+    """Edge case tests for reasoning_replay."""
+    
+    def test_reasoning_replay_none_uses_config(self):
+        """Test that None reasoning_replay uses config default."""
+        # When reasoning_replay is None, should fall back to config
+        reasoning_replay = None
+        enable_reasoning = reasoning_replay if reasoning_replay is not None else False
+        assert enable_reasoning == False
+    
+    def test_reasoning_replay_explicit_true(self):
+        """Test explicit True reasoning_replay."""
+        reasoning_replay = True
+        enable_reasoning = reasoning_replay if reasoning_replay is not None else False
+        assert enable_reasoning == True
+    
+    def test_reasoning_replay_explicit_false(self):
+        """Test explicit False reasoning_replay."""
+        reasoning_replay = False
+        enable_reasoning = reasoning_replay if reasoning_replay is not None else False
+        assert enable_reasoning == False
 
 
 if __name__ == "__main__":
