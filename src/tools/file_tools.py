@@ -8,6 +8,63 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Security: Define allowed workspace directories
+# Order matters: more specific paths first
+ALLOWED_WORKSPACE_DIRS = [
+    Path.cwd().resolve(),  # Current working directory
+    Path.home() / ".efp" / "workspace",  # EFP workspace
+    Path.home() / ".efp",  # EFP base (for sessions, memory)
+    Path("/tmp"),  # Temporary files (commonly used)
+    Path.home(),  # User home directory
+]
+
+
+def _validate_path(file_path: str, allow_temp: bool = True) -> tuple[bool, str, Path]:
+    """Validate file path for security.
+    
+    Args:
+        file_path: Path to validate
+        allow_temp: Whether to allow /tmp directory
+    
+    Returns:
+        (is_valid, error_message, resolved_path)
+    """
+    if not file_path or not file_path.strip():
+        return False, "Empty path", Path(".")
+    
+    path = Path(file_path)
+    
+    # Resolve to absolute path
+    try:
+        resolved = path.resolve()
+    except (OSError, ValueError) as e:
+        return False, f"Invalid path: {e}", path
+    
+    # Check path traversal attempts
+    if ".." in Path(file_path).parts:
+        return False, "Path traversal not allowed (..)", resolved
+    
+    # Build allowed dirs list based on context
+    allowed_dirs = ALLOWED_WORKSPACE_DIRS.copy()
+    if not allow_temp:
+        # Remove /tmp if not allowed in this context
+        allowed_dirs = [d for d in allowed_dirs if str(d) != "/tmp"]
+    
+    # Check if path is within allowed directories
+    is_allowed = False
+    for allowed_dir in allowed_dirs:
+        try:
+            resolved.relative_to(allowed_dir.resolve())
+            is_allowed = True
+            break
+        except ValueError:
+            continue
+    
+    if not is_allowed:
+        return False, f"Path outside allowed workspace: {file_path}", resolved
+    
+    return True, "", resolved
+
 
 def read(file_path: str, limit: Optional[int] = None, offset: Optional[int] = None) -> str:
     """Read file contents.
@@ -20,14 +77,17 @@ def read(file_path: str, limit: Optional[int] = None, offset: Optional[int] = No
     Returns:
         File contents as string
     """
-    path = Path(file_path)
+    # Validate path
+    is_valid, error, resolved_path = _validate_path(file_path)
+    if not is_valid:
+        return f"Error: {error}"
     
-    # Security: Validate path
-    if not path.is_file():
+    # Security: Check if file exists and is file
+    if not resolved_path.is_file():
         return f"Error: File not found: {file_path}"
     
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(resolved_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         
         # Handle offset (convert from 1-indexed to 0-indexed)
@@ -45,9 +105,9 @@ def read(file_path: str, limit: Optional[int] = None, offset: Optional[int] = No
         
         # Add metadata header
         line_count = len(lines)
-        total_lines = len(open(path, 'r').readlines())
+        total_lines = len(open(resolved_path, 'r').readlines())
         
-        header = f"File: {file_path}\nLines: {start + 1}-{start + line_count} of {total_lines}\n\n"
+        header = f"File: {resolved_path}\nLines: {start + 1}-{start + line_count} of {total_lines}\n\n"
         return header + content
         
     except UnicodeDecodeError:
@@ -68,20 +128,20 @@ def write(file_path: str, content: str) -> str:
     Returns:
         Success or error message
     """
-    path = Path(file_path)
-    
-    # Security: Prevent path traversal
-    # For now, allow absolute paths and paths in workspace
+    # Validate path
+    is_valid, error, resolved_path = _validate_path(file_path)
+    if not is_valid:
+        return f"Error: {error}"
     
     try:
         # Create parent directories if needed
-        path.parent.mkdir(parents=True, exist_ok=True)
+        resolved_path.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(resolved_path, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        logger.info(f"File written: {file_path}")
-        return f"✅ File written: {file_path}"
+        logger.info(f"File written: {resolved_path}")
+        return f"✅ File written: {resolved_path}"
         
     except PermissionError:
         return f"Error: Permission denied: {file_path}"
@@ -100,25 +160,28 @@ def edit(file_path: str, oldText: str, newText: str) -> str:
     Returns:
         Success or error message
     """
-    path = Path(file_path)
+    # Validate path
+    is_valid, error, resolved_path = _validate_path(file_path)
+    if not is_valid:
+        return f"Error: {error}"
     
-    if not path.is_file():
+    if not resolved_path.is_file():
         return f"Error: File not found: {file_path}"
     
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(resolved_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
         if oldText not in content:
-            return f"Error: Text not found in file: {oldText}"
+            return f"Error: Text not found in file"
         
         new_content = content.replace(oldText, newText)
         
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(resolved_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
         
-        logger.info(f"File edited: {file_path}")
-        return f"✅ File edited: {file_path}"
+        logger.info(f"File edited: {resolved_path}")
+        return f"✅ File edited: {resolved_path}"
         
     except PermissionError:
         return f"Error: Permission denied: {file_path}"
@@ -135,14 +198,17 @@ def list_dir(path: str = ".") -> str:
     Returns:
         Directory listing
     """
-    dir_path = Path(path)
+    # Validate path
+    is_valid, error, resolved_path = _validate_path(path)
+    if not is_valid:
+        return f"Error: {error}"
     
-    if not dir_path.is_dir():
+    if not resolved_path.is_dir():
         return f"Error: Directory not found: {path}"
     
     try:
         items = []
-        for item in sorted(dir_path.iterdir()):
+        for item in sorted(resolved_path.iterdir()):
             if item.is_dir():
                 items.append(f"📁 {item.name}/")
             else:
@@ -151,7 +217,7 @@ def list_dir(path: str = ".") -> str:
         if not items:
             return f"Directory is empty: {path}"
         
-        return f"Directory: {path}\n\n" + "\n".join(items)
+        return f"Directory: {resolved_path}\n\n" + "\n".join(items)
         
     except PermissionError:
         return f"Error: Permission denied: {path}"
