@@ -1,30 +1,28 @@
-"""Tools module - File operations and shell execution tools."""
+"""Tools module - File operations and shell execution tools.
 
-from .file_tools import (
+遵循项目命名规范:
+- api.py 包含所有工具实现
+- __init__.py 导出工具函数
+"""
+
+from .api import (
     read,
     write,
     edit,
     list_dir,
-    get_tools_schemas as get_file_tools_schemas,
-)
-
-from .exec_tools import (
     exec,
     exec_sync,
-    get_tools_schemas as get_exec_tools_schemas,
+    get_tools_schemas,
 )
 
 
 def get_all_tools() -> list:
     """Get all tool schemas."""
-    schemas = []
-    schemas.extend(get_file_tools_schemas())
-    schemas.extend(get_exec_tools_schemas())
-    return schemas
+    return get_tools_schemas()
 
 
 def execute_tool(name: str, **kwargs) -> str:
-    """Execute a tool by name (sync version for simple cases)."""
+    """Execute a tool by name (sync version)."""
     if name == "read":
         return read(kwargs.get("file_path", ""), kwargs.get("limit"), kwargs.get("offset"))
     
@@ -53,13 +51,12 @@ def execute_tool(name: str, **kwargs) -> str:
 
 __all__ = [
     "read",
-    "write", 
+    "write",
     "edit",
     "list_dir",
     "exec",
     "exec_sync",
     "get_all_tools",
-    "get_file_tools_schemas",
-    "get_exec_tools_schemas",
+    "get_tools_schemas",
     "execute_tool",
 ]
