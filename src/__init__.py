@@ -1,7 +1,8 @@
 """
-Tools - Unified tool exports for Engineering Flow Platform.
+Bash Tools - Shell execution and file operations.
 
-This module exports all tools from src/tools/* for agent use.
+Bash tools with security controls, inspired by OpenClaw:
+https://github.com/openclaw/openclaw/tree/main/src/agents
 """
 
 from typing import Any, Dict, List, Optional
