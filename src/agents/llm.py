@@ -8,9 +8,9 @@ Providers:
 - Ollama (Local)
 
 Debug Logging:
-- Set DEBUG_LLM=true to enable debug logging
-- Set DEBUG_LLM=full for complete input/output (no truncation)
+- Enable with log_level: DEBUG in config.yaml
 - Logs: LLM requests, responses, reasoning, tool calls
+- Complete input/output when debug is enabled (no truncation)
 """
 
 import asyncio
@@ -25,29 +25,19 @@ from src.config import config
 
 logger = logging.getLogger(__name__)
 
-# Debug mode flag - enable with DEBUG_LLM=true or DEBUG_LLM=full
-_DEBUG_MODE = os.environ.get("DEBUG_LLM", "").lower()
-_VALID_DEBUG_VALUES = ("1", "true", "yes", "full")
-if _DEBUG_MODE and _DEBUG_MODE not in _VALID_DEBUG_VALUES:
-    import warnings
-    warnings.warn(
-        f"Invalid DEBUG_LLM value: '{_DEBUG_MODE}'. Valid values: {_VALID_DEBUG_VALUES}. Debug disabled.",
-        UserWarning
-    )
-    _DEBUG_MODE = ""
-
-DEBUG_FULL_OUTPUT = _DEBUG_MODE == "full"
-_DEBUG_ENABLED = _DEBUG_MODE in ("1", "true", "yes", "full")
-
+# Debug logging is enabled when logger.level is DEBUG
+# Set log_level: DEBUG in config.yaml or use --debug flag
+# When DEBUG, complete input/output is logged (no truncation)
 
 def _is_debug_enabled() -> bool:
-    """Check if debug mode is enabled."""
-    return _DEBUG_ENABLED or logger.isEnabledFor(logging.DEBUG)
+    """Check if debug mode is enabled (logger is DEBUG level)."""
+    return logger.isEnabledFor(logging.DEBUG)
 
 
 def _is_full_output() -> bool:
-    """Check if full output mode is enabled (no truncation)."""
-    return DEBUG_FULL_OUTPUT
+    """Check if full output mode is enabled.
+    Always true when debug is enabled - we want complete logs for debugging."""
+    return _is_debug_enabled()
 
 
 def _log_request(component: str, url: str, method: str = "POST", headers: Dict = None, payload: Dict = None):
@@ -64,15 +54,13 @@ def _log_request(component: str, url: str, method: str = "POST", headers: Dict =
 
 
 def _log_response(component: str, status: int, body: Any = None):
-    """Log response with consistent format. Only formats if debug is enabled."""
-    if not _DEBUG_ENABLED:
+    """Log response with consistent format. Only logs if debug is enabled."""
+    if not _is_debug_enabled():
         return
     logger.debug(f"=== [{component}] RESPONSE ===")
     logger.debug(f"Status: {status}")
     if body:
         body_str = json.dumps(body, indent=2, default=str) if isinstance(body, (dict, list)) else str(body)
-        if not DEBUG_FULL_OUTPUT and len(body_str) > 1000:
-            body_str = body_str[:1000] + f"... [{len(body_str) - 1000} chars truncated]"
         logger.debug(f"Body: {body_str}")
 
 
@@ -88,8 +76,8 @@ def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
 
 
 def _truncate_text(text: str, max_length: int = 500) -> str:
-    """Truncate text for logging. Returns full text if DEBUG_LLM=full."""
-    if DEBUG_FULL_OUTPUT or len(text) <= max_length:
+    """Truncate text for logging. When debug is enabled, returns full text."""
+    if _is_debug_enabled() or len(text) <= max_length:
         return text
     return text[:max_length] + f"... [{len(text) - max_length} chars truncated]"
 
@@ -356,6 +344,12 @@ class GitHubCopilotProvider(BaseProvider):
         if tools:
             payload["tools"] = tools
         
+        # Debug: Log request
+        if _is_debug_enabled():
+            logger.debug(f"=== [{self.name.upper()}] REQUEST ===")
+            logger.debug(f"Model: {payload['model']}")
+            logger.debug(f"Messages count: {len(all_messages)}")
+        
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 f"{self.api_base}/chat/completions",
@@ -364,6 +358,11 @@ class GitHubCopilotProvider(BaseProvider):
             )
             response.raise_for_status()
             data = response.json()
+        
+        # Debug: Log response
+        if _is_debug_enabled():
+            logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
+            logger.debug(f"Status: {response.status_code}")
         
         # Parse response - check for tool calls and reasoning
         message_data = data.get("choices", [{}])[0].get("message", {})
@@ -447,6 +446,12 @@ class ClaudeProvider(BaseProvider):
         if tools:
             payload["tools"] = self._convert_tools_to_claude(tools)
         
+        # Debug: Log request
+        if _is_debug_enabled():
+            logger.debug(f"=== [{self.name.upper()}] REQUEST ===")
+            logger.debug(f"Model: {payload['model']}")
+            logger.debug(f"Messages count: {len(all_messages)}")
+        
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 f"{self.api_base}/messages",
@@ -455,6 +460,11 @@ class ClaudeProvider(BaseProvider):
             )
             response.raise_for_status()
             data = response.json()
+        
+        # Debug: Log response
+        if _is_debug_enabled():
+            logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
+            logger.debug(f"Status: {response.status_code}")
         
         return self._parse_response(data)
     

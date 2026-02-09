@@ -22,31 +22,26 @@ from src.agents.executor import (
 
 logger = logging.getLogger(__name__)
 
-# Debug mode: set DEBUG_AGENT=true or DEBUG_AGENT=full for complete output
-_DEBUG_MODE = os.environ.get("DEBUG_AGENT", "").lower()
-_VALID_DEBUG_VALUES = ("1", "true", "yes", "full")
-if _DEBUG_MODE and _DEBUG_MODE not in _VALID_DEBUG_VALUES:
-    import warnings
-    warnings.warn(
-        f"Invalid DEBUG_AGENT value: '{_DEBUG_MODE}'. Valid values: {_VALID_DEBUG_VALUES}. Debug disabled.",
-        UserWarning
-    )
-    _DEBUG_MODE = ""
+# Debug logging is enabled when logger.level is DEBUG
+# Set log_level: DEBUG in config.yaml to enable
+# When DEBUG, complete input/output is logged (no truncation)
 
-DEBUG_FULL_OUTPUT = _DEBUG_MODE == "full"
-_DEBUG_ENABLED = _DEBUG_MODE in ("1", "true", "yes", "full")
+_DEBUG_ENABLED = None  # Lazy initialization
 
 
-def _should_truncate(max_length: int = 500) -> bool:
-    """Check if output should be truncated."""
-    return not DEBUG_FULL_OUTPUT
+def _is_debug_enabled() -> bool:
+    """Check if debug mode is enabled (logger is DEBUG level)."""
+    global _DEBUG_ENABLED
+    if _DEBUG_ENABLED is None:
+        _DEBUG_ENABLED = logger.isEnabledFor(logging.DEBUG)
+    return _DEBUG_ENABLED
 
 
 def _format_content(content: str, prefix: str = "", max_length: int = 500) -> str:
-    """Format content for logging, with optional truncation."""
+    """Format content for logging. Full content when debug is enabled."""
     if not content:
         return f"{prefix}(empty)"
-    if _should_truncate(max_length) and len(content) > max_length:
+    if not _is_debug_enabled() and len(content) > max_length:
         return f"{prefix}{content[:max_length]}... [{len(content) - max_length} chars truncated]"
     return f"{prefix}{content}"
 
@@ -283,7 +278,7 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== END MESSAGE COMPACTION =====
 
         # Debug logging for message received
-        if _DEBUG_ENABLED:
+        if _is_debug_enabled():
             logger.debug(f"=== [AGENT] MESSAGE RECEIVED ===")
             logger.debug(f"Session: {session_id}")
             logger.debug(f"User: {user_name}")
@@ -314,7 +309,7 @@ You have access to the following tools. When a user asks you to do something tha
         )
         
         # Debug logging for LLM response
-        if _DEBUG_ENABLED:
+        if _is_debug_enabled():
             logger.debug(f"=== [AGENT] LLM RESPONSE ===")
             content = llm_result.get('content') or ''
             logger.debug(f"Content length: {len(content)} chars")
@@ -382,7 +377,7 @@ You have access to the following tools. When a user asks you to do something tha
             tool_result = await execute_tool_by_name(tool_name, **args)
             
             # Debug logging for tool result
-            if _DEBUG_ENABLED:
+            if _is_debug_enabled():
                 logger.debug(f"=== [AGENT] TOOL RESULT ===")
                 logger.debug(f"Tool: {tool_name}")
                 logger.debug(f"Success: {tool_result.success}")
@@ -407,7 +402,7 @@ You have access to the following tools. When a user asks you to do something tha
         final_content = (final_result.get("content") or "").strip()
         
         # Debug logging for final response
-        if _DEBUG_ENABLED:
+        if _is_debug_enabled():
             logger.debug(f"=== [AGENT] FINAL RESPONSE ===")
             logger.debug(f"Content length: {len(final_content)} chars")
             logger.debug(f"Content: {_format_content(final_content, max_length=1000)}")
