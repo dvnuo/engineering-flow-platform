@@ -164,7 +164,7 @@ class SessionManager:
         
         logger.debug(f"Evicted oldest session: {oldest_key}")
     
-    def get_session(self, session_id: str) -> Dict[str, Any]:
+    async def get_session(self, session_id: str) -> Dict[str, Any]:
         """Get or create a session."""
         # Check if session exists and is valid
         if session_id in self.sessions and self._is_valid_session(session_id):
@@ -173,14 +173,12 @@ class SessionManager:
         
         # Check persistence if enabled
         if self.persistence_enabled and session_id not in self.sessions:
-            persisted = asyncio.run_coroutine_threadsafe(
-                session_persistence.load_session(session_id),
-                asyncio.get_event_loop()
-            ).result()
+            persisted = await session_persistence.load_session(session_id)
             
             if persisted:
                 self.sessions[session_id] = {
                     "history": persisted.get("messages", []),
+                    "user_id": persisted.get("user_id", ""),
                     "channel": persisted.get("channel", ""),
                     "metadata": persisted.get("metadata", {}),
                     "created_at": persisted.get("created_at", datetime.now().isoformat()),
@@ -195,6 +193,7 @@ class SessionManager:
         
         self.sessions[session_id] = {
             "history": [],
+            "user_id": "",
             "channel": "",
             "metadata": {},
             "created_at": datetime.now().isoformat(),
@@ -205,9 +204,9 @@ class SessionManager:
         
         return self.sessions[session_id]
     
-    def add_message(self, session_id: str, role: str, content: str) -> None:
+    async def add_message(self, session_id: str, role: str, content: str) -> None:
         """Add a message to the session history."""
-        session = self.get_session(session_id)
+        session = await self.get_session(session_id)
         message = {
             "role": role,
             "content": content,
@@ -231,12 +230,12 @@ class SessionManager:
                 )
             )
     
-    def get_history(self, session_id: str) -> List[Dict[str, str]]:
+    async def get_history(self, session_id: str) -> List[Dict[str, str]]:
         """Get conversation history for a session."""
-        session = self.get_session(session_id)
+        session = await self.get_session(session_id)
         return session.get("history", [])
     
-    def clear_history(self, session_id: str) -> None:
+    async def clear_history(self, session_id: str) -> None:
         """Clear session history."""
         if session_id in self.sessions:
             self.sessions[session_id]["history"] = []
@@ -247,11 +246,11 @@ class SessionManager:
                     session_persistence.delete_session(session_id)
                 )
     
-    def list_sessions(self) -> List[str]:
+    async def list_sessions(self) -> List[str]:
         """List all active session IDs."""
         return list(self.sessions.keys())
     
-    def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
+    async def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get session metadata (without full history)."""
         if session_id not in self.sessions:
             return None

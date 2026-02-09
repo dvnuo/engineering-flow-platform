@@ -194,10 +194,10 @@ You have access to the following tools. When a user asks you to do something tha
         usage_data = {}
         
         # Add user message to history
-        session_manager.add_message(session_id, "user", message)
+        await session_manager.add_message(session_id, "user", message)
 
         # Get conversation history
-        messages = session_manager.get_history(session_id)
+        messages = await session_manager.get_history(session_id)
 
         # ===== FAST LANE COMMANDS =====
         from src.agents.fastlane import process_fastlane_command
@@ -205,7 +205,7 @@ You have access to the following tools. When a user asks you to do something tha
         fastlane_response = await process_fastlane_command(message, self)
         if fastlane_response:
             # Fast lane command processed, return the response
-            session_manager.add_message(session_id, "assistant", fastlane_response)
+            await session_manager.add_message(session_id, "assistant", fastlane_response)
             return {"response": fastlane_response, "usage": usage_data}
         # ===== END FAST LANE =====
 
@@ -425,7 +425,7 @@ You have access to the following tools. When a user asks you to do something tha
                 usage_data = final_usage
         
         # Add final response to history
-        session_manager.add_message(session_id, "assistant", final_content)
+        await session_manager.add_message(session_id, "assistant", final_content)
         
         # Return response with reasoning if enabled
         result = {"response": final_content, "usage": usage_data}
@@ -496,13 +496,13 @@ You have access to the following tools. When a user asks you to do something tha
         result = await self.process(full_message, context.get("session_id", "default"))
         return result["response"]
 
-    def clear_session(self, session_id: str) -> None:
+    async def clear_session(self, session_id: str) -> None:
         """Clear a session's history."""
-        session_manager.clear_history(session_id)
+        await session_manager.clear_history(session_id)
 
-    def get_session_info(self, session_id: str) -> Dict[str, any]:
+    async def get_session_info(self, session_id: str) -> Dict[str, any]:
         """Get information about a session."""
-        info = session_manager.get_session_info(session_id)
+        info = await session_manager.get_session_info(session_id)
         return info or {"error": "Session not found"}
 
 

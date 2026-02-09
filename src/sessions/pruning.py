@@ -34,7 +34,7 @@ class SessionPruner:
         Returns:
             Dict with pruned_count, preserved_count, messages_remaining
         """
-        session = session_manager.get_session(session_id)
+        session = await session_manager.get_session(session_id)
         history = session.get("history", [])
         
         if len(history) <= self.config["max_messages"]:
@@ -82,9 +82,9 @@ class SessionPruner:
             "preserved_tool": len(recent_tool),
         }
     
-    def should_prune(self, session_id: str) -> bool:
+    async def should_prune(self, session_id: str) -> bool:
         """Check if a session should be pruned."""
-        session = session_manager.get_session(session_id)
+        session = await session_manager.get_session(session_id)
         history = session.get("history", [])
         return len(history) > self.config["max_messages"]
 
@@ -109,7 +109,7 @@ class SessionCompactor:
         Returns:
             Dict with compact success status and new summary
         """
-        session = session_manager.get_session(session_id)
+        session = await session_manager.get_session(session_id)
         history = session.get("history", [])
         
         if len(history) <= 10:

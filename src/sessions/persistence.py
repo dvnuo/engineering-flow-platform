@@ -7,9 +7,32 @@ import asyncio
 import json
 import os
 import time
+from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
+
+
+@dataclass
+class SessionRecord:
+    """Session record stored in JSONL format."""
+    session_id: str
+    user_id: str
+    channel: str
+    messages: List[Dict[str, Any]]
+    metadata: Dict[str, Any]
+    created_at: str
+    updated_at: str
+    expires_at: Optional[str] = None
+    
+    def to_json(self) -> str:
+        """Convert to JSON string for storage."""
+        return json.dumps(asdict(self), ensure_ascii=False)
+    
+    @classmethod
+    def from_json(cls, line: str) -> "SessionRecord":
+        """Create from JSON string."""
+        return cls(**json.loads(line))
 
 
 class SessionPersistence:

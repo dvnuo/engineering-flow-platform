@@ -166,7 +166,7 @@ async def api_chat(request: web.Request) -> web.Response:
 async def api_sessions(request: web.Request) -> web.Response:
     """List active sessions."""
     try:
-        sessions = session_manager.list_sessions()
+        sessions = await session_manager.list_sessions()
         return web.json_response({'sessions': sessions})
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
@@ -196,7 +196,7 @@ async def api_clear(request: web.Request) -> web.Response:
         data = await request.json()
         session_id = data.get('session_id', 'webchat')
         
-        session_manager.clear_history(session_id)
+        await session_manager.clear_history(session_id)
         
         return web.json_response({'success': True})
     except Exception as e:

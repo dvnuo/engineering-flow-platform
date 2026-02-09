@@ -232,7 +232,7 @@ class Gateway:
     async def handle_list_sessions(self, request: Request) -> web.Response:
         """List all active sessions."""
         from src.sessions.manager import session_manager
-        sessions = session_manager.list_sessions()
+        sessions = await session_manager.list_sessions()
         return web.json_response({"sessions": sessions, "count": len(sessions)})
 
     async def handle_clear_session(self, request: Request) -> web.Response:
@@ -241,7 +241,7 @@ class Gateway:
         session_id = request.match_info.get("session_id", "")
 
         if session_id:
-            session_manager.clear_history(session_id)
+            await session_manager.clear_history(session_id)
             return web.json_response({"status": "cleared", "session_id": session_id})
         else:
             return web.json_response({"status": "error", "message": "session_id required"}, status=400)
