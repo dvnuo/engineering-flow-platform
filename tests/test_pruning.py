@@ -21,22 +21,22 @@ class TestSessionPruner:
         })
     
     @pytest.fixture
-    def populated_session(self):
+    async def populated_session(self):
         """Create a session with test data."""
         session_id = "test-prune-session"
-        session_manager.clear_history(session_id)
+        await session_manager.clear_history(session_id)
         
         # Add system message
-        session_manager.add_message(session_id, "system", "You are a helpful assistant.")
+        await session_manager.add_message(session_id, "system", "You are a helpful assistant.")
         
         # Add many user/assistant messages
         for i in range(25):
-            session_manager.add_message(session_id, "user", f"User message {i}")
-            session_manager.add_message(session_id, "assistant", f"Assistant response {i}")
+            await session_manager.add_message(session_id, "user", f"User message {i}")
+            await session_manager.add_message(session_id, "assistant", f"Assistant response {i}")
         
         # Add some tool messages
         for i in range(8):
-            session_manager.add_message(
+            await session_manager.add_message(
                 session_id, 
                 "tool", 
                 f'{{"tool": "test_tool", "result": "result {i}"}}'
@@ -44,17 +44,19 @@ class TestSessionPruner:
         
         return session_id
     
-    def test_should_prune_small_session(self, pruner):
+    @pytest.mark.asyncio
+    async def test_should_prune_small_session(self, pruner):
         """Test that small sessions are not pruned."""
         session_id = "small-session-test"
-        session_manager.clear_history(session_id)
-        session_manager.add_message(session_id, "user", "Hello")
+        await session_manager.clear_history(session_id)
+        await session_manager.add_message(session_id, "user", "Hello")
         
-        assert pruner.should_prune(session_id) is False
+        assert await pruner.should_prune(session_id) is False
     
-    def test_should_prune_large_session(self, pruner, populated_session):
+    @pytest.mark.asyncio
+    async def test_should_prune_large_session(self, pruner, populated_session):
         """Test that large sessions are pruned."""
-        assert pruner.should_prune(populated_session) is True
+        assert await pruner.should_prune(populated_session) is True
     
     @pytest.mark.asyncio
     async def test_prune_preserves_recent(self, pruner, populated_session):
@@ -65,7 +67,7 @@ class TestSessionPruner:
         assert result["remaining_count"] <= 10
         
         # Check recent messages are preserved
-        session = session_manager.get_session(populated_session)
+        session = await session_manager.get_session(populated_session)
         history = session["history"]
         
         # Last messages should be the most recent ones
@@ -75,7 +77,7 @@ class TestSessionPruner:
     @pytest.mark.asyncio
     async def test_prune_counts(self, pruner, populated_session):
         """Test pruning statistics."""
-        session = session_manager.get_session(populated_session)
+        session = await session_manager.get_session(populated_session)
         original_count = len(session["history"])
         
         result = await pruner.prune(populated_session)
@@ -89,8 +91,8 @@ class TestSessionPruner:
     async def test_prune_no_op_for_small(self, pruner):
         """Test that pruning small sessions does nothing."""
         session_id = "small-prune-test"
-        session_manager.clear_history(session_id)
-        session_manager.add_message(session_id, "user", "Hello")
+        await session_manager.clear_history(session_id)
+        await session_manager.add_message(session_id, "user", "Hello")
         
         result = await pruner.prune(session_id)
         
@@ -107,14 +109,14 @@ class TestSessionCompactor:
         return SessionCompactor()
     
     @pytest.fixture
-    def long_session(self):
+    async def long_session(self):
         """Create a session with many messages."""
         session_id = "test-compact-session"
-        session_manager.clear_history(session_id)
+        await session_manager.clear_history(session_id)
         
         for i in range(20):
-            session_manager.add_message(session_id, "user", f"User message {i}")
-            session_manager.add_message(session_id, "assistant", f"Assistant response {i}")
+            await session_manager.add_message(session_id, "user", f"User message {i}")
+            await session_manager.add_message(session_id, "assistant", f"Assistant response {i}")
         
         return session_id
     
@@ -122,8 +124,8 @@ class TestSessionCompactor:
     async def test_compact_short_session(self, compactor):
         """Test that short sessions are not compacted."""
         session_id = "short-compact-test"
-        session_manager.clear_history(session_id)
-        session_manager.add_message(session_id, "user", "Hello")
+        await session_manager.clear_history(session_id)
+        await session_manager.add_message(session_id, "user", "Hello")
         
         result = await compactor.compact(session_id)
         
@@ -140,7 +142,7 @@ class TestSessionCompactor:
         assert "summary_length" in result
         
         # Check summary message was added
-        session = session_manager.get_session(long_session)
+        session = await session_manager.get_session(long_session)
         history = session["history"]
         
         # First message should be the summary
@@ -152,7 +154,7 @@ class TestSessionCompactor:
         """Test that recent messages are preserved after compaction."""
         await compactor.compact(long_session)
         
-        session = session_manager.get_session(long_session)
+        session = await session_manager.get_session(long_session)
         history = session["history"]
         
         # Last messages should be recent ones
@@ -170,20 +172,20 @@ class TestSessionPruningIntegration:
         from src.sessions.pruning import session_pruner
         
         session_id = "integration-test-session"
-        session_manager.clear_history(session_id)
+        await session_manager.clear_history(session_id)
         
         # Add many messages
         for i in range(30):
-            session_manager.add_message(session_id, "user", f"Message {i}")
+            await session_manager.add_message(session_id, "user", f"Message {i}")
         
         # Get count before prune
-        before = len(session_manager.get_history(session_id))
+        before = len(await session_manager.get_history(session_id))
         
         # Prune
         result = await session_pruner.prune(session_id)
         
         # Verify
-        after = len(session_manager.get_history(session_id))
+        after = len(await session_manager.get_history(session_id))
         
         assert result["pruned"] is True
         assert after < before

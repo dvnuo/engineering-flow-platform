@@ -19,7 +19,7 @@ if str(script_dir) not in sys.path:
 
 from src.gateway.server import gateway
 from src.config import config
-from src.sessions.persistence import session_store
+from src.sessions.persistence import session_persistence
 from src.sessions.manager import session_manager
 from src.sessions.usage import usage_tracker
 from src.cron.mention_poller import start_polling, stop_polling, is_enabled
@@ -96,7 +96,7 @@ async def main() -> None:
     # Initialize session store and usage tracker
     try:
         # Directory already created in __init__
-        logger.info(f"Session store initialized | path={session_store.base_path}")
+        logger.info(f"Session store initialized | path={session_persistence.storage_dir}")
         logger.info(f"Usage tracker initialized | path={usage_tracker.base_path}")
         await session_manager.initialize()
         logger.info("Session manager initialized successfully")
