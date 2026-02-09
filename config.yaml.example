@@ -302,3 +302,44 @@ debug:
 # - LLM requests: Model name, messages, tools
 # - LLM responses: Content, reasoning, tool calls, usage
 # - Agent processing: Messages, tool execution, final responses
+
+# ============================================
+# Bash/Shell Tools Configuration
+# ============================================
+# Security settings for shell command execution
+# Includes file operations (read, write, edit, list_dir) and exec
+
+bash_tools:
+  # Security mode for command execution
+  # - deny: Block all commands by default (safest)
+  # - allowlist: Only allow commands in safe_bins and allowlist
+  # - full: Allow all commands (use with caution)
+  security: "deny"
+
+  # Approval mode for commands
+  # - off: No approval needed
+  # - on-miss: Request approval when command not in allowlist
+  # - always: Always request approval
+  ask: "on-miss"
+
+  # Safe binaries - always allowed in allowlist mode
+  safe_bins:
+    - "jq"
+    - "grep"
+    - "cut"
+    - "sort"
+    - "uniq"
+    - "head"
+    - "tail"
+    - "tr"
+    - "wc"
+
+  # Command allowlist patterns (full paths or globs)
+  # allowlist:
+  #   - "/usr/bin/git"
+  #   - "/usr/bin/ls"
+  #   - "/usr/local/bin/python3"
+
+  # Block dangerous environment variables
+  # These are blocked by default (no need to configure):
+  # LD_PRELOAD, NODE_OPTIONS, PYTHONPATH, BASH_ENV, etc.
