@@ -22,6 +22,16 @@ from .api import (
     reset_security_config,
 )
 
+from .exec_security import (
+    ExecSecurity,
+    ExecAsk,
+    ExecSecurityConfig,
+    ExecAllowlistEntry,
+    DEFAULT_SAFE_BINS,
+    DANGEROUS_ENV_VARS,
+    DANGEROUS_ENV_PREFIXES,
+)
+
 
 def get_all_tools() -> list:
     """Get all tool schemas."""
@@ -80,4 +90,12 @@ __all__ = [
     "set_security_config",
     "get_security_config",
     "reset_security_config",
+    # Security types
+    "ExecSecurity",
+    "ExecAsk",
+    "ExecSecurityConfig",
+    "ExecAllowlistEntry",
+    "DEFAULT_SAFE_BINS",
+    "DANGEROUS_ENV_VARS",
+    "DANGEROUS_ENV_PREFIXES",
 ]
