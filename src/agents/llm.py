@@ -613,6 +613,12 @@ class OllamaProvider(BaseProvider):
                 })
             payload["tools"] = ollama_tools
         
+        # Debug: Log request
+        if _is_debug_enabled():
+            logger.debug(f"=== [{self.name.upper()}] REQUEST ===")
+            logger.debug(f"Model: {payload['model']}")
+            logger.debug(f"Messages count: {len(full_messages)}")
+        
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
@@ -622,6 +628,9 @@ class OllamaProvider(BaseProvider):
                 response.raise_for_status()
                 data = response.json()
         except httpx.ConnectError:
+            if _is_debug_enabled():
+                logger.debug(f"=== [{self.name.upper()}] ERROR ===")
+                logger.debug("Ollama not running. Start with: ollama serve")
             return {
                 "content": "",
                 "tool_calls": [],
@@ -629,7 +638,26 @@ class OllamaProvider(BaseProvider):
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             }
         
-        return self._parse_response(data)
+        # Debug: Log response
+        if _is_debug_enabled():
+            logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
+            logger.debug(f"Status: {response.status_code}")
+        
+        # Parse and log result
+        result = self._parse_response(data)
+        
+        # Debug: Log content and tool calls
+        if _is_debug_enabled():
+            content = result.get("content", "")
+            tool_calls = result.get("tool_calls", [])
+            logger.debug(f"Content length: {len(content)} chars")
+            logger.debug(f"Content preview: {_truncate_text(content, 200)}")
+            logger.debug(f"Tool calls: {len(tool_calls)}")
+            for tc in tool_calls:
+                tc_name = tc.get("function", {}).get("name", "unknown")
+                logger.debug(f"  - {tc_name}")
+        
+        return result
     
     def _parse_response(self, data: Dict) -> Dict[str, Any]:
         """Parse Ollama response with reasoning support."""
