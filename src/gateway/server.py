@@ -116,7 +116,7 @@ class Gateway:
     def __init__(self):
         self.mode = config.discord.get("mode", "bot")  # 'bot' or 'webhook'
         self.jira_enabled = config.jira.get("enabled", False)
-        self.discord_enabled = config.discord.get("enabled", True)  # Discord is optional
+        self.discord_enabled = config.discord.get("enabled", False)  # Discord is optional by default
         self.host = config.server.get("host", "0.0.0.0")
         self.port = config.server.get("port", 8000)
         self.app = web.Application()
