@@ -55,9 +55,6 @@ llm:
 # ============================================
 # Session Configuration (OPTIONAL)
 # ============================================
-# ============================================
-# Session Configuration (OPTIONAL)
-# ============================================
 # Session persistence and caching settings
 session:
   # In-memory session settings
