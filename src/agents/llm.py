@@ -90,12 +90,15 @@ def _truncate_text(text: str, max_length: int = 200) -> str:
     return text
 
 
+class BaseProvider:
+    """Base class for LLM providers."""
+
     def __init__(self, name: str, api_base: str, api_key_env: str = ''):
         self.name = name
         self.api_base = api_base
         self.api_key_env = api_key_env
         self.timeout = 120.0
-    
+
     def _get_headers(self) -> Dict[str, str]:
         """Get request headers."""
         api_key = os.environ.get(self.api_key_env) if self.api_key_env else ''
@@ -105,26 +108,26 @@ def _truncate_text(text: str, max_length: int = 200) -> str:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-    
+
     async def chat(self, **kwargs) -> Dict[str, Any]:
         raise NotImplementedError
-    
+
     def list_models(self) -> List[str]:
         return []
-    
+
     async def _call_api(self, endpoint: str, payload: Dict) -> Dict:
         """Make API call with retry logic and debug logging."""
         headers = self._get_headers()
         url = f"{self.api_base}{endpoint}"
-        
+
         # Debug: Log request
         if _is_debug_enabled():
             _log_request("LLM", url, "POST", headers, payload)
-        
+
         last_error = None
         max_retries = config.llm.get('max_retries', 3)
         retry_delay = config.llm.get('retry_delay', 1)
-        
+
         for attempt in range(max_retries):
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -133,33 +136,33 @@ def _truncate_text(text: str, max_length: int = 200) -> str:
                         headers=headers,
                         json=payload
                     )
-                    
+
                     # Debug: Log response
                     if _is_debug_enabled():
                         _log_response("LLM", response.status_code, response.headers)
-                    
+
                     response.raise_for_status()
                     result = response.json()
-                    
+
                     # Debug: Log response body (truncated)
                     if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
                         result_str = json.dumps(result, indent=2, default=str)
                         logger.debug(f"Body: {_truncate_text(result_str, 1000)}")
-                    
+
                     return result
-                    
+
             except (httpx.HTTPStatusError, httpx.RequestError) as e:
                 last_error = e
                 if _is_debug_enabled():
                     logger.debug(f"=== [LLM] ERROR ===")
                     logger.debug(f"Attempt: {attempt + 1}/{max_retries}")
                     logger.debug(f"Error: {type(e).__name__}: {e}")
-                
+
                 if attempt < max_retries - 1:
                     delay = retry_delay * (2 ** attempt)
                     logger.warning(f"API error, retrying in {delay}s: {e}")
                     await asyncio.sleep(delay)
-        
+
         raise last_error
 
 
