@@ -118,7 +118,9 @@ __all__ = [
 async def execute_tool(name: str, **kwargs) -> ToolResult:
     """Execute a tool by name."""
     from . import git as git_module
+    from . import jira as jira_module
     
+    # Git tools
     if name == "git_status":
         workspace = kwargs.get("workspace", ".")
         result = await git_module.git_status(workspace)
@@ -139,6 +141,24 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         repo_url = kwargs.get("repo_url", "")
         workspace = kwargs.get("workspace", ".")
         result = await git_module.git_clone(repo_url, workspace)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    # Jira tools
+    elif name == "jira_get_issue":
+        issue_key = kwargs.get("issue_key", "")
+        result = await jira_module.jira_get_issue(issue_key)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_search":
+        jql = kwargs.get("jql", "")
+        max_results = kwargs.get("max_results", 10)
+        result = await jira_module.jira_search(jql, max_results)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_add_comment":
+        issue_key = kwargs.get("issue_key", "")
+        comment = kwargs.get("comment", "")
+        result = await jira_module.jira_add_comment(issue_key, comment)
         return ToolResult(success="Error" not in result, content=result)
     
     return ToolResult(success=False, error=f"Tool {name} not implemented")
