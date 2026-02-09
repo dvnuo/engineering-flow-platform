@@ -145,7 +145,7 @@ class BaseProvider:
                     result = response.json()
 
                     # Debug: Log response body (truncated)
-                    if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+                    if _is_debug_enabled():
                         result_str = json.dumps(result, indent=2, default=str)
                         logger.debug(f"Body: {_truncate_text(result_str, 1000)}")
 
