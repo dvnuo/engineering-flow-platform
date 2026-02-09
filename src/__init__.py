@@ -52,12 +52,14 @@ from .github import get_tools_schemas as get_github_tools
 from .jira import get_tools_schemas as get_jira_tools
 from .confluence import get_tools_schemas as get_confluence_tools
 from .git import get_tools_schemas as get_git_tools
+from .tools import get_all_tools as get_tools_all, execute_tool as execute_tools_func
 
 # Also export raw functions for backward compatibility
 from . import github
 from . import jira
 from . import confluence
 from . import git
+from . import tools
 
 
 def get_all_tools() -> list:
@@ -67,6 +69,7 @@ def get_all_tools() -> list:
     tools.extend(get_jira_tools())
     tools.extend(get_confluence_tools())
     tools.extend(get_git_tools())
+    tools.extend(get_tools_all())
     return tools
 
 
@@ -90,39 +93,50 @@ def get_tools_schema() -> List[Dict]:
 
 async def execute_tool(name: str, **kwargs) -> ToolResult:
     """Execute a tool by name."""
-    # Simple implementation - can be extended
+    import asyncio
+    
+    # Try file/exec tools first (imported from tools module)
+    if name in ("read", "write", "edit", "list_dir", "exec"):
+        if name in ("read", "write", "edit", "list_dir"):
+            # Sync tools
+            result = tools.execute_tool(name, **kwargs)
+            return ToolResult(success="Error" not in result, content=result)
+        else:
+            # Exec tool (async)
+            result = await tools.exec(
+                kwargs.get("command", ""),
+                kwargs.get("timeout", 60),
+                kwargs.get("workdir")
+            )
+            return ToolResult(success="Error" not in result, content=result)
+    
+    # Git tools
+    elif name in ("git_status", "git_commit", "git_push", "git_clone"):
+        result = await _execute_git_tool(name, kwargs)
+        return result
+    
+    # Jira tools
+    elif name in ("jira_get_issue", "jira_search", "jira_add_comment"):
+        result = await _execute_jira_tool(name, kwargs)
+        return result
+    
+    # GitHub tools
+    elif name in ("github_get_issue", "github_search_issues", "github_add_comment"):
+        result = await _execute_github_tool(name, kwargs)
+        return result
+    
+    # Confluence tools
+    elif name in ("confluence_get_page", "confluence_search"):
+        result = await _execute_confluence_tool(name, kwargs)
+        return result
+    
     return ToolResult(success=False, error=f"Tool {name} not implemented")
 
 
-__all__ = [
-    "get_all_tools",
-    "get_tool_names",
-    "get_tool",
-    "get_tools_schema",
-    "execute_tool",
-    "get_github_tools",
-    "get_jira_tools",
-    "get_confluence_tools",
-    "get_git_tools",
-    "github_api",
-    "jira",
-    "confluence",
-    "git_api",
-    "ToolResult",
-    "Tool",
-    "TOOLS",
-]
-
-
-# Add tools to execute_tool
-async def execute_tool(name: str, **kwargs) -> ToolResult:
-    """Execute a tool by name."""
+async def _execute_git_tool(name: str, kwargs: Dict) -> ToolResult:
+    """Execute a git tool."""
     from . import git as git_module
-    from . import jira as jira_module
-    from . import github as github_module
-    from . import confluence as confluence_module
     
-    # Git tools
     if name == "git_status":
         workspace = kwargs.get("workspace", ".")
         result = await git_module.git_status(workspace)
@@ -145,8 +159,14 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await git_module.git_clone(repo_url, workspace)
         return ToolResult(success="Error" not in result, content=result)
     
-    # Jira tools
-    elif name == "jira_get_issue":
+    return ToolResult(success=False, error=f"Unknown git tool: {name}")
+
+
+async def _execute_jira_tool(name: str, kwargs: Dict) -> ToolResult:
+    """Execute a jira tool."""
+    from . import jira as jira_module
+    
+    if name == "jira_get_issue":
         issue_key = kwargs.get("issue_key", "")
         result = await jira_module.jira_get_issue(issue_key)
         return ToolResult(success="Error" not in result, content=result)
@@ -163,8 +183,14 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await jira_module.jira_add_comment(issue_key, comment)
         return ToolResult(success="Error" not in result, content=result)
     
-    # GitHub tools
-    elif name == "github_get_issue":
+    return ToolResult(success=False, error=f"Unknown jira tool: {name}")
+
+
+async def _execute_github_tool(name: str, kwargs: Dict) -> ToolResult:
+    """Execute a github tool."""
+    from . import github as github_module
+    
+    if name == "github_get_issue":
         owner = kwargs.get("owner", "")
         repo = kwargs.get("repo", "")
         issue_number = kwargs.get("issue_number", 0)
@@ -185,8 +211,14 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await github_module.github_add_comment(owner, repo, issue_number, comment)
         return ToolResult(success="Error" not in result, content=result)
     
-    # Confluence tools
-    elif name == "confluence_get_page":
+    return ToolResult(success=False, error=f"Unknown github tool: {name}")
+
+
+async def _execute_confluence_tool(name: str, kwargs: Dict) -> ToolResult:
+    """Execute a confluence tool."""
+    from . import confluence as confluence_module
+    
+    if name == "confluence_get_page":
         page_id = kwargs.get("page_id", "")
         result = await confluence_module.confluence_get_page(page_id)
         return ToolResult(success="Error" not in result, content=result)
@@ -197,4 +229,25 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await confluence_module.confluence_search(query, max_results)
         return ToolResult(success="Error" not in result, content=result)
     
-    return ToolResult(success=False, error=f"Tool {name} not implemented")
+    return ToolResult(success=False, error=f"Unknown confluence tool: {name}")
+
+
+__all__ = [
+    "get_all_tools",
+    "get_tool_names",
+    "get_tool",
+    "get_tools_schema",
+    "execute_tool",
+    "get_github_tools",
+    "get_jira_tools",
+    "get_confluence_tools",
+    "get_git_tools",
+    "github_api",
+    "jira",
+    "confluence",
+    "git_api",
+    "ToolResult",
+    "Tool",
+    "TOOLS",
+    "tools",
+]
