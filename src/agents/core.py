@@ -344,7 +344,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         # If no tool calls, return directly
         if not tool_calls:
-            session_manager.add_message(session_id, "assistant", content)
+            await session_manager.add_message(session_id, "assistant", content)
             result = {"response": content, "usage": usage_data}
             if enable_reasoning:
                 result["reasoning"] = llm_result.get("reasoning", "")
