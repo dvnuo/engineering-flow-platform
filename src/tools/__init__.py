@@ -20,6 +20,7 @@ from .api import (
     set_security_config,
     get_security_config,
     reset_security_config,
+    validate_environment,
     ExecSecurity,
     ExecAsk,
     ExecSecurityConfig,
@@ -87,6 +88,7 @@ __all__ = [
     "set_security_config",
     "get_security_config",
     "reset_security_config",
+    "validate_environment",
     # Security types
     "ExecSecurity",
     "ExecAsk",

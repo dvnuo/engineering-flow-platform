@@ -573,3 +573,32 @@ def get_security_info() -> dict:
         "dangerous_env_vars": list(DANGEROUS_ENV_VARS),
         "dangerous_env_prefixes": DANGEROUS_ENV_PREFIXES,
     }
+
+
+# Re-export security functions for external use
+__all__ = [
+    # File tools
+    "read",
+    "write",
+    "edit",
+    "list_dir",
+    # Exec tools
+    "exec",
+    "exec_sync",
+    # Tool schemas
+    "get_tools_schemas",
+    # Security functions
+    "get_security_info",
+    "set_security_config",
+    "get_security_config",
+    "reset_security_config",
+    "validate_environment",
+    # Security types
+    "ExecSecurity",
+    "ExecAsk",
+    "ExecSecurityConfig",
+    "ExecAllowlistEntry",
+    "DEFAULT_SAFE_BINS",
+    "DANGEROUS_ENV_VARS",
+    "DANGEROUS_ENV_PREFIXES",
+]
