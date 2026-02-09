@@ -124,6 +124,17 @@ class Agent:
             # Use memory files + basic structure
             self.system_prompt = f"""{memory_prompt}
 
+## File & Execution Guidelines
+
+When using file operations and shell commands, follow these guidelines:
+
+1. **Read before Edit**: Always read a file before editing it
+2. **Use Appropriate Tools**: Prefer `read`/`write`/`edit` over `exec cat`/`echo`
+3. **Show Your Work**: Display file contents and explain changes
+4. **Safety First**: Don't modify system files, don't delete without asking
+
+See `workspace/TOOLS_FILE_EXEC.md` for detailed guidelines.
+
 ## Tooling
 
 You have access to the following tools. When a user asks you to do something that requires a tool, you MUST use the appropriate tool. Do NOT explain how to do something—DO IT directly.
@@ -140,6 +151,17 @@ You have access to the following tools. When a user asks you to do something tha
         else:
             # Fallback to basic prompt
             self.system_prompt = f"""You are a helpful AI assistant that can execute commands, read/write files, and more.
+
+## File & Execution Guidelines
+
+When using file operations and shell commands, follow these guidelines:
+
+1. **Read before Edit**: Always read a file before editing it
+2. **Use Appropriate Tools**: Prefer `read`/`write`/`edit` over `exec cat`/`echo`
+3. **Show Your Work**: Display file contents and explain changes
+4. **Safety First**: Don't modify system files, don't delete without asking
+
+See `workspace/TOOLS_FILE_EXEC.md` for detailed guidelines.
 
 ## Tooling
 

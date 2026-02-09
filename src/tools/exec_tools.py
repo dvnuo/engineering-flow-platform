@@ -7,67 +7,11 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Security: Define allowed workspace directory
-ALLOWED_WORKSPACE = Path.cwd().resolve()
-
-# Security: Dangerous patterns to block
-DANGEROUS_PATTERNS = [
-    # Command separators that allow chaining
-    ';', '&&', '||', '|', '\n', '\r',
-    # Redirection
-    '>', '>>', '<', '<<',
-    # Command substitution
-    '$(', '`',  # Backtick
-    # Environment variable (block command substitution)
-    '$',
-    # File deletion commands
-    'rm', 'del', 'erase', 'unlink', 'shred', 'mkfs',
-    # Process operations
-    'kill', 'pkill', 'xkill',
-    # Network operations
-    'wget', 'curl', 'nc', 'netcat', 'ssh', 'scp',
-    # Sudo
-    'sudo', 'su ',
-]
+# Default timeout for commands
+DEFAULT_TIMEOUT = 60
 
 
-def _validate_command(command: str) -> tuple[bool, str]:
-    """Validate command for security.
-    
-    Returns:
-        (is_valid, error_message)
-    """
-    if not command or not command.strip():
-        return False, "Empty command"
-    
-    command_lower = command.lower().strip()
-    
-    # Check for dangerous patterns
-    for pattern in DANGEROUS_PATTERNS:
-        if pattern in command_lower:
-            # Special handling for $ (environment variable)
-            if pattern == '$':
-                # Allow $ in simple cases like $PATH but block command substitution
-                if '$(' in command or '`' in command:
-                    return False, f"Dangerous pattern detected: {pattern}"
-                continue
-            return False, f"Dangerous pattern detected: {pattern}"
-    
-    # Check for suspicious patterns
-    suspicious = [
-        '..',  # Path traversal
-        '/etc/', '/root/', '/bin/', '/usr/', '/sbin/',  # System directories
-        'cp /', 'mv /', 'ln -',  # Destructive file ops
-    ]
-    
-    for pattern in suspicious:
-        if pattern in command_lower:
-            return False, f"Suspicious pattern detected: {pattern}"
-    
-    return True, ""
-
-
-async def exec(command: str, timeout: Optional[int] = 60, workdir: Optional[str] = None) -> str:
+async def exec(command: str, timeout: int = DEFAULT_TIMEOUT, workdir: Optional[str] = None) -> str:
     """Execute a shell command.
     
     Args:
@@ -78,39 +22,30 @@ async def exec(command: str, timeout: Optional[int] = 60, workdir: Optional[str]
     Returns:
         Command output (stdout + stderr)
     """
-    # Validate command
-    is_valid, error = _validate_command(command)
-    if not is_valid:
-        return f"Error: {error}"
+    if not command or not command.strip():
+        return "Error: Empty command"
     
     # Validate working directory
+    cwd = Path.cwd()
     if workdir:
         workdir_path = Path(workdir).resolve()
+        # Only allow working directory under current project
         try:
-            workdir_path.relative_to(ALLOWED_WORKSPACE)
+            workdir_path.relative_to(cwd)
+            actual_cwd = workdir_path
         except ValueError:
-            return f"Error: Working directory outside workspace: {workdir}"
+            # If not under cwd, use cwd
+            actual_cwd = cwd
     else:
-        workdir_path = ALLOWED_WORKSPACE
+        actual_cwd = cwd
     
     try:
-        # Use shell=True for command with pipes/redirects, but command is validated
-        # Split command into program and arguments for safer execution
-        parts = command.strip().split()
-        
-        if not parts:
-            return "Error: Empty command"
-        
-        program = parts[0]
-        args = parts[1:] if len(parts) > 1 else []
-        
-        # Execute with asyncio
-        process = await asyncio.create_subprocess_exec(
-            program,
-            *args,
+        # Execute command
+        process = await asyncio.create_subprocess_shell(
+            command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=str(workdir_path)
+            cwd=str(actual_cwd)
         )
         
         try:
@@ -144,19 +79,15 @@ async def exec(command: str, timeout: Optional[int] = 60, workdir: Optional[str]
         
     except asyncio.CancelledError:
         return "Error: Command cancelled"
-    except FileNotFoundError:
-        return f"Error: Command not found: {command.split()[0]}"
     except Exception as e:
         return f"Error executing command: {e}"
 
 
-def exec_sync(command: str, timeout: int = 60, workdir: Optional[str] = None) -> str:
+def exec_sync(command: str, timeout: int = DEFAULT_TIMEOUT, workdir: Optional[str] = None) -> str:
     """Synchronous wrapper for exec (for simple commands).
     
-    Note: For commands with pipes/redirections, use async exec() instead.
-    
     Args:
-        command: Command to execute (simple commands only)
+        command: Command to execute
         timeout: Timeout in seconds (default: 60)
         workdir: Working directory (optional)
     
@@ -165,35 +96,29 @@ def exec_sync(command: str, timeout: int = 60, workdir: Optional[str] = None) ->
     """
     import subprocess
     
-    # Validate command
-    is_valid, error = _validate_command(command)
-    if not is_valid:
-        return f"Error: {error}"
+    if not command or not command.strip():
+        return "Error: Empty command"
     
     # Validate working directory
+    cwd = Path.cwd()
     if workdir:
         workdir_path = Path(workdir).resolve()
         try:
-            workdir_path.relative_to(ALLOWED_WORKSPACE)
+            workdir_path.relative_to(cwd)
+            actual_cwd = str(workdir_path)
         except ValueError:
-            return f"Error: Working directory outside workspace: {workdir}"
-        workdir = str(workdir_path)
+            actual_cwd = str(cwd)
+    else:
+        actual_cwd = str(cwd)
     
     try:
-        # Split command for safer execution (no shell=True)
-        parts = command.strip().split()
-        if not parts:
-            return "Error: Empty command"
-        
-        program = parts[0]
-        args = parts[1:] if len(parts) > 1 else []
-        
         result = subprocess.run(
-            [program] + args,
+            command,
+            shell=True,
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=workdir
+            cwd=actual_cwd
         )
         
         output = []
@@ -209,8 +134,6 @@ def exec_sync(command: str, timeout: int = 60, workdir: Optional[str] = None) ->
         
     except subprocess.TimeoutExpired:
         return f"Error: Command timed out after {timeout} seconds"
-    except FileNotFoundError:
-        return f"Error: Command not found: {command.split()[0]}"
     except Exception as e:
         return f"Error executing command: {e}"
 
@@ -228,7 +151,7 @@ def get_tools_schemas() -> list:
                     "properties": {
                         "command": {"type": "string", "description": "Shell command to execute"},
                         "timeout": {"type": "integer", "description": "Timeout in seconds (default: 60)"},
-                        "workdir": {"type": "string", "description": "Working directory (optional)"}
+                        "workdir": {"type": "string", "description": "Working directory (optional, defaults to current directory)"}
                     },
                     "required": ["command"]
                 }
