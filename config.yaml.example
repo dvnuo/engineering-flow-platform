@@ -208,30 +208,17 @@ heartbeat:
 # ============================================
 # Debug Logging Configuration (OPTIONAL)
 # ============================================
-# Enable debug logging for troubleshooting and development
-# Environment variables (recommended) take precedence over config file
+# Enable debug logging for troubleshooting
+# Set log_level: DEBUG in logging configuration or use --debug flag
 
 debug:
-  # Enable debug logging for LLM requests/responses
-  # Values: true (truncated), full (complete output), false/empty (disabled)
-  # Or set via environment variable: DEBUG_LLM
-  llm: ""  # "" = disabled, "true" = truncated, "full" = complete
-
-  # Enable debug logging for Agent processing
-  # Values: true (truncated), full (complete output), false/empty (disabled)
-  # Or set via environment variable: DEBUG_AGENT
-  agent: ""  # "" = disabled, "true" = truncated, "full" = complete
+  enabled: false  # Set to true to enable debug logging
 
 # Example usage:
 # debug:
-#   llm: "full"     # Complete LLM input/output (no truncation)
-#   agent: "true"   # Structured agent debug logs (truncated)
+#   enabled: true
 
-# Or via environment variables (recommended):
-# export DEBUG_LLM=full
-# export DEBUG_AGENT=true
-
-# What gets logged:
-# - DEBUG_LLM=full: Complete LLM requests, responses, reasoning content
-# - DEBUG_AGENT=full: Complete messages, system prompts, tool results
-# - DEBUG_*=true: Same as above but with truncation for large content
+# What gets logged when enabled:
+# - LLM requests: Model name, messages, tools
+# - LLM responses: Content, reasoning, tool calls, usage
+# - Agent processing: Messages, tool execution, final responses
