@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from memory import MemoryConfig, MemoryStore, get_memory_path, get_long_term_memory_path
+from . import MemoryConfig, MemoryStore, get_memory_path, get_long_term_memory_path
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +208,6 @@ class SqliteMemoryStore(MemoryStore):
                 "score": normalized_score,
                 "raw_score": bm25_score,  # Keep raw BM25 for debugging
                 "search_type": "bm25"
-            })
             })
         
         logger.debug(f"Search '{query}': {len(results)} results")
