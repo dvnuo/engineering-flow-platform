@@ -1,8 +1,8 @@
 """Confluence Integration - Single source of truth for Confluence operations."""
 
-from .api import ConfluenceChannel
+from .api import ConfluenceChannel, confluence_channel, confluence_get_page, confluence_search
 
-__all__ = ["ConfluenceChannel"]
+__all__ = ["ConfluenceChannel", "confluence_channel", "confluence_get_page", "confluence_search"]
 
 
 # ========== Tool Functions ==========

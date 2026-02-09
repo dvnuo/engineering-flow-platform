@@ -892,3 +892,55 @@ def _extract_text_from_block(block: Any, text_parts: List[str]):
         for item in inner:
             _extract_text_from_block(item, text_parts)
         text_parts.append("\n```\n")
+
+
+# ========== Tool Schemas for LLM ==========
+
+def get_tools_schemas() -> list:
+    """Return Jira tool schemas for OpenAI function calling."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_get_issue",
+                "description": "Get details for a Jira issue by key. Returns issue summary, status, assignee, and description.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"}
+                    },
+                    "required": ["issue_key"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_search",
+                "description": "Search Jira issues using JQL (Jira Query Language). Returns a list of matching issues.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "jql": {"type": "string", "description": "JQL query string (e.g., 'project = PROJ AND status = Done')"},
+                        "max_results": {"type": "integer", "description": "Maximum number of results to return", "default": 10}
+                    },
+                    "required": ["jql"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_add_comment",
+                "description": "Add a comment to a Jira issue.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"},
+                        "comment": {"type": "string", "description": "Comment text to add"}
+                    },
+                    "required": ["issue_key", "comment"]
+                }
+            }
+        },
+    ]

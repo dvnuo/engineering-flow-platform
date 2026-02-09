@@ -114,11 +114,15 @@ __all__ = [
 ]
 
 
-# Add git_clone to execute_tool
+# Add tools to execute_tool
 async def execute_tool(name: str, **kwargs) -> ToolResult:
     """Execute a tool by name."""
     from . import git as git_module
+    from . import jira as jira_module
+    from . import github as github_module
+    from . import confluence as confluence_module
     
+    # Git tools
     if name == "git_status":
         workspace = kwargs.get("workspace", ".")
         result = await git_module.git_status(workspace)
@@ -139,6 +143,58 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         repo_url = kwargs.get("repo_url", "")
         workspace = kwargs.get("workspace", ".")
         result = await git_module.git_clone(repo_url, workspace)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    # Jira tools
+    elif name == "jira_get_issue":
+        issue_key = kwargs.get("issue_key", "")
+        result = await jira_module.jira_get_issue(issue_key)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_search":
+        jql = kwargs.get("jql", "")
+        max_results = kwargs.get("max_results", 10)
+        result = await jira_module.jira_search(jql, max_results)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_add_comment":
+        issue_key = kwargs.get("issue_key", "")
+        comment = kwargs.get("comment", "")
+        result = await jira_module.jira_add_comment(issue_key, comment)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    # GitHub tools
+    elif name == "github_get_issue":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        issue_number = kwargs.get("issue_number", 0)
+        result = await github_module.github_get_issue(owner, repo, issue_number)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "github_search_issues":
+        query = kwargs.get("query", "")
+        max_results = kwargs.get("max_results", 10)
+        result = await github_module.github_search_issues(query, max_results)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "github_add_comment":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        issue_number = kwargs.get("issue_number", 0)
+        comment = kwargs.get("comment", "")
+        result = await github_module.github_add_comment(owner, repo, issue_number, comment)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    # Confluence tools
+    elif name == "confluence_get_page":
+        page_id = kwargs.get("page_id", "")
+        result = await confluence_module.confluence_get_page(page_id)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_search":
+        query = kwargs.get("query", "")
+        max_results = kwargs.get("max_results", 10)
+        result = await confluence_module.confluence_search(query, max_results)
         return ToolResult(success="Error" not in result, content=result)
     
     return ToolResult(success=False, error=f"Tool {name} not implemented")

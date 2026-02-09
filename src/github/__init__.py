@@ -1,8 +1,8 @@
 """GitHub Integration - Single source of truth for GitHub operations."""
 
-from .api import GitHubChannel as GitHubClient
+from .api import GitHubChannel as GitHubClient, github_channel, github_get_issue, github_search_issues, github_add_comment
 
-__all__ = ["GitHubClient"]
+__all__ = ["GitHubClient", "github_channel", "github_get_issue", "github_search_issues", "github_add_comment"]
 
 
 # ========== Tool Functions ==========
