@@ -14,10 +14,11 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from ..exec_security import (
+from .exec_security import (
     ExecSecurity,
     ExecAsk,
     ExecSecurityConfig,
+    ExecAllowlistEntry,
     evaluate_command,
     validate_environment,
     requires_approval,
