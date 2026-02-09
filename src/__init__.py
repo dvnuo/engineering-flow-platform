@@ -1,8 +1,7 @@
 """
 Bash Tools - Shell execution and file operations.
 
-Bash tools with security controls, inspired by OpenClaw:
-https://github.com/openclaw/openclaw/tree/main/src/agents
+Bash tools with security controls.
 """
 
 from typing import Any, Dict, List, Optional
