@@ -168,7 +168,7 @@ async def setup_gh_config() -> bool:
         hosts_config = {"github.com": {"oauth_token": token, "user": ""}}
     
     with open(hosts_file, "w") as f:
-        yaml.dump({"hosts": hosts_config}, f)
+        yaml.dump({hosts_config, f)
     
     os.chmod(hosts_file, 0o600)
     return True
