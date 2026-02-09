@@ -8,9 +8,9 @@ Providers:
 - Ollama (Local)
 
 Debug Logging:
-- Enable with log_level: DEBUG in config.yaml
+- Set DEBUG_LLM=true to enable debug logging
+- Set DEBUG_LLM=full for complete input/output (no truncation)
 - Logs: LLM requests, responses, reasoning, tool calls
-- Complete input/output when debug is enabled (no truncation)
 """
 
 import asyncio
@@ -25,30 +25,38 @@ from src.config import config
 
 logger = logging.getLogger(__name__)
 
-# Debug logging cache
-_DEBUG_ENABLED = None  # Lazy initialization
+# Debug mode flag - enable with DEBUG_LLM=true or DEBUG_LLM=full
+# If not set, check logger level
+_DEBUG_MODE = os.environ.get("DEBUG_LLM", "").lower()
+_VALID_DEBUG_VALUES = ("1", "true", "yes", "full", "0", "false", "no")
+if _DEBUG_MODE and _DEBUG_MODE not in _VALID_DEBUG_VALUES:
+    import warnings
+    warnings.warn(
+        f"Invalid DEBUG_LLM value: '{_DEBUG_MODE}'. Valid values: {_VALID_DEBUG_VALUES}. Debug disabled.",
+        UserWarning
+    )
+    _DEBUG_MODE = ""
 
-# Debug logging is enabled when logger.level is DEBUG
-# Set log_level: DEBUG in config.yaml or use --debug flag
-# When DEBUG, complete input/output is logged (no truncation)
+# Debug enabled if:
+# 1. DEBUG_LLM is set to "1", "true", "yes", or "full", OR
+# 2. Logger is configured at DEBUG level (via config log_level: DEBUG)
+DEBUG_FULL_OUTPUT = _DEBUG_MODE == "full"
+_DEBUG_ENABLED = _DEBUG_MODE in ("1", "true", "yes", "full") or logger.isEnabledFor(logging.DEBUG)
+
 
 def _is_debug_enabled() -> bool:
-    """Check if debug mode is enabled (logger is DEBUG level)."""
-    global _DEBUG_ENABLED
-    if _DEBUG_ENABLED is None:
-        _DEBUG_ENABLED = logger.isEnabledFor(logging.DEBUG)
+    """Check if debug mode is enabled."""
     return _DEBUG_ENABLED
 
 
 def _is_full_output() -> bool:
-    """Check if full output mode is enabled.
-    Always true when debug is enabled - we want complete logs for debugging."""
-    return _is_debug_enabled()
+    """Check if full output mode is enabled (no truncation)."""
+    return DEBUG_FULL_OUTPUT
 
 
 def _log_request(component: str, url: str, method: str = "POST", headers: Dict = None, payload: Dict = None):
     """Log request with consistent format. Only formats if debug is enabled."""
-    if not _is_debug_enabled():
+    if not _DEBUG_ENABLED:
         return
     logger.debug(f"=== [{component}] REQUEST ===")
     logger.debug(f"Method: {method}")
@@ -60,13 +68,15 @@ def _log_request(component: str, url: str, method: str = "POST", headers: Dict =
 
 
 def _log_response(component: str, status: int, body: Any = None):
-    """Log response with consistent format. Only logs if debug is enabled."""
-    if not _is_debug_enabled():
+    """Log response with consistent format. Only formats if debug is enabled."""
+    if not _DEBUG_ENABLED:
         return
     logger.debug(f"=== [{component}] RESPONSE ===")
     logger.debug(f"Status: {status}")
     if body:
         body_str = json.dumps(body, indent=2, default=str) if isinstance(body, (dict, list)) else str(body)
+        if not DEBUG_FULL_OUTPUT and len(body_str) > 1000:
+            body_str = body_str[:1000] + f"... [{len(body_str) - 1000} chars truncated]"
         logger.debug(f"Body: {body_str}")
 
 
@@ -81,15 +91,16 @@ def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
     return sanitized
 
 
-def _truncate_text(text: str, max_length: int = 200) -> str:
-    """Truncate text for logging preview."""
-    if not text:
-        return "(empty)"
-    if len(text) > max_length:
-        return f"{text[:max_length]}... [{len(text) - max_length} chars truncated]"
-    return text
+def _truncate_text(text: str, max_length: int = 500) -> str:
+    """Truncate text for logging. Returns full text if DEBUG_LLM=full."""
+    if DEBUG_FULL_OUTPUT or len(text) <= max_length:
+        return text
+    return text[:max_length] + f"... [{len(text) - max_length} chars truncated]"
 
 
+class BaseProvider:
+    """Base class for LLM providers."""
+    
     def __init__(self, name: str, api_base: str, api_key_env: str = ''):
         self.name = name
         self.api_base = api_base
@@ -348,13 +359,18 @@ class GitHubCopilotProvider(BaseProvider):
         # Add tools support (similar to OpenAI)
         if tools:
             payload["tools"] = tools
-        
-        # Debug: Log request
+
+        # Debug: Log chat request details
         if _is_debug_enabled():
-            logger.debug(f"=== [{self.name.upper()}] REQUEST ===")
+            logger.debug(f"=== [COPILOT] CHAT REQUEST ===")
+            logger.debug(f"Provider: {self.name}")
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(all_messages)}")
-        
+            if system_prompt:
+                logger.debug(f"System prompt: {system_prompt[:500]}...")
+            if tools:
+                logger.debug(f"Tools count: {len(tools)}")
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 f"{self.api_base}/chat/completions",
@@ -363,12 +379,21 @@ class GitHubCopilotProvider(BaseProvider):
             )
             response.raise_for_status()
             data = response.json()
-        
-        # Debug: Log response
+
+        # Debug: Log response details
         if _is_debug_enabled():
-            logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
-            logger.debug(f"Status: {response.status_code}")
-        
+            logger.debug(f"=== [COPILOT] CHAT RESPONSE ===")
+            message_data = data.get("choices", [{}])[0].get("message", {})
+            content = message_data.get("content", "") or ""
+            logger.debug(f"Content length: {len(content)} chars")
+            if content:
+                logger.debug(f"Content preview: {content[:500]}...")
+            tool_calls = message_data.get("tool_calls", [])
+            logger.debug(f"Tool calls: {len(tool_calls)}")
+            for tc in tool_calls:
+                tc_name = tc.get("function", {}).get("name", "unknown")
+                logger.debug(f"  - {tc_name}")
+
         # Parse response - check for tool calls and reasoning
         message_data = data.get("choices", [{}])[0].get("message", {})
         content = message_data.get("content", "")
@@ -376,15 +401,6 @@ class GitHubCopilotProvider(BaseProvider):
         
         # GitHub Copilot may return tool_calls
         tool_calls = message_data.get("tool_calls", [])
-        
-        # Debug: Log content and tool calls
-        if _is_debug_enabled():
-            logger.debug(f"Content length: {len(content)} chars")
-            logger.debug(f"Content preview: {_truncate_text(content, 200)}")
-            logger.debug(f"Tool calls: {len(tool_calls)}")
-            for tc in tool_calls:
-                tc_name = tc.get("function", {}).get("name", "unknown")
-                logger.debug(f"  - {tc_name}")
         
         # Calculate usage (approximate)
         prompt_tokens = sum(len(str(m).split()) for m in all_messages) * 4  # Rough estimate
@@ -459,13 +475,18 @@ class ClaudeProvider(BaseProvider):
         
         if tools:
             payload["tools"] = self._convert_tools_to_claude(tools)
-        
-        # Debug: Log request
+
+        # Debug: Log chat request details
         if _is_debug_enabled():
-            logger.debug(f"=== [{self.name.upper()}] REQUEST ===")
+            logger.debug(f"=== [CLAUDE] CHAT REQUEST ===")
+            logger.debug(f"Provider: {self.name}")
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(all_messages)}")
-        
+            if system_prompt:
+                logger.debug(f"System prompt: {system_prompt[:500]}...")
+            if tools:
+                logger.debug(f"Tools count: {len(tools)}")
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 f"{self.api_base}/messages",
@@ -474,27 +495,21 @@ class ClaudeProvider(BaseProvider):
             )
             response.raise_for_status()
             data = response.json()
-        
-        # Debug: Log response
+
+        # Debug: Log response details
         if _is_debug_enabled():
-            logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
-            logger.debug(f"Status: {response.status_code}")
-        
-        # Parse and log content/tool calls
-        parsed = self._parse_response(data)
-        
-        # Debug: Log content and tool calls
-        if _is_debug_enabled():
-            content = parsed.get("content", "")
-            tool_calls = parsed.get("tool_calls", [])
-            logger.debug(f"Content length: {len(content)} chars")
-            logger.debug(f"Content preview: {_truncate_text(content, 200)}")
-            logger.debug(f"Tool calls: {len(tool_calls)}")
-            for tc in tool_calls:
-                tc_name = tc.get("function", {}).get("name", "unknown")
-                logger.debug(f"  - {tc_name}")
-        
-        return parsed
+            logger.debug(f"=== [CLAUDE] CHAT RESPONSE ===")
+            content_blocks = data.get("content", [])
+            text_content = ""
+            for block in content_blocks:
+                if block.get("type") == "text":
+                    text_content = block.get("text", "")
+                    break
+            logger.debug(f"Content length: {len(text_content)} chars")
+            if text_content:
+                logger.debug(f"Content preview: {text_content[:500]}...")
+
+        return self._parse_response(data)
     
     def _convert_tools_to_claude(self, tools: List[Dict]) -> List[Dict]:
         """Convert OpenAI-style tools to Claude format."""
@@ -612,13 +627,18 @@ class OllamaProvider(BaseProvider):
                     }
                 })
             payload["tools"] = ollama_tools
-        
-        # Debug: Log request
+
+        # Debug: Log chat request details
         if _is_debug_enabled():
-            logger.debug(f"=== [{self.name.upper()}] REQUEST ===")
+            logger.debug(f"=== [OLLAMA] CHAT REQUEST ===")
+            logger.debug(f"Provider: {self.name}")
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(full_messages)}")
-        
+            if system_prompt:
+                logger.debug(f"System prompt: {system_prompt[:500]}...")
+            if tools:
+                logger.debug(f"Tools count: {len(tools)}")
+
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
@@ -627,9 +647,18 @@ class OllamaProvider(BaseProvider):
                 )
                 response.raise_for_status()
                 data = response.json()
+
+                # Debug: Log response details
+                if _is_debug_enabled():
+                    logger.debug(f"=== [OLLAMA] CHAT RESPONSE ===")
+                    message = data.get("message", {})
+                    content = message.get("content", "") or ""
+                    logger.debug(f"Content length: {len(content)} chars")
+                    if content:
+                        logger.debug(f"Content preview: {content[:500]}...")
         except httpx.ConnectError:
             if _is_debug_enabled():
-                logger.debug(f"=== [{self.name.upper()}] ERROR ===")
+                logger.debug(f"=== [OLLAMA] ERROR ===")
                 logger.debug("Ollama not running. Start with: ollama serve")
             return {
                 "content": "",
@@ -637,27 +666,8 @@ class OllamaProvider(BaseProvider):
                 "error": "Ollama not running. Start with: ollama serve",
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             }
-        
-        # Debug: Log response
-        if _is_debug_enabled():
-            logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
-            logger.debug(f"Status: {response.status_code}")
-        
-        # Parse and log result
-        result = self._parse_response(data)
-        
-        # Debug: Log content and tool calls
-        if _is_debug_enabled():
-            content = result.get("content", "")
-            tool_calls = result.get("tool_calls", [])
-            logger.debug(f"Content length: {len(content)} chars")
-            logger.debug(f"Content preview: {_truncate_text(content, 200)}")
-            logger.debug(f"Tool calls: {len(tool_calls)}")
-            for tc in tool_calls:
-                tc_name = tc.get("function", {}).get("name", "unknown")
-                logger.debug(f"  - {tc_name}")
-        
-        return result
+
+        return self._parse_response(data)
     
     def _parse_response(self, data: Dict) -> Dict[str, Any]:
         """Parse Ollama response with reasoning support."""
