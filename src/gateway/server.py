@@ -116,6 +116,7 @@ class Gateway:
     def __init__(self):
         self.mode = config.discord.get("mode", "bot")  # 'bot' or 'webhook'
         self.jira_enabled = config.jira.get("enabled", False)
+        self.discord_enabled = config.discord.get("enabled", False)  # Discord is optional by default
         self.host = config.server.get("host", "0.0.0.0")
         self.port = config.server.get("port", 8000)
         self.app = web.Application()
@@ -137,8 +138,8 @@ class Gateway:
         self.app.router.add_get("/api/settings/ollama/models", self.handle_ollama_models)
         self.app.router.add_post("/api/settings/ollama/pull", self.handle_ollama_pull)
 
-        # Webhook routes
-        if self.mode == "webhook":
+        # Webhook routes (only if Discord is enabled)
+        if self.discord_enabled and self.mode == "webhook":
             self.app.router.add_post("/webhook/discord", self.handle_discord_webhook)
         
         if self.jira_enabled:
@@ -450,7 +451,12 @@ class Gateway:
 
     async def start(self) -> None:
         """Start the gateway server."""
-        if self.mode == "bot":
+        # Check if Discord is configured
+        discord_token = config.discord.get("bot_token", "")
+        discord_webhook_url = config.discord.get("webhook_url", "")
+        discord_configured = bool(discord_token) or bool(discord_webhook_url)
+        
+        if self.mode == "bot" and discord_configured:
             # Bot API mode - start Discord bot and HTTP server in parallel
             # Use create_task because discord_channel.start() blocks
             bot_task = asyncio.create_task(discord_channel.start(message_callback=handle_discord_message))
@@ -465,7 +471,7 @@ class Gateway:
             await self.site.start()
             
             logger.info(f"Gateway started in Bot API mode on http://{self.host}:{self.port}")
-        else:
+        elif self.mode == "webhook" and discord_configured:
             # Webhook mode - start HTTP server and Discord session
             await discord_channel.start()
             
@@ -476,15 +482,37 @@ class Gateway:
             await self.site.start()
 
             logger.info(f"Gateway started on http://{self.host}:{self.port} (Webhook mode)")
+        else:
+            # Discord not configured - start HTTP server only
+            self.runner = web.AppRunner(self.app)
+            await self.runner.setup()
+            self.site = web.TCPSite(self.runner, self.host, self.port)
+            await self.site.start()
+
+            logger.info(f"Gateway started on http://{self.host}:{self.port} (Discord disabled - no token configured)")
 
         # Jira channel is initialized in __init__ with HTTP client ready
         # No explicit start_session needed since client is created on import
         if self.jira_enabled and jira_channel.is_configured():
             logger.info("Jira channel enabled and ready")
 
+        # Log Discord status
+        if not discord_configured:
+            logger.info("Discord channel is disabled (no bot_token or webhook_url configured)")
+
     async def stop(self) -> None:
         """Stop the gateway server."""
-        await discord_channel.stop()
+        # Stop Discord if it was started
+        discord_token = config.discord.get("bot_token", "")
+        discord_webhook_url = config.discord.get("webhook_url", "")
+        discord_configured = bool(discord_token) or bool(discord_webhook_url)
+        
+        if discord_configured:
+            try:
+                await discord_channel.stop()
+                logger.info("Discord channel stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping Discord channel: {e}")
         
         # Close Jira client if it was initialized
         if self.jira_enabled:

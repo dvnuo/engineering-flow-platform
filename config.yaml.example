@@ -2,16 +2,22 @@
 # COPY THIS FILE TO config.yaml AND FILL IN YOUR VALUES!
 
 # ============================================
-# Discord Configuration (REQUIRED)
+# Discord Configuration (OPTIONAL)
 # ============================================
+# Discord is optional - set enabled: false to disable
+# If not configured, the platform will run with HTTP API only
 discord:
+  # Enable Discord channel (optional - set to false to disable)
+  enabled: false  # Set to true and configure below to enable Discord
+
   # Bot Token - Get from Discord Developer Portal
   # https://discord.com/developers/applications
-  bot_token: "YOUR_DISCORD_BOT_TOKEN"
-  
+  # Only required if enabled: true
+  bot_token: ""  # Leave empty to disable Discord
+
   # Channel ID - Enable Developer Mode in Discord, right-click channel → Copy ID
-  channel_id: "YOUR_CHANNEL_ID"
-  
+  channel_id: ""
+
   # Mode: "bot" (Bot API) or "webhook" (HTTP Webhook)
   # Bot API mode: Uses discord.py for real-time message handling
   # Webhook mode: Requires public URL for Discord webhooks
