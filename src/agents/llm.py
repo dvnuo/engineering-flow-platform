@@ -8,9 +8,9 @@ Providers:
 - Ollama (Local)
 
 Debug Logging:
-- All HTTP requests/responses are logged with full details
-- Request: URL, headers (sanitized), payload, tools
-- Response: status, body (truncated if too large)
+- Set DEBUG_LLM=true to enable debug logging
+- Set DEBUG_LLM=full for complete input/output (no truncation)
+- Logs: LLM requests, responses, reasoning, tool calls
 """
 
 import asyncio
@@ -25,17 +25,35 @@ from src.config import config
 
 logger = logging.getLogger(__name__)
 
-# Debug mode flag - enable with DEBUG_LLM=true
-_DEBUG_MODE = os.environ.get("DEBUG_LLM", "").lower() in ("1", "true", "yes")
+# Debug mode flag - enable with DEBUG_LLM=true or DEBUG_LLM=full
+_DEBUG_MODE = os.environ.get("DEBUG_LLM", "").lower()
+_VALID_DEBUG_VALUES = ("1", "true", "yes", "full")
+if _DEBUG_MODE and _DEBUG_MODE not in _VALID_DEBUG_VALUES:
+    import warnings
+    warnings.warn(
+        f"Invalid DEBUG_LLM value: '{_DEBUG_MODE}'. Valid values: {_VALID_DEBUG_VALUES}. Debug disabled.",
+        UserWarning
+    )
+    _DEBUG_MODE = ""
+
+DEBUG_FULL_OUTPUT = _DEBUG_MODE == "full"
+_DEBUG_ENABLED = _DEBUG_MODE in ("1", "true", "yes", "full")
 
 
 def _is_debug_enabled() -> bool:
     """Check if debug mode is enabled."""
-    return _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG)
+    return _DEBUG_ENABLED or logger.isEnabledFor(logging.DEBUG)
+
+
+def _is_full_output() -> bool:
+    """Check if full output mode is enabled (no truncation)."""
+    return DEBUG_FULL_OUTPUT
 
 
 def _log_request(component: str, url: str, method: str = "POST", headers: Dict = None, payload: Dict = None):
-    """Log request with consistent format."""
+    """Log request with consistent format. Only formats if debug is enabled."""
+    if not _DEBUG_ENABLED:
+        return
     logger.debug(f"=== [{component}] REQUEST ===")
     logger.debug(f"Method: {method}")
     logger.debug(f"URL: {url}")
@@ -46,12 +64,14 @@ def _log_request(component: str, url: str, method: str = "POST", headers: Dict =
 
 
 def _log_response(component: str, status: int, body: Any = None):
-    """Log response with consistent format."""
+    """Log response with consistent format. Only formats if debug is enabled."""
+    if not _DEBUG_ENABLED:
+        return
     logger.debug(f"=== [{component}] RESPONSE ===")
     logger.debug(f"Status: {status}")
     if body:
         body_str = json.dumps(body, indent=2, default=str) if isinstance(body, (dict, list)) else str(body)
-        if len(body_str) > 1000:
+        if not DEBUG_FULL_OUTPUT and len(body_str) > 1000:
             body_str = body_str[:1000] + f"... [{len(body_str) - 1000} chars truncated]"
         logger.debug(f"Body: {body_str}")
 
@@ -68,8 +88,8 @@ def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
 
 
 def _truncate_text(text: str, max_length: int = 500) -> str:
-    """Truncate text for logging."""
-    if len(text) <= max_length:
+    """Truncate text for logging. Returns full text if DEBUG_LLM=full."""
+    if DEBUG_FULL_OUTPUT or len(text) <= max_length:
         return text
     return text[:max_length] + f"... [{len(text) - max_length} chars truncated]"
 
