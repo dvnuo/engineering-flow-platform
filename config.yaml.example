@@ -78,6 +78,65 @@ session:
     ttl_seconds: 3600  # Cache TTL in seconds (default: 1 hour)
 
 # ============================================
+# Memory Configuration (OPTIONAL)
+# ============================================
+# Long-term memory storage using SQLite with FTS5 full-text search
+
+memory:
+  enabled: true  # Enable memory storage
+  provider: "openai"  # Embedding provider (openai, azure, local)
+  model: "text-embedding-3-small"  # Embedding model
+
+  # Hybrid search settings (vector + text)
+  hybrid:
+    enabled: true  # Enable hybrid search (vector + keyword)
+    vector_weight: 0.7  # Weight for vector similarity (0.0-1.0)
+    text_weight: 0.3  # Weight for keyword matching (0.0-1.0)
+
+  # Cache settings
+  cache:
+    enabled: true  # Enable embedding cache
+    max_entries: 50000  # Maximum cached embeddings
+
+  # Storage paths (unified under ~/.efp/)
+  path: "~/.efp/memory"  # SQLite database location
+  workspace: "~/.efp/workspace"  # Workspace files (MEMORY.md, daily notes)
+
+# ============================================
+# Workspace Configuration (OPTIONAL)
+# ============================================
+# Workspace paths for project-specific files
+# All paths are unified under ~/.efp/ for easy backup
+
+workspace:
+  # Main workspace directory
+  path: "~/.efp/workspace"
+
+  # Memory subdirectory for daily notes
+  memory_dir: "~/.efp/workspace/memory"
+
+  # Session storage (can be overridden in session config)
+  sessions_dir: "~/.efp/sessions"
+
+# ============================================
+# Session Storage Structure
+# ============================================
+# Session data is stored in ~/.efp/sessions/
+#
+# Structure:
+#   ~/.efp/
+#   ├── sessions/              ← Session JSONL files
+#   │   ├── sessions.active.jsonl  (active sessions)
+#   │   └── archive/               (rotated files)
+#   ├── memory/                ← Memory SQLite DB
+#   │   └── memories.sqlite
+#   └── workspace/             ← Project-specific files
+#       ├── MEMORY.md
+#       └── memory/
+#           └── YYYY-MM-DD.md
+#
+# All data is under ~/.efp/ for easy backup and management
+# ============================================
 # Server Configuration (OPTIONAL)
 # ============================================
 server:
