@@ -78,15 +78,22 @@ class MemoryConfig:
         # Memory storage path
         self.memory_dir = Path(config.get("path", str(DEFAULT_MEMORY_DIR))) if config else DEFAULT_MEMORY_DIR
         
-        # Workspace path - read from workspace.path (new config structure)
-        # Falls back to workspace config or default
+        # Workspace path - supports both old and new config structures
+        # Old: memory.workspace (string) - DEPRECATED
+        # New: workspace.path (dict)
+        memory_workspace = config.get("memory", {}).get("workspace") if config else None
         workspace_config = config.get("workspace", {}) if config else {}
-        if isinstance(workspace_config, dict):
-            # New structure: memory.workspace is removed, use workspace.path
+        
+        if memory_workspace:
+            # Legacy config: memory.workspace (deprecated)
+            logger.warning("memory.workspace is deprecated, use workspace.path instead")
+            self.workspace_dir = Path(memory_workspace)
+        elif isinstance(workspace_config, dict):
+            # New config: workspace.path
             self.workspace_dir = Path(workspace_config.get("path", str(DEFAULT_WORKSPACE)))
         else:
-            # Legacy: workspace was a string in memory.workspace
-            self.workspace_dir = Path(workspace_config) if workspace_config else Path(DEFAULT_WORKSPACE)
+            # Fallback
+            self.workspace_dir = Path(DEFAULT_WORKSPACE)
         
         # Ensure memory directory exists
         self.memory_dir.mkdir(parents=True, exist_ok=True)
@@ -173,20 +180,20 @@ def init_memory_store(config: Optional[MemoryConfig] = None, auto_init: bool = F
     """
     global memory_store, _memory_auto_init
     from src.memory.sqlite_store import SqliteMemoryStore
-    from src.config import config
+    from src.config import config as global_config
     
     # If no config provided, read from global config
     if config is None:
         # Build memory config from global config
-        global_config = getattr(config, 'memory', {})
-        workspace_config = getattr(config, 'workspace', {})
+        global_memory_config = getattr(global_config, 'memory', {})
+        global_workspace_config = getattr(global_config, 'workspace', {})
         
         merged_config = {
-            'enabled': global_config.get('enabled', True),
-            'provider': global_config.get('provider', 'openai'),
-            'model': global_config.get('model', 'text-embedding-3-small'),
-            'path': global_config.get('path', str(DEFAULT_MEMORY_DIR)),
-            'workspace': workspace_config,  # Pass workspace config dict
+            'enabled': global_memory_config.get('enabled', True),
+            'provider': global_memory_config.get('provider', 'openai'),
+            'model': global_memory_config.get('model', 'text-embedding-3-small'),
+            'path': global_memory_config.get('path', str(DEFAULT_MEMORY_DIR)),
+            'workspace': global_workspace_config,
         }
         config = merged_config
     
