@@ -38,12 +38,16 @@ def _is_debug_enabled() -> bool:
 
 
 def _format_content(content: str, prefix: str = "", max_length: int = 500) -> str:
-    """Format content for logging. Full content when debug is enabled."""
+    """Format content for logging. Truncated when debug is enabled, hidden when disabled."""
     if not content:
         return f"{prefix}(empty)"
-    if not _is_debug_enabled() and len(content) > max_length:
-        return f"{prefix}{content[:max_length]}... [{len(content) - max_length} chars truncated]"
-    return f"{prefix}{content}"
+    if _is_debug_enabled():
+        # Debug enabled: show truncated content for readability
+        if len(content) > max_length:
+            return f"{prefix}{content[:max_length]}... [{len(content) - max_length} chars truncated]"
+        return f"{prefix}{content}"
+    # Debug disabled: don't log content at all
+    return f"{prefix}(content hidden)"
 
 
 class Agent:

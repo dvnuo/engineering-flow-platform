@@ -25,13 +25,19 @@ from src.config import config
 
 logger = logging.getLogger(__name__)
 
+# Debug logging cache
+_DEBUG_ENABLED = None  # Lazy initialization
+
 # Debug logging is enabled when logger.level is DEBUG
 # Set log_level: DEBUG in config.yaml or use --debug flag
 # When DEBUG, complete input/output is logged (no truncation)
 
 def _is_debug_enabled() -> bool:
     """Check if debug mode is enabled (logger is DEBUG level)."""
-    return logger.isEnabledFor(logging.DEBUG)
+    global _DEBUG_ENABLED
+    if _DEBUG_ENABLED is None:
+        _DEBUG_ENABLED = logger.isEnabledFor(logging.DEBUG)
+    return _DEBUG_ENABLED
 
 
 def _is_full_output() -> bool:
@@ -42,7 +48,7 @@ def _is_full_output() -> bool:
 
 def _log_request(component: str, url: str, method: str = "POST", headers: Dict = None, payload: Dict = None):
     """Log request with consistent format. Only formats if debug is enabled."""
-    if not _DEBUG_ENABLED:
+    if not _is_debug_enabled():
         return
     logger.debug(f"=== [{component}] REQUEST ===")
     logger.debug(f"Method: {method}")
@@ -75,16 +81,15 @@ def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
     return sanitized
 
 
-def _truncate_text(text: str, max_length: int = 500) -> str:
-    """Truncate text for logging. When debug is enabled, returns full text."""
-    if _is_debug_enabled() or len(text) <= max_length:
-        return text
-    return text[:max_length] + f"... [{len(text) - max_length} chars truncated]"
+def _truncate_text(text: str, max_length: int = 200) -> str:
+    """Truncate text for logging preview."""
+    if not text:
+        return "(empty)"
+    if len(text) > max_length:
+        return f"{text[:max_length]}... [{len(text) - max_length} chars truncated]"
+    return text
 
 
-class BaseProvider:
-    """Base class for LLM providers."""
-    
     def __init__(self, name: str, api_base: str, api_key_env: str = ''):
         self.name = name
         self.api_base = api_base
@@ -372,6 +377,15 @@ class GitHubCopilotProvider(BaseProvider):
         # GitHub Copilot may return tool_calls
         tool_calls = message_data.get("tool_calls", [])
         
+        # Debug: Log content and tool calls
+        if _is_debug_enabled():
+            logger.debug(f"Content length: {len(content)} chars")
+            logger.debug(f"Content preview: {_truncate_text(content, 200)}")
+            logger.debug(f"Tool calls: {len(tool_calls)}")
+            for tc in tool_calls:
+                tc_name = tc.get("function", {}).get("name", "unknown")
+                logger.debug(f"  - {tc_name}")
+        
         # Calculate usage (approximate)
         prompt_tokens = sum(len(str(m).split()) for m in all_messages) * 4  # Rough estimate
         completion_tokens = len(content.split()) * 4  # Rough estimate
@@ -466,7 +480,21 @@ class ClaudeProvider(BaseProvider):
             logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
             logger.debug(f"Status: {response.status_code}")
         
-        return self._parse_response(data)
+        # Parse and log content/tool calls
+        parsed = self._parse_response(data)
+        
+        # Debug: Log content and tool calls
+        if _is_debug_enabled():
+            content = parsed.get("content", "")
+            tool_calls = parsed.get("tool_calls", [])
+            logger.debug(f"Content length: {len(content)} chars")
+            logger.debug(f"Content preview: {_truncate_text(content, 200)}")
+            logger.debug(f"Tool calls: {len(tool_calls)}")
+            for tc in tool_calls:
+                tc_name = tc.get("function", {}).get("name", "unknown")
+                logger.debug(f"  - {tc_name}")
+        
+        return parsed
     
     def _convert_tools_to_claude(self, tools: List[Dict]) -> List[Dict]:
         """Convert OpenAI-style tools to Claude format."""
