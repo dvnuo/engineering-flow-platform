@@ -1,12 +1,4 @@
-"""Tools module - File operations and shell execution tools.
-
-遵循项目命名规范:
-- api.py 包含所有工具实现
-- __init__.py 导出工具函数
-
-Security features inspired by OpenClaw:
-https://github.com/openclaw/openclaw/tree/main/src/agents
-"""
+"""Tools module - File operations and shell execution tools."""
 
 from .api import (
     read,

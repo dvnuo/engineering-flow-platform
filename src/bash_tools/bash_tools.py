@@ -1,8 +1,7 @@
 """
 Exec Security Module
 
-Provides security controls for command execution, inspired by OpenClaw's approach.
-https://github.com/openclaw/openclaw/tree/main/src/agents
+Provides security controls for command execution.
 """
 
 from dataclasses import dataclass, field
