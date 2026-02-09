@@ -58,20 +58,17 @@ def check_config() -> tuple[bool, list[str]]:
     can_start = True
     
     # Check Discord configuration
-    discord_token = config.discord.get("bot_token")
-    if not discord_token:
-        warnings.append("Discord bot_token not configured (Discord channel will be disabled)")
+    discord_enabled = config.discord.get("enabled", False)
+    discord_token = config.discord.get("bot_token", "")
+    
+    if discord_enabled and not discord_token:
+        warnings.append("Discord enabled but bot_token not configured")
     
     # Check LLM configuration
     llm_api_key = config.llm.get("api_key")
     if not llm_api_key:
         warnings.append("LLM api_key is not configured (Agent will not respond to messages)")
         can_start = False
-    
-    # Check if any channel is configured
-    jira_enabled = config.jira.get("enabled")
-    if not discord_token and not jira_enabled:
-        warnings.append("No messaging channel configured (Discord or Jira)")
     
     return can_start, warnings
 
