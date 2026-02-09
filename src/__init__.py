@@ -1,7 +1,7 @@
 """
-Tools - Unified tool exports for Engineering Flow Platform.
+Bash Tools - Shell execution and file operations.
 
-This module exports all tools from src/tools/* for agent use.
+Bash tools with security controls.
 """
 
 from typing import Any, Dict, List, Optional
@@ -52,17 +52,20 @@ from .github import get_tools_schemas as get_github_tools
 from .jira import get_tools_schemas as get_jira_tools
 from .confluence import get_tools_schemas as get_confluence_tools
 from .git import get_tools_schemas as get_git_tools
+from .bash_tools import get_tools_schemas as get_bash_tools
 
 # Also export raw functions for backward compatibility
 from . import github
 from . import jira
 from . import confluence
 from . import git
+from . import bash_tools
 
 
 def get_all_tools() -> list:
     """Get all tool schemas."""
     tools = []
+    tools.extend(get_bash_tools())   # Bash/Shell tools: read, write, edit, list_dir, exec
     tools.extend(get_github_tools())
     tools.extend(get_jira_tools())
     tools.extend(get_confluence_tools())
@@ -90,40 +93,52 @@ def get_tools_schema() -> List[Dict]:
 
 async def execute_tool(name: str, **kwargs) -> ToolResult:
     """Execute a tool by name."""
-    # Simple implementation - can be extended
-    return ToolResult(success=False, error=f"Tool {name} not implemented")
-
-
-__all__ = [
-    "get_all_tools",
-    "get_tool_names",
-    "get_tool",
-    "get_tools_schema",
-    "execute_tool",
-    "get_github_tools",
-    "get_jira_tools",
-    "get_confluence_tools",
-    "get_git_tools",
-    "github_api",
-    "jira",
-    "confluence",
-    "git_api",
-    "ToolResult",
-    "Tool",
-    "TOOLS",
-]
-
-
-# Add tools to execute_tool
-async def execute_tool(name: str, **kwargs) -> ToolResult:
-    """Execute a tool by name."""
+    from . import bash_tools as bash_tools_module
     from . import git as git_module
     from . import jira as jira_module
     from . import github as github_module
     from . import confluence as confluence_module
     
+    # Bash/Shell tools
+    if name == "read":
+        file_path = kwargs.get("file_path", "")
+        limit = kwargs.get("limit")
+        offset = kwargs.get("offset")
+        result = bash_tools_module.read(file_path, limit, offset)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "write":
+        file_path = kwargs.get("file_path", "")
+        content = kwargs.get("content", "")
+        result = bash_tools_module.write(file_path, content)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "edit":
+        file_path = kwargs.get("file_path", "")
+        oldText = kwargs.get("oldText", "")
+        newText = kwargs.get("newText", "")
+        result = bash_tools_module.edit(file_path, oldText, newText)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "list_dir":
+        path = kwargs.get("path", ".")
+        result = bash_tools_module.list_dir(path)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "exec":
+        command = kwargs.get("command", "")
+        timeout = kwargs.get("timeout", 60)
+        workdir = kwargs.get("workdir")
+        env = kwargs.get("env")
+        security = kwargs.get("security")
+        ask = kwargs.get("ask")
+        result = await bash_tools_module.exec(command, timeout, workdir, env, security, ask)
+        # Check for success (not blocked, no error)
+        is_success = "Error" not in result and "blocked" not in result.lower() and "requires approval" not in result.lower()
+        return ToolResult(success=is_success, content=result)
+    
     # Git tools
-    if name == "git_status":
+    elif name == "git_status":
         workspace = kwargs.get("workspace", ".")
         result = await git_module.git_status(workspace)
         return ToolResult(success="Error" not in result, content=result)
@@ -198,3 +213,25 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         return ToolResult(success="Error" not in result, content=result)
     
     return ToolResult(success=False, error=f"Tool {name} not implemented")
+
+
+__all__ = [
+    "get_all_tools",
+    "get_tool_names",
+    "get_tool",
+    "get_tools_schema",
+    "execute_tool",
+    "get_github_tools",
+    "get_jira_tools",
+    "get_confluence_tools",
+    "get_git_tools",
+    "get_bash_tools",
+    "github_api",
+    "jira",
+    "confluence",
+    "git_api",
+    "bash_tools",
+    "ToolResult",
+    "Tool",
+    "TOOLS",
+]

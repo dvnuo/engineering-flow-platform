@@ -221,6 +221,7 @@ engineering-flow/
 - **Memory System** - Load context from workspace files
 - **Heartbeat** - Periodic background checks
 - **Extensible** - Easy to add new channels or tools
+- **Shell Tools** - File operations and secure command execution
 
 ---
 
@@ -329,6 +330,80 @@ server:
   host: "0.0.0.0"
   port: 8000
 ```
+
+---
+
+## Shell Tools (bash_tools)
+
+The platform includes shell tools for file operations and secure command execution.
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `read` | Read file contents |
+| `write` | Create or overwrite files |
+| `edit` | Edit files by replacing text |
+| `list_dir` | List directory contents |
+| `exec` | Execute shell commands with security controls |
+
+### Security Modes
+
+The `exec` tool supports three security modes:
+
+| Mode | Behavior |
+|------|----------|
+| `deny` | Block all commands by default (safest) |
+| `allowlist` | Only allow commands in safe_bins or allowlist |
+| `full` | Allow all commands (use with caution) |
+
+### Approval Modes
+
+| Mode | Behavior |
+|------|----------|
+| `off` | No approval needed |
+| `on-miss` | Request approval when command not in allowlist |
+| `always` | Always request approval |
+
+### Configuration
+
+Edit `config.yaml`:
+
+```yaml
+bash_tools:
+  # Security mode: deny, allowlist, full
+  security: "deny"
+
+  # Approval mode: off, on-miss, always
+  ask: "on-miss"
+
+  # Safe binaries (always allowed in allowlist mode)
+  safe_bins:
+    - "jq"
+    - "grep"
+    - "cut"
+    - "sort"
+    - "uniq"
+    - "head"
+    - "tail"
+    - "tr"
+    - "wc"
+
+  # Command allowlist patterns
+  allowlist:
+    - "/usr/bin/git"
+    - "/usr/bin/ls"
+```
+
+### Dangerous Environment Variables
+
+The following environment variables are blocked by default:
+
+- `LD_PRELOAD`, `LD_LIBRARY_PATH` - Library injection
+- `NODE_OPTIONS`, `NODE_PATH` - Node.js code injection
+- `PYTHONPATH`, `PYTHONHOME` - Python code injection
+- `BASH_ENV`, `ENV` - Shell execution injection
+- Custom `PATH` - Binary hijacking prevention
 
 ---
 
