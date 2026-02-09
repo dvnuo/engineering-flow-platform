@@ -1,241 +1,281 @@
 """Session persistence layer for Engineering Flow Platform.
 
-Manages JSONL transcript files and sessions.json store.
+Manages JSONL transcript files and sessions.json store with TTL support.
 """
 
 import asyncio
 import json
 import os
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 
-class SessionStore:
-    """Manages session persistence in JSONL format.
+class SessionPersistence:
+    """Manages session persistence in JSONL format with TTL support.
     
     Directory structure:
         sessions/
         ├── sessions.json          # Store: sessionKey -> metadata
-        ├── main/
-        │   └── <sessionId>.jsonl  # Transcript files
-        └── <channel>/
-            └── <sessionId>.jsonl
+        ├── sessions.active.jsonl  # Active sessions (append-only)
+        └── archive/
+            └── sessions_YYYYMMDD_HHMMSS.jsonl  # Rotated files
+    
+    Features:
+    - JSONL format for append-only logging
+    - TTL (Time-To-Live) for automatic expiration
+    - File rotation when size limit is reached
+    - Background cleanup of expired sessions
     """
     
-    def __init__(self, base_path: str = "~/.efp/sessions"):
-        self.base_path = Path(base_path).expanduser()
-        self.sessions_file = self.base_path / "sessions.json"
+    def __init__(
+        self,
+        storage_dir: str = "~/.efp/sessions",
+        ttl_seconds: int = 86400,  # 24 hours default
+        max_file_size_mb: int = 100,
+        enabled: bool = True,
+    ):
+        self.storage_dir = Path(storage_dir).expanduser()
+        self.ttl_seconds = ttl_seconds
+        self.max_file_size = max_file_size_mb * 1024 * 1024
+        self.enabled = enabled
         self._lock = None  # Created lazily in ensure_dir
+        self._ensure_dir()
     
-    async def ensure_dir(self):
+    def _ensure_dir(self):
         """Ensure base directory exists."""
-        self.base_path.mkdir(parents=True, exist_ok=True)
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.active_file = self.storage_dir / "sessions.active.jsonl"
+        self.archive_dir = self.storage_dir / "archive"
+        self.archive_dir.mkdir(exist_ok=True)
         if self._lock is None:
             self._lock = asyncio.Lock()
+        # Create active file if it doesn't exist
+        self.active_file.touch(exist_ok=True)
+    
+    def _is_expired(self, record: Dict) -> bool:
+        """Check if a session record is expired."""
+        expires_at = record.get("expires_at")
+        if not expires_at:
+            return False
+        try:
+            expires = datetime.fromisoformat(expires_at)
+            return datetime.utcnow() > expires
+        except (ValueError, TypeError):
+            return False
+    
+    def _calculate_expires_at(self) -> str:
+        """Calculate expiration time for new sessions."""
+        expires = datetime.utcnow() + timedelta(seconds=self.ttl_seconds)
+        return expires.isoformat()
+    
+    def _rotate_file(self):
+        """Rotate active file to archive when size limit is reached."""
+        if not self.enabled:
+            return
+        if self.active_file.stat().st_size < self.max_file_size:
+            return
         
-    def _load_store(self) -> Dict[str, Any]:
-        """Load sessions.json store."""
-        if self.sessions_file.exists():
-            try:
-                with open(self.sessions_file, 'r') as f:
-                    return json.load(f)
-            except json.JSONDecodeError:
-                return {}
-        return {}
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        archive_file = self.archive_dir / f"sessions_{timestamp}.jsonl"
+        
+        self.active_file.rename(archive_file)
+        self.active_file.touch(exist_ok=True)
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Rotated session file to {archive_file}")
     
-    def _save_store(self, store: Dict[str, Any]):
-        """Save sessions.json store."""
-        with open(self.sessions_file, 'w') as f:
-            json.dump(store, f, indent=2)
-    
-    def _get_transcript_path(self, channel: str, session_id: str) -> Path:
-        """Get path for transcript file."""
-        channel_dir = self.base_path / channel
-        channel_dir.mkdir(parents=True, exist_ok=True)
-        return channel_dir / f"{session_id}.jsonl"
-    
-    async def create_session(
+    async def save_session(
         self,
-        session_key: str,
-        channel: str = "main",
-        metadata: Optional[Dict] = None
-    ) -> str:
-        """Create a new session and return session_id."""
-        async with self._lock:
-            store = self._load_store()
-            
-            # Generate session ID
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            session_id = f"{channel}_{timestamp}"
-            
-            # Store metadata
-            store[session_key] = {
-                "sessionId": session_id,
-                "channel": channel,
-                "createdAt": datetime.now().isoformat(),
-                "updatedAt": datetime.now().isoformat(),
-                "messageCount": 0,
-                "metadata": metadata or {},
-            }
-            
-            self._save_store(store)
-            
-            # Initialize transcript file
-            transcript_path = self._get_transcript_path(channel, session_id)
-            transcript_path.touch()
-            
-            return session_id
-    
-    async def get_session_id(self, session_key: str) -> Optional[str]:
-        """Get session_id for a session key."""
-        store = self._load_store()
-        session = store.get(session_key)
-        return session["sessionId"] if session else None
-    
-    async def get_session_info(self, session_key: str) -> Optional[Dict[str, Any]]:
-        """Get session metadata."""
-        store = self._load_store()
-        return store.get(session_key)
-    
-    async def update_session(
-        self,
-        session_key: str,
-        updates: Dict[str, Any]
+        session_id: str,
+        channel: str,
+        messages: List[Dict[str, Any]],
+        metadata: Optional[Dict] = None,
     ) -> bool:
-        """Update session metadata."""
-        async with self._lock:
-            store = self._load_store()
-            if session_key not in store:
-                return False
-            
-            store[session_key].update(updates)
-            store[session_key]["updatedAt"] = datetime.now().isoformat()
-            self._save_store(store)
-            return True
-    
-    async def append_message(
-        self,
-        session_key: str,
-        role: str,
-        content: str,
-        metadata: Optional[Dict] = None
-    ) -> bool:
-        """Append a message to the transcript."""
-        store = self._load_store()
-        if session_key not in store:
+        """Save or update a session to the active JSONL file."""
+        if not self.enabled:
             return False
         
-        session_info = store[session_key]
-        channel = session_info["channel"]
-        session_id = session_info["sessionId"]
-        
-        transcript_path = self._get_transcript_path(channel, session_id)
-        
-        entry = {
-            "role": role,
-            "content": content,
-            "timestamp": datetime.now().isoformat(),
-            "metadata": metadata or {},
-        }
-        
-        with open(transcript_path, 'a') as f:
-            f.write(json.dumps(entry) + '\n')
-        
-        # Update message count
-        session_info["messageCount"] = session_info.get("messageCount", 0) + 1
-        session_info["updatedAt"] = datetime.now().isoformat()
-        self._save_store(store)
-        
-        return True
+        async with self._lock:
+            try:
+                # Check file size and rotate if needed
+                if self.active_file.stat().st_size > self.max_file_size:
+                    self._rotate_file()
+                
+                now = datetime.utcnow().isoformat()
+                expires_at = self._calculate_expires_at()
+                
+                record = {
+                    "session_id": session_id,
+                    "channel": channel,
+                    "messages": messages,
+                    "metadata": metadata or {},
+                    "created_at": now,
+                    "updated_at": now,
+                    "expires_at": expires_at,
+                }
+                
+                with open(self.active_file, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + '\n')
+                
+                return True
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to save session: {e}")
+                return False
     
-    async def get_transcript(
-        self,
-        session_key: str,
-        limit: Optional[int] = None
-    ) -> List[Dict[str, Any]]:
-        """Get transcript history for a session."""
-        store = self._load_store()
-        if session_key not in store:
-            return []
+    async def load_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Load a session by ID from the active file."""
+        if not self.enabled:
+            return None
         
-        session_info = store[session_key]
-        channel = session_info["channel"]
-        session_id = session_info["sessionId"]
-        
-        transcript_path = self._get_transcript_path(channel, session_id)
-        if not transcript_path.exists():
-            return []
-        
-        messages = []
-        with open(transcript_path, 'r') as f:
-            for line in f:
-                if line.strip():
-                    messages.append(json.loads(line))
-        
-        if limit:
-            messages = messages[-limit:]
-        
-        return messages
+        try:
+            with open(self.active_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    record = json.loads(line)
+                    if record.get("session_id") == session_id:
+                        if self._is_expired(record):
+                            return None
+                        return record
+            return None
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to load session: {e}")
+            return None
     
     async def list_sessions(
         self,
-        active_minutes: Optional[int] = None
+        include_expired: bool = False,
     ) -> List[Dict[str, Any]]:
-        """List all sessions, optionally filtered by activity."""
-        store = self._load_store()
-        sessions = list(store.values())
+        """List all sessions, optionally including expired ones."""
+        if not self.enabled:
+            return []
         
-        if active_minutes:
-            cutoff = datetime.now().timestamp() - (active_minutes * 60)
-            sessions = [
-                s for s in sessions
-                if datetime.fromisoformat(s["updatedAt"]).timestamp() > cutoff
-            ]
+        sessions = []
+        now = datetime.utcnow()
         
-        return sessions
+        try:
+            with open(self.active_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    record = json.loads(line)
+                    
+                    if not include_expired:
+                        expires_at = record.get("expires_at")
+                        if expires_at:
+                            try:
+                                expires = datetime.fromisoformat(expires_at)
+                                if now > expires:
+                                    continue
+                            except (ValueError, TypeError):
+                                continue
+                    
+                    sessions.append(record)
+            
+            return sessions
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to list sessions: {e}")
+            return []
     
-    async def delete_session(self, session_key: str) -> bool:
-        """Delete a session and its transcript."""
+    async def delete_session(self, session_id: str) -> bool:
+        """Delete a session by ID."""
+        if not self.enabled:
+            return False
+        
         async with self._lock:
-            store = self._load_store()
-            if session_key not in store:
+            try:
+                sessions = []
+                deleted = False
+                
+                with open(self.active_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        record = json.loads(line)
+                        if record.get("session_id") != session_id:
+                            sessions.append(line)
+                        else:
+                            deleted = True
+                
+                with open(self.active_file, 'w', encoding='utf-8') as f:
+                    f.writelines(sessions)
+                
+                return deleted
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to delete session: {e}")
                 return False
-            
-            session_info = store[session_key]
-            channel = session_info["channel"]
-            session_id = session_info["sessionId"]
-            
-            # Delete transcript file
-            transcript_path = self._get_transcript_path(channel, session_id)
-            if transcript_path.exists():
-                transcript_path.unlink()
-            
-            # Remove from store
-            del store[session_key]
-            self._save_store(store)
-            
-            return True
+    
+    async def cleanup_expired(self) -> int:
+        """Remove all expired sessions from the active file."""
+        if not self.enabled:
+            return 0
+        
+        async with self._lock:
+            try:
+                sessions = []
+                removed = 0
+                now = datetime.utcnow()
+                
+                with open(self.active_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        record = json.loads(line)
+                        
+                        expires_at = record.get("expires_at")
+                        is_expired = False
+                        
+                        if expires_at:
+                            try:
+                                expires = datetime.fromisoformat(expires_at)
+                                is_expired = now > expires
+                            except (ValueError, TypeError):
+                                is_expired = True  # Remove malformed records
+                        
+                        if is_expired:
+                            removed += 1
+                        else:
+                            sessions.append(line)
+                
+                with open(self.active_file, 'w', encoding='utf-8') as f:
+                    f.writelines(sessions)
+                
+                logger = logging.getLogger(__name__)
+                logger.info(f"Cleaned up {removed} expired sessions")
+                return removed
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to cleanup expired sessions: {e}")
+                return 0
     
     async def clear_all(self) -> int:
-        """Clear all sessions. Returns count deleted."""
+        """Clear all sessions. Returns count of cleared sessions."""
+        if not self.enabled:
+            return 0
+        
         async with self._lock:
-            store = self._load_store()
-            count = len(store)
-            
-            # Delete all transcript files
-            for session_info in store.values():
-                channel = session_info["channel"]
-                session_id = session_info["sessionId"]
-                transcript_path = self._get_transcript_path(channel, session_id)
-                if transcript_path.exists():
-                    transcript_path.unlink()
-            
-            # Clear store
-            self._save_store({})
-            
-            return count
+            try:
+                count = 0
+                with open(self.active_file, 'r', encoding='utf-8') as f:
+                    count = sum(1 for line in f if line.strip())
+                
+                self.active_file.unlink()
+                self.active_file.touch(exist_ok=True)
+                
+                logger = logging.getLogger(__name__)
+                logger.info(f"Cleared {count} sessions")
+                return count
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to clear sessions: {e}")
+                return 0
 
 
 # Global session store instance
-session_store = SessionStore()
+session_persistence = SessionPersistence()

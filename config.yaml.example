@@ -55,8 +55,27 @@ llm:
 # ============================================
 # Session Configuration (OPTIONAL)
 # ============================================
+# ============================================
+# Session Configuration (OPTIONAL)
+# ============================================
+# Session persistence and caching settings
 session:
+  # In-memory session settings
   max_history: 5  # Keep last 5 conversation turns
+  auto_save: true  # Automatically save sessions to disk
+
+  # Persistence layer settings (JSONL format)
+  persistence:
+    enabled: true  # Enable session persistence
+    storage_dir: "~/.efp/sessions"  # Where to store session files
+    ttl_seconds: 86400  # Session TTL in seconds (default: 24 hours)
+    max_file_size_mb: 100  # Max size before file rotation
+
+  # Cache settings (for in-memory session cache)
+  cache:
+    enabled: true  # Enable session caching
+    max_sessions: 1000  # Max sessions to keep in memory
+    ttl_seconds: 3600  # Cache TTL in seconds (default: 1 hour)
 
 # ============================================
 # Server Configuration (OPTIONAL)
