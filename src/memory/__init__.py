@@ -74,8 +74,26 @@ class MemoryConfig:
         self.text_weight = config.get("hybrid", {}).get("text_weight", 0.3) if config else 0.3
         self.cache_enabled = config.get("cache", {}).get("enabled", True) if config else True
         self.cache_max_entries = config.get("cache", {}).get("max_entries", 50000) if config else 50000
+        
+        # Memory storage path
         self.memory_dir = Path(config.get("path", str(DEFAULT_MEMORY_DIR))) if config else DEFAULT_MEMORY_DIR
-        self.workspace_dir = Path(config.get("workspace", str(DEFAULT_WORKSPACE))) if config else DEFAULT_WORKSPACE
+        
+        # Workspace path - supports both old and new config structures
+        # Old: memory.workspace (string) - DEPRECATED
+        # New: workspace.path (dict)
+        memory_workspace = config.get("memory", {}).get("workspace") if config else None
+        workspace_config = config.get("workspace", {}) if config else {}
+        
+        if memory_workspace:
+            # Legacy config: memory.workspace (deprecated)
+            logger.warning("memory.workspace is deprecated, use workspace.path instead")
+            self.workspace_dir = Path(memory_workspace)
+        elif isinstance(workspace_config, dict):
+            # New config: workspace.path
+            self.workspace_dir = Path(workspace_config.get("path", str(DEFAULT_WORKSPACE)))
+        else:
+            # Fallback
+            self.workspace_dir = Path(DEFAULT_WORKSPACE)
         
         # Ensure memory directory exists
         self.memory_dir.mkdir(parents=True, exist_ok=True)
@@ -154,7 +172,7 @@ def init_memory_store(config: Optional[MemoryConfig] = None, auto_init: bool = F
     """Initialize the global memory store.
     
     Args:
-        config: Optional memory configuration.
+        config: Optional memory configuration. If not provided, reads from global config.
         auto_init: If True, automatically initialize on first use.
         
     Returns:
@@ -162,8 +180,24 @@ def init_memory_store(config: Optional[MemoryConfig] = None, auto_init: bool = F
     """
     global memory_store, _memory_auto_init
     from src.memory.sqlite_store import SqliteMemoryStore
+    from src.config import config as global_config
     
-    memory_store = SqliteMemoryStore(config)
+    # If no config provided, read from global config
+    if config is None:
+        # Build memory config from global config
+        global_memory_config = getattr(global_config, 'memory', {})
+        global_workspace_config = getattr(global_config, 'workspace', {})
+        
+        merged_config = {
+            'enabled': global_memory_config.get('enabled', True),
+            'provider': global_memory_config.get('provider', 'openai'),
+            'model': global_memory_config.get('model', 'text-embedding-3-small'),
+            'path': global_memory_config.get('path', str(DEFAULT_MEMORY_DIR)),
+            'workspace': global_workspace_config,
+        }
+        config = merged_config
+    
+    memory_store = SqliteMemoryStore(MemoryConfig(config))
     _memory_auto_init = auto_init
     logger.info(f"Memory store initialized: {config}")
     return memory_store

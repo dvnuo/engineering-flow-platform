@@ -98,9 +98,8 @@ memory:
     enabled: true  # Enable embedding cache
     max_entries: 50000  # Maximum cached embeddings
 
-  # Storage paths (unified under ~/.efp/)
+  # SQLite database location
   path: "~/.efp/memory"  # SQLite database location
-  workspace: "~/.efp/workspace"  # Workspace files (MEMORY.md, daily notes)
 
 # ============================================
 # Workspace Configuration (OPTIONAL)
