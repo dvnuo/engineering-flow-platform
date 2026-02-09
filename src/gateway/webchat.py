@@ -13,6 +13,7 @@ from typing import Any, Dict
 from aiohttp import web
 
 from src.agents.core import Agent as AgentCore
+from src.agents.errors import extract_error_details, LLMError
 from src.config import config
 from src.sessions.manager import session_manager
 from src.sessions.usage import usage_tracker
@@ -159,8 +160,40 @@ async def api_chat(request: web.Request) -> web.Response:
     except json.JSONDecodeError:
         return web.json_response({'error': 'Invalid JSON'}, status=400)
     except Exception as e:
+        # Get detailed error information
+        error_details = extract_error_details(e)
+        
+        # Log full error details
         logger.error(f"Chat error: {e}")
-        return web.json_response({'error': str(e)}, status=500)
+        logger.error(f"Error details: {json.dumps(error_details, indent=2)}")
+        
+        # Return user-friendly error message with optional details
+        user_message = str(e)
+        error_type = error_details.get("error_type", "unknown")
+        status_code = 500
+        
+        # Map error types to HTTP status codes
+        if error_type == "bad_request":
+            status_code = 400
+        elif error_type == "authentication_error":
+            status_code = 401
+        elif error_type == "rate_limit":
+            status_code = 429
+        elif error_type == "server_error":
+            status_code = 500
+        
+        # Try to get a user-friendly message
+        if isinstance(e, LLMError):
+            # Use the error's message
+            user_message = e.message
+            status_code = e.status_code or status_code
+        
+        return web.json_response({
+            'error': user_message,
+            'error_type': error_type,
+            'details': error_details.get("details", {}),
+            'timestamp': error_details.get("timestamp"),
+        }, status=status_code)
 
 
 async def api_sessions(request: web.Request) -> web.Response:
