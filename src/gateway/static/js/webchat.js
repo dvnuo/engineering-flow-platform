@@ -1080,6 +1080,19 @@
         });
     }
     
+    // Password toggle buttons
+    document.querySelectorAll('.toggle-password').forEach(button => {
+        button.addEventListener('click', function() {
+            const targetId = this.getAttribute('data-target');
+            const input = document.getElementById(targetId);
+            if (input) {
+                const isPassword = input.type === 'password';
+                input.type = isPassword ? 'text' : 'password';
+                this.classList.toggle('showing', isPassword);
+            }
+        });
+    });
+    
     async function showSettings() {
         settingsPanel.classList.add('show');
         
@@ -1098,7 +1111,7 @@
                     llmProvider.value = provider;
                     // Update model dropdown with current provider and model
                     updateModelDropdown(provider, model);
-                    // API key is hidden, don't populate
+                    llmApiKey.value = config.llm.api_key || '';
                 } else {
                     // Default to github_copilot with gpt-4
                     llmProvider.value = 'github_copilot';
@@ -1110,7 +1123,7 @@
                     jiraEnabled.checked = config.jira.enabled || false;
                     jiraUrl.value = config.jira.url || '';
                     jiraUsername.value = config.jira.username || '';
-                    // API token is hidden
+                    jiraApiToken.value = config.jira.api_token || '';
                 }
                 
                 // Confluence settings
@@ -1118,7 +1131,7 @@
                     confluenceEnabled.checked = config.confluence.enabled || false;
                     confluenceUrl.value = config.confluence.url || '';
                     confluenceUsername.value = config.confluence.username || '';
-                    // API token is hidden
+                    confluenceApiToken.value = config.confluence.api_token || '';
                 }
                 
                 // GitHub settings

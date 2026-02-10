@@ -1488,6 +1488,40 @@ input:checked + .slider:before {
     border-color: var(--color-accent);
 }
 
+/* Password Input with Toggle */
+.password-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.password-input-wrapper .settings-input {
+    padding-right: 40px;
+}
+
+.toggle-password {
+    position: absolute;
+    right: 8px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-muted);
+    transition: color var(--duration-fast);
+}
+
+.toggle-password:hover {
+    color: var(--color-text);
+}
+
+.toggle-password .eye-icon {
+    width: 16px;
+    height: 16px;
+}
+
 .settings-input-group {
     margin-bottom: var(--space-md);
 }

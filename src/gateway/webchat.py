@@ -611,7 +611,7 @@ async def api_save_config(request: web.Request) -> web.Response:
 
 
 async def api_get_config(request: web.Request) -> web.Response:
-    """Get current configuration (without sensitive values).
+    """Get current configuration.
     
     GET /api/config
     """
@@ -631,23 +631,7 @@ async def api_get_config(request: web.Request) -> web.Response:
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f) or {}
         
-        # Remove sensitive values for display
-        def sanitize(obj, level=0):
-            if level > 3:
-                return obj
-            if isinstance(obj, dict):
-                result = {}
-                for k, v in obj.items():
-                    if 'key' in k.lower() or 'token' in k.lower() or 'password' in k.lower() or 'secret' in k.lower():
-                        result[k] = '***HIDDEN***' if v else ''
-                    else:
-                        result[k] = sanitize(v, level + 1)
-                return result
-            elif isinstance(obj, list):
-                return [sanitize(i, level + 1) for i in obj]
-            return obj
-        
-        return web.json_response({'config': sanitize(config)})
+        return web.json_response({'config': config})
     except Exception as e:
         logger.error(f"Error reading config: {e}")
         return web.json_response({'error': str(e)}, status=500)
