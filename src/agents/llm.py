@@ -37,18 +37,62 @@ from .errors import (
 logger = logging.getLogger(__name__)
 
 # Debug logging cache
-_DEBUG_ENABLED = None  # Lazy initialization
+_DEBUG_ENABLED = None
+_HTTPX_TRACE_ENABLED = None
 
 # Debug logging is enabled when logger.level is DEBUG
 # Set log_level: DEBUG in config.yaml or use --debug flag
 # When DEBUG, complete input/output is logged (no truncation)
+
+def _setup_httpx_logging():
+    """Configure httpx logging based on debug settings."""
+    global _HTTPX_TRACE_ENABLED
+    
+    if _HTTPX_TRACE_ENABLED is not None:
+        return  # Already configured
+    
+    try:
+        # Check if httpx trace logging should be enabled
+        debug_config = config.debug() if hasattr(config, 'debug') else {}
+        httpx_trace = debug_config.get('httpx_trace', False) if debug_config else False
+        
+        # Get httpx logger
+        httpx_logger = logging.getLogger("httpx")
+        
+        if httpx_trace:
+            # Enable DEBUG level for httpx to show trace logs
+            httpx_logger.setLevel(logging.DEBUG)
+            _HTTPX_TRACE_ENABLED = True
+        else:
+            # Disable httpx trace logs by default
+            # Set to WARNING to suppress DEBUG trace logs
+            httpx_logger.setLevel(logging.WARNING)
+            _HTTPX_TRACE_ENABLED = False
+        
+        # Also configure httpcore (underlying HTTP library)
+        httpcore_logger = logging.getLogger("httpcore")
+        httpcore_logger.setLevel(httpx_logger.level)
+        
+    except Exception:
+        _HTTPX_TRACE_ENABLED = False
+
 
 def _is_debug_enabled() -> bool:
     """Check if debug mode is enabled (logger is DEBUG level)."""
     global _DEBUG_ENABLED
     if _DEBUG_ENABLED is None:
         _DEBUG_ENABLED = logger.isEnabledFor(logging.DEBUG)
+        # Setup httpx logging after first check
+        _setup_httpx_logging()
     return _DEBUG_ENABLED
+
+
+def _is_httpx_trace_enabled() -> bool:
+    """Check if httpx trace logging is enabled."""
+    global _HTTPX_TRACE_ENABLED
+    if _HTTPX_TRACE_ENABLED is None:
+        _setup_httpx_logging()
+    return _HTTPX_TRACE_ENABLED
 
 
 def _is_full_output() -> bool:

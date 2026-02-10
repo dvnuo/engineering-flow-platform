@@ -325,6 +325,10 @@ heartbeat:
 
 debug:
   enabled: false  # Set to true to enable debug logging
+  # httpx_trace: Enable httpx detailed trace logging (very verbose)
+  # When true, logs all HTTP request/response details including TLS, headers, body
+  # Recommended: false - set to true only for network debugging
+  httpx_trace: false  # Set to true to enable httpx trace logging
 
 # Example usage:
 # debug:
