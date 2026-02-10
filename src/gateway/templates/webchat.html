@@ -32,10 +32,22 @@
         
         <div class="input-area">
             <div class="input-wrapper">
+                <div class="skill-selector" id="skillSelector">
+                    <div class="skill-selector-dropdown" id="skillDropdown">
+                        <div class="skill-selector-header">Available Skills</div>
+                        <div class="skill-list" id="skillList">
+                            <div class="skill-item" data-command="/git">
+                                <span class="skill-emoji">🔧</span>
+                                <span class="skill-name">git</span>
+                                <span class="skill-desc">Execute git commands</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <textarea 
                     class="input-field" 
                     id="messageInput" 
-                    placeholder="Type your message..."
+                    placeholder="Type a message or / for skills..."
                     rows="1"
                 ></textarea>
                 <button class="send-button" id="sendButton">Send</button>

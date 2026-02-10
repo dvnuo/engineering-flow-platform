@@ -15,11 +15,17 @@
     const statsModal = document.getElementById('statsModal');
     const closeStatsButton = document.getElementById('closeStats');
     const statsContent = document.getElementById('statsContent');
+    const skillSelector = document.getElementById('skillSelector');
+    const skillDropdown = document.getElementById('skillDropdown');
+    const skillList = document.getElementById('skillList');
     
     // State
     let isLoading = false;
     let totalTokens = 0;
     let totalCost = 0;
+    let skills = [];
+    let selectedSkillIndex = -1;
+    let skillsLoaded = false;
     
     // Stats Modal
     statsButton.addEventListener('click', showStats);
@@ -122,6 +128,118 @@
         statsModal.classList.remove('show');
     }
     
+    // ========== Skill Selector ==========
+    
+    /**
+     * Load skills from API
+     */
+    async function loadSkills() {
+        if (skillsLoaded) return;
+        
+        try {
+            const response = await fetch('/api/skills');
+            const data = await response.json();
+            skills = data.skills || [];
+            skillsLoaded = true;
+        } catch (error) {
+            console.error('Failed to load skills:', error);
+            skills = [];
+        }
+    }
+    
+    /**
+     * Show skill selector dropdown
+     */
+    function showSkillSelector() {
+        if (!skills.length) {
+            loadSkills().then(() => {
+                if (skills.length) {
+                    renderSkillList();
+                    skillSelector.classList.add('active');
+                }
+            });
+            return;
+        }
+        renderSkillList();
+        skillSelector.classList.add('active');
+    }
+    
+    /**
+     * Hide skill selector dropdown
+     */
+    function hideSkillSelector() {
+        skillSelector.classList.remove('active');
+        selectedSkillIndex = -1;
+    }
+    
+    /**
+     * Render skill list in dropdown
+     */
+    function renderSkillList() {
+        if (!skills.length) {
+            skillList.innerHTML = '<div class="skill-item"><span class="skill-desc">No skills available</span></div>';
+            return;
+        }
+        
+        const query = messageInput.value.slice(1).toLowerCase();
+        let filteredSkills = skills;
+        
+        if (query) {
+            filteredSkills = skills.filter(s => 
+                s.name.toLowerCase().includes(query) || 
+                s.description.toLowerCase().includes(query)
+            );
+        }
+        
+        skillList.innerHTML = filteredSkills.map((skill, index) => `
+            <div class="skill-item" data-command="/${skill.name}" data-index="${index}">
+                <span class="skill-emoji">${skill.emoji || '🔧'}</span>
+                <span class="skill-name">/${skill.name}</span>
+                <span class="skill-desc">${skill.description || ''}</span>
+            </div>
+        `).join('');
+        
+        // Add click handlers
+        skillList.querySelectorAll('.skill-item').forEach(item => {
+            item.addEventListener('click', function() {
+                const command = this.dataset.command;
+                messageInput.value = command + ' ';
+                messageInput.focus();
+                hideSkillSelector();
+            });
+        });
+        
+        // Select first item by default
+        if (filteredSkills.length > 0) {
+            selectedSkillIndex = 0;
+            skillList.children[0]?.classList.add('selected');
+        } else {
+            selectedSkillIndex = -1;
+        }
+    }
+    
+    /**
+     * Navigate skill list
+     */
+    function navigateSkillList(direction) {
+        const items = skillList.querySelectorAll('.skill-item');
+        if (!items.length) return;
+        
+        // Remove current selection
+        if (selectedSkillIndex >= 0 && selectedSkillIndex < items.length) {
+            items[selectedSkillIndex].classList.remove('selected');
+        }
+        
+        // Calculate new index
+        selectedSkillIndex += direction;
+        if (selectedSkillIndex < 0) selectedSkillIndex = items.length - 1;
+        if (selectedSkillIndex >= items.length) selectedSkillIndex = 0;
+        
+        // Add new selection
+        items[selectedSkillIndex].classList.add('selected');
+        items[selectedSkillIndex].scrollIntoView({ block: 'nearest' });
+    }
+    
     // Auto-resize textarea
     messageInput.addEventListener('input', function() {
         this.style.height = 'auto';
@@ -130,7 +248,51 @@
     
     // Send on Enter (Shift+Enter for new line)
     messageInput.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter' && !e.shiftKey) {
+        // Skill selector navigation
+        if (skillSelector.classList.contains('active')) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                navigateSkillList(1);
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                navigateSkillList(-1);
+                return;
+            }
+            if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                const selected = skillList.querySelector('.skill-item.selected');
+                if (selected) {
+                    const command = selected.dataset.command;
+                    messageInput.value = command + ' ';
+                    messageInput.focus();
+                    hideSkillSelector();
+                }
+                return;
+            }
+            if (e.key === 'Escape') {
+                hideSkillSelector();
+                return;
+            }
+        }
+        
+        // Show skill selector on /
+        if (e.key === '/' && messageInput.selectionStart === 0) {
+            e.preventDefault();
+            showSkillSelector();
+            return;
+        }
+        
+        // Close skill selector when deleting the /
+        if (e.key === 'Backspace' || e.key === 'Delete') {
+            if (messageInput.value === '/' && skillSelector.classList.contains('active')) {
+                hideSkillSelector();
+            }
+        }
+        
+        // Send message
+        if (e.key === 'Enter' && !e.shiftKey && !skillSelector.classList.contains('active')) {
             e.preventDefault();
             sendMessage();
         }
@@ -171,6 +333,13 @@
         messagesContainer.appendChild(div);
         scrollToBottom();
     }
+    
+    // Close skill selector when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!skillSelector.contains(e.target)) {
+            hideSkillSelector();
+        }
+    });
     
     /**
      * Escape HTML special characters
