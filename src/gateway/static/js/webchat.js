@@ -31,6 +31,57 @@
     let currentSessionId = localStorage.getItem('efp-session-id') || null;
     console.log('[WebChat] Initial sessionId from localStorage:', currentSessionId);
     
+    // ========== Helper Functions ==========
+    
+    /**
+     * Format timestamp with smart date display
+     * - Same day: "14:30"
+     * - Yesterday: "Yesterday 14:30"
+     * - Within a week: "Thursday 14:30"
+     * - Within a year: "Jan 15 14:30"
+     * - Over a year ago: "2024-01-15 14:30"
+     */
+    function formatSmartDate(date) {
+        const now = new Date();
+        const messageDate = new Date(date);
+        const timeStr = messageDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
+        // Same day
+        if (messageDate.toDateString() === now.toDateString()) {
+            return timeStr;
+        }
+        
+        // Yesterday
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        if (messageDate.toDateString() === yesterday.toDateString()) {
+            return `Yesterday ${timeStr}`;
+        }
+        
+        // Within the last 7 days
+        const oneWeekAgo = new Date(now);
+        oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+        if (messageDate > oneWeekAgo) {
+            const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            return `${days[messageDate.getDay()]} ${timeStr}`;
+        }
+        
+        // Within the same year
+        if (messageDate.getFullYear() === now.getFullYear()) {
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const month = months[messageDate.getMonth()];
+            const day = messageDate.getDate();
+            return `${month} ${day} ${timeStr}`;
+        }
+        
+        // Over a year ago
+        const year = messageDate.getFullYear();
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const month = months[messageDate.getMonth()];
+        const day = messageDate.getDate();
+        return `${year}-${month}-${day} ${timeStr}`;
+    }
+    
     // ========== Theme Management ==========
     
     const THEME_KEY = 'efp-theme';
@@ -440,10 +491,7 @@
         div.className = `message ${role}`;
         
         const avatar = role === 'user' ? 'U' : role === 'assistant' ? 'AI' : '!';
-        const time = timestamp || new Date().toLocaleTimeString([], { 
-            hour: '2-digit', 
-            minute: '2-digit' 
-        });
+        const time = timestamp ? formatSmartDate(timestamp) : formatSmartDate(new Date());
         
         div.innerHTML = `
             <div class="avatar" aria-hidden="true">${avatar}</div>
@@ -548,10 +596,7 @@
         const timestamp = document.createElement('div');
         timestamp.className = 'message-timestamp';
         timestamp.setAttribute('aria-label', 'Message time');
-        timestamp.textContent = new Date().toLocaleTimeString([], { 
-            hour: '2-digit', 
-            minute: '2-digit' 
-        });
+        timestamp.textContent = formatSmartDate(new Date());
         bubble.appendChild(timestamp);
     }
     
