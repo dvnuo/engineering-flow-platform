@@ -6,7 +6,7 @@ openai
 python-dotenv
 httpx
 discord.py>=2.3.0
-requests  # For Atlassian API (Jira/Confluence)
+requests
 
 # Vector memory for semantic search
 qdrant-client>=1.3.0
