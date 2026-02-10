@@ -918,7 +918,7 @@
             } else {
                 messages.forEach(msg => {
                     const role = msg.role || 'user';
-                    addMessage(role, msg.content || '');
+                    addMessage(role, msg.content || '', msg.timestamp || msg.created_at);
                 });
             }
             
