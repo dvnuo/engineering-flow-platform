@@ -609,8 +609,12 @@
                 // Update current session ID from response and persist
                 if (data.session_id) {
                     currentSessionId = data.session_id;
+                    console.log('[WebChat] Received session_id from server:', currentSessionId);
                     localStorage.setItem(SESSION_ID_KEY, currentSessionId);
                     console.log('[WebChat] Saved sessionId to localStorage:', currentSessionId);
+                    // Verify it was saved
+                    const saved = localStorage.getItem(SESSION_ID_KEY);
+                    console.log('[WebChat] Verified localStorage.getItem:', saved);
                 }
                 
                 addMessage('assistant', data.response);
@@ -971,5 +975,16 @@
     
     // Add copy buttons to existing code blocks
     addCopyButtons();
+    
+    // Debug: Expose session functions globally for testing
+    window.webchatDebugSession = {
+        get: () => localStorage.getItem('efp-session-id'),
+        set: (id) => {
+            localStorage.setItem('efp-session-id', id);
+            return localStorage.getItem('efp-session-id');
+        },
+        clear: () => localStorage.removeItem('efp-session-id'),
+        log: () => console.log('[WebChat] session_id:', localStorage.getItem('efp-session-id'))
+    };
     
 })();
