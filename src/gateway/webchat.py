@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from aiohttp import web
 
@@ -244,6 +244,124 @@ async def api_clear(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e)}, status=500)
 
 
+def _parse_skill_from_file(skill_path: Path) -> Optional[Dict[str, Any]]:
+    """Parse a skill from SKILL.md file.
+    
+    Args:
+        skill_path: Path to SKILL.md file
+        
+    Returns:
+        Skill dict or None if parsing fails
+    """
+    try:
+        content = skill_path.read_text(encoding='utf-8')
+        
+        # Extract skill name from first line (without # prefix)
+        lines = content.strip().split('\n')
+        name = ""
+        description = ""
+        emoji = "🔧"
+        examples = []
+        in_examples = False
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if line.startswith('# ') and not name:
+                name = line[2:].strip().replace(' Skill', '').lower()
+            elif line.startswith('## Examples'):
+                in_examples = True
+                continue
+            elif in_examples:
+                if line.startswith('```') or line.startswith('## '):
+                    in_examples = False
+                    continue
+                # Extract example commands from comments
+                if line.startswith('# '):
+                    example = line[2:].strip()
+                    if example and len(example) < 80:  # Limit example length
+                        examples.append(example)
+            elif not description and line and not line.startswith('#'):
+                description = line
+        
+        # Try to find emoji in first line or after #
+        emoji_match = content.strip().split('\n')[0]
+        if '📌' in emoji_match:
+            emoji = "📌"
+        elif '🔧' in emoji_match:
+            emoji = "🔧"
+        elif '💻' in emoji_match:
+            emoji = "💻"
+        elif '📝' in emoji_match:
+            emoji = "📝"
+        elif '🔍' in emoji_match:
+            emoji = "🔍"
+        elif '🌤️' in emoji_match:
+            emoji = "🌤️"
+        
+        return {
+            "name": name,
+            "description": description,
+            "emoji": emoji,
+            "path": str(skill_path.parent.name),
+            "examples": examples[:3],  # Limit to 3 examples
+        }
+    except Exception:
+        return None
+
+
+def _get_skills_list() -> List[Dict[str, Any]]:
+    """Get list of all available skills.
+    
+    Returns:
+        List of skill dictionaries
+    """
+    skills = []
+    project_root = Path(__file__).resolve().parent.parent.parent
+    
+    # Check multiple locations for skills
+    skill_dirs = [
+        project_root / "skills",
+        project_root / "src" / "skills",
+    ]
+    
+    for skill_dir in skill_dirs:
+        if not skill_dir.exists():
+            continue
+            
+        for skill_path in skill_dir.iterdir():
+            if skill_path.is_dir():
+                skill_file = skill_path / "SKILL.md"
+                if skill_file.exists():
+                    skill = _parse_skill_from_file(skill_file)
+                    if skill and skill["name"]:
+                        skills.append(skill)
+    
+    return skills
+
+
+async def api_skills(request: web.Request) -> web.Response:
+    """Get list of available skills.
+    
+    GET /api/skills
+    Returns: List of skills with name, description, emoji
+    """
+    try:
+        query = request.query.get('q', '').lower()
+        skills = _get_skills_list()
+        
+        if query:
+            # Filter skills by query
+            skills = [
+                s for s in skills
+                if query in s.get('name', '') or query in s.get('description', '')
+            ]
+        
+        return web.json_response({'skills': skills})
+    except Exception as e:
+        logger.error(f"Error getting skills: {e}")
+        return web.json_response({'error': str(e), 'skills': []}, status=500)
+
+
 def setup_webchat_routes(app: web.Application):
     """Set up WebChat routes.
     
@@ -254,6 +372,7 @@ def setup_webchat_routes(app: web.Application):
         GET  /api/sessions   - List sessions
         GET  /api/usage      - Get usage stats
         POST /api/clear      - Clear session
+        GET  /api/skills     - Get available skills
     """
     app.router.add_get('/chat', serve_webchat)
     app.router.add_get('/static/{path:.*}', serve_static)
@@ -261,6 +380,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
+    app.router.add_get('/api/skills', api_skills)
     
     logger.info("WebChat routes registered:")
     logger.info("  GET  /chat        - WebChat UI")
@@ -269,3 +389,4 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  GET  /api/sessions - List sessions")
     logger.info("  GET  /api/usage    - Get usage stats")
     logger.info("  POST /api/clear   - Clear session")
+    logger.info("  GET  /api/skills  - Get available skills")

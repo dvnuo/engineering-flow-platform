@@ -429,3 +429,98 @@ body {
     text-align: center;
     padding: 20px;
 }
+
+/* Skill Selector */
+.skill-selector {
+    position: relative;
+    display: none;
+}
+
+.skill-selector.active {
+    display: block;
+}
+
+.skill-selector-dropdown {
+    position: relative;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    background: #1a1a2e;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    margin-bottom: 8px;
+    max-height: 250px;
+    overflow-y: auto;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    z-index: 100;
+}
+
+.skill-selector-header {
+    padding: 10px 16px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.4);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.skill-list {
+    padding: 8px;
+}
+
+.skill-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.skill-item:hover,
+.skill-item.selected {
+    background: rgba(102, 126, 234, 0.2);
+}
+
+.skill-item .skill-emoji {
+    font-size: 16px;
+}
+
+.skill-item .skill-name {
+    font-weight: 600;
+    color: white;
+    min-width: 100px;
+}
+
+.skill-item .skill-desc {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 12px;
+}
+
+.skill-item.selected .skill-desc {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.skill-item .skill-examples {
+    display: none;
+    font-size: 11px;
+    color: rgba(102, 126, 234, 0.8);
+    margin-left: auto;
+    font-family: monospace;
+}
+
+.skill-item:hover .skill-examples,
+.skill-item.selected .skill-examples {
+    display: block;
+}
+
+/* Keyboard focus styles for accessibility */
+.skill-item:focus {
+    outline: 2px solid rgba(102, 126, 234, 0.8);
+    outline-offset: 2px;
+}
+
+.skill-item:focus .skill-examples {
+    display: block;
+}

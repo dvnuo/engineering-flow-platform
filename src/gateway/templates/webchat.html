@@ -32,10 +32,16 @@
         
         <div class="input-area">
             <div class="input-wrapper">
+                <div class="skill-selector" id="skillSelector">
+                    <div class="skill-selector-dropdown" id="skillDropdown" role="listbox" aria-label="Available Skills">
+                        <div class="skill-selector-header">Available Skills</div>
+                        <div class="skill-list" id="skillList" role="listbox"></div>
+                    </div>
+                </div>
                 <textarea 
                     class="input-field" 
                     id="messageInput" 
-                    placeholder="Type your message..."
+                    placeholder="Type a message or / for skills..."
                     rows="1"
                 ></textarea>
                 <button class="send-button" id="sendButton">Send</button>
@@ -54,13 +60,31 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h2>📊 Usage Statistics</h2>
-                <button class="close-button" id="closeStats">&times;</button>
+                <button class="close-button" id="closeStats" aria-label="Close">&times;</button>
             </div>
-            <div class="modal-body" id="statsContent">
+            <div class="modal-body" id="statsContent" role="region" aria-live="polite">
                 <div class="loading">Loading...</div>
             </div>
         </div>
     </div>
+    
+    <!-- Skill Selector Live Region for Screen Readers -->
+    <div id="skillAriaLive" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+    
+    <!-- Screen Reader Only Styles -->
+    <style>
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+    </style>
     
     <script src="/static/js/webchat.js"></script>
 </body>
