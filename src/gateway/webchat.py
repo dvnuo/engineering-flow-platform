@@ -430,7 +430,7 @@ async def api_browse_files(request: web.Request) -> web.Response:
     Returns: List of files and directories
     """
     try:
-        path = request.query.get('path', '/root/.openclaw/workspace/engineering-flow')
+        path = request.query.get('path', Path.home() / ".efp/workspace/engineering-flow")
         base_path = Path(path)
         
         if not base_path.exists():
