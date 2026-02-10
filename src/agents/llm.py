@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from src.config import config
+from src.sessions.usage import usage_tracker, estimate_cost
 from .errors import (
     handle_httpx_error,
     handle_httpx_request_error,
@@ -296,12 +297,24 @@ class OpenAIProvider(BaseProvider):
         if message.get("reasoning"):
             result["reasoning"] = message.get("reasoning")
         
-        # Calculate cost (simplified)
-        model_name = data.get("model", "")
-        if "gpt-4" in model_name:
-            result["usage"]["cost_usd"] = result["usage"].get("total_tokens", 0) * 0.00006
-        else:
-            result["usage"]["cost_usd"] = result["usage"].get("total_tokens", 0) * 0.000002
+        # Calculate cost using centralized pricing
+        usage = result["usage"]
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+        model_name = data.get("model", self.default_model)
+        
+        cost = estimate_cost(model_name, input_tokens, output_tokens)
+        usage["cost_usd"] = cost
+        
+        # Record usage for tracking
+        usage_tracker.record_usage(
+            provider=self.name,
+            model=model_name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            session_id="llm_api",
+            task_type="chat",
+        )
         
         return result
     
@@ -427,6 +440,21 @@ class GitHubCopilotProvider(BaseProvider):
         # Include reasoning if present
         if reasoning:
             result["reasoning"] = reasoning
+        
+        # Calculate cost and record usage
+        input_tokens = prompt_tokens
+        output_tokens = completion_tokens
+        cost = estimate_cost(self.default_model, input_tokens, output_tokens)
+        result["usage"]["cost_usd"] = cost
+        
+        usage_tracker.record_usage(
+            provider=self.name,
+            model=self.default_model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            session_id="llm_api",
+            task_type="chat",
+        )
         
         return result
     
@@ -570,6 +598,21 @@ class ClaudeProvider(BaseProvider):
         if reasoning_content:
             result["reasoning"] = reasoning_content
         
+        # Calculate cost and record usage
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        cost = estimate_cost(self.default_model, input_tokens, output_tokens)
+        result["usage"]["cost_usd"] = cost
+        
+        usage_tracker.record_usage(
+            provider=self.name,
+            model=self.default_model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            session_id="llm_api",
+            task_type="chat",
+        )
+        
         return result
     
     def list_models(self) -> List[str]:
@@ -680,6 +723,22 @@ class OllamaProvider(BaseProvider):
             for tc in tool_calls:
                 tc_name = tc.get("function", {}).get("name", "unknown")
                 logger.debug(f"  - {tc_name}")
+        
+        # Calculate cost (Ollama is free, but we track tokens)
+        usage = result.get("usage", {})
+        input_tokens = usage.get("prompt_eval_count", usage.get("prompt_tokens", 0))
+        output_tokens = usage.get("eval_count", usage.get("output_tokens", 0))
+        cost = estimate_cost(self.default_model, input_tokens, output_tokens)
+        result["usage"]["cost_usd"] = cost
+        
+        usage_tracker.record_usage(
+            provider=self.name,
+            model=self.default_model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            session_id="llm_api",
+            task_type="chat",
+        )
         
         return result
     
