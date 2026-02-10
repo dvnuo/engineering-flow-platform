@@ -4,35 +4,50 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Engineering Flow Platform - Chat</title>
+    
+    <!-- OpenClaw-inspired Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
     <link rel="stylesheet" href="/static/css/webchat.css">
 </head>
 <body>
-    <div class="header">
+    <!-- Header -->
+    <header class="header">
         <div class="logo">EFP</div>
-        <div>
-            <div class="header-title">Engineering Flow Platform Assistant</div>
+        <div class="header-content">
+            <div class="header-title">Engineering Flow Platform</div>
             <div class="header-subtitle">AI-Powered Personal Assistant</div>
         </div>
-        <button class="stats-button" id="statsButton" title="View Usage Stats">📊</button>
-    </div>
+        <button class="stats-button" id="statsButton" title="View Usage Stats" aria-label="View usage statistics">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 20V10"/>
+                <path d="M18 20V4"/>
+                <path d="M6 20v-4"/>
+            </svg>
+        </button>
+    </header>
     
-    <div class="chat-container">
-        <div class="messages" id="messages">
+    <!-- Chat Container -->
+    <main class="chat-container">
+        <div class="messages" id="messages" role="log" aria-live="polite">
             <div class="welcome-message">
                 <h2>👋 Welcome!</h2>
                 <p>I'm your AI assistant. How can I help you today?</p>
             </div>
         </div>
         
-        <div class="typing-indicator" id="typing">
+        <div class="typing-indicator" id="typing" role="status" aria-label="Assistant is typing">
             <div class="typing-dot"></div>
             <div class="typing-dot"></div>
             <div class="typing-dot"></div>
         </div>
         
+        <!-- Input Area -->
         <div class="input-area">
             <div class="input-wrapper">
-                <div class="skill-selector" id="skillSelector">
+                <div class="skill-selector" id="skillSelector" role="combobox" aria-expanded="false" aria-haspopup="listbox">
                     <div class="skill-selector-dropdown" id="skillDropdown" role="listbox" aria-label="Available Skills">
                         <div class="skill-selector-header">Available Skills</div>
                         <div class="skill-list" id="skillList" role="listbox"></div>
@@ -43,23 +58,51 @@
                     id="messageInput" 
                     placeholder="Type a message or / for skills..."
                     rows="1"
+                    aria-label="Message input"
                 ></textarea>
                 <button class="send-button" id="sendButton">Send</button>
             </div>
         </div>
-    </div>
+    </main>
     
-    <div class="status-bar">
-        <span id="status">Ready</span>
-        <span id="tokenCount">Tokens: 0</span>
-        <span id="costDisplay">Cost: $0.00</span>
-    </div>
+    <!-- Status Bar -->
+    <footer class="status-bar" role="contentinfo">
+        <span id="status">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M12 6v6l4 2"/>
+            </svg>
+            Ready
+        </span>
+        <button class="clear-button" id="clearButton" title="Clear chat">Clear</button>
+        <span id="tokenCount">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+            </svg>
+            Tokens: 0
+        </span>
+        <span id="costDisplay">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="1" x2="12" y2="23"/>
+                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+            Cost: $0.00
+        </span>
+    </footer>
     
     <!-- Usage Stats Modal -->
-    <div class="modal" id="statsModal">
+    <div class="modal" id="statsModal" role="dialog" aria-modal="true" aria-labelledby="statsTitle">
         <div class="modal-content">
             <div class="modal-header">
-                <h2>📊 Usage Statistics</h2>
+                <h2 id="statsTitle">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 8px;">
+                        <path d="M12 20V10"/>
+                        <path d="M18 20V4"/>
+                        <path d="M6 20v-4"/>
+                    </svg>
+                    Usage Statistics
+                </h2>
                 <button class="close-button" id="closeStats" aria-label="Close">&times;</button>
             </div>
             <div class="modal-body" id="statsContent" role="region" aria-live="polite">

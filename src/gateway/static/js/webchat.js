@@ -343,15 +343,44 @@
         });
         
         div.innerHTML = `
-            <div class="avatar">${avatar}</div>
+            <div class="avatar" aria-hidden="true">${avatar}</div>
             <div>
-                <div class="message-content">${escapeHtml(content)}</div>
-                <div class="message-timestamp">${time}</div>
+                <div class="message-bubble">${renderMarkdown(content)}</div>
+                <div class="message-timestamp" aria-label="Message time">${time}</div>
             </div>
         `;
         
         messagesContainer.appendChild(div);
         scrollToBottom();
+    }
+    
+    /**
+     * Simple markdown-like rendering
+     * @param {string} text - Text to render
+     * @returns {string} HTML
+     */
+    function renderMarkdown(text) {
+        // Escape HTML first
+        let html = escapeHtml(text);
+        
+        // Code blocks (```...```)
+        html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+        
+        // Inline code (`...`)
+        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+        
+        // Bold (**...**)
+        html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        
+        // Headers (# ## ### ####)
+        html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+        html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+        html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+        
+        // Links ([text](url))
+        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+        
+        return html;
     }
     
     // Close skill selector when clicking outside
@@ -369,8 +398,7 @@
     function escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
-        const html = div.innerHTML;
-        return html.replace(/\n/g, '<br>');
+        return div.innerHTML;
     }
     
     /**
