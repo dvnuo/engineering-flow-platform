@@ -230,10 +230,72 @@ class Gateway:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def handle_list_sessions(self, request: Request) -> web.Response:
-        """List all active sessions."""
+        """List all active sessions with details.
+        
+        GET /api/sessions?limit=10
+        Returns: List of sessions with name, last message, timestamp
+        """
         from src.sessions.manager import session_manager
-        sessions = await session_manager.list_sessions()
-        return web.json_response({"sessions": sessions, "count": len(sessions)})
+        from datetime import datetime
+        
+        logger.info(f"[handle_list_sessions] ENTERING - listing sessions")
+        
+        try:
+            # Initialize session manager if needed
+            if not session_manager._initialized:
+                logger.info("[handle_list_sessions] Initializing session manager")
+                await session_manager.initialize()
+            
+            limit = int(request.query.get('limit', 10))
+            session_ids = await session_manager.list_sessions()
+            logger.info(f"[handle_list_sessions] Found {len(session_ids)} sessions")
+            
+            # Format sessions with details, filter out empty sessions
+            detailed_sessions = []
+            for session_id in session_ids[:limit]:
+                # Get session info
+                session_info = await session_manager.get_session_info(session_id)
+                
+                if not session_info:
+                    logger.warning(f"[handle_list_sessions] No info for session: {session_id}")
+                    continue
+                
+                history = session_info.get('history', [])
+                
+                # Skip empty sessions (no user messages)
+                user_messages = [msg for msg in history if msg.get('role') == 'user']
+                if not user_messages:
+                    logger.info(f"[handle_list_sessions] Skipping empty session: {session_id}")
+                    continue
+                
+                # Get first user message as session name
+                first_user_msg = user_messages[0]
+                session_name = (first_user_msg.get('content', '') or 'New Chat')[:30]
+                if not session_name.strip():
+                    session_name = 'New Chat'
+                
+                # Get last message preview
+                last_message = ''
+                for msg in reversed(history):
+                    if msg.get('role') in ('user', 'assistant'):
+                        last_message = (msg.get('content', '') or '')[:50]
+                        break
+                
+                detailed_sessions.append({
+                    'session_id': session_id,
+                    'name': session_name,
+                    'last_message': last_message,
+                    'updated_at': session_info.get('updated_at', datetime.utcnow().isoformat()),
+                    'message_count': len(user_messages),
+                    '_marker': 'FIXED_2026_02_10_17_20',  # Version marker
+                })
+                logger.info(f"[handle_list_sessions] Added session: {session_id} -> name='{session_name}'")
+            
+            logger.info(f"[handle_list_sessions] Returning {len(detailed_sessions)} sessions")
+            return web.json_response({'sessions': detailed_sessions})
+        except Exception as e:
+            logger.error(f"[handle_list_sessions] ERROR: {e}", exc_info=True)
+            return web.json_response({'error': str(e)}, status=500)
 
     async def handle_clear_session(self, request: Request) -> web.Response:
         """Clear a session's history."""
