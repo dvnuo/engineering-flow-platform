@@ -590,7 +590,17 @@
     async function sendMessageFallback(content) {
         try {
             // Generate new session_id if currentSessionId is null/undefined
-            const requestSessionId = currentSessionId || 'webchat_' + new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+            const now = new Date();
+            const timestamp = now.getFullYear() +
+                String(now.getMonth() + 1).padStart(2, '0') +
+                String(now.getDate()).padStart(2, '0') +
+                '_' +
+                String(now.getHours()).padStart(2, '0') +
+                String(now.getMinutes()).padStart(2, '0') +
+                String(now.getSeconds()).padStart(2, '0');
+            const requestSessionId = currentSessionId || 'webchat_' + timestamp;
+            
+            console.log('[WebChat] Generated session_id:', requestSessionId);
             
             const response = await fetch('/api/chat', {
                 method: 'POST',
