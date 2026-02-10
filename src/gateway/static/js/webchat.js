@@ -14,6 +14,108 @@
     // State
     let isLoading = false;
     let totalTokens = 0;
+    let totalCost = 0;
+    
+    // Stats Modal
+    statsButton.addEventListener('click', showStats);
+    closeStatsButton.addEventListener('click', hideStats);
+    statsModal.addEventListener('click', function(e) {
+        if (e.target === statsModal) hideStats();
+    });
+    
+    /**
+     * Show usage statistics modal
+     */
+    async function showStats() {
+        statsModal.classList.add('show');
+        statsContent.innerHTML = '<div class="loading">Loading...</div>';
+        
+        try {
+            const response = await fetch('/api/usage?days=30');
+            const data = await response.json();
+            
+            if (data.error) {
+                statsContent.innerHTML = '<div class="no-data">Error loading stats</div>';
+                return;
+            }
+            
+            let html = '';
+            
+            // Global stats
+            const global = data.global || {};
+            html += `
+                <div class="stats-section">
+                    <h3>Global (Last ${data.period_days || 30} days)</h3>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-label">Requests</div>
+                            <div class="stat-value">${global.request_count || 0}</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">Total Cost</div>
+                            <div class="stat-value cost">$${(global.total_cost_usd || global.total_cost || 0).toFixed(4)}</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">Input Tokens</div>
+                            <div class="stat-value">${global.total_input_tokens || global.total_input || 0}</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">Output Tokens</div>
+                            <div class="stat-value">${global.total_output_tokens || global.total_output || 0}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // By Provider
+            const byProvider = data.by_provider || {};
+            if (Object.keys(byProvider).length > 0) {
+                html += '<div class="stats-section"><h3>By Provider</h3><div class="stats-grid">';
+                for (const [provider, stats] of Object.entries(byProvider)) {
+                    html += `
+                        <div class="stat-item">
+                            <div class="stat-label">${provider}</div>
+                            <div class="stat-value cost">$${(stats.cost || 0).toFixed(4)}</div>
+                            <div class="stat-model">${stats.requests || 0} requests</div>
+                        </div>
+                    `;
+                }
+                html += '</div></div>';
+            }
+            
+            // By Model
+            const byModel = data.by_model || {};
+            if (Object.keys(byModel).length > 0) {
+                html += '<div class="stats-section"><h3>By Model</h3>';
+                for (const [model, stats] of Object.entries(byModel)) {
+                    html += `
+                        <div class="stat-item">
+                            <div class="stat-label">${model}</div>
+                            <div class="stat-value cost">$${(stats.cost || 0).toFixed(4)}</div>
+                            <div class="stat-model">${(stats.input_tokens || 0).toLocaleString()} in / ${(stats.output_tokens || 0).toLocaleString()} out</div>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+            }
+            
+            if (!html) {
+                html = '<div class="no-data">No usage data yet</div>';
+            }
+            
+            statsContent.innerHTML = html;
+            
+        } catch (error) {
+            statsContent.innerHTML = '<div class="no-data">Error loading stats</div>';
+        }
+    }
+    
+    /**
+     * Hide usage statistics modal
+     */
+    function hideStats() {
+        statsModal.classList.remove('show');
+    }
     
     // Auto-resize textarea
     messageInput.addEventListener('input', function() {
@@ -125,9 +227,15 @@
             } else {
                 addMessage('assistant', data.response);
                 
-                if (data.usage && data.usage.total_tokens) {
-                    totalTokens += data.usage.total_tokens;
-                    tokenCountSpan.textContent = `Tokens: ${totalTokens}`;
+                if (data.usage) {
+                    if (data.usage.total_tokens) {
+                        totalTokens += data.usage.total_tokens;
+                        tokenCountSpan.textContent = `Tokens: ${totalTokens}`;
+                    }
+                    if (data.usage.cost) {
+                        totalCost += data.usage.cost;
+                        costDisplaySpan.textContent = `Cost: $${totalCost.toFixed(4)}`;
+                    }
                 }
                 
                 statusSpan.textContent = 'Ready';

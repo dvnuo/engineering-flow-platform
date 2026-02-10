@@ -13,6 +13,7 @@
             <div class="header-title">Engineering Flow Platform Assistant</div>
             <div class="header-subtitle">AI-Powered Personal Assistant</div>
         </div>
+        <button class="stats-button" id="statsButton" title="View Usage Stats">📊</button>
     </div>
     
     <div class="chat-container">
@@ -45,6 +46,20 @@
     <div class="status-bar">
         <span id="status">Ready</span>
         <span id="tokenCount">Tokens: 0</span>
+        <span id="costDisplay">Cost: $0.00</span>
+    </div>
+    
+    <!-- Usage Stats Modal -->
+    <div class="modal" id="statsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>📊 Usage Statistics</h2>
+                <button class="close-button" id="closeStats">&times;</button>
+            </div>
+            <div class="modal-body" id="statsContent">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
     </div>
     
     <script src="/static/js/webchat.js"></script>
