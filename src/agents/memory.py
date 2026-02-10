@@ -1,6 +1,7 @@
 """Memory system for loading workspace MD files.
 
 Loads SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, and daily notes.
+Integrates with VectorMemory for semantic search.
 """
 
 import logging
@@ -18,17 +19,129 @@ DEFAULT_WORKSPACE = Path.home() / ".efp" / "workspace"
 class MemorySystem:
     """Manages loading and access to workspace memory files."""
     
-    def __init__(self, workspace_path: Optional[str] = None, cache_ttl_seconds: int = 60):
+    def __init__(
+        self,
+        workspace_path: Optional[str] = None,
+        cache_ttl_seconds: int = 60,
+        vector_enabled: bool = True,
+        vector_config: Optional[Dict] = None,
+    ):
         """Initialize memory system.
         
         Args:
             workspace_path: Path to workspace directory. Defaults to ~/.efp/workspace
             cache_ttl_seconds: Cache TTL in seconds (default: 60). Set to 0 to disable caching.
+            vector_enabled: Whether to enable vector memory for semantic search
+            vector_config: Configuration for vector memory
         """
         self.workspace = Path(workspace_path) if workspace_path else DEFAULT_WORKSPACE
         self._cache: Dict[str, Any] = {}
         self._cache_time: Optional[datetime] = None
         self._cache_ttl_seconds = cache_ttl_seconds
+        
+        # Initialize vector memory
+        self.vector_memory = None
+        self._vector_enabled = vector_enabled
+        if vector_enabled:
+            self._init_vector_memory(vector_config or {})
+    
+    def _init_vector_memory(self, config: Dict) -> None:
+        """Initialize vector memory.
+        
+        Args:
+            config: Vector memory configuration
+        """
+        try:
+            from src.memory.vector import VectorMemory
+            
+            storage_dir = config.get("storage_dir", str(self.workspace / "vector_memory"))
+            embedding_model = config.get("model", "all-MiniLM-L6-v2")
+            dimension = config.get("dimension", 384)
+            score_threshold = config.get("score_threshold", 0.5)
+            
+            self.vector_memory = VectorMemory(
+                storage_dir=storage_dir,
+                embedding_model=embedding_model,
+                dimension=dimension,
+                score_threshold=score_threshold,
+            )
+            self._vector_enabled = True
+            logger.info("Vector memory initialized successfully")
+            
+            # Index existing memory files
+            self._index_memory_files()
+            
+        except Exception as e:
+            logger.debug(f"Failed to initialize vector memory: {e}")
+            self._vector_enabled = False
+            self.vector_memory = None
+    
+    def _index_memory_files(self) -> None:
+        """Index all memory files into vector store."""
+        if not self.vector_memory:
+            return
+        
+        files = ["SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md", "MEMORY.md"]
+        
+        for filename in files:
+            filepath = self.workspace / filename
+            if filepath.exists():
+                try:
+                    content = filepath.read_text(encoding='utf-8')
+                    key = f"memory:{filename}"
+                    self.vector_memory.add(
+                        key=key,
+                        content=content,
+                        metadata={"source": filename, "type": "memory_file"},
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to index {filename}: {e}")
+    
+    def search_semantic(
+        self,
+        query: str,
+        limit: int = 5,
+        score_threshold: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        """Search memories using semantic similarity.
+        
+        Args:
+            query: Search query
+            limit: Maximum results
+            score_threshold: Minimum similarity score
+            
+        Returns:
+            List of matching entries with scores
+        """
+        if not self._vector_enabled or not self.vector_memory:
+            return []
+        
+        try:
+            return self.vector_memory.search(query, limit, score_threshold)
+        except Exception as e:
+            logger.error(f"Semantic search failed: {e}")
+            return []
+    
+    def add_memory(
+        self,
+        key: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Add a memory entry to vector store.
+        
+        Args:
+            key: Unique key for the memory
+            content: Content to store
+            metadata: Optional metadata
+        """
+        if not self._vector_enabled or not self.vector_memory:
+            return
+        
+        try:
+            self.vector_memory.add(key=key, content=content, metadata=metadata)
+        except Exception as e:
+            logger.error(f"Failed to add memory: {e}")
     
     def _load_file(self, filename: str) -> Optional[str]:
         """Load a markdown file from workspace.
