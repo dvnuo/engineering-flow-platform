@@ -258,3 +258,20 @@ async def write_long_term_memory(content: str) -> Path:
     
     logger.info(f"Wrote long-term memory: {memory_file}")
     return memory_file
+
+
+# Vector Memory exports
+from src.memory.vector import VectorMemory, MemoryEntry
+
+__all__ = [
+    'VectorMemory',
+    'MemoryEntry',
+    'MemoryConfig',
+    'MemoryStore',
+    'get_memory_path',
+    'get_long_term_memory_path',
+    'init_memory_store',
+    'get_memory_store',
+    'write_daily_memory',
+    'write_long_term_memory',
+]

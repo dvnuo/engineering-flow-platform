@@ -98,6 +98,14 @@ memory:
   # SQLite database location
   path: "~/.efp/memory"  # SQLite database location
 
+  # Vector memory for semantic search (Qdrant-based)
+  vector:
+    enabled: true  # Enable vector memory for semantic search
+    storage_dir: "~/.efp/workspace/vector_memory"  # Vector storage directory
+    model: "all-MiniLM-L6-v2"  # Sentence transformer model
+    dimension: 384  # Embedding dimension
+    score_threshold: 0.5  # Minimum similarity score (0.0-1.0)
+
 # ============================================
 # Workspace Configuration (OPTIONAL)
 # ============================================
