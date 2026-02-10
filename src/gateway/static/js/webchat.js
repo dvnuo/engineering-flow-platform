@@ -19,6 +19,7 @@
     const skillDropdown = document.getElementById('skillDropdown');
     const skillList = document.getElementById('skillList');
     const themeToggle = document.getElementById('themeToggle');
+    const newChatBtn = document.querySelector('[data-action="new-chat"]');
     
     // State
     let isLoading = false;
@@ -798,6 +799,9 @@
                 });
             }
             
+            // Remove active state from New Chat button when loading a session
+            if (newChatBtn) newChatBtn.classList.remove('active');
+            
             statusSpan.textContent = 'Ready';
             
         } catch (error) {
@@ -840,6 +844,7 @@
             `;
             statusSpan.textContent = 'Ready';
             recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
+            if (newChatBtn) newChatBtn.classList.add('active');
         } else if (action === 'files') {
             showFileExplorer();
         } else if (action === 'settings') {
