@@ -27,11 +27,12 @@
     let skills = [];
     let selectedSkillIndex = -1;
     let skillsLoaded = false;
-    let currentSessionId = null;
+    let currentSessionId = localStorage.getItem('efp-session-id') || null;
     
     // ========== Theme Management ==========
     
     const THEME_KEY = 'efp-theme';
+    const SESSION_ID_KEY = 'efp-session-id';
     
     /**
      * Get saved theme preference
@@ -604,9 +605,10 @@
                 addMessage('error', `Error: ${data.error}`);
                 statusSpan.textContent = 'Error';
             } else {
-                // Update current session ID from response
+                // Update current session ID from response and persist
                 if (data.session_id) {
                     currentSessionId = data.session_id;
+                    localStorage.setItem(SESSION_ID_KEY, currentSessionId);
                 }
                 
                 addMessage('assistant', data.response);
@@ -782,6 +784,7 @@
         
         if (action === 'new-chat') {
             currentSessionId = null;
+            localStorage.removeItem(SESSION_ID_KEY);  // Clear persisted session
             messagesContainer.innerHTML = `
                 <div class="welcome-message">
                     <h2>👋 New Chat</h2>
