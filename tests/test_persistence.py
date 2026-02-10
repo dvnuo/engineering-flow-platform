@@ -5,17 +5,17 @@ import tempfile
 import pytest
 from pathlib import Path
 
-from src.sessions.persistence import SessionStore
+from src.sessions.persistence import SessionPersistence
 
 
-class TestSessionStore:
-    """Tests for SessionStore class."""
+class TestSessionPersistence:
+    """Tests for SessionPersistence class."""
     
     @pytest.fixture
     def store(self):
         """Create a temporary session store."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            yield SessionStore(f"{tmpdir}/sessions")
+            yield SessionPersistence(f"{tmpdir}/sessions")
     
     @pytest.mark.asyncio
     async def test_create_session(self, store):
