@@ -369,6 +369,7 @@ async def api_sessions(request: web.Request) -> web.Response:
                 'last_message': last_message,
                 'updated_at': session_info.get('updated_at', datetime.utcnow().isoformat()),
                 'message_count': len(user_messages),
+                '_marker': 'FIXED_2026_02_10_16_58',  # Version marker
             })
             logger.info(f"[api_sessions] Added session: {session_id} -> name='{session_name}'")
         
