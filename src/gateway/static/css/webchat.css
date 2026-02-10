@@ -94,7 +94,8 @@ body {
     font-family: var(--font-sans);
     background: var(--color-bg);
     color: var(--color-text);
-    height: 100%;
+    height: 100vh;
+    width: 100vw;
     margin: 0;
     padding: 0;
     overflow: hidden;
@@ -122,90 +123,20 @@ body {
     background: var(--color-border-hover);
 }
 
-/* Shell Layout (OpenClaw-style) - Replaced by flex layout */
-/* Layout structure: topbar (outside) + sidebar + chat-content */
-.sidebar {
-    width: var(--shell-nav-width);
-    background: var(--color-bg-card);
-    border-right: 1px solid var(--color-border);
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    overflow-y: auto;
-    flex-shrink: 0;
-}
-
-.sidebar-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-    padding: var(--space-md);
-    border-bottom: 1px solid var(--color-border);
-}
-
-.sidebar-title {
-    font-weight: 600;
-    font-size: 14px;
-    color: var(--color-text);
-}
-
-.sidebar-section {
-    padding: var(--space-md);
-    flex: 1;
-}
-
-.sidebar-section-title {
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--color-text-muted);
-    margin-bottom: var(--space-sm);
-    padding-left: var(--space-sm);
-}
-
-.sidebar-item {
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-    padding: var(--space-sm) var(--space-md);
-    border-radius: var(--radius-md);
-    color: var(--color-text-muted);
-    text-decoration: none;
-    font-size: 14px;
-    transition: all var(--duration-fast);
-    cursor: pointer;
-}
-
-.sidebar-item:hover {
-    background: var(--color-bg-input);
-    color: var(--color-text);
-}
-
-.sidebar-item.active {
-    background: var(--color-accent-muted);
-    color: var(--color-accent);
-}
-
-.sidebar-item svg {
-    flex-shrink: 0;
-}
-
-.sidebar-footer {
-    padding: var(--space-md);
-    border-top: 1px solid var(--color-border);
-}
-
-/* Topbar */
+/* Topbar - Fixed at top */
 .topbar {
-    height: var(--shell-topbar-height);
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
     background: var(--color-bg-card);
     border-bottom: 1px solid var(--color-border);
     display: flex;
     align-items: center;
     gap: var(--space-md);
     padding: 0 var(--space-lg);
-    flex-shrink: 0;
+    z-index: 100;
 }
 
 .toggle-sidebar {
@@ -300,10 +231,87 @@ body {
     display: block !important;
 }
 
-/* Main Content Area - Replaced by .layout */
-.layout {
+/* Sidebar */
+.sidebar {
+    width: 240px;
+    background: var(--color-bg-card);
+    border-right: 1px solid var(--color-border);
     display: flex;
-    height: calc(100vh - var(--shell-topbar-height));
+    flex-direction: column;
+    height: 100%;
+    overflow-y: auto;
+    flex-shrink: 0;
+}
+
+.sidebar-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-md);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.sidebar-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--color-text);
+}
+
+.sidebar-section {
+    padding: var(--space-md);
+    flex: 1;
+}
+
+.sidebar-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--color-text-muted);
+    margin-bottom: var(--space-sm);
+    padding-left: var(--space-sm);
+}
+
+.sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    border-radius: var(--radius-md);
+    color: var(--color-text-muted);
+    text-decoration: none;
+    font-size: 14px;
+    transition: all var(--duration-fast);
+    cursor: pointer;
+}
+
+.sidebar-item:hover {
+    background: var(--color-bg-input);
+    color: var(--color-text);
+}
+
+.sidebar-item.active {
+    background: var(--color-accent-muted);
+    color: var(--color-accent);
+}
+
+.sidebar-item svg {
+    flex-shrink: 0;
+}
+
+.sidebar-footer {
+    padding: var(--space-md);
+    border-top: 1px solid var(--color-border);
+}
+
+/* Main Content Area - Flex layout below topbar */
+.layout {
+    position: absolute;
+    top: 56px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
     overflow: hidden;
 }
 
@@ -655,150 +663,21 @@ body {
     gap: var(--space-xs);
 }
 
-/* Tool Execution Cards */
-.tool-execution-card {
-    background: var(--color-bg-card);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    margin: var(--space-md) 0;
-    overflow: hidden;
-    animation: slideIn var(--duration-normal) var(--ease-out);
-}
-
-@keyframes slideIn {
-    from {
-        opacity: 0;
-        transform: translateY(10px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.tool-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-    padding: var(--space-sm) var(--space-md);
+/* Clear Button */
+.clear-button {
     background: var(--color-bg-input);
-    border-bottom: 1px solid var(--color-border);
-    font-size: 12px;
-    font-weight: 500;
-}
-
-.tool-icon {
-    font-size: 14px;
-}
-
-.tool-name {
-    color: var(--color-text);
-    font-weight: 600;
-}
-
-.tool-status {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: var(--space-xs);
-    color: var(--color-text-muted);
-}
-
-.tool-status.executing {
-    color: var(--color-warning);
-}
-
-.tool-status.completed {
-    color: var(--color-success);
-}
-
-.tool-status.error {
-    color: var(--color-error);
-}
-
-.tool-content {
-    padding: var(--space-md);
-    font-family: var(--font-mono);
-    font-size: 13px;
-    background: #0d0d0f;
-    overflow-x: auto;
-}
-
-.tool-content pre {
-    margin: 0;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-}
-
-/* Approval Card */
-.approval-card {
-    background: var(--color-bg-card);
-    border: 1px solid var(--color-warning);
-    border-radius: var(--radius-lg);
-    margin: var(--space-md) 0;
-}
-
-.approval-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-    padding: var(--space-sm) var(--space-md);
-    background: rgba(245, 158, 11, 0.1);
-    border-bottom: 1px solid rgba(245, 158, 11, 0.3);
-    color: var(--color-warning);
-    font-weight: 600;
-    font-size: 13px;
-}
-
-.approval-body {
-    padding: var(--space-md);
-}
-
-.approval-code {
-    background: #0d0d0f;
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    padding: var(--space-md);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    overflow-x: auto;
-    margin-bottom: var(--space-md);
     color: var(--color-text-muted);
-}
-
-.approval-actions {
-    display: flex;
-    gap: var(--space-sm);
-}
-
-.approval-btn {
-    flex: 1;
-    padding: var(--space-sm) var(--space-md);
+    padding: 6px 12px;
     border-radius: var(--radius-md);
-    font-size: 13px;
-    font-weight: 600;
     cursor: pointer;
+    font-size: 12px;
     transition: all var(--duration-fast);
-    border: none;
 }
 
-.approval-btn.approve {
-    background: var(--color-success);
-    color: white;
-}
-
-.approval-btn.approve:hover {
-    background: #16a34a;
-}
-
-.approval-btn.deny {
-    background: var(--color-bg-input);
-    border: 1px solid var(--color-border);
-    color: var(--color-text);
-}
-
-.approval-btn.deny:hover {
+.clear-button:hover {
     background: var(--color-border);
+    color: var(--color-text);
 }
 
 /* Streaming Content (for SSE) */
@@ -1075,30 +954,13 @@ body {
     outline-offset: 2px;
 }
 
-/* Clear Button */
-.clear-button {
-    background: var(--color-bg-input);
-    border: 1px solid var(--color-border);
-    color: var(--color-text-muted);
-    padding: 6px 12px;
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    font-size: 12px;
-    transition: all var(--duration-fast);
-}
-
-.clear-button:hover {
-    background: var(--color-border);
-    color: var(--color-text);
-}
-
 /* Responsive Design */
 @media (max-width: 768px) {
     .sidebar {
         position: fixed;
         left: 0;
-        top: var(--shell-topbar-height);
-        height: calc(100vh - var(--shell-topbar-height));
+        top: 56px;
+        height: calc(100vh - 56px);
         z-index: 100;
         box-shadow: var(--shadow-lg);
         transform: translateX(-100%);
@@ -1106,10 +968,6 @@ body {
     }
     
     .sidebar.open {
-        transform: translateX(0);
-    }
-    
-    .layout.sidebar-open .sidebar {
         transform: translateX(0);
     }
     
