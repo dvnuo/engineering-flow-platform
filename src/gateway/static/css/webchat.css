@@ -600,6 +600,51 @@ body {
     transform: none;
 }
 
+/* Primary Button */
+.btn-primary {
+    background: var(--color-accent);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 12px 20px;
+    color: white;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--duration-fast);
+}
+
+.btn-primary:hover {
+    background: var(--color-accent-hover);
+}
+
+.btn-primary:active {
+    transform: scale(0.98);
+}
+
+/* Icon Button */
+.icon-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-md);
+    color: var(--color-text);
+    cursor: pointer;
+    transition: all var(--duration-fast);
+}
+
+.icon-button:hover {
+    background: var(--color-bg-input);
+    color: var(--color-text);
+}
+
+.icon-button:active {
+    transform: scale(0.95);
+}
+
 /* Typing Indicator */
 .typing-indicator {
     display: none;
