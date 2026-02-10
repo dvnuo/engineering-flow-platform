@@ -759,13 +759,19 @@
                     }
                 });
                 
-                recentSessionsList.appendChild(item);
+                // Insert before sentinel so sentinel stays at bottom
+                const sentinel = document.getElementById('sessions-sentinel');
+                if (sentinel) {
+                    recentSessionsList.insertBefore(item, sentinel);
+                } else {
+                    recentSessionsList.appendChild(item);
+                }
             });
             
             // Update offset for next load
             sessionsOffset += sessions.length;
             
-            // Add or update sentinel
+            // Ensure sentinel exists at bottom
             let sentinel = document.getElementById('sessions-sentinel');
             if (!sentinel) {
                 sentinel = createSessionsSentinel();
