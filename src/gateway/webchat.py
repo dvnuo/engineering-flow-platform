@@ -139,10 +139,12 @@ async def api_chat(request: web.Request) -> web.Response:
         # Record usage if available
         if usage:
             usage_tracker.record_usage(
-                session_id=session_id,
-                response={"usage": usage},
+                provider="openai",
                 model=config.llm.get('model', 'unknown'),
-                channel='webchat'
+                input_tokens=usage.get("prompt_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                session_id=session_id,
+                task_type="chat"
             )
         
         response_data = {
@@ -209,15 +211,21 @@ async def api_usage(request: web.Request) -> web.Response:
     """Get usage statistics."""
     try:
         session_id = request.query.get('session_id')
+        days = int(request.query.get('days', 30))
+        hours = days * 24
+        
         if session_id:
             summary = usage_tracker.get_session_summary(session_id)
             return web.json_response(summary)
         else:
-            summary = usage_tracker.get_global_summary()
-            by_model = usage_tracker.get_usage_by_model()
+            global_summary = usage_tracker.get_global_summary(hours=hours)
+            by_model = usage_tracker.get_usage_by_model(hours=hours)
+            by_provider = usage_tracker.get_usage_by_provider(hours=hours)
             return web.json_response({
-                'global': summary,
-                'by_model': by_model
+                'period_days': days,
+                'global': global_summary,
+                'by_model': by_model,
+                'by_provider': by_provider,
             })
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
