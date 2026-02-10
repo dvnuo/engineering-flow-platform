@@ -253,14 +253,14 @@ class Gateway:
             # Format sessions with details, filter out empty sessions
             detailed_sessions = []
             for session_id in session_ids[:limit]:
-                # Get session info
-                session_info = await session_manager.get_session_info(session_id)
+                # Get session with full history (not get_session_info which excludes history)
+                session = await session_manager.get_session(session_id)
                 
-                if not session_info:
-                    logger.warning(f"[handle_list_sessions] No info for session: {session_id}")
+                if not session:
+                    logger.warning(f"[handle_list_sessions] No session: {session_id}")
                     continue
                 
-                history = session_info.get('history', [])
+                history = session.get('history', [])
                 
                 # Skip empty sessions (no user messages)
                 user_messages = [msg for msg in history if msg.get('role') == 'user']
@@ -285,7 +285,7 @@ class Gateway:
                     'session_id': session_id,
                     'name': session_name,
                     'last_message': last_message,
-                    'updated_at': session_info.get('updated_at', datetime.utcnow().isoformat()),
+                    'updated_at': session.get('updated_at', datetime.utcnow().isoformat()),
                     'message_count': len(user_messages),
                     '_marker': 'FIXED_2026_02_10_17_20',  # Version marker
                 })
