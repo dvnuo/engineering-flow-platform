@@ -1069,7 +1069,7 @@ body {
     display: flex;
     flex-direction: column;
     gap: var(--space-xs);
-    max-height: calc(100vh - 340px);
+    height: calc(100vh - 410px);
     overflow-y: auto;
     padding-right: var(--space-xs);
 }
