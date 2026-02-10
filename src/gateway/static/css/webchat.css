@@ -441,7 +441,7 @@ body {
 }
 
 .skill-selector-dropdown {
-    position: absolute;
+    position: relative;
     bottom: 100%;
     left: 0;
     right: 0;
