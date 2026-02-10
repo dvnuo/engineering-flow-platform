@@ -852,12 +852,12 @@
     
     // ========== File Explorer ==========
     
-    const fileExplorerModal = document.getElementById('fileExplorerModal');
+    const fileExplorerPanel = document.getElementById('fileExplorerPanel');
     const closeFileExplorer = document.getElementById('closeFileExplorer');
     const fileExplorerContent = document.getElementById('fileExplorerContent');
     
     async function showFileExplorer(path = '/root/engineering-flow-platform') {
-        fileExplorerModal.classList.add('show');
+        fileExplorerPanel.classList.add('show');
         fileExplorerContent.innerHTML = '<div class="loading">Loading...</div>';
         
         try {
@@ -924,7 +924,7 @@
                     // Insert path in chat
                     messageInput.value += path;
                     messageInput.focus();
-                    fileExplorerModal.classList.remove('show');
+                    fileExplorerPanel.classList.remove('show');
                 });
             });
             
@@ -936,22 +936,19 @@
     
     if (closeFileExplorer) {
         closeFileExplorer.addEventListener('click', function() {
-            fileExplorerModal.classList.remove('show');
-        });
-        fileExplorerModal.addEventListener('click', function(e) {
-            if (e.target === fileExplorerModal) fileExplorerModal.classList.remove('show');
+            fileExplorerPanel.classList.remove('show');
         });
     }
     
     // ========== File Viewer ==========
     
-    const fileViewerModal = document.getElementById('fileViewerModal');
+    const fileViewerPanel = document.getElementById('fileViewerPanel');
     const closeFileViewer = document.getElementById('closeFileViewer');
     const fileViewerTitleText = document.getElementById('fileViewerTitleText');
     const fileViewerContent = document.getElementById('fileViewerContent');
     
     async function showFileViewer(path) {
-        fileViewerModal.classList.add('show');
+        fileViewerPanel.classList.add('show');
         fileViewerContent.innerHTML = '<div class="loading">Loading...</div>';
         
         try {
@@ -1000,10 +997,7 @@
     
     if (closeFileViewer) {
         closeFileViewer.addEventListener('click', function() {
-            fileViewerModal.classList.remove('show');
-        });
-        fileViewerModal.addEventListener('click', function(e) {
-            if (e.target === fileViewerModal) fileViewerModal.classList.remove('show');
+            fileViewerPanel.classList.remove('show');
         });
     }
     

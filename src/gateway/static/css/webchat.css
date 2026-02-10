@@ -1174,7 +1174,105 @@ body {
     padding: var(--space-xl);
 }
 
-/* File Viewer */
+/* Sidebar Panels - File Explorer & Viewer */
+.sidebar-panel {
+    position: fixed;
+    top: 0;
+    right: -400px;
+    width: 400px;
+    height: 100vh;
+    background: var(--color-bg-surface);
+    box-shadow: -2px 0 10px rgba(0,0,0,0.1);
+    display: flex;
+    flex-direction: column;
+    transition: right 0.3s ease;
+    z-index: 1000;
+}
+
+.sidebar-panel.show {
+    right: 0;
+}
+
+.sidebar-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-md) var(--space-lg);
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg);
+}
+
+.sidebar-panel-header h2 {
+    display: flex;
+    align-items: center;
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.sidebar-panel-body {
+    flex: 1;
+    overflow: auto;
+    padding: var(--space-md);
+}
+
+/* File Explorer in Sidebar */
+#fileExplorerContent {
+    padding: var(--space-md);
+}
+
+#fileExplorerContent .file-explorer-path {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: var(--space-md);
+    padding-bottom: var(--space-md);
+    border-bottom: 1px solid var(--color-border);
+}
+
+#fileExplorerContent .file-explorer-path button {
+    padding: 4px 8px;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--color-text);
+}
+
+#fileExplorerContent .file-explorer-path button:hover {
+    background: var(--color-bg-input);
+}
+
+#fileExplorerContent .file-explorer-item {
+    display: flex;
+    align-items: center;
+    padding: var(--space-sm) var(--space-md);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+#fileExplorerContent .file-explorer-item:hover {
+    background: var(--color-bg-input);
+}
+
+#fileExplorerContent .file-explorer-item svg {
+    margin-right: var(--space-sm);
+    flex-shrink: 0;
+}
+
+#fileExplorerContent .file-explorer-item.folder {
+    color: var(--color-text);
+    font-weight: 500;
+}
+
+#fileExplorerContent .file-explorer-item.file {
+    color: var(--color-text-secondary);
+}
+
+/* File Viewer in Sidebar */
 .file-viewer-info {
     display: flex;
     justify-content: space-between;
@@ -1182,7 +1280,7 @@ body {
     background: var(--color-bg-input);
     border-radius: var(--radius-md);
     margin-bottom: var(--space-md);
-    font-size: 12px;
+    font-size: 11px;
     color: var(--color-text-muted);
 }
 
@@ -1192,9 +1290,9 @@ body {
     background: var(--color-bg);
     border-radius: var(--radius-md);
     overflow: auto;
-    max-height: calc(80vh - 120px);
+    max-height: calc(100vh - 120px);
     font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
+    font-size: 12px;
     line-height: 1.6;
 }
 

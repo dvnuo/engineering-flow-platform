@@ -197,40 +197,46 @@
         </div>
     </div>
     
-    <!-- File Explorer Modal -->
-    <div class="modal" id="fileExplorerModal" role="dialog" aria-modal="true" aria-labelledby="fileExplorerTitle">
-        <div class="modal-content" style="max-width: 600px;">
-            <div class="modal-header">
-                <h2 id="fileExplorerTitle">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 8px;">
-                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                    </svg>
-                    File Explorer
-                </h2>
-                <button class="close-button" id="closeFileExplorer" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body" id="fileExplorerContent" role="region" aria-live="polite">
-                <div class="loading">Loading...</div>
-            </div>
+    <!-- File Explorer Sidebar Panel -->
+    <div class="sidebar-panel" id="fileExplorerPanel" role="region" aria-label="File Explorer">
+        <div class="sidebar-panel-header">
+            <h2>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+                Files
+            </h2>
+            <button class="icon-button" id="closeFileExplorer" aria-label="Close">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        </div>
+        <div class="sidebar-panel-body" id="fileExplorerContent">
+            <div class="loading">Loading...</div>
         </div>
     </div>
     
-    <!-- File Viewer Modal -->
-    <div class="modal" id="fileViewerModal" role="dialog" aria-modal="true" aria-labelledby="fileViewerTitle">
-        <div class="modal-content" style="max-width: 800px; max-height: 80vh;">
-            <div class="modal-header">
-                <h2 id="fileViewerTitle">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 8px;">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                        <polyline points="14 2 14 8 20 8"/>
-                    </svg>
-                    <span id="fileViewerTitleText">File Viewer</span>
-                </h2>
-                <button class="close-button" id="closeFileViewer" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body" id="fileViewerContent" role="region" aria-live="polite" style="overflow: auto; max-height: calc(80vh - 60px);">
-                <div class="loading">Loading...</div>
-            </div>
+    <!-- File Viewer Sidebar Panel -->
+    <div class="sidebar-panel" id="fileViewerPanel" role="region" aria-label="File Viewer">
+        <div class="sidebar-panel-header">
+            <h2>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 6px;">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                </svg>
+                <span id="fileViewerTitleText">File</span>
+            </h2>
+            <button class="icon-button" id="closeFileViewer" aria-label="Close">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        </div>
+        <div class="sidebar-panel-body" id="fileViewerContent">
+            <div class="loading">Loading...</div>
         </div>
     </div>
     
