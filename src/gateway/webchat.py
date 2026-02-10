@@ -319,11 +319,12 @@ async def api_sessions(request: web.Request) -> web.Response:
     GET /api/sessions?limit=10
     Returns: List of sessions with name, last message, timestamp
     
-    VERSION: 2026-02-10-16-55-FIXED
+    VERSION: FINAL_TEST_2026_02_10_17_10
     """
     import time
     start_time = time.time()
-    logger.info(f"[api_sessions VERSION 2026-02-10-16-55-FIXED] ENTERING")
+    logger.info(f"[api_sessions FINAL_TEST_2026_02_10_17_10] ENTERING - checking version")
+    logger.info(f"[FINAL_TEST] Source file: /root/engineering-flow-platform/src/gateway/webchat.py")
     try:
         # Initialize session manager if needed
         if not session_manager._initialized:
