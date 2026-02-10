@@ -313,7 +313,7 @@ body {
     max-width: 100%;
     padding: var(--space-lg);
     gap: var(--space-lg);
-    overflow-y: auto;
+    overflow: hidden;
 }
 
 /* Messages Area */
