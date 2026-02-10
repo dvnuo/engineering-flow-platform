@@ -343,3 +343,28 @@ bash_tools:
   # Block dangerous environment variables
   # These are blocked by default (no need to configure):
   # LD_PRELOAD, NODE_OPTIONS, PYTHONPATH, BASH_ENV, etc.
+
+# ============================================
+# Error Logging Configuration
+# ============================================
+# Settings for error logging and display
+
+error_logging:
+  # Log full error details (including status codes, response bodies)
+  # Recommended: true for debugging, false for production
+  log_full_errors: true
+
+  # Return error details to API clients
+  # true: Include error type, details, timestamp in responses
+  # false: Only return basic error message
+  return_error_details: true
+
+  # Sanitize sensitive data in error logs
+  # Masks API keys, tokens, passwords
+  sanitize_errors: true
+
+# Example usage:
+# error_logging:
+#   log_full_errors: true
+#   return_error_details: true
+#   sanitize_errors: true

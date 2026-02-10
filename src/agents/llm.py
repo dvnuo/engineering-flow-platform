@@ -22,6 +22,16 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from src.config import config
+from .errors import (
+    handle_httpx_error,
+    handle_httpx_request_error,
+    HTTPError,
+    NetworkError,
+    LLMError,
+    log_error,
+    format_error_for_user,
+    create_error_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -358,14 +368,25 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(all_messages)}")
         
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.api_base}/chat/completions",
-                headers=headers,
-                json=payload
-            )
-            response.raise_for_status()
-            data = response.json()
+        # Make API call with proper error handling
+        endpoint = "/chat/completions"
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.api_base}{endpoint}",
+                    headers=headers,
+                    json=payload
+                )
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPStatusError as e:
+            error = handle_httpx_error(e, provider=self.name, endpoint=endpoint)
+            log_error(error, component=self.name.upper())
+            raise error
+        except httpx.RequestError as e:
+            error = handle_httpx_request_error(e, provider=self.name, endpoint=endpoint)
+            log_error(error, component=self.name.upper())
+            raise error
         
         # Debug: Log response
         if _is_debug_enabled():
