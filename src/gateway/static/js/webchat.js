@@ -12,7 +12,7 @@
     const tokenCountSpan = document.getElementById('tokenCount');
     const costDisplaySpan = document.getElementById('costDisplay');
     const statsButton = document.getElementById('statsButton');
-    const statsModal = document.getElementById('statsModal');
+    const statsPanel = document.getElementById('statsPanel');
     const closeStatsButton = document.getElementById('closeStats');
     const statsContent = document.getElementById('statsContent');
     const skillSelector = document.getElementById('skillSelector');
@@ -135,15 +135,12 @@
     // Stats Modal
     statsButton.addEventListener('click', showStats);
     closeStatsButton.addEventListener('click', hideStats);
-    statsModal.addEventListener('click', function(e) {
-        if (e.target === statsModal) hideStats();
-    });
     
     /**
      * Show usage statistics modal
      */
     async function showStats() {
-        statsModal.classList.add('show');
+        statsPanel.classList.add('show');
         statsContent.innerHTML = '<div class="loading">Loading...</div>';
         
         try {
@@ -230,7 +227,7 @@
      * Hide usage statistics modal
      */
     function hideStats() {
-        statsModal.classList.remove('show');
+        statsPanel.classList.remove('show');
     }
     
     // ========== Skill Selector ==========
@@ -1009,7 +1006,7 @@
     
     // ========== Settings ==========
     
-    const settingsModal = document.getElementById('settingsModal');
+    const settingsPanel = document.getElementById('settingsPanel');
     const closeSettings = document.getElementById('closeSettings');
     const settingsContent = document.getElementById('settingsContent');
     const settingsThemeToggle = document.getElementById('settingsThemeToggle');
@@ -1019,7 +1016,7 @@
     const saveSettingsBtn = document.getElementById('saveSettings');
     
     function showSettings() {
-        settingsModal.classList.add('show');
+        settingsPanel.classList.add('show');
         
         // Load saved settings
         const theme = getTheme();
@@ -1046,16 +1043,13 @@
             localStorage.setItem('efp-openai-key', settingsOpenAIKey.value);
             localStorage.setItem('efp-anthropic-key', settingsAnthropicKey.value);
             
-            settingsModal.classList.remove('show');
+            settingsPanel.classList.remove('show');
         });
     }
     
     if (closeSettings) {
         closeSettings.addEventListener('click', function() {
-            settingsModal.classList.remove('show');
-        });
-        settingsModal.addEventListener('click', function(e) {
-            if (e.target === settingsModal) settingsModal.classList.remove('show');
+            settingsPanel.classList.remove('show');
         });
     }
     
