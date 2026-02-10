@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from aiohttp import web
 
@@ -316,7 +316,7 @@ def _get_skills_list() -> List[Dict[str, Any]]:
         List of skill dictionaries
     """
     skills = []
-    project_root = Path(__file__).parent.parent.parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     
     # Check multiple locations for skills
     skill_dirs = [
