@@ -723,6 +723,35 @@
                 });
             });
             
+            // Auto-load the first session if no current session
+            // First check if we have a persisted session_id in localStorage
+            const persistedSessionId = localStorage.getItem(SESSION_ID_KEY);
+            if (persistedSessionId && persistedSessionId !== 'null') {
+                // Verify this session exists in the list
+                const sessionExists = validSessions.find(s => s.session_id === persistedSessionId);
+                if (sessionExists) {
+                    console.log('Auto-loading persisted session:', persistedSessionId);
+                    loadSession(persistedSessionId);
+                    // Update active state
+                    recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => {
+                        if (i.getAttribute('data-session-id') === persistedSessionId) {
+                            i.classList.add('active');
+                        } else {
+                            i.classList.remove('active');
+                        }
+                    });
+                } else {
+                    // Persisted session not found, load first session
+                    console.log('Persisted session not found, loading first session');
+                    const firstSession = validSessions[0];
+                    loadSession(firstSession.session_id);
+                }
+            } else if (!currentSessionId && validSessions.length > 0) {
+                const firstSession = validSessions[0];
+                console.log('Auto-loading first session:', firstSession.session_id);
+                loadSession(firstSession.session_id);
+            }
+            
         } catch (error) {
             console.error('Error loading sessions:', error);
             recentSessionsList.innerHTML = '<div class="loading-sessions">Error loading sessions</div>';
