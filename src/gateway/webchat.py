@@ -558,6 +558,7 @@ async def api_save_config(request: web.Request) -> web.Response:
         
         # Try project config first, then fallback to ~/.efp/
         project_config = Path(__file__).parent.parent.parent / 'config.yaml'
+        project_example = Path(__file__).parent.parent.parent / 'config.yaml.example'
         efp_config = Path.home() / '.efp' / 'config.yaml'
         
         if project_config.exists():
@@ -565,12 +566,23 @@ async def api_save_config(request: web.Request) -> web.Response:
         elif efp_config.exists():
             config_path = efp_config
         else:
-            return web.json_response({'error': 'config.yaml not found (checked: project dir and ~/.efp/)'}, status=404)
+            # Create new config from example
+            efp_config.parent.mkdir(parents=True, exist_ok=True)
+            if project_example.exists():
+                import shutil
+                shutil.copy(project_example, efp_config)
+                config_path = efp_config
+            else:
+                config_path = efp_config
+            config = {}
         
-        # Read existing config
+        # Read existing config if file exists and wasn't just created
         import yaml
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f) or {}
+        if config_path.exists() and 'config' not in locals():
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f) or {}
+        elif 'config' not in locals():
+            config = {}
         
         # Update sections
         if 'llm' in data:
