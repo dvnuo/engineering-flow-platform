@@ -662,61 +662,159 @@
     
     const recentSessionsList = document.getElementById('recentSessionsList');
     const refreshSessionsBtn = document.getElementById('refreshSessions');
+    const SESSIONS_LIMIT = 20;
+    let sessionsOffset = 0;
+    let sessionsHasMore = true;
+    let sessionsLoading = false;
+    let sessionsObserver = null;
+    
+    // Create sentinel element for infinite scroll
+    function createSessionsSentinel() {
+        const sentinel = document.createElement('div');
+        sentinel.id = 'sessions-sentinel';
+        sentinel.className = 'loading-sessions';
+        sentinel.textContent = 'Loading more...';
+        sentinel.style.display = 'none';
+        return sentinel;
+    }
     
     /**
-     * Load recent sessions from API
+     * Load recent sessions from API with pagination
      */
-    async function loadRecentSessions() {
+    async function loadRecentSessions(reset = false) {
         if (!recentSessionsList) return;
         
-        recentSessionsList.innerHTML = '<div class="loading-sessions">Loading...</div>';
+        // Reset if requested
+        if (reset) {
+            sessionsOffset = 0;
+            sessionsHasMore = true;
+            recentSessionsList.innerHTML = '';
+        }
+        
+        if (!sessionsHasMore || sessionsLoading) return;
+        
+        sessionsLoading = true;
+        
+        // Show loading on first load
+        if (sessionsOffset === 0) {
+            recentSessionsList.innerHTML = '<div class="loading-sessions">Loading...</div>';
+        }
         
         try {
-            const response = await fetch('/api/sessions?limit=10');
+            const response = await fetch(`/api/sessions?limit=${SESSIONS_LIMIT}&offset=${sessionsOffset}`);
             const data = await response.json();
             
             if (data.error || !data.sessions) {
                 recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
+                sessionsHasMore = false;
                 return;
             }
             
-            if (data.sessions.length === 0) {
-                recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
+            // Clear loading message on first load
+            if (sessionsOffset === 0) {
+                recentSessionsList.innerHTML = '';
+            }
+            
+            const sessions = data.sessions || [];
+            sessionsHasMore = data.has_more !== false;
+            
+            if (sessions.length === 0) {
+                if (sessionsOffset === 0) {
+                    recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
+                }
+                sessionsHasMore = false;
                 return;
             }
             
-            // Filter out null sessions
-            const validSessions = (data.sessions || []).filter(s => s);
-            if (validSessions.length === 0) {
-                recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
-                return;
-            }
+            // Get current active session
+            const currentActiveId = recentSessionsList.querySelector('.recent-session-item.active')?.getAttribute('data-session-id');
             
-            recentSessionsList.innerHTML = validSessions.map((session, index) => {
-                const sessionId = session.session_id || ('session_' + index);
-                return `
-                <div class="recent-session-item ${index === 0 ? 'active' : ''}" data-session-id="${sessionId}">
+            // Append new sessions
+            sessions.forEach((session, index) => {
+                const sessionId = session.session_id || ('session_' + (sessionsOffset + index));
+                const isActive = sessionId === currentActiveId || (index === 0 && sessionsOffset === 0 && !currentActiveId);
+                
+                const item = document.createElement('div');
+                item.className = `recent-session-item ${isActive ? 'active' : ''}`;
+                item.setAttribute('data-session-id', sessionId);
+                item.innerHTML = `
                     <svg class="recent-session-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                     </svg>
                     <div class="recent-session-info">
-                        <div class="recent-session-name">${escapeHtml(session.name || session.session_id || 'Chat ' + (index + 1))}</div>
+                        <div class="recent-session-name">${escapeHtml(session.name || session.session_id || 'Chat ' + (sessionsOffset + index + 1))}</div>
                         <div class="recent-session-preview">${escapeHtml(session.last_message || '')}</div>
                     </div>
-                </div>
-            `}).join('');
-            
-            // Add click handlers
-            recentSessionsList.querySelectorAll('.recent-session-item').forEach(item => {
+                `;
+                
+                // Add click handler
                 item.addEventListener('click', function(e) {
                     e.preventDefault();
-                    const sessionId = this.getAttribute('data-session-id');
-                    console.log('Clicked session:', sessionId);
-                    if (sessionId && sessionId !== 'undefined') {
-                        loadSession(sessionId);
-                        // Update active state
+                    const sid = this.getAttribute('data-session-id');
+                    console.log('Clicked session:', sid);
+                    if (sid && sid !== 'undefined') {
+                        loadSession(sid);
                         recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
                         this.classList.add('active');
+                    }
+                });
+                
+                recentSessionsList.appendChild(item);
+            });
+            
+            // Update offset for next load
+            sessionsOffset += sessions.length;
+            
+            // Add or update sentinel
+            let sentinel = document.getElementById('sessions-sentinel');
+            if (!sentinel) {
+                sentinel = createSessionsSentinel();
+                recentSessionsList.appendChild(sentinel);
+            }
+            
+            // Setup intersection observer for infinite scroll
+            if (sessionsHasMore && !sessionsObserver) {
+                sessionsObserver = new IntersectionObserver((entries) => {
+                    entries.forEach(entry => {
+                        if (entry.isIntersecting && sessionsHasMore && !sessionsLoading) {
+                            loadRecentSessions(false);
+                        }
+                    });
+                }, { rootMargin: '100px' });
+                
+                sessionsObserver.observe(sentinel);
+            }
+            
+            // Update sentinel visibility
+            sentinel.style.display = sessionsHasMore ? 'block' : 'none';
+            sentinel.textContent = sessionsHasMore ? 'Loading more...' : 'No more sessions';
+            
+            // Auto-load first session if none selected
+            if (sessionsOffset === sessions.length && !currentSessionId) {
+                const firstSession = recentSessionsList.querySelector('.recent-session-item');
+                if (firstSession) {
+                    const firstSessionId = firstSession.getAttribute('data-session-id');
+                    console.log('Auto-loading first session:', firstSessionId);
+                    loadSession(firstSessionId);
+                }
+            }
+            
+        } catch (error) {
+            console.error('Error loading sessions:', error);
+            if (sessionsOffset === 0) {
+                recentSessionsList.innerHTML = '<div class="loading-sessions">Error loading sessions</div>';
+            }
+        } finally {
+            sessionsLoading = false;
+        }
+    }
+    
+    // Refresh button handler
+    if (refreshSessionsBtn) {
+        refreshSessionsBtn.addEventListener('click', () => {
+            loadRecentSessions(true);
+        });
+    }
                     }
                 });
             });
@@ -814,18 +912,8 @@
         }
     }
     
-    // Refresh sessions button
-    if (refreshSessionsBtn) {
-        refreshSessionsBtn.addEventListener('click', function() {
-            this.classList.add('loading');
-            loadRecentSessions().finally(() => {
-                this.classList.remove('loading');
-            });
-        });
-    }
-    
     // Load recent sessions on page load
-    loadRecentSessions();
+    loadRecentSessions(true);
     
     // Set New Chat button active if no persisted session
     if (!localStorage.getItem(SESSION_ID_KEY) && newChatBtn) {
