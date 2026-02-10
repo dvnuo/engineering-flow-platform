@@ -317,9 +317,11 @@ async def api_sessions(request: web.Request) -> web.Response:
     GET /api/sessions?limit=10
     Returns: List of sessions with name, last message, timestamp
     """
+    logger.info("[api_sessions] NEW CODE - ENTERING")
     try:
         # Initialize session manager if needed
         if not session_manager._initialized:
+            logger.info("[api_sessions] Initializing session manager")
             await session_manager.initialize()
         
         limit = int(request.query.get('limit', 10))
@@ -333,6 +335,7 @@ async def api_sessions(request: web.Request) -> web.Response:
             session_info = await session_manager.get_session_info(session_id)
             
             if not session_info:
+                logger.warning(f"[api_sessions] No info for session: {session_id}")
                 continue
             
             history = session_info.get('history', [])
@@ -368,7 +371,7 @@ async def api_sessions(request: web.Request) -> web.Response:
         logger.info(f"[api_sessions] Returning {len(detailed_sessions)} sessions")
         return web.json_response({'sessions': detailed_sessions})
     except Exception as e:
-        logger.error(f"Error listing sessions: {e}")
+        logger.error(f"[api_sessions] ERROR: {e}", exc_info=True)
         return web.json_response({'error': str(e)}, status=500)
 
 
