@@ -10,6 +10,11 @@
     const typingIndicator = document.getElementById('typing');
     const statusSpan = document.getElementById('status');
     const tokenCountSpan = document.getElementById('tokenCount');
+    const costDisplaySpan = document.getElementById('costDisplay');
+    const statsButton = document.getElementById('statsButton');
+    const statsModal = document.getElementById('statsModal');
+    const closeStatsButton = document.getElementById('closeStats');
+    const statsContent = document.getElementById('statsContent');
     
     // State
     let isLoading = false;
