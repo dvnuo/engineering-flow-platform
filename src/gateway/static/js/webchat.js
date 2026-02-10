@@ -1045,6 +1045,41 @@
     const sshKeyPath = document.getElementById('sshKeyPath');
     const debugEnabled = document.getElementById('debugEnabled');
     
+    // Provider to Model mapping
+    const providerModels = {
+        github_copilot: [
+            { value: 'gpt-4', label: 'GPT-4' },
+            { value: 'gpt-4o', label: 'GPT-4o' },
+            { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+        ],
+        openai: [
+            { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
+            { value: 'gpt-4', label: 'GPT-4' },
+            { value: 'gpt-4o', label: 'GPT-4o' },
+            { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+        ],
+        anthropic: [
+            { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
+            { value: 'claude-haiku-4-20250514', label: 'Claude Haiku 4' },
+            { value: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
+        ],
+    };
+    
+    // Update model dropdown based on selected provider
+    function updateModelDropdown(provider, currentModel = '') {
+        const models = providerModels[provider] || [];
+        llmModel.innerHTML = models.map(m => 
+            `<option value="${m.value}" ${m.value === currentModel ? 'selected' : ''}>${m.label}</option>`
+        ).join('');
+    }
+    
+    // Listen for provider changes
+    if (llmProvider) {
+        llmProvider.addEventListener('change', function() {
+            updateModelDropdown(this.value);
+        });
+    }
+    
     async function showSettings() {
         settingsPanel.classList.add('show');
         
@@ -1058,9 +1093,16 @@
                 
                 // LLM settings
                 if (config.llm) {
-                    llmProvider.value = config.llm.provider || 'github_copilot';
-                    llmModel.value = config.llm.model || 'gpt-4';
+                    const provider = config.llm.provider || 'github_copilot';
+                    const model = config.llm.model || 'gpt-4';
+                    llmProvider.value = provider;
+                    // Update model dropdown with current provider and model
+                    updateModelDropdown(provider, model);
                     // API key is hidden, don't populate
+                } else {
+                    // Default to github_copilot with gpt-4
+                    llmProvider.value = 'github_copilot';
+                    updateModelDropdown('github_copilot', 'gpt-4');
                 }
                 
                 // Jira settings
