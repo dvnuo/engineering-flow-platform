@@ -204,8 +204,15 @@ class SessionManager:
         
         return self.sessions[session_id]
     
-    async def add_message(self, session_id: str, role: str, content: str) -> None:
-        """Add a message to the session history."""
+    async def add_message(self, session_id: str, role: str, content: str, wait_for_save: bool = False) -> None:
+        """Add a message to the session history.
+        
+        Args:
+            session_id: The session ID
+            role: Message role ('user', 'assistant', 'system')
+            content: Message content
+            wait_for_save: If True, wait for persistence save to complete
+        """
         session = await self.get_session(session_id)
         message = {
             "role": role,
@@ -221,7 +228,7 @@ class SessionManager:
         
         # Auto-save to persistence layer
         if self.auto_save and self.persistence_enabled:
-            asyncio.create_task(
+            save_task = asyncio.create_task(
                 session_persistence.save_session(
                     session_id=session_id,
                     channel=session.get("channel", ""),
@@ -229,6 +236,9 @@ class SessionManager:
                     metadata=session.get("metadata", {}),
                 )
             )
+            # Optionally wait for save to complete
+            if wait_for_save:
+                await save_task
     
     async def get_history(self, session_id: str) -> List[Dict[str, str]]:
         """Get conversation history for a session."""

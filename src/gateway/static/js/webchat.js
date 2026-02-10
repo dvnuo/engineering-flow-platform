@@ -18,6 +18,7 @@
     const skillSelector = document.getElementById('skillSelector');
     const skillDropdown = document.getElementById('skillDropdown');
     const skillList = document.getElementById('skillList');
+    const themeToggle = document.getElementById('themeToggle');
     
     // State
     let isLoading = false;
@@ -26,6 +27,110 @@
     let skills = [];
     let selectedSkillIndex = -1;
     let skillsLoaded = false;
+    let currentSessionId = localStorage.getItem('efp-session-id') || null;
+    console.log('[WebChat] Initial sessionId from localStorage:', currentSessionId);
+    
+    // ========== Theme Management ==========
+    
+    const THEME_KEY = 'efp-theme';
+    const SESSION_ID_KEY = 'efp-session-id';
+    
+    /**
+     * Get saved theme preference
+     */
+    function getTheme() {
+        return localStorage.getItem(THEME_KEY) || 'light';
+    }
+    
+    /**
+     * Set theme and save preference
+     */
+    function setTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem(THEME_KEY, theme);
+    }
+    
+    /**
+    /**
+     * Toggle between light and dark theme
+     */
+    function toggleTheme() {
+        const currentTheme = getTheme();
+        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+        setTheme(newTheme);
+    }
+    
+    /**
+     * Initialize theme on page load
+     */
+    function initTheme() {
+        const theme = getTheme();
+        setTheme(theme);
+    }
+    
+    // Initialize theme
+    initTheme();
+    
+    // Theme toggle event listener
+    if (themeToggle) {
+        themeToggle.addEventListener('click', toggleTheme);
+    }
+    /**
+     * Toggle between light and dark theme
+     */
+    function toggleTheme() {
+        const currentTheme = getTheme();
+        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+        setTheme(newTheme);
+    }
+    
+    /**
+     * Initialize theme on page load
+     */
+    function initTheme() {
+        const theme = getTheme();
+        setTheme(theme);
+    }
+    
+    // Initialize theme
+    initTheme();
+    
+    // Theme toggle event listener
+    if (themeToggle) {
+        themeToggle.addEventListener('click', toggleTheme);
+    }
+    
+    // ========== Sidebar Management ==========
+    
+    const sidebar = document.getElementById('sidebar');
+    const layout = document.querySelector('.layout');
+    const toggleSidebarBtn = document.getElementById('toggleSidebar');
+    
+    /**
+     * Toggle sidebar on mobile
+     */
+    function toggleSidebar() {
+        if (layout && window.innerWidth <= 768) {
+            layout.classList.toggle('sidebar-open');
+            sidebar.classList.toggle('open');
+        }
+    }
+    
+    // Sidebar toggle button
+    if (toggleSidebarBtn) {
+        toggleSidebarBtn.addEventListener('click', toggleSidebar);
+    }
+    
+    // Close sidebar when clicking outside on mobile
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 768 && 
+            layout && layout.classList.contains('sidebar-open') &&
+            sidebar && !sidebar.contains(e.target) &&
+            toggleSidebarBtn && !toggleSidebarBtn.contains(e.target)) {
+            layout.classList.remove('sidebar-open');
+            sidebar.classList.remove('open');
+        }
+    });
     
     // Stats Modal
     statsButton.addEventListener('click', showStats);
@@ -343,15 +448,44 @@
         });
         
         div.innerHTML = `
-            <div class="avatar">${avatar}</div>
+            <div class="avatar" aria-hidden="true">${avatar}</div>
             <div>
-                <div class="message-content">${escapeHtml(content)}</div>
-                <div class="message-timestamp">${time}</div>
+                <div class="message-bubble">${renderMarkdown(content)}</div>
+                <div class="message-timestamp" aria-label="Message time">${time}</div>
             </div>
         `;
         
         messagesContainer.appendChild(div);
         scrollToBottom();
+    }
+    
+    /**
+     * Simple markdown-like rendering
+     * @param {string} text - Text to render
+     * @returns {string} HTML
+     */
+    function renderMarkdown(text) {
+        // Escape HTML first
+        let html = escapeHtml(text);
+        
+        // Code blocks (```...```)
+        html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+        
+        // Inline code (`...`)
+        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+        
+        // Bold (**...**)
+        html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        
+        // Headers (# ## ### ####)
+        html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+        html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+        html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+        
+        // Links ([text](url))
+        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+        
+        return html;
     }
     
     // Close skill selector when clicking outside
@@ -369,8 +503,7 @@
     function escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
-        const html = div.innerHTML;
-        return html.replace(/\n/g, '<br>');
+        return div.innerHTML;
     }
     
     /**
@@ -381,7 +514,51 @@
     }
     
     /**
-     * Send message to the server
+     * Add a streaming message placeholder for SSE
+     */
+    function createStreamingMessage() {
+        const div = document.createElement('div');
+        div.className = 'message assistant streaming-message';
+        div.innerHTML = `
+            <div class="avatar" aria-hidden="true">AI</div>
+            <div>
+                <div class="message-bubble"><span class="streaming-text"></span><span class="cursor-blink"></span></div>
+            </div>
+        `;
+        messagesContainer.appendChild(div);
+        scrollToBottom();
+        return div;
+    }
+    
+    /**
+     * Update streaming message content
+     */
+    function updateStreamingMessage(div, content) {
+        const bubble = div.querySelector('.message-bubble');
+        const textSpan = bubble.querySelector('.streaming-text');
+        textSpan.innerHTML = renderMarkdown(content);
+        scrollToBottom();
+    }
+    
+    /**
+     * Finish streaming message
+     */
+    function finishStreamingMessage(div) {
+        div.classList.remove('streaming-message');
+        div.classList.add('streaming-finished');
+        const bubble = div.querySelector('.message-bubble');
+        const timestamp = document.createElement('div');
+        timestamp.className = 'message-timestamp';
+        timestamp.setAttribute('aria-label', 'Message time');
+        timestamp.textContent = new Date().toLocaleTimeString([], { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+        });
+        bubble.appendChild(timestamp);
+    }
+    
+    /**
+     * Send message to the server with SSE streaming
      */
     async function sendMessage() {
         if (isLoading) return;
@@ -397,9 +574,34 @@
         addMessage('user', content);
         
         statusSpan.textContent = 'Thinking...';
-        typingIndicator.classList.add('show');
+        typingIndicator.classList.remove('show');
         
+        // Use regular API directly (SSE streaming not yet implemented)
+        await sendMessageFallback(content);
+        
+        isLoading = false;
+        sendButton.disabled = false;
+        messageInput.focus();
+    }
+    
+    /**
+     * Fallback: Send message using regular API
+     */
+    async function sendMessageFallback(content) {
         try {
+            // Generate new session_id if currentSessionId is null/undefined
+            const now = new Date();
+            const timestamp = now.getFullYear() +
+                String(now.getMonth() + 1).padStart(2, '0') +
+                String(now.getDate()).padStart(2, '0') +
+                '_' +
+                String(now.getHours()).padStart(2, '0') +
+                String(now.getMinutes()).padStart(2, '0') +
+                String(now.getSeconds()).padStart(2, '0');
+            const requestSessionId = currentSessionId || 'webchat_' + timestamp;
+            
+            console.log('[WebChat] Generated session_id:', requestSessionId);
+            
             const response = await fetch('/api/chat', {
                 method: 'POST',
                 headers: { 
@@ -407,18 +609,29 @@
                 },
                 body: JSON.stringify({ 
                     message: content,
-                    session_id: 'webchat'
+                    session_id: requestSessionId
                 })
             });
             
             const data = await response.json();
-            
-            typingIndicator.classList.remove('show');
+            console.log('[WebChat] API response:', JSON.stringify(data, null, 2));
             
             if (data.error) {
                 addMessage('error', `Error: ${data.error}`);
                 statusSpan.textContent = 'Error';
             } else {
+                // Update current session ID from response and persist
+                console.log('[WebChat] data.session_id:', data.session_id);
+                if (data.session_id) {
+                    currentSessionId = data.session_id;
+                    console.log('[WebChat] Received session_id from server:', currentSessionId);
+                    localStorage.setItem(SESSION_ID_KEY, currentSessionId);
+                    console.log('[WebChat] Saved sessionId to localStorage:', currentSessionId);
+                    // Verify it was saved
+                    const saved = localStorage.getItem(SESSION_ID_KEY);
+                    console.log('[WebChat] Verified localStorage.getItem:', saved);
+                }
+                
                 addMessage('assistant', data.response);
                 
                 if (data.usage) {
@@ -433,20 +646,389 @@
                 }
                 
                 statusSpan.textContent = 'Ready';
+                
+                // Refresh sessions list to show the new session
+                loadRecentSessions();
             }
         } catch (error) {
-            typingIndicator.classList.remove('show');
             addMessage('error', `Connection error: ${error.message}`);
             statusSpan.textContent = 'Disconnected';
-        } finally {
-            isLoading = false;
-            sendButton.disabled = false;
-            messageInput.focus();
         }
     }
     
     // Expose sendMessage globally for testing
     window.webchatSendMessage = sendMessage;
     window.webchatAddMessage = addMessage;
+    
+    // ========== Recent Sessions ==========
+    
+    const recentSessionsList = document.getElementById('recentSessionsList');
+    const refreshSessionsBtn = document.getElementById('refreshSessions');
+    
+    /**
+     * Load recent sessions from API
+     */
+    async function loadRecentSessions() {
+        if (!recentSessionsList) return;
+        
+        recentSessionsList.innerHTML = '<div class="loading-sessions">Loading...</div>';
+        
+        try {
+            const response = await fetch('/api/sessions?limit=10');
+            const data = await response.json();
+            
+            if (data.error || !data.sessions) {
+                recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
+                return;
+            }
+            
+            if (data.sessions.length === 0) {
+                recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
+                return;
+            }
+            
+            // Filter out null sessions
+            const validSessions = (data.sessions || []).filter(s => s);
+            if (validSessions.length === 0) {
+                recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
+                return;
+            }
+            
+            recentSessionsList.innerHTML = validSessions.map((session, index) => {
+                const sessionId = session.session_id || ('session_' + index);
+                return `
+                <div class="recent-session-item ${index === 0 ? 'active' : ''}" data-session-id="${sessionId}">
+                    <svg class="recent-session-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    <div class="recent-session-info">
+                        <div class="recent-session-name">${escapeHtml(session.name || session.session_id || 'Chat ' + (index + 1))}</div>
+                        <div class="recent-session-preview">${escapeHtml(session.last_message || '')}</div>
+                    </div>
+                </div>
+            `}).join('');
+            
+            // Add click handlers
+            recentSessionsList.querySelectorAll('.recent-session-item').forEach(item => {
+                item.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const sessionId = this.getAttribute('data-session-id');
+                    console.log('Clicked session:', sessionId);
+                    if (sessionId && sessionId !== 'undefined') {
+                        loadSession(sessionId);
+                        // Update active state
+                        recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
+                        this.classList.add('active');
+                    }
+                });
+            });
+            
+            // Auto-load the first session if no current session
+            // First check if we have a persisted session_id in localStorage
+            const persistedSessionId = localStorage.getItem(SESSION_ID_KEY);
+            if (persistedSessionId && persistedSessionId !== 'null') {
+                // Verify this session exists in the list
+                const sessionExists = validSessions.find(s => s.session_id === persistedSessionId);
+                if (sessionExists) {
+                    console.log('Auto-loading persisted session:', persistedSessionId);
+                    loadSession(persistedSessionId);
+                    // Update active state
+                    recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => {
+                        if (i.getAttribute('data-session-id') === persistedSessionId) {
+                            i.classList.add('active');
+                        } else {
+                            i.classList.remove('active');
+                        }
+                    });
+                } else {
+                    // Persisted session not found, load first session
+                    console.log('Persisted session not found, loading first session');
+                    const firstSession = validSessions[0];
+                    loadSession(firstSession.session_id);
+                }
+            } else if (!currentSessionId && validSessions.length > 0) {
+                const firstSession = validSessions[0];
+                console.log('Auto-loading first session:', firstSession.session_id);
+                loadSession(firstSession.session_id);
+            }
+            
+        } catch (error) {
+            console.error('Error loading sessions:', error);
+            recentSessionsList.innerHTML = '<div class="loading-sessions">Error loading sessions</div>';
+        }
+    }
+    
+    /**
+     * Load a specific session
+     */
+    async function loadSession(sessionId) {
+        console.log('loadSession called with:', sessionId);
+        if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {
+            console.error('Invalid session ID:', sessionId);
+            return;
+        }
+        
+        currentSessionId = sessionId;
+        messagesContainer.innerHTML = '<div class="loading">Loading...</div>';
+        statusSpan.textContent = `Loading: ${sessionId}`;
+        
+        try {
+            const response = await fetch('/api/sessions/' + encodeURIComponent(sessionId));
+            const data = await response.json();
+            
+            if (data.error) {
+                messagesContainer.innerHTML = `<div class="welcome-message">
+                    <h2>👋 Error</h2>
+                    <p>${escapeHtml(data.error)}</p>
+                </div>`;
+                statusSpan.textContent = 'Error loading session';
+                return;
+            }
+            
+            // Clear and render messages
+            messagesContainer.innerHTML = '';
+            
+            const messages = data.messages || [];
+            if (messages.length === 0) {
+                messagesContainer.innerHTML = `<div class="welcome-message">
+                    <h2>👋 ${escapeHtml(data.name || 'New Chat')}</h2>
+                    <p>Start a conversation</p>
+                </div>`;
+            } else {
+                messages.forEach(msg => {
+                    const role = msg.role || 'user';
+                    addMessage(role, msg.content || '');
+                });
+            }
+            
+            statusSpan.textContent = 'Ready';
+            
+        } catch (error) {
+            console.error('Error loading session:', error);
+            messagesContainer.innerHTML = `<div class="welcome-message">
+                <h2>👋 Error</h2>
+                <p>Failed to load session</p>
+            </div>`;
+            statusSpan.textContent = 'Error';
+        }
+    }
+    
+    // Refresh sessions button
+    if (refreshSessionsBtn) {
+        refreshSessionsBtn.addEventListener('click', function() {
+            this.classList.add('loading');
+            loadRecentSessions().finally(() => {
+                this.classList.remove('loading');
+            });
+        });
+    }
+    
+    // Load recent sessions on page load
+    loadRecentSessions();
+    
+    // ========== Sidebar Actions ==========
+    
+    document.addEventListener('click', function(e) {
+        const action = e.target.closest('[data-action]')?.dataset.action;
+        if (!action) return;
+        
+        if (action === 'new-chat') {
+            currentSessionId = null;
+            localStorage.removeItem(SESSION_ID_KEY);  // Clear persisted session
+            messagesContainer.innerHTML = `
+                <div class="welcome-message">
+                    <h2>👋 New Chat</h2>
+                    <p>Start a new conversation</p>
+                </div>
+            `;
+            statusSpan.textContent = 'Ready';
+            recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
+        } else if (action === 'files') {
+            showFileExplorer();
+        } else if (action === 'settings') {
+            showSettings();
+        }
+    });
+    
+    // ========== File Explorer ==========
+    
+    const fileExplorerModal = document.getElementById('fileExplorerModal');
+    const closeFileExplorer = document.getElementById('closeFileExplorer');
+    const fileExplorerContent = document.getElementById('fileExplorerContent');
+    
+    async function showFileExplorer(path = '/root/.openclaw/workspace/engineering-flow') {
+        fileExplorerModal.classList.add('show');
+        fileExplorerContent.innerHTML = '<div class="loading">Loading...</div>';
+        
+        try {
+            const response = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
+            const data = await response.json();
+            
+            if (data.error) {
+                fileExplorerContent.innerHTML = `<div class="loading">${escapeHtml(data.error)}</div>`;
+                return;
+            }
+            
+            const pathParts = data.path.split('/').filter(p => p);
+            let pathHtml = '<div class="file-explorer-path"><button data-path="/">/</button>';
+            let currentPath = '';
+            pathParts.forEach(part => {
+                currentPath += '/' + part;
+                pathHtml += ' / <button data-path="' + currentPath + '">' + escapeHtml(part) + '</button>';
+            });
+            pathHtml += '</div>';
+            
+            if (data.items.length === 0) {
+                fileExplorerContent.innerHTML = pathHtml + '<div class="file-explorer-empty">Empty directory</div>';
+                return;
+            }
+            
+            fileExplorerContent.innerHTML = pathHtml + `
+                <div class="file-explorer-list">
+                    ${data.items.map(item => `
+                        <div class="file-explorer-item" data-path="${item.path}" data-is-dir="${item.is_dir}">
+                            ${item.is_dir ? 
+                                '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>' :
+                                '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
+                            }
+                            <span class="file-name">${escapeHtml(item.name)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            
+            // Add click handlers
+            fileExplorerContent.querySelectorAll('.file-explorer-path button').forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    showFileExplorer(this.dataset.path);
+                });
+            });
+            
+            fileExplorerContent.querySelectorAll('.file-explorer-item').forEach(item => {
+                item.addEventListener('click', function() {
+                    if (this.dataset.is_dir === 'true') {
+                        showFileExplorer(this.dataset.path);
+                    } else {
+                        // Insert file path in chat
+                        messageInput.value += this.dataset.path;
+                        messageInput.focus();
+                        fileExplorerModal.classList.remove('show');
+                    }
+                });
+            });
+            
+        } catch (error) {
+            console.error('Error loading files:', error);
+            fileExplorerContent.innerHTML = '<div class="loading">Error loading files</div>';
+        }
+    }
+    
+    if (closeFileExplorer) {
+        closeFileExplorer.addEventListener('click', function() {
+            fileExplorerModal.classList.remove('show');
+        });
+        fileExplorerModal.addEventListener('click', function(e) {
+            if (e.target === fileExplorerModal) fileExplorerModal.classList.remove('show');
+        });
+    }
+    
+    // ========== Settings ==========
+    
+    const settingsModal = document.getElementById('settingsModal');
+    const closeSettings = document.getElementById('closeSettings');
+    const settingsContent = document.getElementById('settingsContent');
+    const settingsThemeToggle = document.getElementById('settingsThemeToggle');
+    const settingsDefaultModel = document.getElementById('settingsDefaultModel');
+    const settingsOpenAIKey = document.getElementById('settingsOpenAIKey');
+    const settingsAnthropicKey = document.getElementById('settingsAnthropicKey');
+    const saveSettingsBtn = document.getElementById('saveSettings');
+    
+    function showSettings() {
+        settingsModal.classList.add('show');
+        
+        // Load saved settings
+        const theme = getTheme();
+        settingsThemeToggle.checked = theme === 'dark';
+        
+        // Load other settings from localStorage
+        const savedModel = localStorage.getItem('efp-default-model');
+        if (savedModel) settingsDefaultModel.value = savedModel;
+        
+        const savedOpenAIKey = localStorage.getItem('efp-openai-key');
+        if (savedOpenAIKey) settingsOpenAIKey.value = savedOpenAIKey;
+        
+        const savedAnthropicKey = localStorage.getItem('efp-anthropic-key');
+        if (savedAnthropicKey) settingsAnthropicKey.value = savedAnthropicKey;
+    }
+    
+    if (saveSettingsBtn) {
+        saveSettingsBtn.addEventListener('click', function() {
+            // Save theme
+            setTheme(settingsThemeToggle.checked ? 'dark' : 'light');
+            
+            // Save other settings
+            localStorage.setItem('efp-default-model', settingsDefaultModel.value);
+            localStorage.setItem('efp-openai-key', settingsOpenAIKey.value);
+            localStorage.setItem('efp-anthropic-key', settingsAnthropicKey.value);
+            
+            settingsModal.classList.remove('show');
+        });
+    }
+    
+    if (closeSettings) {
+        closeSettings.addEventListener('click', function() {
+            settingsModal.classList.remove('show');
+        });
+        settingsModal.addEventListener('click', function(e) {
+            if (e.target === settingsModal) settingsModal.classList.remove('show');
+        });
+    }
+    
+    // ========== Copy Code Button ==========
+    
+    function addCopyButtons() {
+        document.querySelectorAll('pre code').forEach((block) => {
+            if (block.parentElement.querySelector('.copy-code-button')) return;
+            
+            const button = document.createElement('button');
+            button.className = 'copy-code-button';
+            button.textContent = 'Copy';
+            button.addEventListener('click', function() {
+                navigator.clipboard.writeText(block.textContent).then(() => {
+                    this.textContent = 'Copied!';
+                    this.classList.add('copied');
+                    setTimeout(() => {
+                        this.textContent = 'Copy';
+                        this.classList.remove('copied');
+                    }, 2000);
+                });
+            });
+            block.parentElement.style.position = 'relative';
+            block.parentElement.appendChild(button);
+        });
+    }
+    
+    // Add copy buttons when new messages are added
+    const originalAddMessage = window.webchatAddMessage;
+    window.webchatAddMessage = function(role, content, timestamp) {
+        const result = originalAddMessage(role, content, timestamp);
+        addCopyButtons();
+        return result;
+    };
+    
+    // Add copy buttons to existing code blocks
+    addCopyButtons();
+    
+    // Debug: Expose session functions globally for testing
+    window.webchatDebugSession = {
+        get: () => localStorage.getItem('efp-session-id'),
+        set: (id) => {
+            localStorage.setItem('efp-session-id', id);
+            return localStorage.getItem('efp-session-id');
+        },
+        clear: () => localStorage.removeItem('efp-session-id'),
+        log: () => console.log('[WebChat] session_id:', localStorage.getItem('efp-session-id'))
+    };
     
 })();
