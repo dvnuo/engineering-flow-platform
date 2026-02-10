@@ -342,8 +342,7 @@ body {
     margin: 0;
     padding: var(--space-lg);
     gap: var(--space-lg);
-    height: 100%;
-    overflow: hidden;
+    overflow-y: auto;
 }
 
 /* Messages Area */
