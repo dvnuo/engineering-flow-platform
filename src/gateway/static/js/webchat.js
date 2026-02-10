@@ -75,15 +75,16 @@
     // ========== Sidebar Management ==========
     
     const sidebar = document.getElementById('sidebar');
-    const shell = document.querySelector('.shell');
+    const layout = document.querySelector('.layout');
     const toggleSidebarBtn = document.getElementById('toggleSidebar');
     
     /**
      * Toggle sidebar on mobile
      */
     function toggleSidebar() {
-        if (shell && window.innerWidth <= 768) {
-            shell.classList.toggle('sidebar-open');
+        if (layout && window.innerWidth <= 768) {
+            layout.classList.toggle('sidebar-open');
+            sidebar.classList.toggle('open');
         }
     }
     
@@ -95,10 +96,11 @@
     // Close sidebar when clicking outside on mobile
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 768 && 
-            shell && shell.classList.contains('sidebar-open') &&
+            layout && layout.classList.contains('sidebar-open') &&
             sidebar && !sidebar.contains(e.target) &&
             toggleSidebarBtn && !toggleSidebarBtn.contains(e.target)) {
-            shell.classList.remove('sidebar-open');
+            layout.classList.remove('sidebar-open');
+            sidebar.classList.remove('open');
         }
     });
     

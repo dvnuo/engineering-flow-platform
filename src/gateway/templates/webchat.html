@@ -13,8 +13,45 @@
     <link rel="stylesheet" href="/static/css/webchat.css">
 </head>
 <body>
-    <!-- Shell Layout (like OpenClaw) -->
-    <div class="shell">
+    <!-- Topbar - Outside shell -->
+    <header class="topbar">
+        <button class="toggle-sidebar" id="toggleSidebar" aria-label="Toggle sidebar">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="3" y1="12" x2="21" y2="12"/>
+                <line x1="3" y1="6" x2="21" y2="6"/>
+                <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+        </button>
+        <div class="topbar-title">Engineering Flow Platform</div>
+        <button class="stats-button" id="statsButton" title="View Usage Stats" aria-label="View usage statistics">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 20V10"/>
+                <path d="M18 20V4"/>
+                <path d="M6 20v-4"/>
+            </svg>
+        </button>
+        <button class="theme-toggle" id="themeToggle" title="Toggle theme" aria-label="Toggle light/dark theme">
+            <!-- Sun icon (shown in dark mode) -->
+            <svg class="icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
+                <circle cx="12" cy="12" r="5"/>
+                <line x1="12" y1="1" x2="12" y2="3"/>
+                <line x1="12" y1="21" x2="12" y2="23"/>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                <line x1="1" y1="12" x2="3" y2="12"/>
+                <line x1="21" y1="12" x2="23" y2="12"/>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+            </svg>
+            <!-- Moon icon (shown in light mode) -->
+            <svg class="icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+            </svg>
+        </button>
+    </header>
+    
+    <!-- Main Layout -->
+    <div class="layout">
         <!-- Navigation Sidebar -->
         <nav class="sidebar" id="sidebar">
             <div class="sidebar-header">
@@ -67,83 +104,43 @@
             </div>
         </nav>
         
-        <!-- Main Content Area -->
-        <div class="main-area">
-            <!-- Header -->
-            <header class="topbar">
-                <button class="toggle-sidebar" id="toggleSidebar" aria-label="Toggle sidebar">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="3" y1="12" x2="21" y2="12"/>
-                        <line x1="3" y1="6" x2="21" y2="6"/>
-                        <line x1="3" y1="18" x2="21" y2="18"/>
-                    </svg>
-                </button>
-                <div class="topbar-title">Engineering Flow Platform</div>
-                <button class="stats-button" id="statsButton" title="View Usage Stats" aria-label="View usage statistics">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12 20V10"/>
-                        <path d="M18 20V4"/>
-                        <path d="M6 20v-4"/>
-                    </svg>
-                </button>
-                <button class="theme-toggle" id="themeToggle" title="Toggle theme" aria-label="Toggle light/dark theme">
-                    <!-- Sun icon (shown in dark mode) -->
-                    <svg class="icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
-                        <circle cx="12" cy="12" r="5"/>
-                        <line x1="12" y1="1" x2="12" y2="3"/>
-                        <line x1="12" y1="21" x2="12" y2="23"/>
-                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-                        <line x1="1" y1="12" x2="3" y2="12"/>
-                        <line x1="21" y1="12" x2="23" y2="12"/>
-                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-                    </svg>
-                    <!-- Moon icon (shown in light mode) -->
-                    <svg class="icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-                    </svg>
-                </button>
-            </header>
+        <!-- Chat Content -->
+        <main class="chat-container">
+            <div class="messages" id="messages" role="log" aria-live="polite">
+                <div class="welcome-message">
+                    <h2>👋 Welcome!</h2>
+                    <p>I'm your AI assistant. How can I help you today?</p>
+                </div>
+            </div>
             
-            <!-- Chat Container -->
-            <main class="chat-container">
-                <div class="messages" id="messages" role="log" aria-live="polite">
-                    <div class="welcome-message">
-                        <h2>👋 Welcome!</h2>
-                        <p>I'm your AI assistant. How can I help you today?</p>
-                    </div>
-                </div>
-                
-                <div class="typing-indicator" id="typing" role="status" aria-label="Assistant is typing">
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
-                </div>
-                
-                <!-- Streaming Content (for SSE) -->
-                <div class="streaming-content" id="streamingContent"></div>
-                
-                <!-- Input Area -->
-                <div class="input-area">
-                    <div class="input-wrapper">
-                        <div class="skill-selector" id="skillSelector" role="combobox" aria-expanded="false" aria-haspopup="listbox">
-                            <div class="skill-selector-dropdown" id="skillDropdown" role="listbox" aria-label="Available Skills">
-                                <div class="skill-selector-header">Available Skills</div>
-                                <div class="skill-list" id="skillList" role="listbox"></div>
-                            </div>
+            <div class="typing-indicator" id="typing" role="status" aria-label="Assistant is typing">
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            </div>
+            
+            <!-- Streaming Content (for SSE) -->
+            <div class="streaming-content" id="streamingContent"></div>
+            
+            <!-- Input Area -->
+            <div class="input-area">
+                <div class="input-wrapper">
+                    <div class="skill-selector" id="skillSelector" role="combobox" aria-expanded="false" aria-haspopup="listbox">
+                        <div class="skill-selector-dropdown" id="skillDropdown" role="listbox" aria-label="Available Skills">
+                            <div class="skill-selector-header">Available Skills</div>
+                            <div class="skill-list" id="skillList" role="listbox"></div>
                         </div>
-                        <textarea 
-                            class="input-field" 
-                            id="messageInput" 
-                            placeholder="Type a message or / for skills..."
-                            rows="1"
-                            aria-label="Message input"
-                        ></textarea>
-                        <button class="send-button" id="sendButton">Send</button>
                     </div>
+                    <textarea 
+                        class="input-field" 
+                        id="messageInput" 
+                        placeholder="Type a message or / for skills..."
+                        rows="1"
+                        aria-label="Message input"
+                    ></textarea>
+                    <button class="send-button" id="sendButton">Send</button>
                 </div>
-            </main>
+            </div>
             
             <!-- Status Bar -->
             <footer class="status-bar" role="contentinfo">
@@ -170,7 +167,7 @@
                     Cost: $0.00
                 </span>
             </footer>
-        </div>
+        </main>
     </div>
     
     <!-- Usage Stats Modal -->
