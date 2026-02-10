@@ -75,6 +75,40 @@ def check_config() -> tuple[bool, list[str]]:
 
 async def main() -> None:
     """Main entry point."""
+    import argparse
+    import logging
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Engineering Flow Platform")
+    parser.add_argument("--httpx-trace", action="store_true", 
+                        help="Enable httpx detailed trace logging (very verbose)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Enable debug logging")
+    args, _ = parser.parse_known_args()
+    
+    # Apply command line arguments to config
+    if args.debug:
+        config._config["debug"] = {"enabled": True, "httpx_trace": args.httpx_trace}
+    elif args.httpx_trace:
+        current_debug = config._config.get("debug", {})
+        current_debug["httpx_trace"] = True
+        config._config["debug"] = current_debug
+    
+    # Setup httpx logging level BEFORE setup_logging
+    httpx_logger = logging.getLogger("httpx")
+    httpcore_logger = logging.getLogger("httpcore")
+    
+    # Check if httpx trace should be enabled
+    debug_config = config._config.get("debug", {})
+    httpx_trace_enabled = debug_config.get("httpx_trace", False) or args.httpx_trace
+    
+    if httpx_trace_enabled:
+        httpx_logger.setLevel(logging.DEBUG)
+        httpcore_logger.setLevel(logging.DEBUG)
+    else:
+        httpx_logger.setLevel(logging.WARNING)
+        httpcore_logger.setLevel(logging.WARNING)
+    
     logger = setup_logging_config()
     logger.info("=" * 60)
     logger.info("Engineering Flow Platform - Starting...")
