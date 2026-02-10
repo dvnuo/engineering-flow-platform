@@ -297,6 +297,10 @@ async def api_sessions(request: web.Request) -> web.Response:
     Returns: List of sessions with name, last message, timestamp
     """
     try:
+        # Initialize session manager if needed
+        if not session_manager._initialized:
+            await session_manager.initialize()
+        
         limit = int(request.query.get('limit', 10))
         session_ids = await session_manager.list_sessions()
         
@@ -349,6 +353,10 @@ async def api_load_session(request: web.Request) -> web.Response:
     Returns: Session messages
     """
     try:
+        # Initialize session manager if needed
+        if not session_manager._initialized:
+            await session_manager.initialize()
+        
         session_id = request.match_info.get('session_id', '')
         if not session_id:
             return web.json_response({'error': 'Session ID required'}, status=400)

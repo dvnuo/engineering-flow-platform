@@ -719,27 +719,32 @@
                 return;
             }
             
-            recentSessionsList.innerHTML = data.sessions.map((session, index) => `
-                <div class="recent-session-item ${index === 0 ? 'active' : ''}" data-session-id="${session.session_id}">
+            recentSessionsList.innerHTML = data.sessions.map((session, index) => {
+                const sessionId = session.session_id || ('session_' + index);
+                return `
+                <div class="recent-session-item ${index === 0 ? 'active' : ''}" data-session-id="${sessionId}">
                     <svg class="recent-session-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                     </svg>
                     <div class="recent-session-info">
-                        <div class="recent-session-name">${escapeHtml(session.name || session.session_id)}</div>
+                        <div class="recent-session-name">${escapeHtml(session.name || session.session_id || 'Chat ' + (index + 1))}</div>
                         <div class="recent-session-preview">${escapeHtml(session.last_message || '')}</div>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
             
             // Add click handlers
             recentSessionsList.querySelectorAll('.recent-session-item').forEach(item => {
-                item.addEventListener('click', function() {
-                    const sessionId = this.dataset.sessionId;
-                    loadSession(sessionId);
-                    
-                    // Update active state
-                    recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
-                    this.classList.add('active');
+                item.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const sessionId = this.getAttribute('data-session-id');
+                    console.log('Clicked session:', sessionId);
+                    if (sessionId && sessionId !== 'undefined') {
+                        loadSession(sessionId);
+                        // Update active state
+                        recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
+                        this.classList.add('active');
+                    }
                 });
             });
             
@@ -753,12 +758,18 @@
      * Load a specific session
      */
     async function loadSession(sessionId) {
+        console.log('loadSession called with:', sessionId);
+        if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {
+            console.error('Invalid session ID:', sessionId);
+            return;
+        }
+        
         currentSessionId = sessionId;
         messagesContainer.innerHTML = '<div class="loading">Loading...</div>';
         statusSpan.textContent = `Loading: ${sessionId}`;
         
         try {
-            const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+            const response = await fetch('/api/sessions/' + encodeURIComponent(sessionId));
             const data = await response.json();
             
             if (data.error) {
