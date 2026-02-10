@@ -139,10 +139,12 @@ async def api_chat(request: web.Request) -> web.Response:
         # Record usage if available
         if usage:
             usage_tracker.record_usage(
-                session_id=session_id,
-                response={"usage": usage},
+                provider="openai",
                 model=config.llm.get('model', 'unknown'),
-                channel='webchat'
+                input_tokens=usage.get("prompt_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                session_id=session_id,
+                task_type="chat"
             )
         
         response_data = {

@@ -136,35 +136,24 @@ class UsageTracker:
     
     def record_usage(
         self,
-        session_id: str,
-        response: Dict,
+        provider: str,
         model: str,
-        channel: str = "unknown"
+        input_tokens: int,
+        output_tokens: int,
+        session_id: str = "default",
+        task_type: str = "chat"
     ) -> UsageStats:
         """Record token usage for a session."""
+        # Build response dict from parameters
+        response = {
+            "usage": {
+                "prompt_tokens": input_tokens,
+                "completion_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens
+            }
+        }
         stats = self._parse_usage_from_response(response, model)
-        
-        # Append to session file
-        entry = {
-            "session_id": session_id,
-            "channel": channel,
-            **stats.to_dict(),
-        }
-        
-        with open(self.session_file, 'a') as f:
-            f.write(json.dumps(entry) + '\n')
-        
-        # Append to global file
-        global_entry = {
-            "type": "usage",
-            **stats.to_dict(),
-        }
-        
-        with open(self.global_file, 'a') as f:
-            f.write(json.dumps(global_entry) + '\n')
-        
-        return stats
-    
+
     def get_session_usage(self, session_id: str) -> List[UsageStats]:
         """Get usage stats for a specific session."""
         usages = []
