@@ -547,6 +547,88 @@ async def api_clear(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e)}, status=500)
 
 
+async def api_save_config(request: web.Request) -> web.Response:
+    """Save configuration to config.yaml.
+    
+    POST /api/config/save
+    Body: JSON with config sections to update
+    """
+    try:
+        data = await request.json()
+        
+        config_path = Path(__file__).parent.parent.parent / 'config.yaml'
+        
+        if not config_path.exists():
+            return web.json_response({'error': 'config.yaml not found'}, status=404)
+        
+        # Read existing config
+        import yaml
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) or {}
+        
+        # Update sections
+        if 'llm' in data:
+            config['llm'] = data['llm']
+        if 'jira' in data:
+            config['jira'] = data['jira']
+        if 'confluence' in data:
+            config['confluence'] = data['confluence']
+        if 'github' in data:
+            config['github'] = data['github']
+        if 'git' in data:
+            config['git'] = data['git']
+        if 'ssh' in data:
+            config['ssh'] = data['ssh']
+        if 'debug' in data:
+            config['debug'] = data['debug']
+        
+        # Write back
+        with open(config_path, 'w', encoding='utf-8') as f:
+            yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+        
+        return web.json_response({'success': True, 'message': 'Configuration saved. Restart required.'})
+    except Exception as e:
+        logger.error(f"Error saving config: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_get_config(request: web.Request) -> web.Response:
+    """Get current configuration (without sensitive values).
+    
+    GET /api/config
+    """
+    try:
+        config_path = Path(__file__).parent.parent.parent / 'config.yaml'
+        
+        if not config_path.exists():
+            return web.json_response({'error': 'config.yaml not found'}, status=404)
+        
+        import yaml
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) or {}
+        
+        # Remove sensitive values for display
+        def sanitize(obj, level=0):
+            if level > 3:
+                return obj
+            if isinstance(obj, dict):
+                result = {}
+                for k, v in obj.items():
+                    if 'key' in k.lower() or 'token' in k.lower() or 'password' in k.lower() or 'secret' in k.lower():
+                        result[k] = '***HIDDEN***' if v else ''
+                    else:
+                        result[k] = sanitize(v, level + 1)
+                return result
+            elif isinstance(obj, list):
+                return [sanitize(i, level + 1) for i in obj]
+            return obj
+        
+        return web.json_response({'config': sanitize(config)})
+    except Exception as e:
+        logger.error(f"Error reading config: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
 def _parse_skill_from_file(skill_path: Path) -> Optional[Dict[str, Any]]:
     """Parse a skill from SKILL.md file.
     
@@ -692,6 +774,8 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/files/read', api_read_file)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
+    app.router.add_get('/api/config', api_get_config)
+    app.router.add_post('/api/config/save', api_save_config)
     app.router.add_get('/api/skills', api_skills)
     
     logger.info("WebChat routes registered:")

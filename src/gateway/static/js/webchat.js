@@ -1022,42 +1022,149 @@
     
     const settingsPanel = document.getElementById('settingsPanel');
     const closeSettings = document.getElementById('closeSettings');
-    const settingsContent = document.getElementById('settingsContent');
-    const settingsThemeToggle = document.getElementById('settingsThemeToggle');
-    const settingsDefaultModel = document.getElementById('settingsDefaultModel');
-    const settingsOpenAIKey = document.getElementById('settingsOpenAIKey');
-    const settingsAnthropicKey = document.getElementById('settingsAnthropicKey');
     const saveSettingsBtn = document.getElementById('saveSettings');
     
-    function showSettings() {
+    // Settings form elements
+    const llmProvider = document.getElementById('llmProvider');
+    const llmModel = document.getElementById('llmModel');
+    const llmApiKey = document.getElementById('llmApiKey');
+    const jiraEnabled = document.getElementById('jiraEnabled');
+    const jiraUrl = document.getElementById('jiraUrl');
+    const jiraUsername = document.getElementById('jiraUsername');
+    const jiraApiToken = document.getElementById('jiraApiToken');
+    const confluenceEnabled = document.getElementById('confluenceEnabled');
+    const confluenceUrl = document.getElementById('confluenceUrl');
+    const confluenceUsername = document.getElementById('confluenceUsername');
+    const confluenceApiToken = document.getElementById('confluenceApiToken');
+    const githubEnabled = document.getElementById('githubEnabled');
+    const githubToken = document.getElementById('githubToken');
+    const githubBaseUrl = document.getElementById('githubBaseUrl');
+    const gitName = document.getElementById('gitName');
+    const gitEmail = document.getElementById('gitEmail');
+    const sshEnabled = document.getElementById('sshEnabled');
+    const sshKeyPath = document.getElementById('sshKeyPath');
+    const debugEnabled = document.getElementById('debugEnabled');
+    
+    async function showSettings() {
         settingsPanel.classList.add('show');
         
-        // Load saved settings
-        const theme = getTheme();
-        settingsThemeToggle.checked = theme === 'dark';
-        
-        // Load other settings from localStorage
-        const savedModel = localStorage.getItem('efp-default-model');
-        if (savedModel) settingsDefaultModel.value = savedModel;
-        
-        const savedOpenAIKey = localStorage.getItem('efp-openai-key');
-        if (savedOpenAIKey) settingsOpenAIKey.value = savedOpenAIKey;
-        
-        const savedAnthropicKey = localStorage.getItem('efp-anthropic-key');
-        if (savedAnthropicKey) settingsAnthropicKey.value = savedAnthropicKey;
+        // Load config from server
+        try {
+            const response = await fetch('/api/config');
+            const data = await response.json();
+            
+            if (data.config) {
+                const config = data.config;
+                
+                // LLM settings
+                if (config.llm) {
+                    llmProvider.value = config.llm.provider || 'github_copilot';
+                    llmModel.value = config.llm.model || 'gpt-4';
+                    // API key is hidden, don't populate
+                }
+                
+                // Jira settings
+                if (config.jira) {
+                    jiraEnabled.checked = config.jira.enabled || false;
+                    jiraUrl.value = config.jira.url || '';
+                    jiraUsername.value = config.jira.username || '';
+                    // API token is hidden
+                }
+                
+                // Confluence settings
+                if (config.confluence) {
+                    confluenceEnabled.checked = config.confluence.enabled || false;
+                    confluenceUrl.value = config.confluence.url || '';
+                    confluenceUsername.value = config.confluence.username || '';
+                    // API token is hidden
+                }
+                
+                // GitHub settings
+                if (config.github) {
+                    githubEnabled.checked = config.github.enabled || false;
+                    githubToken.value = config.github.api_token || '';
+                    githubBaseUrl.value = config.github.base_url || '';
+                }
+                
+                // Git settings
+                if (config.git && config.git.user) {
+                    gitName.value = config.git.user.name || '';
+                    gitEmail.value = config.git.user.email || '';
+                }
+                
+                // SSH settings
+                if (config.ssh) {
+                    sshEnabled.checked = config.ssh.enabled || false;
+                    sshKeyPath.value = config.ssh.private_key_path || '';
+                }
+                
+                // Debug settings
+                if (config.debug) {
+                    debugEnabled.checked = config.debug.enabled || false;
+                }
+            }
+        } catch (error) {
+            console.error('Error loading config:', error);
+        }
     }
     
     if (saveSettingsBtn) {
-        saveSettingsBtn.addEventListener('click', function() {
-            // Save theme
-            setTheme(settingsThemeToggle.checked ? 'dark' : 'light');
+        saveSettingsBtn.addEventListener('click', async function() {
+            const config = {
+                llm: {
+                    provider: llmProvider.value,
+                    model: llmModel.value,
+                    api_key: llmApiKey.value,
+                },
+                jira: {
+                    enabled: jiraEnabled.checked,
+                    url: jiraUrl.value,
+                    username: jiraUsername.value,
+                    api_token: jiraApiToken.value,
+                },
+                confluence: {
+                    enabled: confluenceEnabled.checked,
+                    url: confluenceUrl.value,
+                    username: confluenceUsername.value,
+                    api_token: confluenceApiToken.value,
+                },
+                github: {
+                    enabled: githubEnabled.checked,
+                    api_token: githubToken.value,
+                    base_url: githubBaseUrl.value,
+                },
+                git: {
+                    user: {
+                        name: gitName.value,
+                        email: gitEmail.value,
+                    },
+                },
+                ssh: {
+                    enabled: sshEnabled.checked,
+                    private_key_path: sshKeyPath.value,
+                },
+                debug: {
+                    enabled: debugEnabled.checked,
+                },
+            };
             
-            // Save other settings
-            localStorage.setItem('efp-default-model', settingsDefaultModel.value);
-            localStorage.setItem('efp-openai-key', settingsOpenAIKey.value);
-            localStorage.setItem('efp-anthropic-key', settingsAnthropicKey.value);
-            
-            settingsPanel.classList.remove('show');
+            try {
+                const response = await fetch('/api/config/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config),
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    alert('Configuration saved! Please restart the server for changes to take effect.');
+                    settingsPanel.classList.remove('show');
+                } else {
+                    alert('Error saving configuration: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error saving configuration: ' + error.message);
+            }
         });
     }
     

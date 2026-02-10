@@ -1804,3 +1804,80 @@ pre:hover .copy-code-button,
     border-color: var(--color-success);
     color: white;
 }
+
+/* Settings Form Styles */
+.settings-section {
+    margin-bottom: var(--space-lg);
+    padding-bottom: var(--space-lg);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.settings-section:last-of-type {
+    border-bottom: none;
+    margin-bottom: var(--space-md);
+    padding-bottom: 0;
+}
+
+.settings-section h3 {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    color: var(--color-text);
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: var(--space-md);
+}
+
+.settings-row {
+    margin-bottom: var(--space-md);
+}
+
+.settings-row label {
+    display: block;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    margin-bottom: var(--space-xs);
+}
+
+.settings-row-inline {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-md);
+}
+
+.settings-row-inline span {
+    color: var(--color-text);
+    font-size: 13px;
+}
+
+.settings-input {
+    width: 100%;
+    background: var(--color-bg-input);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-sm) var(--space-md);
+    color: var(--color-text);
+    font-size: 13px;
+}
+
+.settings-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+.settings-select {
+    width: 100%;
+    background: var(--color-bg-input);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-sm) var(--space-md);
+    color: var(--color-text);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.settings-select:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}

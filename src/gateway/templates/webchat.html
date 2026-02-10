@@ -238,32 +238,7 @@
             </button>
         </div>
         <div class="sidebar-panel-body" id="settingsContent">
-            <!-- Theme Setting -->
-            <div class="settings-section">
-                <h3>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="5"/>
-                        <line x1="12" y1="1" x2="12" y2="3"/>
-                        <line x1="12" y1="21" x2="12" y2="23"/>
-                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-                        <line x1="1" y1="12" x2="3" y2="12"/>
-                        <line x1="21" y1="12" x2="23" y2="12"/>
-                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-                    </svg>
-                    Theme
-                </h3>
-                <div class="setting-row">
-                    <span>Dark Mode</span>
-                    <label class="toggle">
-                        <input type="checkbox" id="settingsThemeToggle">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-            </div>
-            
-            <!-- Model Setting -->
+            <!-- LLM Model Settings -->
             <div class="settings-section">
                 <h3>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -271,41 +246,177 @@
                         <path d="M2 17l10 5 10-5"/>
                         <path d="M2 12l10 5 10-5"/>
                     </svg>
-                    Model
+                    LLM Model
                 </h3>
                 <div class="setting-row">
-                    <span>Default Model</span>
-                    <select id="settingsDefaultModel" class="settings-select">
-                        <option value="openai/gpt-4o">GPT-4o</option>
-                        <option value="anthropic/claude-sonnet-4-20250514">Claude Sonnet 4</option>
-                        <option value="anthropic/claude-opus-4-20250514">Claude Opus 4</option>
-                        <option value="github/copilot">GitHub Copilot</option>
-                        <option value="minimax/MiniMax-M2.1">MiniMax M2.1</option>
-                        <option value="ollama/llama3.1">Llama 3.1</option>
+                    <label>Provider</label>
+                    <select id="llmProvider" class="settings-select">
+                        <option value="github_copilot">GitHub Copilot</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
                     </select>
+                </div>
+                <div class="setting-row">
+                    <label>Model</label>
+                    <select id="llmModel" class="settings-select">
+                        <option value="gpt-4">GPT-4</option>
+                        <option value="gpt-4o">GPT-4o</option>
+                        <option value="gpt-4o-mini">GPT-4o Mini</option>
+                        <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                        <option value="claude-opus-4-20250514">Claude Opus 4</option>
+                    </select>
+                </div>
+                <div class="setting-row">
+                    <label>API Key</label>
+                    <input type="password" id="llmApiKey" class="settings-input" placeholder="Enter API key">
                 </div>
             </div>
             
-            <!-- API Keys -->
+            <!-- Jira Settings -->
             <div class="settings-section">
                 <h3>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                        <path d="M12 2v20M2 12h20"/>
                     </svg>
-                    API Keys
+                    Jira
                 </h3>
-                <div class="setting-row">
-                    <span>OpenAI API Key</span>
-                    <input type="password" id="settingsOpenAIKey" class="settings-input" placeholder="sk-...">
+                <div class="setting-row-inline">
+                    <label class="toggle">
+                        <input type="checkbox" id="jiraEnabled">
+                        <span class="slider"></span>
+                    </label>
+                    <span>Enabled</span>
                 </div>
                 <div class="setting-row">
-                    <span>Anthropic API Key</span>
-                    <input type="password" id="settingsAnthropicKey" class="settings-input" placeholder="sk-ant-...">
+                    <label>URL</label>
+                    <input type="text" id="jiraUrl" class="settings-input" placeholder="https://your-domain.atlassian.net">
+                </div>
+                <div class="setting-row">
+                    <label>Username</label>
+                    <input type="text" id="jiraUsername" class="settings-input" placeholder="admin@company.com">
+                </div>
+                <div class="setting-row">
+                    <label>API Token</label>
+                    <input type="password" id="jiraApiToken" class="settings-input" placeholder="API Token">
                 </div>
             </div>
             
-            <button class="btn btn-primary" id="saveSettings" style="width: 100%;">Save Settings</button>
+            <!-- Confluence Settings -->
+            <div class="settings-section">
+                <h3>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                    </svg>
+                    Confluence
+                </h3>
+                <div class="setting-row-inline">
+                    <label class="toggle">
+                        <input type="checkbox" id="confluenceEnabled">
+                        <span class="slider"></span>
+                    </label>
+                    <span>Enabled</span>
+                </div>
+                <div class="setting-row">
+                    <label>URL</label>
+                    <input type="text" id="confluenceUrl" class="settings-input" placeholder="https://your-domain.atlassian.net/wiki">
+                </div>
+                <div class="setting-row">
+                    <label>Username</label>
+                    <input type="text" id="confluenceUsername" class="settings-input" placeholder="your-email@company.com">
+                </div>
+                <div class="setting-row">
+                    <label>API Token</label>
+                    <input type="password" id="confluenceApiToken" class="settings-input" placeholder="API Token">
+                </div>
+            </div>
+            
+            <!-- GitHub Settings -->
+            <div class="settings-section">
+                <h3>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>
+                    </svg>
+                    GitHub
+                </h3>
+                <div class="setting-row-inline">
+                    <label class="toggle">
+                        <input type="checkbox" id="githubEnabled">
+                        <span class="slider"></span>
+                    </label>
+                    <span>Enabled</span>
+                </div>
+                <div class="setting-row">
+                    <label>API Token</label>
+                    <input type="password" id="githubToken" class="settings-input" placeholder="GitHub Personal Access Token">
+                </div>
+                <div class="setting-row">
+                    <label>Enterprise URL</label>
+                    <input type="text" id="githubBaseUrl" class="settings-input" placeholder="https://github.company.com (leave empty for github.com)">
+                </div>
+            </div>
+            
+            <!-- Git Settings -->
+            <div class="settings-section">
+                <h3>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M12 4v4m0 4h4m-4 0H8m8 0h4m-4 0H8"/>
+                    </svg>
+                    Git
+                </h3>
+                <div class="setting-row">
+                    <label>User Name</label>
+                    <input type="text" id="gitName" class="settings-input" placeholder="Bot Name">
+                </div>
+                <div class="setting-row">
+                    <label>User Email</label>
+                    <input type="email" id="gitEmail" class="settings-input" placeholder="bot@company.com">
+                </div>
+            </div>
+            
+            <!-- SSH Settings -->
+            <div class="settings-section">
+                <h3>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="4" width="20" height="16" rx="2"/>
+                        <path d="M6 8h4M6 12h4M6 16h4"/>
+                    </svg>
+                    SSH
+                </h3>
+                <div class="setting-row-inline">
+                    <label class="toggle">
+                        <input type="checkbox" id="sshEnabled">
+                        <span class="slider"></span>
+                    </label>
+                    <span>Enabled</span>
+                </div>
+                <div class="setting-row">
+                    <label>Private Key Path</label>
+                    <input type="text" id="sshKeyPath" class="settings-input" placeholder="/path/to/private_key">
+                </div>
+            </div>
+            
+            <!-- Debug Settings -->
+            <div class="settings-section">
+                <h3>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/>
+                    </svg>
+                    Debug
+                </h3>
+                <div class="setting-row-inline">
+                    <label class="toggle">
+                        <input type="checkbox" id="debugEnabled">
+                        <span class="slider"></span>
+                    </label>
+                    <span>Debug Logging</span>
+                </div>
+            </div>
+            
+            <button class="btn btn-primary" id="saveSettings" style="width: 100%; margin-top: var(--space-lg);">
+                Save Configuration
+            </button>
         </div>
     </div>
     
