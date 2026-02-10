@@ -556,10 +556,16 @@ async def api_save_config(request: web.Request) -> web.Response:
     try:
         data = await request.json()
         
-        config_path = Path(__file__).parent.parent.parent / 'config.yaml'
+        # Try project config first, then fallback to ~/.efp/
+        project_config = Path(__file__).parent.parent.parent / 'config.yaml'
+        efp_config = Path.home() / '.efp' / 'config.yaml'
         
-        if not config_path.exists():
-            return web.json_response({'error': 'config.yaml not found'}, status=404)
+        if project_config.exists():
+            config_path = project_config
+        elif efp_config.exists():
+            config_path = efp_config
+        else:
+            return web.json_response({'error': 'config.yaml not found (checked: project dir and ~/.efp/)'}, status=404)
         
         # Read existing config
         import yaml
@@ -598,10 +604,16 @@ async def api_get_config(request: web.Request) -> web.Response:
     GET /api/config
     """
     try:
-        config_path = Path(__file__).parent.parent.parent / 'config.yaml'
+        # Try project config first, then fallback to ~/.efp/
+        project_config = Path(__file__).parent.parent.parent / 'config.yaml'
+        efp_config = Path.home() / '.efp' / 'config.yaml'
         
-        if not config_path.exists():
-            return web.json_response({'error': 'config.yaml not found'}, status=404)
+        if project_config.exists():
+            config_path = project_config
+        elif efp_config.exists():
+            config_path = efp_config
+        else:
+            return web.json_response({'error': 'config.yaml not found (checked: project dir and ~/.efp/)'}, status=404)
         
         import yaml
         with open(config_path, 'r', encoding='utf-8') as f:
