@@ -856,7 +856,7 @@
     const closeFileExplorer = document.getElementById('closeFileExplorer');
     const fileExplorerContent = document.getElementById('fileExplorerContent');
     
-    async function showFileExplorer(path = '/root/.openclaw/workspace/engineering-flow') {
+    async function showFileExplorer(path = '/root/engineering-flow-platform') {
         fileExplorerModal.classList.add('show');
         fileExplorerContent.innerHTML = '<div class="loading">Loading...</div>';
         
