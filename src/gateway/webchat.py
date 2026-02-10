@@ -316,8 +316,12 @@ async def api_sessions(request: web.Request) -> web.Response:
     
     GET /api/sessions?limit=10
     Returns: List of sessions with name, last message, timestamp
+    
+    VERSION: 2026-02-10-16-55-FIXED
     """
-    logger.info("[api_sessions] NEW CODE - ENTERING")
+    import time
+    start_time = time.time()
+    logger.info(f"[api_sessions VERSION 2026-02-10-16-55-FIXED] ENTERING")
     try:
         # Initialize session manager if needed
         if not session_manager._initialized:
