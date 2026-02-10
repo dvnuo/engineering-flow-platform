@@ -867,8 +867,7 @@ body {
     bottom: 100%;
     left: 0;
     right: 0;
-    width: 100%;
-    min-width: 200px;
+    width: 600px;
     background: var(--color-bg-card);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg);
