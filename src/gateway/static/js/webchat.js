@@ -589,6 +589,9 @@
      */
     async function sendMessageFallback(content) {
         try {
+            // Generate new session_id if currentSessionId is null/undefined
+            const requestSessionId = currentSessionId || 'webchat_' + new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+            
             const response = await fetch('/api/chat', {
                 method: 'POST',
                 headers: { 
@@ -596,7 +599,7 @@
                 },
                 body: JSON.stringify({ 
                     message: content,
-                    session_id: currentSessionId || null  // Backend will create new session if null
+                    session_id: requestSessionId
                 })
             });
             
