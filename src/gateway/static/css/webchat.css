@@ -1027,7 +1027,7 @@ body {
 /* Recent Sessions Sidebar */
 #recentSessionsSection {
     flex: 0 0 auto;
-    max-height: 40%;
+    max-height: 100%;
     overflow-y: auto;
 }
 
@@ -1164,12 +1164,6 @@ body {
 
 .file-explorer-breadcrumb-sep {
     color: var(--color-text-subtle);
-}
-
-.file-explorer-list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
 }
 
 .file-explorer-item {
@@ -1710,7 +1704,7 @@ input:checked + .slider:before {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    max-height: 400px;
+    max-height: 100%;
     overflow-y: auto;
 }
 

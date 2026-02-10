@@ -919,12 +919,16 @@
             });
             
             fileExplorerContent.querySelectorAll('.file-explorer-item').forEach(item => {
-                item.addEventListener('click', function() {
-                    if (this.dataset.is_dir === 'true') {
-                        showFileExplorer(this.dataset.path);
+                item.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    const isDir = this.dataset.is_dir === 'true';
+                    const path = this.dataset.path;
+                    console.log('File item clicked:', { path, isDir });
+                    if (isDir) {
+                        showFileExplorer(path);
                     } else {
                         // Double-click to view file content
-                        showFileViewer(this.dataset.path);
+                        showFileViewer(path);
                     }
                 });
                 
