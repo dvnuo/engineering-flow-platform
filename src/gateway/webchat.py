@@ -261,13 +261,25 @@ def _parse_skill_from_file(skill_path: Path) -> Optional[Dict[str, Any]]:
         name = ""
         description = ""
         emoji = "🔧"
+        examples = []
+        in_examples = False
         
         for i, line in enumerate(lines):
             line = line.strip()
             if line.startswith('# ') and not name:
                 name = line[2:].strip().replace(' Skill', '').lower()
             elif line.startswith('## Examples'):
-                break
+                in_examples = True
+                continue
+            elif in_examples:
+                if line.startswith('```') or line.startswith('## '):
+                    in_examples = False
+                    continue
+                # Extract example commands from comments
+                if line.startswith('# '):
+                    example = line[2:].strip()
+                    if example and len(example) < 80:  # Limit example length
+                        examples.append(example)
             elif not description and line and not line.startswith('#'):
                 description = line
         
@@ -291,6 +303,7 @@ def _parse_skill_from_file(skill_path: Path) -> Optional[Dict[str, Any]]:
             "description": description,
             "emoji": emoji,
             "path": str(skill_path.parent.name),
+            "examples": examples[:3],  # Limit to 3 examples
         }
     except Exception:
         return None

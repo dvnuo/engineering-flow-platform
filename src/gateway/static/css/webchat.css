@@ -501,3 +501,26 @@ body {
 .skill-item.selected .skill-desc {
     color: rgba(255, 255, 255, 0.7);
 }
+
+.skill-item .skill-examples {
+    display: none;
+    font-size: 11px;
+    color: rgba(102, 126, 234, 0.8);
+    margin-left: auto;
+    font-family: monospace;
+}
+
+.skill-item:hover .skill-examples,
+.skill-item.selected .skill-examples {
+    display: block;
+}
+
+/* Keyboard focus styles for accessibility */
+.skill-item:focus {
+    outline: 2px solid rgba(102, 126, 234, 0.8);
+    outline-offset: 2px;
+}
+
+.skill-item:focus .skill-examples {
+    display: block;
+}

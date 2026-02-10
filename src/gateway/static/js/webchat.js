@@ -192,21 +192,31 @@
         }
         
         skillList.innerHTML = filteredSkills.map((skill, index) => `
-            <div class="skill-item" data-command="/${skill.name}" data-index="${index}">
-                <span class="skill-emoji">${skill.emoji || '🔧'}</span>
+            <div class="skill-item" 
+                 role="option" 
+                 aria-selected="${index === 0 ? 'true' : 'false'}"
+                 data-command="/${skill.name}" 
+                 data-index="${index}"
+                 tabindex="0">
+                <span class="skill-emoji" aria-hidden="true">${skill.emoji || '🔧'}</span>
                 <span class="skill-name">/${skill.name}</span>
                 <span class="skill-desc">${skill.description || ''}</span>
+                ${skill.examples && skill.examples.length ? 
+                    `<span class="skill-examples">${skill.examples[0]}</span>` : ''}
             </div>
         `).join('');
         
-        // Add click handlers
+        // Add click and touch handlers
         skillList.querySelectorAll('.skill-item').forEach(item => {
-            item.addEventListener('click', function() {
+            const selectSkill = function(e) {
+                e.preventDefault();
                 const command = this.dataset.command;
                 messageInput.value = command + ' ';
                 messageInput.focus();
                 hideSkillSelector();
-            });
+            };
+            item.addEventListener('click', selectSkill);
+            item.addEventListener('touchstart', selectSkill, { passive: false });
         });
         
         // Select first item by default
@@ -225,9 +235,10 @@
         const items = skillList.querySelectorAll('.skill-item');
         if (!items.length) return;
         
-        // Remove current selection
+        // Remove current selection and update ARIA
         if (selectedSkillIndex >= 0 && selectedSkillIndex < items.length) {
             items[selectedSkillIndex].classList.remove('selected');
+            items[selectedSkillIndex].setAttribute('aria-selected', 'false');
         }
         
         // Calculate new index
@@ -235,9 +246,18 @@
         if (selectedSkillIndex < 0) selectedSkillIndex = items.length - 1;
         if (selectedSkillIndex >= items.length) selectedSkillIndex = 0;
         
-        // Add new selection
-        items[selectedSkillIndex].classList.add('selected');
-        items[selectedSkillIndex].scrollIntoView({ block: 'nearest' });
+        // Add new selection and update ARIA
+        const selectedItem = items[selectedSkillIndex];
+        selectedItem.classList.add('selected');
+        selectedItem.setAttribute('aria-selected', 'true');
+        selectedItem.scrollIntoView({ block: 'nearest' });
+        
+        // Announce to screen readers
+        const ariaLive = document.getElementById('skillAriaLive');
+        if (ariaLive) {
+            const skill = skills[selectedSkillIndex];
+            ariaLive.textContent = `/${skill.name}: ${skill.description}`;
+        }
     }
     
     // Auto-resize textarea
