@@ -689,6 +689,9 @@
             sessionsOffset = 0;
             sessionsHasMore = true;
             recentSessionsList.innerHTML = '';
+            // Recreate sentinel
+            const sentinel = createSessionsSentinel();
+            recentSessionsList.appendChild(sentinel);
         }
         
         if (!sessionsHasMore || sessionsLoading) return;
@@ -697,7 +700,11 @@
         
         // Show loading on first load
         if (sessionsOffset === 0) {
-            recentSessionsList.innerHTML = '<div class="loading-sessions">Loading...</div>';
+            const loadingMsg = document.createElement('div');
+            loadingMsg.id = 'sessions-loading';
+            loadingMsg.className = 'loading-sessions';
+            loadingMsg.textContent = 'Loading...';
+            recentSessionsList.insertBefore(loadingMsg, recentSessionsList.firstChild);
         }
         
         try {
@@ -712,7 +719,8 @@
             
             // Clear loading message on first load
             if (sessionsOffset === 0) {
-                recentSessionsList.innerHTML = '';
+                const loadingMsg = document.getElementById('sessions-loading');
+                if (loadingMsg) loadingMsg.remove();
             }
             
             const sessions = data.sessions || [];
