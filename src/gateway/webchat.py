@@ -291,11 +291,54 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
 
 
 async def api_sessions(request: web.Request) -> web.Response:
-    """List active sessions."""
+    """List recent sessions with details.
+    
+    GET /api/sessions?limit=10
+    Returns: List of sessions with name, last message, timestamp
+    """
     try:
+        limit = int(request.query.get('limit', 10))
         sessions = await session_manager.list_sessions()
-        return web.json_response({'sessions': sessions})
+        
+        # Format sessions with details
+        detailed_sessions = []
+        for session in sessions[:limit]:
+            detailed_sessions.append({
+                'session_id': session.get('session_id', session) if isinstance(session, dict) else str(session),
+                'last_message': session.get('last_message', '')[:50] if isinstance(session, dict) and session.get('last_message') else 'New Chat',
+                'updated_at': session.get('updated_at', datetime.utcnow().isoformat()) if isinstance(session, dict) else datetime.utcnow().isoformat(),
+            })
+        
+        return web.json_response({'sessions': detailed_sessions})
     except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_browse_files(request: web.Request) -> web.Response:
+    """Browse file directory.
+    
+    GET /api/files?path=/workspace
+    Returns: List of files and directories
+    """
+    try:
+        path = request.query.get('path', '/root/.openclaw/workspace/engineering-flow')
+        base_path = Path(path)
+        
+        if not base_path.exists():
+            return web.json_response({'error': 'Path not found', 'path': path}, status=404)
+        
+        items = []
+        for item in sorted(base_path.iterdir()):
+            items.append({
+                'name': item.name,
+                'path': str(item.resolve()),
+                'is_dir': item.is_dir(),
+                'is_file': item.is_file(),
+            })
+        
+        return web.json_response({'path': str(base_path.resolve()), 'items': items})
+    except Exception as e:
+        logger.error(f"Error browsing files: {e}")
         return web.json_response({'error': str(e)}, status=500)
 
 
@@ -459,14 +502,15 @@ def setup_webchat_routes(app: web.Application):
     
     Routes:
         GET  /             - WebChat UI (root)
-        GET  /chat        - WebChat UI (backward compatibility)
-        GET  /static/*       - Static files (CSS, JS)
-        POST /api/chat       - Send message
+        GET  /chat         - WebChat UI (backward compatibility)
+        GET  /static/*     - Static files (CSS, JS)
+        POST /api/chat     - Send message
         POST /api/chat/stream - Send message (streaming SSE)
-        GET  /api/sessions   - List sessions
-        GET  /api/usage      - Get usage stats
-        POST /api/clear      - Clear session
-        GET  /api/skills     - Get available skills
+        GET  /api/sessions - List recent sessions
+        GET  /api/files    - Browse files
+        GET  /api/usage   - Get usage stats
+        POST /api/clear   - Clear session
+        GET  /api/skills  - Get available skills
     """
     app.router.add_get('/', serve_webchat)
     app.router.add_get('/chat', serve_webchat)  # Backward compatibility
@@ -474,17 +518,19 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)
     app.router.add_get('/api/sessions', api_sessions)
+    app.router.add_get('/api/files', api_browse_files)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
     app.router.add_get('/api/skills', api_skills)
     
     logger.info("WebChat routes registered:")
-    logger.info("  GET  /             - WebChat UI (root)")
-    logger.info("  GET  /chat        - WebChat UI (backward compat)")
-    logger.info("  GET  /static/*    - Static files (CSS, JS)")
-    logger.info("  POST /api/chat    - Send message")
+    logger.info("  GET  /              - WebChat UI (root)")
+    logger.info("  GET  /chat         - WebChat UI (backward compat)")
+    logger.info("  GET  /static/*     - Static files (CSS, JS)")
+    logger.info("  POST /api/chat     - Send message")
     logger.info("  POST /api/chat/stream - Send message (streaming SSE)")
-    logger.info("  GET  /api/sessions - List sessions")
+    logger.info("  GET  /api/sessions - List recent sessions")
+    logger.info("  GET  /api/files    - Browse files")
     logger.info("  GET  /api/usage   - Get usage stats")
     logger.info("  POST /api/clear   - Clear session")
     logger.info("  GET  /api/skills  - Get available skills")

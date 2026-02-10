@@ -27,6 +27,7 @@
     let skills = [];
     let selectedSkillIndex = -1;
     let skillsLoaded = false;
+    let currentSessionId = null;
     
     // ========== Theme Management ==========
     
@@ -48,6 +49,29 @@
     }
     
     /**
+     * Toggle between light and dark theme
+     */
+    function toggleTheme() {
+        const currentTheme = getTheme();
+        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+        setTheme(newTheme);
+    }
+    
+    /**
+     * Initialize theme on page load
+     */
+    function initTheme() {
+        const theme = getTheme();
+        setTheme(theme);
+    }
+    
+    // Initialize theme
+    initTheme();
+    
+    // Theme toggle event listener
+    if (themeToggle) {
+        themeToggle.addEventListener('click', toggleTheme);
+    }
      * Toggle between light and dark theme
      */
     function toggleTheme() {
@@ -665,5 +689,276 @@
     // Expose sendMessage globally for testing
     window.webchatSendMessage = sendMessage;
     window.webchatAddMessage = addMessage;
+    
+    // ========== Recent Sessions ==========
+    
+    const recentSessionsList = document.getElementById('recentSessionsList');
+    const refreshSessionsBtn = document.getElementById('refreshSessions');
+    
+    /**
+     * Load recent sessions from API
+     */
+    async function loadRecentSessions() {
+        if (!recentSessionsList) return;
+        
+        recentSessionsList.innerHTML = '<div class="loading-sessions">Loading...</div>';
+        
+        try {
+            const response = await fetch('/api/sessions?limit=10');
+            const data = await response.json();
+            
+            if (data.error || !data.sessions) {
+                recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
+                return;
+            }
+            
+            if (data.sessions.length === 0) {
+                recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
+                return;
+            }
+            
+            recentSessionsList.innerHTML = data.sessions.map((session, index) => `
+                <div class="recent-session-item ${index === 0 ? 'active' : ''}" data-session-id="${session.session_id}">
+                    <svg class="recent-session-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    <div class="recent-session-info">
+                        <div class="recent-session-name">${escapeHtml(session.last_message || 'New Chat')}</div>
+                    </div>
+                </div>
+            `).join('');
+            
+            // Add click handlers
+            recentSessionsList.querySelectorAll('.recent-session-item').forEach(item => {
+                item.addEventListener('click', function() {
+                    const sessionId = this.dataset.sessionId;
+                    loadSession(sessionId);
+                    
+                    // Update active state
+                    recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
+                    this.classList.add('active');
+                });
+            });
+            
+        } catch (error) {
+            console.error('Error loading sessions:', error);
+            recentSessionsList.innerHTML = '<div class="loading-sessions">Error loading sessions</div>';
+        }
+    }
+    
+    /**
+     * Load a specific session
+     */
+    async function loadSession(sessionId) {
+        currentSessionId = sessionId;
+        messagesContainer.innerHTML = '';
+        statusSpan.textContent = `Session: ${sessionId}`;
+    }
+    
+    // Refresh sessions button
+    if (refreshSessionsBtn) {
+        refreshSessionsBtn.addEventListener('click', function() {
+            this.classList.add('loading');
+            loadRecentSessions().finally(() => {
+                this.classList.remove('loading');
+            });
+        });
+    }
+    
+    // Load recent sessions on page load
+    loadRecentSessions();
+    
+    // ========== Sidebar Actions ==========
+    
+    document.addEventListener('click', function(e) {
+        const action = e.target.closest('[data-action]')?.dataset.action;
+        if (!action) return;
+        
+        if (action === 'new-chat') {
+            currentSessionId = null;
+            messagesContainer.innerHTML = `
+                <div class="welcome-message">
+                    <h2>👋 New Chat</h2>
+                    <p>Start a new conversation</p>
+                </div>
+            `;
+            statusSpan.textContent = 'Ready';
+            recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
+        } else if (action === 'files') {
+            showFileExplorer();
+        } else if (action === 'settings') {
+            showSettings();
+        }
+    });
+    
+    // ========== File Explorer ==========
+    
+    const fileExplorerModal = document.getElementById('fileExplorerModal');
+    const closeFileExplorer = document.getElementById('closeFileExplorer');
+    const fileExplorerContent = document.getElementById('fileExplorerContent');
+    
+    async function showFileExplorer(path = '/root/.openclaw/workspace/engineering-flow') {
+        fileExplorerModal.classList.add('show');
+        fileExplorerContent.innerHTML = '<div class="loading">Loading...</div>';
+        
+        try {
+            const response = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
+            const data = await response.json();
+            
+            if (data.error) {
+                fileExplorerContent.innerHTML = `<div class="loading">${escapeHtml(data.error)}</div>`;
+                return;
+            }
+            
+            const pathParts = data.path.split('/').filter(p => p);
+            let pathHtml = '<div class="file-explorer-path"><button data-path="/">/</button>';
+            let currentPath = '';
+            pathParts.forEach(part => {
+                currentPath += '/' + part;
+                pathHtml += ' / <button data-path="' + currentPath + '">' + escapeHtml(part) + '</button>';
+            });
+            pathHtml += '</div>';
+            
+            if (data.items.length === 0) {
+                fileExplorerContent.innerHTML = pathHtml + '<div class="file-explorer-empty">Empty directory</div>';
+                return;
+            }
+            
+            fileExplorerContent.innerHTML = pathHtml + `
+                <div class="file-explorer-list">
+                    ${data.items.map(item => `
+                        <div class="file-explorer-item" data-path="${item.path}" data-is-dir="${item.is_dir}">
+                            ${item.is_dir ? 
+                                '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>' :
+                                '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
+                            }
+                            <span class="file-name">${escapeHtml(item.name)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            
+            // Add click handlers
+            fileExplorerContent.querySelectorAll('.file-explorer-path button').forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    showFileExplorer(this.dataset.path);
+                });
+            });
+            
+            fileExplorerContent.querySelectorAll('.file-explorer-item').forEach(item => {
+                item.addEventListener('click', function() {
+                    if (this.dataset.is_dir === 'true') {
+                        showFileExplorer(this.dataset.path);
+                    } else {
+                        // Insert file path in chat
+                        messageInput.value += this.dataset.path;
+                        messageInput.focus();
+                        fileExplorerModal.classList.remove('show');
+                    }
+                });
+            });
+            
+        } catch (error) {
+            console.error('Error loading files:', error);
+            fileExplorerContent.innerHTML = '<div class="loading">Error loading files</div>';
+        }
+    }
+    
+    if (closeFileExplorer) {
+        closeFileExplorer.addEventListener('click', function() {
+            fileExplorerModal.classList.remove('show');
+        });
+        fileExplorerModal.addEventListener('click', function(e) {
+            if (e.target === fileExplorerModal) fileExplorerModal.classList.remove('show');
+        });
+    }
+    
+    // ========== Settings ==========
+    
+    const settingsModal = document.getElementById('settingsModal');
+    const closeSettings = document.getElementById('closeSettings');
+    const settingsContent = document.getElementById('settingsContent');
+    const settingsThemeToggle = document.getElementById('settingsThemeToggle');
+    const settingsDefaultModel = document.getElementById('settingsDefaultModel');
+    const settingsOpenAIKey = document.getElementById('settingsOpenAIKey');
+    const settingsAnthropicKey = document.getElementById('settingsAnthropicKey');
+    const saveSettingsBtn = document.getElementById('saveSettings');
+    
+    function showSettings() {
+        settingsModal.classList.add('show');
+        
+        // Load saved settings
+        const theme = getTheme();
+        settingsThemeToggle.checked = theme === 'dark';
+        
+        // Load other settings from localStorage
+        const savedModel = localStorage.getItem('efp-default-model');
+        if (savedModel) settingsDefaultModel.value = savedModel;
+        
+        const savedOpenAIKey = localStorage.getItem('efp-openai-key');
+        if (savedOpenAIKey) settingsOpenAIKey.value = savedOpenAIKey;
+        
+        const savedAnthropicKey = localStorage.getItem('efp-anthropic-key');
+        if (savedAnthropicKey) settingsAnthropicKey.value = savedAnthropicKey;
+    }
+    
+    if (saveSettingsBtn) {
+        saveSettingsBtn.addEventListener('click', function() {
+            // Save theme
+            setTheme(settingsThemeToggle.checked ? 'dark' : 'light');
+            
+            // Save other settings
+            localStorage.setItem('efp-default-model', settingsDefaultModel.value);
+            localStorage.setItem('efp-openai-key', settingsOpenAIKey.value);
+            localStorage.setItem('efp-anthropic-key', settingsAnthropicKey.value);
+            
+            settingsModal.classList.remove('show');
+        });
+    }
+    
+    if (closeSettings) {
+        closeSettings.addEventListener('click', function() {
+            settingsModal.classList.remove('show');
+        });
+        settingsModal.addEventListener('click', function(e) {
+            if (e.target === settingsModal) settingsModal.classList.remove('show');
+        });
+    }
+    
+    // ========== Copy Code Button ==========
+    
+    function addCopyButtons() {
+        document.querySelectorAll('pre code').forEach((block) => {
+            if (block.parentElement.querySelector('.copy-code-button')) return;
+            
+            const button = document.createElement('button');
+            button.className = 'copy-code-button';
+            button.textContent = 'Copy';
+            button.addEventListener('click', function() {
+                navigator.clipboard.writeText(block.textContent).then(() => {
+                    this.textContent = 'Copied!';
+                    this.classList.add('copied');
+                    setTimeout(() => {
+                        this.textContent = 'Copy';
+                        this.classList.remove('copied');
+                    }, 2000);
+                });
+            });
+            block.parentElement.style.position = 'relative';
+            block.parentElement.appendChild(button);
+        });
+    }
+    
+    // Add copy buttons when new messages are added
+    const originalAddMessage = window.webchatAddMessage;
+    window.webchatAddMessage = function(role, content, timestamp) {
+        const result = originalAddMessage(role, content, timestamp);
+        addCopyButtons();
+        return result;
+    };
+    
+    // Add copy buttons to existing code blocks
+    addCopyButtons();
     
 })();
