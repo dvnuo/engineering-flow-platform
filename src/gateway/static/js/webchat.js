@@ -601,12 +601,14 @@
             });
             
             const data = await response.json();
+            console.log('[WebChat] API response:', JSON.stringify(data, null, 2));
             
             if (data.error) {
                 addMessage('error', `Error: ${data.error}`);
                 statusSpan.textContent = 'Error';
             } else {
                 // Update current session ID from response and persist
+                console.log('[WebChat] data.session_id:', data.session_id);
                 if (data.session_id) {
                     currentSessionId = data.session_id;
                     console.log('[WebChat] Received session_id from server:', currentSessionId);
