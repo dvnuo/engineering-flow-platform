@@ -827,6 +827,11 @@
     // Load recent sessions on page load
     loadRecentSessions();
     
+    // Set New Chat button active if no persisted session
+    if (!localStorage.getItem(SESSION_ID_KEY) && newChatBtn) {
+        newChatBtn.classList.add('active');
+    }
+    
     // ========== Sidebar Actions ==========
     
     document.addEventListener('click', function(e) {
