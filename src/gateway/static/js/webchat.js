@@ -28,6 +28,7 @@
     let selectedSkillIndex = -1;
     let skillsLoaded = false;
     let currentSessionId = localStorage.getItem('efp-session-id') || null;
+    console.log('[WebChat] Initial sessionId from localStorage:', currentSessionId);
     
     // ========== Theme Management ==========
     
@@ -609,6 +610,7 @@
                 if (data.session_id) {
                     currentSessionId = data.session_id;
                     localStorage.setItem(SESSION_ID_KEY, currentSessionId);
+                    console.log('[WebChat] Saved sessionId to localStorage:', currentSessionId);
                 }
                 
                 addMessage('assistant', data.response);
