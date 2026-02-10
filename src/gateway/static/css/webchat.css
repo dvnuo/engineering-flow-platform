@@ -1069,6 +1069,9 @@ body {
     display: flex;
     flex-direction: column;
     gap: var(--space-xs);
+    max-height: calc(100vh - 340px);
+    overflow-y: auto;
+    padding-right: var(--space-xs);
 }
 
 .loading-sessions {
@@ -1626,6 +1629,9 @@ input:checked + .slider:before {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    max-height: calc(100vh - 340px);
+    overflow-y: auto;
+    padding-right: var(--space-xs);
 }
 
 .recent-session-item {
