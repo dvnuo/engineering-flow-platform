@@ -16,6 +16,7 @@ from src.agents.core import Agent as AgentCore
 from src.agents.errors import extract_error_details, LLMError
 from src.config import config
 from src.sessions.manager import session_manager
+from src.sessions.persistence import session_persistence
 from src.sessions.usage import usage_tracker
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,16 @@ async def api_chat(request: web.Request) -> web.Response:
             track_usage=True,
             reasoning_replay=reasoning_replay,
         )
+        
+        # Force save session to persistence
+        session = await session_manager.get_session(session_id)
+        if session and session.get("history"):
+            await session_persistence.save_session(
+                session_id=session_id,
+                channel=session.get("channel", ""),
+                messages=session["history"],
+                metadata=session.get("metadata", {}),
+            )
         
         response = result.get("response", "") if result else ""
         usage = result.get("usage", {}) if result else {}
@@ -304,7 +315,7 @@ async def api_sessions(request: web.Request) -> web.Response:
         limit = int(request.query.get('limit', 10))
         session_ids = await session_manager.list_sessions()
         
-        # Format sessions with details
+        # Format sessions with details, filter out empty sessions
         detailed_sessions = []
         for session_id in session_ids[:limit]:
             # Get session info
@@ -315,21 +326,22 @@ async def api_sessions(request: web.Request) -> web.Response:
             
             history = session_info.get('history', [])
             
+            # Skip empty sessions (no user messages)
+            user_messages = [msg for msg in history if msg.get('role') == 'user']
+            if not user_messages:
+                continue
+            
             # Get first user message as session name
-            session_name = 'New Chat'
-            last_message = ''
-            for msg in history:
-                if msg.get('role') == 'user':
-                    session_name = msg.get('content', 'New Chat')[:30]
-                    break
+            first_user_msg = user_messages[0]
+            session_name = (first_user_msg.get('content', '') or 'New Chat')[:30]
+            if not session_name.strip():
+                session_name = 'New Chat'
             
             # Get last message preview
+            last_message = ''
             for msg in reversed(history):
-                if msg.get('role') == 'user':
-                    last_message = msg.get('content', '')[:50]
-                    break
-                elif msg.get('role') == 'assistant':
-                    last_message = msg.get('content', '')[:50]
+                if msg.get('role') in ('user', 'assistant'):
+                    last_message = (msg.get('content', '') or '')[:50]
                     break
             
             detailed_sessions.append({
@@ -337,7 +349,7 @@ async def api_sessions(request: web.Request) -> web.Response:
                 'name': session_name,
                 'last_message': last_message,
                 'updated_at': session_info.get('updated_at', datetime.utcnow().isoformat()),
-                'message_count': len(history),
+                'message_count': len(user_messages),
             })
         
         return web.json_response({'sessions': detailed_sessions})
@@ -366,9 +378,20 @@ async def api_load_session(request: web.Request) -> web.Response:
         if not session_info:
             return web.json_response({'error': 'Session not found'}, status=404)
         
+        history = session_info.get('history', [])
+        
+        # Extract session name from first user message
+        session_name = 'New Chat'
+        for msg in history:
+            if msg.get('role') == 'user':
+                content = msg.get('content', '') or 'New Chat'
+                session_name = content[:30]
+                break
+        
         return web.json_response({
             'session_id': session_id,
-            'messages': session_info.get('history', []),
+            'name': session_name,
+            'messages': history,
         })
     except Exception as e:
         logger.error(f"Error loading session: {e}")
