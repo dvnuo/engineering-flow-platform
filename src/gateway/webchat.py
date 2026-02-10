@@ -458,7 +458,8 @@ def setup_webchat_routes(app: web.Application):
     """Set up WebChat routes.
     
     Routes:
-        GET  /chat           - WebChat UI
+        GET  /             - WebChat UI (root)
+        GET  /chat        - WebChat UI (backward compatibility)
         GET  /static/*       - Static files (CSS, JS)
         POST /api/chat       - Send message
         POST /api/chat/stream - Send message (streaming SSE)
@@ -467,7 +468,8 @@ def setup_webchat_routes(app: web.Application):
         POST /api/clear      - Clear session
         GET  /api/skills     - Get available skills
     """
-    app.router.add_get('/chat', serve_webchat)
+    app.router.add_get('/', serve_webchat)
+    app.router.add_get('/chat', serve_webchat)  # Backward compatibility
     app.router.add_get('/static/{path:.*}', serve_static)
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)
@@ -477,11 +479,12 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/skills', api_skills)
     
     logger.info("WebChat routes registered:")
-    logger.info("  GET  /chat           - WebChat UI")
-    logger.info("  GET  /static/*       - Static files (CSS, JS)")
-    logger.info("  POST /api/chat       - Send message")
+    logger.info("  GET  /             - WebChat UI (root)")
+    logger.info("  GET  /chat        - WebChat UI (backward compat)")
+    logger.info("  GET  /static/*    - Static files (CSS, JS)")
+    logger.info("  POST /api/chat    - Send message")
     logger.info("  POST /api/chat/stream - Send message (streaming SSE)")
-    logger.info("  GET  /api/sessions   - List sessions")
-    logger.info("  GET  /api/usage      - Get usage stats")
-    logger.info("  POST /api/clear      - Clear session")
-    logger.info("  GET  /api/skills     - Get available skills")
+    logger.info("  GET  /api/sessions - List sessions")
+    logger.info("  GET  /api/usage   - Get usage stats")
+    logger.info("  POST /api/clear   - Clear session")
+    logger.info("  GET  /api/skills  - Get available skills")

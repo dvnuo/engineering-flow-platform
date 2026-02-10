@@ -18,6 +18,7 @@
     const skillSelector = document.getElementById('skillSelector');
     const skillDropdown = document.getElementById('skillDropdown');
     const skillList = document.getElementById('skillList');
+    const themeToggle = document.getElementById('themeToggle');
     
     // State
     let isLoading = false;
@@ -26,6 +27,80 @@
     let skills = [];
     let selectedSkillIndex = -1;
     let skillsLoaded = false;
+    
+    // ========== Theme Management ==========
+    
+    const THEME_KEY = 'efp-theme';
+    
+    /**
+     * Get saved theme preference
+     */
+    function getTheme() {
+        return localStorage.getItem(THEME_KEY) || 'light';
+    }
+    
+    /**
+     * Set theme and save preference
+     */
+    function setTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem(THEME_KEY, theme);
+    }
+    
+    /**
+     * Toggle between light and dark theme
+     */
+    function toggleTheme() {
+        const currentTheme = getTheme();
+        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+        setTheme(newTheme);
+    }
+    
+    /**
+     * Initialize theme on page load
+     */
+    function initTheme() {
+        const theme = getTheme();
+        setTheme(theme);
+    }
+    
+    // Initialize theme
+    initTheme();
+    
+    // Theme toggle event listener
+    if (themeToggle) {
+        themeToggle.addEventListener('click', toggleTheme);
+    }
+    
+    // ========== Sidebar Management ==========
+    
+    const sidebar = document.getElementById('sidebar');
+    const shell = document.querySelector('.shell');
+    const toggleSidebarBtn = document.getElementById('toggleSidebar');
+    
+    /**
+     * Toggle sidebar on mobile
+     */
+    function toggleSidebar() {
+        if (shell && window.innerWidth <= 768) {
+            shell.classList.toggle('sidebar-open');
+        }
+    }
+    
+    // Sidebar toggle button
+    if (toggleSidebarBtn) {
+        toggleSidebarBtn.addEventListener('click', toggleSidebar);
+    }
+    
+    // Close sidebar when clicking outside on mobile
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 768 && 
+            shell && shell.classList.contains('sidebar-open') &&
+            sidebar && !sidebar.contains(e.target) &&
+            toggleSidebarBtn && !toggleSidebarBtn.contains(e.target)) {
+            shell.classList.remove('sidebar-open');
+        }
+    });
     
     // Stats Modal
     statsButton.addEventListener('click', showStats);
