@@ -6,6 +6,7 @@ import asyncio
 import shlex
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -24,14 +25,27 @@ class GitClient:
     def __init__(self, workspace: str = None):
         self.workspace = workspace or str(DEFAULT_WORKSPACE)
     
-    async def run(self, args: list, cwd: str = None) -> str:
-        """Run a git command and return output."""
+    async def run(self, args: list, cwd: str = None, env: dict = None) -> str:
+        """Run a git command and return output.
+        
+        Args:
+            args: Git command arguments
+            cwd: Working directory
+            env: Environment variables to add/modify
+        """
         try:
+            # Setup environment
+            process_env = None
+            if env:
+                process_env = os.environ.copy()
+                process_env.update(env)
+            
             result = await asyncio.create_subprocess_exec(
                 "git", *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                cwd=cwd or self.workspace
+                cwd=cwd or self.workspace,
+                env=process_env
             )
             stdout, _ = await result.communicate()
             return stdout.decode("utf-8").strip()
@@ -53,6 +67,25 @@ class GitClient:
     async def pull(self, cwd: str = None) -> str:
         """Pull from remote."""
         return await self.run(["pull"], cwd)
+    
+    def convert_to_ssh(self, https_url: str) -> str:
+        """Convert HTTPS git URL to SSH URL.
+        
+        Supports formats:
+        - https://github.com/owner/repo.git -> git@github.com:owner/repo
+        - https://github.com/owner/repo -> git@github.com:owner/repo
+        """
+        import re
+        # Match HTTPS URL pattern: https://hostname/path
+        match = re.match(r'https://([^/]+)/(.+)', https_url)
+        if match:
+            hostname = match.group(1)
+            path = match.group(2)
+            # Remove .git suffix if present
+            if path.endswith('.git'):
+                path = path[:-4]
+            return f"git@{hostname}:{path}"
+        return https_url  # Return as-is if not HTTPS format
     
     def convert_to_https(self, ssh_url: str) -> str:
         """Convert SSH git URL to HTTPS URL.
@@ -77,27 +110,57 @@ class GitClient:
     async def clone(self, repo_url: str, target_dir: str = None) -> str:
         """Clone a repository.
         
-        Supports both SSH and HTTPS URLs:
+        Supports SSH and HTTPS URLs:
         - SSH: git@github.com:owner/repo.git
         - HTTPS: https://github.com/owner/repo.git
-        """
-        import os
-        # Convert SSH URL to HTTPS if needed
-        if repo_url.startswith("git@") or repo_url.startswith("ssh://"):
-            repo_url = self.convert_to_https(repo_url)
         
-        target = target_dir or self.workspace
+        When using HTTPS URLs, automatically converts to SSH format
+        and configures SSH to skip host key verification for automation.
+        
+        Note: Using StrictHostKeyChecking=no for automation convenience.
+        For production, consider using StrictHostKeyChecking=accept-new
+        to detect MITM attacks on known hosts.
+        """
+        # Convert HTTPS URL to SSH if needed
+        if repo_url.startswith("https://"):
+            repo_url = self.convert_to_ssh(repo_url)
+        
         # Extract repo name from URL if no target_dir specified
         if not target_dir:
-            # Get repo name from URL (remove .git suffix and last path component)
             repo_name = repo_url.split("/")[-1].replace(".git", "")
-            target = os.path.join(self.workspace, repo_name)
+            target_dir = os.path.join(self.workspace, repo_name)
         
-        # Clone into workspace/REPO_NAME
-        target = os.path.join(self.workspace, target.split("/")[-1].replace(".git", ""))
+        # Ensure target directory
+        target = os.path.join(self.workspace, target_dir.split("/")[-1].replace(".git", ""))
         os.makedirs(self.workspace, exist_ok=True)
         
-        return await self.run(["clone", repo_url, target], cwd=self.workspace)
+        # Configure git to skip host key verification for automation
+        # WARNING: This reduces security by not verifying host keys.
+        # Consider using 'accept-new' instead of 'no' for better security.
+        ssh_env = {
+            'GIT_SSH_COMMAND': (
+                'ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null'
+            )
+        }
+        
+        try:
+            output = await self.run(["clone", repo_url, target], cwd=self.workspace, env=ssh_env)
+            
+            # Check for common errors and provide helpful messages
+            if "Error:" in output:
+                if "Could not resolve host" in output:
+                    return f"Error: Could not resolve host. Please check the repository URL: {repo_url}"
+                elif "Repository not found" in output:
+                    return f"Error: Repository not found. Please check the URL: {repo_url}"
+                elif "Permission denied" in output:
+                    return f"Error: Permission denied. You may need to add your SSH key or check permissions."
+                elif "Authentication failed" in output:
+                    return f"Error: Authentication failed. Please check your SSH key configuration."
+            
+            return output if output else f"Successfully cloned to {target}"
+            
+        except Exception as e:
+            return f"Error: {e}"
 
 
 # Standalone functions for backward compatibility
