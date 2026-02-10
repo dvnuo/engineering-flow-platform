@@ -1,6 +1,8 @@
 """WebChat UI and HTTP server for Engineering Flow Platform.
 
 A simple web interface to chat with the agent directly.
+
+UNIQUE_MARKER_12345
 """
 
 import asyncio
