@@ -1092,7 +1092,7 @@ body {
     display: flex;
     align-items: center;
     gap: var(--space-sm);
-    padding: var(--space-sm) var(--space-md);
+    padding: var(--space-lg) var(--space-sm);
     border-radius: var(--radius-md);
     color: var(--color-text-muted);
     text-decoration: none;
