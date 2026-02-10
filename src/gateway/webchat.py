@@ -198,6 +198,98 @@ async def api_chat(request: web.Request) -> web.Response:
         }, status=status_code)
 
 
+async def api_chat_stream(request: web.Request) -> web.StreamResponse:
+    """Handle streaming chat API requests (Server-Sent Events).
+    
+    POST /api/chat/stream
+    Body: {"message": "...", "session_id": "optional"}
+    
+    Returns: text/event-stream with chunks of the response
+    """
+    try:
+        data = await request.json()
+        message = (data.get('message') or '').strip()
+        session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
+        
+        if not message:
+            response = web.json_response({'error': 'Empty message'}, status=400)
+            return response
+        
+        # Create streaming response
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no',  # Disable nginx buffering
+            }
+        )
+        
+        await response.prepare()
+        
+        # Send start event
+        await response.write(f"event: start\ndata: {json.dumps({'session_id': session_id})}\n\n")
+        
+        # Run agent and stream response
+        agent = AgentCore()
+        
+        async def stream_callback(chunk: str):
+            """Callback for streaming chunks."""
+            try:
+                # Escape newlines for SSE format
+                escaped = chunk.replace('\n', '\\n').replace('\r', '\\r')
+                await response.write(f"event: chunk\ndata: {escaped}\n\n")
+            except Exception as e:
+                logger.error(f"Error writing stream chunk: {e}")
+        
+        result = await agent.process(
+            message=message,
+            session_id=session_id,
+            user_name="webchat-user",
+            track_usage=True,
+            stream_callback=stream_callback,
+        )
+        
+        response_text = result.get("response", "") if result else ""
+        usage = result.get("usage", {}) if result else {}
+        
+        # Record usage
+        if usage:
+            usage_tracker.record_usage(
+                provider="openai",
+                model=config.llm.get('model', 'unknown'),
+                input_tokens=usage.get("prompt_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                session_id=session_id,
+                task_type="chat"
+            )
+        
+        # Send usage data
+        usage_data = json.dumps({
+            'usage': usage,
+            'session_id': session_id,
+        })
+        await response.write(f"event: usage\ndata: {usage_data}\n\n")
+        
+        # Send done event
+        await response.write(f"event: done\ndata: \n\n")
+        
+        return response
+        
+    except json.JSONDecodeError:
+        response = web.json_response({'error': 'Invalid JSON'}, status=400)
+        return response
+    except Exception as e:
+        logger.error(f"Stream error: {e}")
+        error_data = json.dumps({'error': str(e)})
+        try:
+            await response.write(f"event: error\ndata: {error_data}\n\n")
+        except Exception:
+            pass
+        return web.Response(status=500, text=str(e))
+
+
 async def api_sessions(request: web.Request) -> web.Response:
     """List active sessions."""
     try:
@@ -369,6 +461,7 @@ def setup_webchat_routes(app: web.Application):
         GET  /chat           - WebChat UI
         GET  /static/*       - Static files (CSS, JS)
         POST /api/chat       - Send message
+        POST /api/chat/stream - Send message (streaming SSE)
         GET  /api/sessions   - List sessions
         GET  /api/usage      - Get usage stats
         POST /api/clear      - Clear session
@@ -377,16 +470,18 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/chat', serve_webchat)
     app.router.add_get('/static/{path:.*}', serve_static)
     app.router.add_post('/api/chat', api_chat)
+    app.router.add_post('/api/chat/stream', api_chat_stream)
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
     app.router.add_get('/api/skills', api_skills)
     
     logger.info("WebChat routes registered:")
-    logger.info("  GET  /chat        - WebChat UI")
-    logger.info("  GET  /static/*    - Static files (CSS, JS)")
-    logger.info("  POST /api/chat    - Send message")
-    logger.info("  GET  /api/sessions - List sessions")
-    logger.info("  GET  /api/usage    - Get usage stats")
-    logger.info("  POST /api/clear   - Clear session")
-    logger.info("  GET  /api/skills  - Get available skills")
+    logger.info("  GET  /chat           - WebChat UI")
+    logger.info("  GET  /static/*       - Static files (CSS, JS)")
+    logger.info("  POST /api/chat       - Send message")
+    logger.info("  POST /api/chat/stream - Send message (streaming SSE)")
+    logger.info("  GET  /api/sessions   - List sessions")
+    logger.info("  GET  /api/usage      - Get usage stats")
+    logger.info("  POST /api/clear      - Clear session")
+    logger.info("  GET  /api/skills     - Get available skills")

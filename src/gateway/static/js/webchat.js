@@ -409,7 +409,51 @@
     }
     
     /**
-     * Send message to the server
+     * Add a streaming message placeholder for SSE
+     */
+    function createStreamingMessage() {
+        const div = document.createElement('div');
+        div.className = 'message assistant streaming-message';
+        div.innerHTML = `
+            <div class="avatar" aria-hidden="true">AI</div>
+            <div>
+                <div class="message-bubble"><span class="streaming-text"></span><span class="cursor-blink"></span></div>
+            </div>
+        `;
+        messagesContainer.appendChild(div);
+        scrollToBottom();
+        return div;
+    }
+    
+    /**
+     * Update streaming message content
+     */
+    function updateStreamingMessage(div, content) {
+        const bubble = div.querySelector('.message-bubble');
+        const textSpan = bubble.querySelector('.streaming-text');
+        textSpan.innerHTML = renderMarkdown(content);
+        scrollToBottom();
+    }
+    
+    /**
+     * Finish streaming message
+     */
+    function finishStreamingMessage(div) {
+        div.classList.remove('streaming-message');
+        div.classList.add('streaming-finished');
+        const bubble = div.querySelector('.message-bubble');
+        const timestamp = document.createElement('div');
+        timestamp.className = 'message-timestamp';
+        timestamp.setAttribute('aria-label', 'Message time');
+        timestamp.textContent = new Date().toLocaleTimeString([], { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+        });
+        bubble.appendChild(timestamp);
+    }
+    
+    /**
+     * Send message to the server with SSE streaming
      */
     async function sendMessage() {
         if (isLoading) return;
@@ -424,9 +468,84 @@
         
         addMessage('user', content);
         
-        statusSpan.textContent = 'Thinking...';
-        typingIndicator.classList.add('show');
+        statusSpan.textContent = 'Streaming...';
+        typingIndicator.classList.remove('show');
         
+        try {
+            const response = await fetch('/api/chat/stream', {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json' 
+                },
+                body: JSON.stringify({ 
+                    message: content,
+                    session_id: 'webchat'
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            
+            // Create streaming message placeholder
+            const streamingDiv = createStreamingMessage();
+            let accumulatedContent = '';
+            
+            // Read streaming response
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split('\n');
+                
+                for (const line of lines) {
+                    if (line.startsWith('event: ')) {
+                        const eventType = line.slice(7).trim();
+                        
+                        // Find the corresponding data line
+                        const dataIndex = lines.indexOf(line) + 1;
+                        if (dataIndex < lines.length) {
+                            const dataLine = lines[dataIndex];
+                            if (dataLine.startsWith('data: ')) {
+                                const data = dataLine.slice(6).trim();
+                                
+                                if (eventType === 'chunk') {
+                                    // Decode escaped newlines
+                                    const text = data.replace(/\\n/g, '\n').replace(/\\r/g, '\r');
+                                    accumulatedContent += text;
+                                    updateStreamingMessage(streamingDiv, accumulatedContent);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Streaming complete
+            finishStreamingMessage(streamingDiv);
+            
+            // Get usage from last event (in real implementation, track session_id)
+            statusSpan.textContent = 'Ready';
+            
+        } catch (error) {
+            // Fallback to regular API on stream error
+            console.warn('SSE failed, falling back to regular API:', error);
+            await sendMessageFallback(content);
+        } finally {
+            isLoading = false;
+            sendButton.disabled = false;
+            messageInput.focus();
+        }
+    }
+    
+    /**
+     * Fallback: Send message using regular API
+     */
+    async function sendMessageFallback(content) {
         try {
             const response = await fetch('/api/chat', {
                 method: 'POST',
@@ -440,8 +559,6 @@
             });
             
             const data = await response.json();
-            
-            typingIndicator.classList.remove('show');
             
             if (data.error) {
                 addMessage('error', `Error: ${data.error}`);
@@ -463,13 +580,8 @@
                 statusSpan.textContent = 'Ready';
             }
         } catch (error) {
-            typingIndicator.classList.remove('show');
             addMessage('error', `Connection error: ${error.message}`);
             statusSpan.textContent = 'Disconnected';
-        } finally {
-            isLoading = false;
-            sendButton.disabled = false;
-            messageInput.focus();
         }
     }
     
