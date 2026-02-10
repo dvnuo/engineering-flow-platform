@@ -164,7 +164,6 @@ body {
 }
 
 .input-wrapper {
-    position: relative;
     display: flex;
     gap: 12px;
     align-items: flex-end;
