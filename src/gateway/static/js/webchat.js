@@ -772,7 +772,13 @@
                 recentSessionsList.appendChild(sentinel);
             }
             
-            // Setup intersection observer for infinite scroll
+            // Always update sentinel visibility at the end
+            if (sentinel) {
+                sentinel.style.display = sessionsHasMore ? 'block' : 'none';
+                sentinel.textContent = sessionsHasMore ? 'Loading more...' : 'No more sessions';
+            }
+            
+            // Setup intersection observer for infinite scroll (only once)
             if (sessionsHasMore && !sessionsObserver) {
                 sessionsObserver = new IntersectionObserver((entries) => {
                     entries.forEach(entry => {
@@ -782,12 +788,10 @@
                     });
                 }, { rootMargin: '100px' });
                 
-                sessionsObserver.observe(sentinel);
+                if (sentinel) {
+                    sessionsObserver.observe(sentinel);
+                }
             }
-            
-            // Update sentinel visibility
-            sentinel.style.display = sessionsHasMore ? 'block' : 'none';
-            sentinel.textContent = sessionsHasMore ? 'Loading more...' : 'No more sessions';
             
             // Auto-load first session if none selected
             if (sessionsOffset === sessions.length && !currentSessionId) {
