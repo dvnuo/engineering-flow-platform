@@ -725,7 +725,8 @@
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                     </svg>
                     <div class="recent-session-info">
-                        <div class="recent-session-name">${escapeHtml(session.last_message || 'New Chat')}</div>
+                        <div class="recent-session-name">${escapeHtml(session.name || session.session_id)}</div>
+                        <div class="recent-session-preview">${escapeHtml(session.last_message || '')}</div>
                     </div>
                 </div>
             `).join('');
@@ -753,8 +754,48 @@
      */
     async function loadSession(sessionId) {
         currentSessionId = sessionId;
-        messagesContainer.innerHTML = '';
-        statusSpan.textContent = `Session: ${sessionId}`;
+        messagesContainer.innerHTML = '<div class="loading">Loading...</div>';
+        statusSpan.textContent = `Loading: ${sessionId}`;
+        
+        try {
+            const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+            const data = await response.json();
+            
+            if (data.error) {
+                messagesContainer.innerHTML = `<div class="welcome-message">
+                    <h2>👋 Error</h2>
+                    <p>${escapeHtml(data.error)}</p>
+                </div>`;
+                statusSpan.textContent = 'Error loading session';
+                return;
+            }
+            
+            // Clear and render messages
+            messagesContainer.innerHTML = '';
+            
+            const messages = data.messages || [];
+            if (messages.length === 0) {
+                messagesContainer.innerHTML = `<div class="welcome-message">
+                    <h2>👋 ${escapeHtml(data.name || 'New Chat')}</h2>
+                    <p>Start a conversation</p>
+                </div>`;
+            } else {
+                messages.forEach(msg => {
+                    const role = msg.role || 'user';
+                    addMessage(role, msg.content || '');
+                });
+            }
+            
+            statusSpan.textContent = 'Ready';
+            
+        } catch (error) {
+            console.error('Error loading session:', error);
+            messagesContainer.innerHTML = `<div class="welcome-message">
+                <h2>👋 Error</h2>
+                <p>Failed to load session</p>
+            </div>`;
+            statusSpan.textContent = 'Error';
+        }
     }
     
     // Refresh sessions button

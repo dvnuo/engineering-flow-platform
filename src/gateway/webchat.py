@@ -298,19 +298,72 @@ async def api_sessions(request: web.Request) -> web.Response:
     """
     try:
         limit = int(request.query.get('limit', 10))
-        sessions = await session_manager.list_sessions()
+        session_ids = await session_manager.list_sessions()
         
         # Format sessions with details
         detailed_sessions = []
-        for session in sessions[:limit]:
+        for session_id in session_ids[:limit]:
+            # Get session info
+            session_info = await session_manager.get_session_info(session_id)
+            
+            if not session_info:
+                continue
+            
+            history = session_info.get('history', [])
+            
+            # Get first user message as session name
+            session_name = 'New Chat'
+            last_message = ''
+            for msg in history:
+                if msg.get('role') == 'user':
+                    session_name = msg.get('content', 'New Chat')[:30]
+                    break
+            
+            # Get last message preview
+            for msg in reversed(history):
+                if msg.get('role') == 'user':
+                    last_message = msg.get('content', '')[:50]
+                    break
+                elif msg.get('role') == 'assistant':
+                    last_message = msg.get('content', '')[:50]
+                    break
+            
             detailed_sessions.append({
-                'session_id': session.get('session_id', session) if isinstance(session, dict) else str(session),
-                'last_message': session.get('last_message', '')[:50] if isinstance(session, dict) and session.get('last_message') else 'New Chat',
-                'updated_at': session.get('updated_at', datetime.utcnow().isoformat()) if isinstance(session, dict) else datetime.utcnow().isoformat(),
+                'session_id': session_id,
+                'name': session_name,
+                'last_message': last_message,
+                'updated_at': session_info.get('updated_at', datetime.utcnow().isoformat()),
+                'message_count': len(history),
             })
         
         return web.json_response({'sessions': detailed_sessions})
     except Exception as e:
+        logger.error(f"Error listing sessions: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_load_session(request: web.Request) -> web.Response:
+    """Load session messages.
+    
+    GET /api/sessions/{session_id}
+    Returns: Session messages
+    """
+    try:
+        session_id = request.match_info.get('session_id', '')
+        if not session_id:
+            return web.json_response({'error': 'Session ID required'}, status=400)
+        
+        session_info = await session_manager.get_session(session_id)
+        
+        if not session_info:
+            return web.json_response({'error': 'Session not found'}, status=404)
+        
+        return web.json_response({
+            'session_id': session_id,
+            'messages': session_info.get('history', []),
+        })
+    except Exception as e:
+        logger.error(f"Error loading session: {e}")
         return web.json_response({'error': str(e)}, status=500)
 
 
@@ -507,6 +560,7 @@ def setup_webchat_routes(app: web.Application):
         POST /api/chat     - Send message
         POST /api/chat/stream - Send message (streaming SSE)
         GET  /api/sessions - List recent sessions
+        GET  /api/sessions/{session_id} - Load session messages
         GET  /api/files    - Browse files
         GET  /api/usage   - Get usage stats
         POST /api/clear   - Clear session
@@ -518,6 +572,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)
     app.router.add_get('/api/sessions', api_sessions)
+    app.router.add_get('/api/sessions/{session_id}', api_load_session)
     app.router.add_get('/api/files', api_browse_files)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
@@ -530,6 +585,7 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  POST /api/chat     - Send message")
     logger.info("  POST /api/chat/stream - Send message (streaming SSE)")
     logger.info("  GET  /api/sessions - List recent sessions")
+    logger.info("  GET  /api/sessions/{id} - Load session messages")
     logger.info("  GET  /api/files    - Browse files")
     logger.info("  GET  /api/usage   - Get usage stats")
     logger.info("  POST /api/clear   - Clear session")
