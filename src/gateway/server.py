@@ -250,9 +250,9 @@ class Gateway:
             session_ids = await session_manager.list_sessions()
             logger.info(f"[handle_list_sessions] Found {len(session_ids)} sessions")
             
-            # Format sessions with details, filter out empty sessions
-            detailed_sessions = []
-            for session_id in session_ids[:limit]:
+            # Get all sessions with their details first
+            sessions_with_details = []
+            for session_id in session_ids:
                 # Get session with full history (not get_session_info which excludes history)
                 session = await session_manager.get_session(session_id)
                 
@@ -265,7 +265,6 @@ class Gateway:
                 # Skip empty sessions (no user messages)
                 user_messages = [msg for msg in history if msg.get('role') == 'user']
                 if not user_messages:
-                    logger.info(f"[handle_list_sessions] Skipping empty session: {session_id}")
                     continue
                 
                 # Get first user message as session name
@@ -281,15 +280,25 @@ class Gateway:
                         last_message = (msg.get('content', '') or '')[:50]
                         break
                 
-                detailed_sessions.append({
+                updated_at = session.get('updated_at', datetime.utcnow().isoformat())
+                
+                sessions_with_details.append({
                     'session_id': session_id,
                     'name': session_name,
                     'last_message': last_message,
-                    'updated_at': session.get('updated_at', datetime.utcnow().isoformat()),
+                    'updated_at': updated_at,
                     'message_count': len(user_messages),
-                    '_marker': 'FIXED_2026_02_10_17_20',  # Version marker
                 })
-                logger.info(f"[handle_list_sessions] Added session: {session_id} -> name='{session_name}'")
+            
+            # Sort by updated_at descending (newest first)
+            sessions_with_details.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
+            
+            # Apply limit
+            detailed_sessions = sessions_with_details[:limit]
+            
+            for s in detailed_sessions:
+                s['_marker'] = 'FIXED_2026_02_10_17_20'
+                logger.info(f"[handle_list_sessions] Added session: {s['session_id']} -> name='{s['name']}'")
             
             logger.info(f"[handle_list_sessions] Returning {len(detailed_sessions)} sessions")
             return web.json_response({'sessions': detailed_sessions})
