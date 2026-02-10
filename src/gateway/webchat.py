@@ -123,6 +123,12 @@ async def api_chat(request: web.Request) -> web.Response:
         if not message:
             return web.json_response({'error': 'Empty message'}, status=400)
         
+        logger.info(f"[api_chat] Processing message for session: {session_id}")
+        
+        # Initialize session manager if needed
+        if not session_manager._initialized:
+            await session_manager.initialize()
+        
         # Run agent (history is managed internally by session_manager)
         agent = AgentCore()
         result = await agent.process(
@@ -135,13 +141,17 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Force save session to persistence
         session = await session_manager.get_session(session_id)
+        logger.info(f"[api_chat] Session after agent.process(): {session is not None}")
         if session and session.get("history"):
+            logger.info(f"[api_chat] Saving session with {len(session['history'])} messages")
             await session_persistence.save_session(
                 session_id=session_id,
                 channel=session.get("channel", ""),
                 messages=session["history"],
                 metadata=session.get("metadata", {}),
             )
+        else:
+            logger.warning(f"[api_chat] No session or empty history for {session_id}")
         
         response = result.get("response", "") if result else ""
         usage = result.get("usage", {}) if result else {}
@@ -314,6 +324,7 @@ async def api_sessions(request: web.Request) -> web.Response:
         
         limit = int(request.query.get('limit', 10))
         session_ids = await session_manager.list_sessions()
+        logger.info(f"[api_sessions] Found {len(session_ids)} sessions: {session_ids[:5]}")
         
         # Format sessions with details, filter out empty sessions
         detailed_sessions = []
@@ -329,6 +340,7 @@ async def api_sessions(request: web.Request) -> web.Response:
             # Skip empty sessions (no user messages)
             user_messages = [msg for msg in history if msg.get('role') == 'user']
             if not user_messages:
+                logger.info(f"[api_sessions] Skipping empty session: {session_id}")
                 continue
             
             # Get first user message as session name
@@ -351,7 +363,9 @@ async def api_sessions(request: web.Request) -> web.Response:
                 'updated_at': session_info.get('updated_at', datetime.utcnow().isoformat()),
                 'message_count': len(user_messages),
             })
+            logger.info(f"[api_sessions] Added session: {session_id} -> name='{session_name}'")
         
+        logger.info(f"[api_sessions] Returning {len(detailed_sessions)} sessions")
         return web.json_response({'sessions': detailed_sessions})
     except Exception as e:
         logger.error(f"Error listing sessions: {e}")

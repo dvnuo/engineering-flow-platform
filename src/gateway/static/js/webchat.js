@@ -594,7 +594,7 @@
                 },
                 body: JSON.stringify({ 
                     message: content,
-                    session_id: currentSessionId || 'webchat'
+                    session_id: currentSessionId || null  // Backend will create new session if null
                 })
             });
             
@@ -604,6 +604,11 @@
                 addMessage('error', `Error: ${data.error}`);
                 statusSpan.textContent = 'Error';
             } else {
+                // Update current session ID from response
+                if (data.session_id) {
+                    currentSessionId = data.session_id;
+                }
+                
                 addMessage('assistant', data.response);
                 
                 if (data.usage) {
@@ -618,6 +623,9 @@
                 }
                 
                 statusSpan.textContent = 'Ready';
+                
+                // Refresh sessions list to show the new session
+                loadRecentSessions();
             }
         } catch (error) {
             addMessage('error', `Connection error: ${error.message}`);
