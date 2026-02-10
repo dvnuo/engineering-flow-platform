@@ -1174,6 +1174,36 @@ body {
     padding: var(--space-xl);
 }
 
+/* File Viewer */
+.file-viewer-info {
+    display: flex;
+    justify-content: space-between;
+    padding: var(--space-sm) var(--space-md);
+    background: var(--color-bg-input);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-md);
+    font-size: 12px;
+    color: var(--color-text-muted);
+}
+
+.file-viewer-code {
+    margin: 0;
+    padding: var(--space-md);
+    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    overflow: auto;
+    max-height: calc(80vh - 120px);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.file-viewer-code code {
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+}
+
 /* Settings Modal */
 .settings-section {
     margin-bottom: var(--space-lg);

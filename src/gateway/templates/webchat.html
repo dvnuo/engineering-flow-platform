@@ -215,6 +215,25 @@
         </div>
     </div>
     
+    <!-- File Viewer Modal -->
+    <div class="modal" id="fileViewerModal" role="dialog" aria-modal="true" aria-labelledby="fileViewerTitle">
+        <div class="modal-content" style="max-width: 800px; max-height: 80vh;">
+            <div class="modal-header">
+                <h2 id="fileViewerTitle">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 8px;">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                    </svg>
+                    <span id="fileViewerTitleText">File Viewer</span>
+                </h2>
+                <button class="close-button" id="closeFileViewer" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" id="fileViewerContent" role="region" aria-live="polite" style="overflow: auto; max-height: calc(80vh - 60px);">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+    </div>
+    
     <!-- Settings Modal -->
     <div class="modal" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
         <div class="modal-content" style="max-width: 500px;">

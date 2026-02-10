@@ -910,11 +910,21 @@
                     if (this.dataset.is_dir === 'true') {
                         showFileExplorer(this.dataset.path);
                     } else {
-                        // Insert file path in chat
-                        messageInput.value += this.dataset.path;
-                        messageInput.focus();
-                        fileExplorerModal.classList.remove('show');
+                        // Double-click to view file content
+                        showFileViewer(this.dataset.path);
                     }
+                });
+                
+                // Right-click for options
+                item.addEventListener('contextmenu', function(e) {
+                    e.preventDefault();
+                    const path = this.dataset.path;
+                    const isDir = this.dataset.is_dir === 'true';
+                    
+                    // Insert path in chat
+                    messageInput.value += path;
+                    messageInput.focus();
+                    fileExplorerModal.classList.remove('show');
                 });
             });
             
@@ -930,6 +940,70 @@
         });
         fileExplorerModal.addEventListener('click', function(e) {
             if (e.target === fileExplorerModal) fileExplorerModal.classList.remove('show');
+        });
+    }
+    
+    // ========== File Viewer ==========
+    
+    const fileViewerModal = document.getElementById('fileViewerModal');
+    const closeFileViewer = document.getElementById('closeFileViewer');
+    const fileViewerTitleText = document.getElementById('fileViewerTitleText');
+    const fileViewerContent = document.getElementById('fileViewerContent');
+    
+    async function showFileViewer(path) {
+        fileViewerModal.classList.add('show');
+        fileViewerContent.innerHTML = '<div class="loading">Loading...</div>';
+        
+        try {
+            const response = await fetch(`/api/files/read?path=${encodeURIComponent(path)}`);
+            const data = await response.json();
+            
+            if (data.error) {
+                fileViewerContent.innerHTML = `<div class="file-explorer-error">${escapeHtml(data.error)}</div>`;
+                return;
+            }
+            
+            fileViewerTitleText.textContent = data.name;
+            
+            // Render file content with syntax highlighting
+            const escapedContent = escapeHtml(data.content || '');
+            const language = data.language || 'text';
+            
+            fileViewerContent.innerHTML = `
+                <div class="file-viewer-info">
+                    <span>${escapeHtml(data.path)}</span>
+                    <span>${formatBytes(data.size || 0)}</span>
+                </div>
+                <pre class="file-viewer-code"><code class="language-${language}">${escapedContent}</code></pre>
+            `;
+            
+            // Apply syntax highlighting
+            if (typeof hljs !== 'undefined') {
+                fileViewerContent.querySelectorAll('pre code').forEach((block) => {
+                    hljs.highlightElement(block);
+                });
+            }
+            
+        } catch (error) {
+            console.error('Error reading file:', error);
+            fileViewerContent.innerHTML = `<div class="file-explorer-error">${escapeHtml(error.message)}</div>`;
+        }
+    }
+    
+    function formatBytes(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+    
+    if (closeFileViewer) {
+        closeFileViewer.addEventListener('click', function() {
+            fileViewerModal.classList.remove('show');
+        });
+        fileViewerModal.addEventListener('click', function(e) {
+            if (e.target === fileViewerModal) fileViewerModal.classList.remove('show');
         });
     }
     

@@ -430,7 +430,7 @@ async def api_browse_files(request: web.Request) -> web.Response:
     Returns: List of files and directories
     """
     try:
-        path = request.query.get('path', Path.home() / ".efp/workspace/engineering-flow")
+        path = request.query.get('path', str(Path.home() / ".efp/workspace/engineering-flow"))
         base_path = Path(path)
         
         if not base_path.exists():
@@ -448,6 +448,65 @@ async def api_browse_files(request: web.Request) -> web.Response:
         return web.json_response({'path': str(base_path.resolve()), 'items': items})
     except Exception as e:
         logger.error(f"Error browsing files: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_read_file(request: web.Request) -> web.Response:
+    """Read file content.
+    
+    GET /api/files/read?path=/path/to/file
+    Returns: File content and metadata
+    """
+    try:
+        path = request.query.get('path', '')
+        if not path:
+            return web.json_response({'error': 'Path required'}, status=400)
+        
+        file_path = Path(path)
+        
+        if not file_path.exists():
+            return web.json_response({'error': 'File not found', 'path': path}, status=404)
+        
+        if not file_path.is_file():
+            return web.json_response({'error': 'Not a file', 'path': path}, status=400)
+        
+        # Read file content
+        content = file_path.read_text(encoding='utf-8')
+        
+        # Determine language for syntax highlighting
+        ext = file_path.suffix.lower()
+        language_map = {
+            '.py': 'python',
+            '.js': 'javascript',
+            '.ts': 'typescript',
+            '.html': 'html',
+            '.css': 'css',
+            '.json': 'json',
+            '.md': 'markdown',
+            '.yaml': 'yaml',
+            '.yml': 'yaml',
+            '.sh': 'bash',
+            '.sql': 'sql',
+            '.xml': 'xml',
+            '.csv': 'csv',
+        }
+        language = language_map.get(ext, 'text')
+        
+        return web.json_response({
+            'path': str(file_path.resolve()),
+            'name': file_path.name,
+            'size': file_path.stat().st_size,
+            'content': content,
+            'language': language,
+        })
+    except UnicodeDecodeError:
+        # Binary file
+        return web.json_response({
+            'error': 'Cannot read binary file',
+            'path': path,
+        }, status=400)
+    except Exception as e:
+        logger.error(f"Error reading file: {e}")
         return web.json_response({'error': str(e)}, status=500)
 
 
@@ -630,6 +689,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/sessions/{session_id}', api_load_session)
     app.router.add_get('/api/files', api_browse_files)
+    app.router.add_get('/api/files/read', api_read_file)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
     app.router.add_get('/api/skills', api_skills)
@@ -643,6 +703,7 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  GET  /api/sessions - List recent sessions")
     logger.info("  GET  /api/sessions/{id} - Load session messages")
     logger.info("  GET  /api/files    - Browse files")
+    logger.info("  GET  /api/files/read - Read file content")
     logger.info("  GET  /api/usage   - Get usage stats")
     logger.info("  POST /api/clear   - Clear session")
     logger.info("  GET  /api/skills  - Get available skills")
