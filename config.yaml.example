@@ -107,6 +107,30 @@ memory:
     score_threshold: 0.5  # Minimum similarity score (0.0-1.0)
 
 # ============================================
+# Cost Tracking Configuration (OPTIONAL)
+# ============================================
+# Track LLM usage and costs across providers
+
+cost_tracking:
+  enabled: true  # Enable cost tracking
+  storage_dir: "~/.efp/usage"  # Where to store usage records
+  retention_days: 30  # Keep records for N days (default: 30)
+  # Model pricing can be customized here
+  # By default uses built-in pricing from cost_tracker.py
+
+# Example usage:
+# cost_tracking:
+#   enabled: true
+#   storage_dir: "~/.efp/usage"
+#   retention_days: 30
+
+# Supported providers and models (built-in pricing):
+# - openai: gpt-4o, gpt-4o-mini, gpt-4, gpt-3.5-turbo, o1-preview, o1-mini
+# - anthropic: claude-sonnet-4, claude-opus-4, claude-haiku-4
+# - github_copilot: gpt-4, gpt-4o
+# - ollama: free (local)
+
+# ============================================
 # Workspace Configuration (OPTIONAL)
 # ============================================
 # Workspace paths for project-specific files

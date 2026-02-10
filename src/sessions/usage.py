@@ -1,13 +1,47 @@
 """Usage tracking for Engineering Flow Platform.
 
-Tracks token usage and estimates costs.
+Tracks token usage and costs across all providers.
+Supports per-session, per-model, and per-provider breakdowns.
 """
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+# Token pricing (per 1M tokens) - can be extended with more models
+TOKEN_PRICING = {
+    # OpenAI models
+    "gpt-4o": {"input": 5.0, "output": 15.0},
+    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+    "gpt-4-turbo": {"input": 10.0, "output": 30.0},
+    "gpt-4": {"input": 30.0, "output": 60.0},
+    "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
+    "gpt-3.5-turbo-16k": {"input": 3.0, "output": 4.0},
+    "o1-preview": {"input": 15.0, "output": 60.0},
+    "o1-mini": {"input": 1.10, "output": 4.40},
+    # Anthropic models
+    "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
+    "claude-opus-4-20250514": {"input": 15.0, "output": 75.0},
+    "claude-haiku-4-20250514": {"input": 0.25, "output": 1.25},
+    "claude-3-5-sonnet": {"input": 3.0, "output": 15.0},
+    "claude-3-opus": {"input": 15.0, "output": 75.0},
+    "claude-3-haiku": {"input": 0.25, "output": 1.25},
+    # GitHub Copilot (uses OpenAI models internally)
+    "github_copilot": {"input": 5.0, "output": 15.0},
+    # Default fallback
+    "default": {"input": 1.0, "output": 2.0},
+}
+
+# Provider mapping
+PROVIDER_MODEL_MAP = {
+    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo", "o1-preview", "o1-mini"],
+    "anthropic": ["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-haiku-4-20250514"],
+    "github_copilot": ["github_copilot"],
+    "ollama": ["default"],
+}
 
 
 @dataclass
@@ -255,6 +289,115 @@ class UsageTracker:
                     by_model[model]["requests"] += 1
         
         return by_model
+    
+    def get_usage_by_provider(self, hours: Optional[int] = None) -> Dict[str, Dict[str, Any]]:
+        """Get usage breakdown by provider."""
+        if not self.global_file.exists():
+            return {}
+        
+        cutoff = None
+        if hours:
+            cutoff = datetime.utcnow().timestamp() - (hours * 3600)
+        
+        by_provider: Dict[str, Dict[str, Any]] = {}
+        
+        # Infer provider from model
+        def infer_provider(model: str) -> str:
+            for provider, models in PROVIDER_MODEL_MAP.items():
+                if model in models or model.startswith(provider):
+                    return provider
+            return "unknown"
+        
+        with open(self.global_file, 'r') as f:
+            for line in f:
+                if line.strip():
+                    entry = json.loads(line)
+                    if entry.get("type") != "usage":
+                        continue
+                    
+                    if cutoff:
+                        ts = datetime.fromisoformat(entry["timestamp"]).timestamp()
+                        if ts < cutoff:
+                            continue
+                    
+                    model = entry.get("model", "unknown")
+                    provider = infer_provider(model)
+                    
+                    if provider not in by_provider:
+                        by_provider[provider] = {
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "cost": 0.0,
+                            "requests": 0,
+                        }
+                    
+                    by_provider[provider]["input_tokens"] += entry.get("input_tokens", 0)
+                    by_provider[provider]["output_tokens"] += entry.get("output_tokens", 0)
+                    by_provider[provider]["cost"] += entry.get("cost", 0.0)
+                    by_provider[provider]["requests"] += 1
+        
+        return by_provider
+    
+    def cleanup_old_records(self, retention_days: int = 30) -> int:
+        """Remove records older than retention_days.
+        
+        Args:
+            retention_days: Number of days to retain
+            
+        Returns:
+            Number of records removed
+        """
+        if not self.global_file.exists():
+            return 0
+        
+        cutoff = datetime.utcnow() - timedelta(days=retention_days)
+        remaining = []
+        removed = 0
+        
+        with open(self.global_file, 'r') as f:
+            for line in f:
+                if line.strip():
+                    entry = json.loads(line)
+                    ts = datetime.fromisoformat(entry.get("timestamp", "2000-01-01"))
+                    if ts >= cutoff:
+                        remaining.append(line)
+                    else:
+                        removed += 1
+        
+        with open(self.global_file, 'w') as f:
+            for line in remaining:
+                f.write(line)
+        
+        if removed > 0:
+            logger.info(f"Cleaned up {removed} old usage records")
+        
+        return removed
+    
+    def health_check(self) -> Dict[str, Any]:
+        """Check health status of usage tracking.
+        
+        Returns:
+            Health status dictionary
+        """
+        try:
+            stats = self.get_global_summary(hours=24)
+            by_model = self.get_usage_by_model(hours=24)
+            by_provider = self.get_usage_by_provider(hours=24)
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e),
+            }
+        
+        return {
+            "status": "healthy",
+            "storage_dir": str(self.base_path),
+            "session_file": str(self.session_file),
+            "global_file": str(self.global_file),
+            "last_24h": stats,
+            "by_model": by_model,
+            "by_provider": by_provider,
+        }
     
     def clear_session_usage(self, session_id: str) -> int:
         """Clear usage records for a session. Returns count cleared."""
