@@ -921,7 +921,7 @@
             fileExplorerContent.querySelectorAll('.file-explorer-item').forEach(item => {
                 item.addEventListener('click', function(e) {
                     e.stopPropagation();
-                    const isDir = this.dataset.is_dir === 'true';
+                    const isDir = this.dataset.isDir === 'true';
                     const path = this.dataset.path;
                     console.log('File item clicked:', { path, isDir });
                     if (isDir) {
@@ -936,7 +936,7 @@
                 item.addEventListener('contextmenu', function(e) {
                     e.preventDefault();
                     const path = this.dataset.path;
-                    const isDir = this.dataset.is_dir === 'true';
+                    const isDir = this.dataset.isDir === 'true';
                     
                     // Insert path in chat
                     messageInput.value += path;
