@@ -25,14 +25,27 @@ class GitClient:
     def __init__(self, workspace: str = None):
         self.workspace = workspace or str(DEFAULT_WORKSPACE)
     
-    async def run(self, args: list, cwd: str = None) -> str:
-        """Run a git command and return output."""
+    async def run(self, args: list, cwd: str = None, env: dict = None) -> str:
+        """Run a git command and return output.
+        
+        Args:
+            args: Git command arguments
+            cwd: Working directory
+            env: Environment variables to add/modify
+        """
         try:
+            # Setup environment
+            process_env = None
+            if env:
+                process_env = os.environ.copy()
+                process_env.update(env)
+            
             result = await asyncio.create_subprocess_exec(
                 "git", *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                cwd=cwd or self.workspace
+                cwd=cwd or self.workspace,
+                env=process_env
             )
             stdout, _ = await result.communicate()
             return stdout.decode("utf-8").strip()
@@ -103,46 +116,38 @@ class GitClient:
         
         When using HTTPS URLs, automatically converts to SSH format
         and configures SSH to skip host key verification for automation.
-        """
-        import os
-        import re
         
+        Note: Using StrictHostKeyChecking=no for automation convenience.
+        For production, consider using StrictHostKeyChecking=accept-new
+        to detect MITM attacks on known hosts.
+        """
         # Convert HTTPS URL to SSH if needed
         if repo_url.startswith("https://"):
             repo_url = self.convert_to_ssh(repo_url)
         
-        target = target_dir or self.workspace
         # Extract repo name from URL if no target_dir specified
         if not target_dir:
-            # Get repo name from URL (remove .git suffix and last path component)
             repo_name = repo_url.split("/")[-1].replace(".git", "")
-            target = os.path.join(self.workspace, repo_name)
+            target_dir = os.path.join(self.workspace, repo_name)
         
-        # Clone into workspace/REPO_NAME
-        target = os.path.join(self.workspace, target.split("/")[-1].replace(".git", ""))
+        # Ensure target directory
+        target = os.path.join(self.workspace, target_dir.split("/")[-1].replace(".git", ""))
         os.makedirs(self.workspace, exist_ok=True)
         
         # Configure git to skip host key verification for automation
-        # This handles "Are you sure you want to continue connecting (yes/no)?"
-        import subprocess
-        env = os.environ.copy()
-        env['GIT_SSH_COMMAND'] = (
-            'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
-        )
+        # WARNING: This reduces security by not verifying host keys.
+        # Consider using 'accept-new' instead of 'no' for better security.
+        ssh_env = {
+            'GIT_SSH_COMMAND': (
+                'ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null'
+            )
+        }
         
         try:
-            result = await asyncio.create_subprocess_exec(
-                "git", "clone", repo_url, target,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                cwd=self.workspace,
-                env=env
-            )
-            stdout, _ = await result.communicate()
-            output = stdout.decode("utf-8").strip()
+            output = await self.run(["clone", repo_url, target], cwd=self.workspace, env=ssh_env)
             
             # Check for common errors and provide helpful messages
-            if result.returncode != 0:
+            if "Error:" in output:
                 if "Could not resolve host" in output:
                     return f"Error: Could not resolve host. Please check the repository URL: {repo_url}"
                 elif "Repository not found" in output:
@@ -151,7 +156,6 @@ class GitClient:
                     return f"Error: Permission denied. You may need to add your SSH key or check permissions."
                 elif "Authentication failed" in output:
                     return f"Error: Authentication failed. Please check your SSH key configuration."
-                return f"Error: {output}"
             
             return output if output else f"Successfully cloned to {target}"
             
