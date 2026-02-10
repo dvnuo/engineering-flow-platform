@@ -870,11 +870,17 @@
             }
             
             const pathParts = data.path.split('/').filter(p => p);
-            let pathHtml = '<div class="file-explorer-path"><button data-path="/">/</button>';
+            let pathHtml = '<div class="file-explorer-path">';
+            pathHtml += '<button data-path="/">🏠</button>';
             let currentPath = '';
+            let isFirst = true;
             pathParts.forEach(part => {
                 currentPath += '/' + part;
-                pathHtml += ' / <button data-path="' + currentPath + '">' + escapeHtml(part) + '</button>';
+                if (!isFirst) {
+                    pathHtml += '<span class="separator">/</span>';
+                }
+                isFirst = false;
+                pathHtml += '<button data-path="' + currentPath + '">' + escapeHtml(part) + '</button>';
             });
             pathHtml += '</div>';
             

@@ -1178,8 +1178,8 @@ body {
 .sidebar-panel {
     position: fixed;
     top: 0;
-    right: -400px;
-    width: 400px;
+    right: -600px;
+    width: 600px;
     height: 100vh;
     background: var(--color-bg-surface);
     box-shadow: -2px 0 10px rgba(0,0,0,0.1);
@@ -1224,8 +1224,9 @@ body {
 
 #fileExplorerContent .file-explorer-path {
     display: flex;
+    align-items: center;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 0;
     margin-bottom: var(--space-md);
     padding-bottom: var(--space-md);
     border-bottom: 1px solid var(--color-border);
@@ -1234,15 +1235,20 @@ body {
 #fileExplorerContent .file-explorer-path button {
     padding: 4px 8px;
     background: transparent;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
+    border: none;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 13px;
     color: var(--color-text);
+    border-radius: var(--radius-sm);
 }
 
 #fileExplorerContent .file-explorer-path button:hover {
     background: var(--color-bg-input);
+}
+
+#fileExplorerContent .file-explorer-path .separator {
+    color: var(--color-text-muted);
+    padding: 0 2px;
 }
 
 #fileExplorerContent .file-explorer-item {
