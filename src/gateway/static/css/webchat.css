@@ -243,6 +243,10 @@ body {
     flex-shrink: 0;
 }
 
+.sidebar-section-mini {
+    flex: 0;
+}
+
 .sidebar-section {
     padding: var(--space-md);
     flex: 1;
