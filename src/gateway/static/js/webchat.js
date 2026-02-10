@@ -664,7 +664,14 @@
                 return;
             }
             
-            recentSessionsList.innerHTML = data.sessions.map((session, index) => {
+            // Filter out null sessions
+            const validSessions = (data.sessions || []).filter(s => s);
+            if (validSessions.length === 0) {
+                recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
+                return;
+            }
+            
+            recentSessionsList.innerHTML = validSessions.map((session, index) => {
                 const sessionId = session.session_id || ('session_' + index);
                 return `
                 <div class="recent-session-item ${index === 0 ? 'active' : ''}" data-session-id="${sessionId}">
