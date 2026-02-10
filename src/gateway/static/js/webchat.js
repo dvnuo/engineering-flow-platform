@@ -49,6 +49,7 @@
     }
     
     /**
+    /**
      * Toggle between light and dark theme
      */
     function toggleTheme() {
@@ -72,6 +73,7 @@
     if (themeToggle) {
         themeToggle.addEventListener('click', toggleTheme);
     }
+    /**
      * Toggle between light and dark theme
      */
     function toggleTheme() {
