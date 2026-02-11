@@ -246,7 +246,10 @@ class Gateway:
                 logger.info("[handle_list_sessions] Initializing session manager")
                 await session_manager.initialize()
             
-            limit = int(request.query.get('limit', 10))
+            # Pagination parameters
+            limit = int(request.query.get('limit', 20))
+            offset = int(request.query.get('offset', 0))
+            
             session_ids = await session_manager.list_sessions()
             logger.info(f"[handle_list_sessions] Found {len(session_ids)} sessions")
             
@@ -293,15 +296,21 @@ class Gateway:
             # Sort by updated_at descending (newest first)
             sessions_with_details.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
             
-            # Apply limit
-            detailed_sessions = sessions_with_details[:limit]
+            # Apply pagination
+            total_count = len(sessions_with_details)
+            detailed_sessions = sessions_with_details[offset:offset + limit]
+            has_more = offset + limit < total_count
             
             for s in detailed_sessions:
                 s['_marker'] = 'FIXED_2026_02_10_17_20'
                 logger.info(f"[handle_list_sessions] Added session: {s['session_id']} -> name='{s['name']}'")
             
-            logger.info(f"[handle_list_sessions] Returning {len(detailed_sessions)} sessions")
-            return web.json_response({'sessions': detailed_sessions})
+            logger.info(f"[handle_list_sessions] Returning {len(detailed_sessions)} sessions (offset={offset}, has_more={has_more})")
+            return web.json_response({
+                'sessions': detailed_sessions,
+                'has_more': has_more,
+                'total': total_count
+            })
         except Exception as e:
             logger.error(f"[handle_list_sessions] ERROR: {e}", exc_info=True)
             return web.json_response({'error': str(e)}, status=500)

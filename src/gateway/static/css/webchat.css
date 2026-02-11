@@ -313,7 +313,7 @@ body {
     max-width: 100%;
     padding: var(--space-lg);
     gap: var(--space-lg);
-    overflow-y: auto;
+    overflow: hidden;
 }
 
 /* Messages Area */
@@ -598,6 +598,73 @@ body {
     opacity: 0.5;
     cursor: not-allowed;
     transform: none;
+}
+
+/* Primary Button */
+.btn-primary {
+    background: var(--color-accent);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 12px 20px;
+    color: white;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--duration-fast);
+}
+
+.btn-primary:hover {
+    background: var(--color-accent-hover);
+}
+
+.btn-primary:active {
+    transform: scale(0.98);
+}
+
+/* Secondary Button */
+.btn-secondary {
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 12px 20px;
+    color: var(--color-text);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--duration-fast);
+}
+
+.btn-secondary:hover {
+    background: var(--color-bg-input);
+    border-color: var(--color-border-hover);
+}
+
+.btn-secondary:active {
+    transform: scale(0.98);
+}
+
+/* Icon Button */
+.icon-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-md);
+    color: var(--color-text);
+    cursor: pointer;
+    transition: all var(--duration-fast);
+}
+
+.icon-button:hover {
+    background: var(--color-bg-input);
+    color: var(--color-text);
+}
+
+.icon-button:active {
+    transform: scale(0.95);
 }
 
 /* Typing Indicator */
@@ -982,7 +1049,8 @@ body {
 /* Recent Sessions Sidebar */
 #recentSessionsSection {
     flex: 0 0 auto;
-    max-height: 40%;
+    min-height: 70%;
+    max-height: 100%;
     overflow-y: auto;
 }
 
@@ -1023,6 +1091,9 @@ body {
     display: flex;
     flex-direction: column;
     gap: var(--space-xs);
+    height: calc(100vh - 410px);
+    overflow-y: auto;
+    padding-right: var(--space-xs);
 }
 
 .loading-sessions {
@@ -1121,12 +1192,6 @@ body {
     color: var(--color-text-subtle);
 }
 
-.file-explorer-list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
 .file-explorer-item {
     display: flex;
     align-items: center;
@@ -1174,6 +1239,140 @@ body {
     padding: var(--space-xl);
 }
 
+/* Sidebar Panels - File Explorer & Viewer */
+.sidebar-panel {
+    position: fixed;
+    top: 0;
+    right: -600px;
+    width: 600px;
+    height: 100vh;
+    background: #ffffff;
+    box-shadow: -2px 0 10px rgba(0,0,0,0.1);
+    display: flex;
+    flex-direction: column;
+    transition: right 0.3s ease;
+    z-index: 1000;
+}
+
+.sidebar-panel.show {
+    right: 0;
+}
+
+.sidebar-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-md) var(--space-lg);
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg);
+}
+
+.sidebar-panel-header h2 {
+    display: flex;
+    align-items: center;
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.sidebar-panel-body {
+    flex: 1;
+    overflow: auto;
+    padding: var(--space-md);
+}
+
+/* File Explorer in Sidebar */
+#fileExplorerContent {
+    padding: var(--space-md);
+}
+
+#fileExplorerContent .file-explorer-path {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0;
+    margin-bottom: var(--space-md);
+    padding-bottom: var(--space-md);
+    border-bottom: 1px solid var(--color-border);
+}
+
+#fileExplorerContent .file-explorer-path button {
+    padding: 4px 8px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--color-text);
+    border-radius: var(--radius-sm);
+}
+
+#fileExplorerContent .file-explorer-path button:hover {
+    background: var(--color-bg-input);
+}
+
+#fileExplorerContent .file-explorer-path .separator {
+    color: var(--color-text-muted);
+    padding: 0 2px;
+}
+
+#fileExplorerContent .file-explorer-item {
+    display: flex;
+    align-items: center;
+    padding: var(--space-sm) var(--space-md);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+#fileExplorerContent .file-explorer-item:hover {
+    background: var(--color-bg-input);
+}
+
+#fileExplorerContent .file-explorer-item svg {
+    margin-right: var(--space-sm);
+    flex-shrink: 0;
+}
+
+#fileExplorerContent .file-explorer-item.folder {
+    color: var(--color-text);
+    font-weight: 500;
+}
+
+#fileExplorerContent .file-explorer-item.file {
+    color: var(--color-text-secondary);
+}
+
+/* File Viewer in Sidebar */
+.file-viewer-info {
+    display: flex;
+    justify-content: space-between;
+    padding: var(--space-sm) var(--space-md);
+    background: var(--color-bg-input);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-md);
+    font-size: 11px;
+    color: var(--color-text-muted);
+}
+
+.file-viewer-code {
+    margin: 0;
+    padding: var(--space-md);
+    background: var(--color-bg);
+    border-radius: var(--radius-md);
+    overflow: auto;
+    max-height: calc(100vh - 120px);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.file-viewer-code code {
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+}
+
 /* Settings Modal */
 .settings-section {
     margin-bottom: var(--space-lg);
@@ -1201,6 +1400,52 @@ body {
     display: flex;
     align-items: center;
     gap: var(--space-md);
+}
+
+/* Toggle Switch */
+.toggle {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 28px;
+}
+
+.toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--color-border);
+    transition: var(--duration-fast);
+    border-radius: 28px;
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 22px;
+    width: 22px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: var(--duration-fast);
+    border-radius: 50%;
+}
+
+input:checked + .slider {
+    background-color: var(--color-accent);
+}
+
+input:checked + .slider:before {
+    transform: translateX(22px);
 }
 
 .toggle-switch {
@@ -1267,6 +1512,40 @@ body {
 .settings-select:focus {
     outline: none;
     border-color: var(--color-accent);
+}
+
+/* Password Input with Toggle */
+.password-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.password-input-wrapper .settings-input {
+    padding-right: 40px;
+}
+
+.toggle-password {
+    position: absolute;
+    right: 8px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-muted);
+    transition: color var(--duration-fast);
+}
+
+.toggle-password:hover {
+    color: var(--color-text);
+}
+
+.toggle-password .eye-icon {
+    width: 16px;
+    height: 16px;
 }
 
 .settings-input-group {
@@ -1367,335 +1646,201 @@ body {
     position: relative;
 }
 
-/* Recent Sessions */
-.recent-sessions-list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+/* GitHub Copilot Authorization */
+.copilot-auth-section {
+    margin-top: var(--space-sm);
 }
 
-.recent-session-item {
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-    padding: var(--space-sm) var(--space-md);
-    border-radius: var(--radius-md);
-    color: var(--color-text-muted);
-    text-decoration: none;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all var(--duration-fast);
-    overflow: hidden;
-}
-
-.recent-session-item:hover {
-    background: var(--color-bg-input);
-    color: var(--color-text);
-}
-
-.recent-session-item.active {
-    background: var(--color-accent-muted);
-    color: var(--color-accent);
-}
-
-.recent-session-icon {
-    flex-shrink: 0;
-    opacity: 0.7;
-}
-
-.recent-session-info {
-    flex: 1;
-    overflow: hidden;
-}
-
-.recent-session-name {
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.recent-session-preview {
-    font-size: 11px;
-    opacity: 0.7;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.refresh-sessions {
-    background: none;
-    border: none;
-    color: var(--color-text-muted);
-    padding: 4px;
-    cursor: pointer;
-    border-radius: var(--radius-sm);
-    transition: all var(--duration-fast);
-    margin-left: auto;
-}
-
-.refresh-sessions:hover {
-    background: var(--color-bg-input);
-    color: var(--color-text);
-}
-
-.refresh-sessions.loading svg {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-
-.loading-sessions {
-    color: var(--color-text-muted);
-    font-size: 12px;
-    padding: var(--space-sm) var(--space-md);
-}
-
-/* File Explorer */
-.file-explorer-path {
-    background: var(--color-bg-input);
-    border-radius: var(--radius-md);
-    padding: var(--space-sm) var(--space-md);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    color: var(--color-text);
-    margin-bottom: var(--space-md);
-    overflow-x: auto;
-    white-space: nowrap;
-}
-
-.file-explorer-path button {
-    background: none;
-    border: none;
-    color: var(--color-accent);
-    cursor: pointer;
-    padding: 0;
-    font-family: inherit;
-    font-size: inherit;
-}
-
-.file-explorer-path button:hover {
-    text-decoration: underline;
-}
-
-.file-explorer-list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    max-height: 400px;
-    overflow-y: auto;
-}
-
-.file-explorer-item {
+.copilot-auth-btn {
+    width: 100%;
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: var(--space-sm);
-    padding: var(--space-sm) var(--space-md);
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
-    color: var(--color-text-muted);
-    text-decoration: none;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all var(--duration-fast);
-}
-
-.file-explorer-item:hover {
-    background: var(--color-bg-input);
+    padding: 12px 20px;
     color: var(--color-text);
-}
-
-.file-explorer-item svg {
-    flex-shrink: 0;
-    opacity: 0.7;
-}
-
-.file-explorer-item .file-name {
-    flex: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.file-explorer-empty {
-    color: var(--color-text-muted);
-    font-size: 12px;
-    padding: var(--space-lg);
-    text-align: center;
-}
-
-/* Settings Modal */
-.settings-section {
-    margin-bottom: var(--space-lg);
-}
-
-.settings-section h3 {
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-    color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: var(--space-md);
+    cursor: pointer;
+    transition: all var(--duration-fast);
 }
 
-.settings-option {
+.copilot-auth-btn:hover {
+    background: var(--color-bg-input);
+    border-color: var(--color-border-hover);
+}
+
+.copilot-auth-btn:active {
+    transform: scale(0.98);
+}
+
+.copilot-auth-status {
+    margin-top: var(--space-md);
+    padding: var(--space-md);
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.copilot-steps {
     display: flex;
-    align-items: center;
+    flex-direction: column;
     gap: var(--space-md);
 }
 
-.toggle-switch {
-    position: relative;
-    width: 48px;
-    height: 26px;
+.copilot-step {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-sm);
 }
 
-.toggle-switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
-
-.toggle-slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: var(--color-border);
-    transition: var(--duration-fast);
-    border-radius: 26px;
-}
-
-.toggle-slider:before {
-    position: absolute;
-    content: "";
-    height: 20px;
-    width: 20px;
-    left: 3px;
-    bottom: 3px;
-    background-color: white;
-    transition: var(--duration-fast);
+.step-number {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
     border-radius: 50%;
-}
-
-input:checked + .toggle-slider {
-    background-color: var(--color-accent);
-}
-
-input:checked + .toggle-slider:before {
-    transform: translateX(22px);
-}
-
-.settings-label {
-    color: var(--color-text);
-    font-size: 14px;
-}
-
-.settings-select {
-    width: 100%;
-    background: var(--color-bg-input);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    padding: var(--space-sm) var(--space-md);
-    color: var(--color-text);
-    font-size: 14px;
-    cursor: pointer;
-}
-
-.settings-select:focus {
-    outline: none;
-    border-color: var(--color-accent);
-}
-
-.settings-input-group {
-    margin-bottom: var(--space-md);
-}
-
-.settings-input-group label {
-    display: block;
-    color: var(--color-text-muted);
-    font-size: 12px;
-    margin-bottom: var(--space-xs);
-}
-
-.settings-input {
-    width: 100%;
-    background: var(--color-bg-input);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    padding: var(--space-sm) var(--space-md);
-    color: var(--color-text);
-    font-size: 14px;
-}
-
-.settings-input:focus {
-    outline: none;
-    border-color: var(--color-accent);
-}
-
-.settings-actions {
-    margin-top: var(--space-lg);
-    padding-top: var(--space-md);
-    border-top: 1px solid var(--color-border);
-}
-
-.save-settings-button {
-    width: 100%;
     background: var(--color-accent);
-    border: none;
-    border-radius: var(--radius-md);
-    padding: var(--space-md);
     color: white;
-    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
     font-weight: 600;
-    cursor: pointer;
-    transition: all var(--duration-fast);
 }
 
-.save-settings-button:hover {
+.step-content {
+    flex: 1;
+}
+
+.step-content p {
+    margin: 0 0 var(--space-xs) 0;
+    font-size: 13px;
+    color: var(--color-text);
+}
+
+.copilot-link {
+    display: inline-block;
+    padding: var(--space-xs) var(--space-sm);
+    background: var(--color-accent);
+    color: white;
+    text-decoration: none;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 500;
+    transition: background var(--duration-fast);
+}
+
+.copilot-link:hover {
     background: var(--color-accent-hover);
+    color: white;
 }
 
-/* Code Copy Button */
-pre {
-    position: relative;
+.copilot-code-wrapper {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
 }
 
-.copy-code-button {
-    position: absolute;
-    top: var(--space-sm);
-    right: var(--space-sm);
-    background: var(--color-bg-card);
+.copilot-code-wrapper code {
+    flex: 1;
+    padding: var(--space-sm);
+    background: var(--color-bg-input);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 14px;
+    letter-spacing: 2px;
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.btn-copy {
+    padding: var(--space-xs) var(--space-sm);
+    background: var(--color-bg-input);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
-    padding: 4px 8px;
-    color: var(--color-text-muted);
-    font-size: 11px;
-    cursor: pointer;
-    opacity: 0;
-    transition: all var(--duration-fast);
-    z-index: 10;
-}
-
-pre:hover .copy-code-button,
-.copy-code-button.show {
-    opacity: 1;
-}
-
-.copy-code-button:hover {
-    background: var(--color-border);
     color: var(--color-text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all var(--duration-fast);
 }
 
-.copy-code-button.copied {
+.btn-copy:hover {
+    background: var(--color-border);
+}
+
+.btn-copy.copied {
     background: var(--color-success);
     border-color: var(--color-success);
     color: white;
 }
+
+.copilot-status {
+    margin-top: var(--space-md);
+    padding-top: var(--space-md);
+    border-top: 1px solid var(--color-border);
+    text-align: center;
+}
+
+.copilot-timer {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    margin-bottom: var(--space-sm);
+}
+
+.copilot-timer.warning {
+    color: #f59e0b;
+}
+
+.copilot-timer.error {
+    color: #ef4444;
+}
+
+.copilot-status-text {
+    font-size: 13px;
+    color: var(--color-text-muted);
+    margin-bottom: var(--space-sm);
+}
+
+.copilot-progress {
+    display: none;
+}
+
+.copilot-progress.active {
+    display: block;
+}
+
+.copilot-progress .progress-bar {
+    height: 4px;
+    background: var(--color-bg-input);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.copilot-progress .progress-bar::after {
+    content: '';
+    display: block;
+    height: 100%;
+    width: 100%;
+    background: var(--color-accent);
+    animation: progressPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes progressPulse {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+.copilot-auth-status.success {
+    border-color: var(--color-success);
+    background: rgba(34, 197, 94, 0.1);
+}
+
+.copilot-auth-status.success .copilot-status-text {
+    color: var(--color-success);
+    font-weight: 600;
+}
+

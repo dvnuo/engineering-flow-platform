@@ -430,7 +430,7 @@ async def api_browse_files(request: web.Request) -> web.Response:
     Returns: List of files and directories
     """
     try:
-        path = request.query.get('path', Path.home() / ".efp/workspace/engineering-flow")
+        path = request.query.get('path', str(Path.home() / ".efp/workspace/engineering-flow"))
         base_path = Path(path)
         
         if not base_path.exists():
@@ -448,6 +448,65 @@ async def api_browse_files(request: web.Request) -> web.Response:
         return web.json_response({'path': str(base_path.resolve()), 'items': items})
     except Exception as e:
         logger.error(f"Error browsing files: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_read_file(request: web.Request) -> web.Response:
+    """Read file content.
+    
+    GET /api/files/read?path=/path/to/file
+    Returns: File content and metadata
+    """
+    try:
+        path = request.query.get('path', '')
+        if not path:
+            return web.json_response({'error': 'Path required'}, status=400)
+        
+        file_path = Path(path)
+        
+        if not file_path.exists():
+            return web.json_response({'error': 'File not found', 'path': path}, status=404)
+        
+        if not file_path.is_file():
+            return web.json_response({'error': 'Not a file', 'path': path}, status=400)
+        
+        # Read file content
+        content = file_path.read_text(encoding='utf-8')
+        
+        # Determine language for syntax highlighting
+        ext = file_path.suffix.lower()
+        language_map = {
+            '.py': 'python',
+            '.js': 'javascript',
+            '.ts': 'typescript',
+            '.html': 'html',
+            '.css': 'css',
+            '.json': 'json',
+            '.md': 'markdown',
+            '.yaml': 'yaml',
+            '.yml': 'yaml',
+            '.sh': 'bash',
+            '.sql': 'sql',
+            '.xml': 'xml',
+            '.csv': 'csv',
+        }
+        language = language_map.get(ext, 'text')
+        
+        return web.json_response({
+            'path': str(file_path.resolve()),
+            'name': file_path.name,
+            'size': file_path.stat().st_size,
+            'content': content,
+            'language': language,
+        })
+    except UnicodeDecodeError:
+        # Binary file
+        return web.json_response({
+            'error': 'Cannot read binary file',
+            'path': path,
+        }, status=400)
+    except Exception as e:
+        logger.error(f"Error reading file: {e}")
         return web.json_response({'error': str(e)}, status=500)
 
 
@@ -485,6 +544,275 @@ async def api_clear(request: web.Request) -> web.Response:
         
         return web.json_response({'success': True})
     except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_save_config(request: web.Request) -> web.Response:
+    """Save configuration to config.yaml.
+    
+    POST /api/config/save
+    Body: JSON with config sections to update
+    """
+    try:
+        data = await request.json()
+        
+        # Try project config first, then fallback to ~/.efp/
+        project_config = Path(__file__).parent.parent.parent / 'config.yaml'
+        project_example = Path(__file__).parent.parent.parent / 'config.yaml.example'
+        efp_config = Path.home() / '.efp' / 'config.yaml'
+        
+        if project_config.exists():
+            config_path = project_config
+        elif efp_config.exists():
+            config_path = efp_config
+        else:
+            # Create new config from example
+            efp_config.parent.mkdir(parents=True, exist_ok=True)
+            if project_example.exists():
+                import shutil
+                shutil.copy(project_example, efp_config)
+                config_path = efp_config
+            else:
+                config_path = efp_config
+            config = {}
+        
+        # Read existing config if file exists and wasn't just created
+        import yaml
+        if config_path.exists() and 'config' not in locals():
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f) or {}
+        elif 'config' not in locals():
+            config = {}
+        
+        # Update sections
+        if 'llm' in data:
+            config['llm'] = data['llm']
+        if 'jira' in data:
+            config['jira'] = data['jira']
+        if 'confluence' in data:
+            config['confluence'] = data['confluence']
+        if 'github' in data:
+            config['github'] = data['github']
+        if 'git' in data:
+            config['git'] = data['git']
+        if 'ssh' in data:
+            config['ssh'] = data['ssh']
+        if 'debug' in data:
+            config['debug'] = data['debug']
+        
+        # Write back
+        with open(config_path, 'w', encoding='utf-8') as f:
+            yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+        
+        return web.json_response({'success': True, 'message': 'Configuration saved. Restart required.'})
+    except Exception as e:
+        logger.error(f"Error saving config: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_get_config(request: web.Request) -> web.Response:
+    """Get current configuration.
+    
+    GET /api/config
+    """
+    try:
+        # Try project config first, then fallback to ~/.efp/
+        project_config = Path(__file__).parent.parent.parent / 'config.yaml'
+        efp_config = Path.home() / '.efp' / 'config.yaml'
+        
+        if project_config.exists():
+            config_path = project_config
+        elif efp_config.exists():
+            config_path = efp_config
+        else:
+            return web.json_response({'error': 'config.yaml not found (checked: project dir and ~/.efp/)'}, status=404)
+        
+        import yaml
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) or {}
+        
+        return web.json_response({'config': config})
+    except Exception as e:
+        logger.error(f"Error reading config: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
+# ========== GitHub Copilot Authorization ==========
+
+import httpx
+import uuid
+
+# In-memory storage for pending authorizations (in production, use Redis/database)
+_pending_authorizations: Dict[str, Dict[str, Any]] = {}
+
+
+async def api_copilot_auth_start(request: web.Request) -> web.Response:
+    """Start GitHub Copilot device authorization flow.
+    
+    POST /api/copilot/auth/start
+    
+    Returns:
+        - verification_url: URL for user to authorize
+        - user_code: Code to display to user
+        - device_code: Device code for polling
+        - expires_in: Seconds until expiration
+        - interval: Polling interval in seconds
+    """
+    try:
+        # Get GitHub base URL from config
+        github_base_url = config.get("github.base_url", "https://github.com").replace("https://github.com", "").strip("/")
+        api_base_url = config.get("github.api_base", "https://api.github.com")
+        
+        async with httpx.AsyncClient() as client:
+            # Request device authorization from GitHub
+            response = await client.post(
+                f"{api_base_url}/copilot/token_verification",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                json={
+                    "action": "create"
+                }
+            )
+            
+            if response.status_code != 201:
+                logger.error(f"GitHub Copilot auth failed: {response.status_code} {response.text}")
+                return web.json_response({
+                    'error': 'Failed to start authorization',
+                    'details': f'GitHub API returned {response.status_code}'
+                }, status=500)
+            
+            data = response.json()
+            
+            # Store pending authorization
+            device_code = data.get("device_code", str(uuid.uuid4()))
+            auth_id = str(uuid.uuid4())[:8]
+            
+            _pending_authorizations[auth_id] = {
+                'device_code': device_code,
+                'user_code': data.get("user_code", ""),
+                'verification_uri': data.get("verification_uri", ""),
+                'verification_uri_complete': data.get("verification_uri_complete", ""),
+                'expires_at': datetime.utcnow().timestamp() + data.get("expires_in", 600),
+                'interval': data.get("interval", 5),
+                'status': 'pending',
+                'token': None,
+                'created_at': datetime.utcnow().isoformat(),
+            }
+            
+            logger.info(f"GitHub Copilot auth started: {auth_id}")
+            
+            return web.json_response({
+                'auth_id': auth_id,
+                'user_code': data.get("user_code", ""),
+                'verification_url': data.get("verification_uri", ""),
+                'verification_complete_url': data.get("verification_uri_complete", ""),
+                'expires_in': data.get("expires_in", 600),
+                'interval': data.get("interval", 5),
+            })
+            
+    except Exception as e:
+        logger.error(f"Error starting Copilot auth: {e}", exc_info=True)
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_copilot_auth_check(request: web.Request) -> web.Response:
+    """Check GitHub Copilot authorization status.
+    
+    POST /api/copilot/auth/check
+    Body: { "auth_id": "...", "device_code": "..." }
+    
+    Returns:
+        - status: "pending" | "authorized" | "expired" | "failed"
+        - token: (only if authorized) the GitHub Copilot token
+    """
+    try:
+        import uuid
+        
+        data = await request.json()
+        auth_id = data.get("auth_id", "")
+        device_code = data.get("device_code", "")
+        
+        if not auth_id or not device_code:
+            return web.json_response({'error': 'auth_id and device_code required'}, status=400)
+        
+        # Check if authorization exists
+        auth = _pending_authorizations.get(auth_id)
+        if not auth:
+            return web.json_response({'error': 'Authorization not found or expired'}, status=404)
+        
+        # Check if expired
+        if datetime.utcnow().timestamp() > auth['expires_at']:
+            _pending_authorizations.pop(auth_id, None)
+            return web.json_response({'status': 'expired', 'message': 'Authorization expired'})
+        
+        # Check current status
+        if auth['status'] == 'authorized':
+            token = auth['token']
+            _pending_authorizations.pop(auth_id, None)
+            return web.json_response({
+                'status': 'authorized',
+                'token': token,
+            })
+        
+        # Get GitHub API base
+        api_base_url = config.get("github.api_base", "https://api.github.com")
+        
+        async with httpx.AsyncClient() as client:
+            # Check token status
+            response = await client.post(
+                f"{api_base_url}/copilot/token_verification",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                json={
+                    "action": "verify",
+                    "device_code": device_code
+                }
+            )
+            
+            if response.status_code == 200:
+                # Authorization complete!
+                token_data = response.json()
+                token = token_data.get("token", "")
+                
+                # Update authorization status
+                auth['status'] = 'authorized'
+                auth['token'] = token
+                
+                logger.info(f"GitHub Copilot authorized: {auth_id}")
+                
+                # Clean up and return
+                _pending_authorizations.pop(auth_id, None)
+                
+                return web.json_response({
+                    'status': 'authorized',
+                    'token': token,
+                })
+            elif response.status_code == 400:
+                error_data = response.json()
+                error = error_data.get("error", "")
+                
+                if error == "authorization_pending":
+                    return web.json_response({'status': 'pending'})
+                elif error == "expired_token":
+                    _pending_authorizations.pop(auth_id, None)
+                    return web.json_response({'status': 'expired', 'message': 'Device code expired'})
+                elif error == "authorization_declined":
+                    _pending_authorizations.pop(auth_id, None)
+                    return web.json_response({'status': 'declined', 'message': 'User declined authorization'})
+                else:
+                    return web.json_response({'status': 'failed', 'message': error})
+            else:
+                return web.json_response({
+                    'status': 'pending',
+                    'message': 'Still waiting...'
+                })
+                
+    except Exception as e:
+        logger.error(f"Error checking Copilot auth: {e}", exc_info=True)
         return web.json_response({'error': str(e)}, status=500)
 
 
@@ -630,9 +958,14 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/sessions/{session_id}', api_load_session)
     app.router.add_get('/api/files', api_browse_files)
+    app.router.add_get('/api/files/read', api_read_file)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
+    app.router.add_get('/api/config', api_get_config)
+    app.router.add_post('/api/config/save', api_save_config)
     app.router.add_get('/api/skills', api_skills)
+    app.router.add_post('/api/copilot/auth/start', api_copilot_auth_start)
+    app.router.add_post('/api/copilot/auth/check', api_copilot_auth_check)
     
     logger.info("WebChat routes registered:")
     logger.info("  GET  /              - WebChat UI (root)")
@@ -643,6 +976,7 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  GET  /api/sessions - List recent sessions")
     logger.info("  GET  /api/sessions/{id} - Load session messages")
     logger.info("  GET  /api/files    - Browse files")
+    logger.info("  GET  /api/files/read - Read file content")
     logger.info("  GET  /api/usage   - Get usage stats")
     logger.info("  POST /api/clear   - Clear session")
     logger.info("  GET  /api/skills  - Get available skills")

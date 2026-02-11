@@ -12,13 +12,14 @@
     const tokenCountSpan = document.getElementById('tokenCount');
     const costDisplaySpan = document.getElementById('costDisplay');
     const statsButton = document.getElementById('statsButton');
-    const statsModal = document.getElementById('statsModal');
+    const statsPanel = document.getElementById('statsPanel');
     const closeStatsButton = document.getElementById('closeStats');
     const statsContent = document.getElementById('statsContent');
     const skillSelector = document.getElementById('skillSelector');
     const skillDropdown = document.getElementById('skillDropdown');
     const skillList = document.getElementById('skillList');
     const themeToggle = document.getElementById('themeToggle');
+    const newChatBtn = document.querySelector('[data-action="new-chat"]');
     
     // State
     let isLoading = false;
@@ -29,6 +30,57 @@
     let skillsLoaded = false;
     let currentSessionId = localStorage.getItem('efp-session-id') || null;
     console.log('[WebChat] Initial sessionId from localStorage:', currentSessionId);
+    
+    // ========== Helper Functions ==========
+    
+    /**
+     * Format timestamp with smart date display
+     * - Same day: "14:30"
+     * - Yesterday: "Yesterday 14:30"
+     * - Within a week: "Thursday 14:30"
+     * - Within a year: "Jan 15 14:30"
+     * - Over a year ago: "2024-01-15 14:30"
+     */
+    function formatSmartDate(date) {
+        const now = new Date();
+        const messageDate = new Date(date);
+        const timeStr = messageDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
+        // Same day
+        if (messageDate.toDateString() === now.toDateString()) {
+            return timeStr;
+        }
+        
+        // Yesterday
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        if (messageDate.toDateString() === yesterday.toDateString()) {
+            return `Yesterday ${timeStr}`;
+        }
+        
+        // Within the last 7 days
+        const oneWeekAgo = new Date(now);
+        oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+        if (messageDate > oneWeekAgo) {
+            const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            return `${days[messageDate.getDay()]} ${timeStr}`;
+        }
+        
+        // Within the same year
+        if (messageDate.getFullYear() === now.getFullYear()) {
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const month = months[messageDate.getMonth()];
+            const day = messageDate.getDate();
+            return `${month} ${day} ${timeStr}`;
+        }
+        
+        // Over a year ago
+        const year = messageDate.getFullYear();
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const month = months[messageDate.getMonth()];
+        const day = messageDate.getDate();
+        return `${year}-${month}-${day} ${timeStr}`;
+    }
     
     // ========== Theme Management ==========
     
@@ -135,15 +187,12 @@
     // Stats Modal
     statsButton.addEventListener('click', showStats);
     closeStatsButton.addEventListener('click', hideStats);
-    statsModal.addEventListener('click', function(e) {
-        if (e.target === statsModal) hideStats();
-    });
     
     /**
      * Show usage statistics modal
      */
     async function showStats() {
-        statsModal.classList.add('show');
+        statsPanel.classList.add('show');
         statsContent.innerHTML = '<div class="loading">Loading...</div>';
         
         try {
@@ -230,7 +279,7 @@
      * Hide usage statistics modal
      */
     function hideStats() {
-        statsModal.classList.remove('show');
+        statsPanel.classList.remove('show');
     }
     
     // ========== Skill Selector ==========
@@ -442,10 +491,7 @@
         div.className = `message ${role}`;
         
         const avatar = role === 'user' ? 'U' : role === 'assistant' ? 'AI' : '!';
-        const time = timestamp || new Date().toLocaleTimeString([], { 
-            hour: '2-digit', 
-            minute: '2-digit' 
-        });
+        const time = timestamp ? formatSmartDate(timestamp) : formatSmartDate(new Date());
         
         div.innerHTML = `
             <div class="avatar" aria-hidden="true">${avatar}</div>
@@ -550,10 +596,7 @@
         const timestamp = document.createElement('div');
         timestamp.className = 'message-timestamp';
         timestamp.setAttribute('aria-label', 'Message time');
-        timestamp.textContent = new Date().toLocaleTimeString([], { 
-            hour: '2-digit', 
-            minute: '2-digit' 
-        });
+        timestamp.textContent = formatSmartDate(new Date());
         bubble.appendChild(timestamp);
     }
     
@@ -568,8 +611,13 @@
         
         isLoading = true;
         sendButton.disabled = true;
+        
+        // Clear input first (before addMessage to avoid any race conditions)
         messageInput.value = '';
         messageInput.style.height = 'auto';
+        // Force browser to update (fix for autocomplete/ cached values)
+        messageInput.blur();
+        messageInput.focus();
         
         addMessage('user', content);
         
@@ -664,98 +712,197 @@
     
     const recentSessionsList = document.getElementById('recentSessionsList');
     const refreshSessionsBtn = document.getElementById('refreshSessions');
+    const SESSIONS_LIMIT = 20;
+    let sessionsOffset = 0;
+    let sessionsHasMore = true;
+    let sessionsLoading = false;
+    let sessionsObserver = null;
+    
+    // Create sentinel element for infinite scroll
+    function createSessionsSentinel() {
+        const sentinel = document.createElement('div');
+        sentinel.id = 'sessions-sentinel';
+        sentinel.className = 'loading-sessions';
+        sentinel.textContent = 'Loading more...';
+        sentinel.style.display = 'none';
+        return sentinel;
+    }
     
     /**
-     * Load recent sessions from API
+     * Load recent sessions from API with pagination
      */
-    async function loadRecentSessions() {
+    async function loadRecentSessions(reset = false) {
         if (!recentSessionsList) return;
         
-        recentSessionsList.innerHTML = '<div class="loading-sessions">Loading...</div>';
+        // Reset if requested
+        if (reset) {
+            sessionsOffset = 0;
+            sessionsHasMore = true;
+            recentSessionsList.innerHTML = '';
+            // Recreate sentinel
+            const sentinel = createSessionsSentinel();
+            recentSessionsList.appendChild(sentinel);
+        }
+        
+        if (!sessionsHasMore || sessionsLoading) return;
+        
+        sessionsLoading = true;
+        
+        // Show loading on first load
+        if (sessionsOffset === 0) {
+            const loadingMsg = document.createElement('div');
+            loadingMsg.id = 'sessions-loading';
+            loadingMsg.className = 'loading-sessions';
+            loadingMsg.textContent = 'Loading...';
+            recentSessionsList.insertBefore(loadingMsg, recentSessionsList.firstChild);
+        }
         
         try {
-            const response = await fetch('/api/sessions?limit=10');
+            const response = await fetch(`/api/sessions?limit=${SESSIONS_LIMIT}&offset=${sessionsOffset}`);
             const data = await response.json();
             
             if (data.error || !data.sessions) {
                 recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
+                sessionsHasMore = false;
                 return;
             }
             
-            if (data.sessions.length === 0) {
-                recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
+            // Clear loading message on first load
+            if (sessionsOffset === 0) {
+                const loadingMsg = document.getElementById('sessions-loading');
+                if (loadingMsg) loadingMsg.remove();
+            }
+            
+            const sessions = data.sessions || [];
+            sessionsHasMore = data.has_more !== false;
+            
+            if (sessions.length === 0) {
+                if (sessionsOffset === 0) {
+                    recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
+                }
+                sessionsHasMore = false;
                 return;
             }
             
-            // Filter out null sessions
-            const validSessions = (data.sessions || []).filter(s => s);
-            if (validSessions.length === 0) {
-                recentSessionsList.innerHTML = '<div class="loading-sessions">No recent sessions</div>';
-                return;
-            }
+            // Get current active session
+            const currentActiveId = recentSessionsList.querySelector('.recent-session-item.active')?.getAttribute('data-session-id');
             
-            recentSessionsList.innerHTML = validSessions.map((session, index) => {
-                const sessionId = session.session_id || ('session_' + index);
-                return `
-                <div class="recent-session-item ${index === 0 ? 'active' : ''}" data-session-id="${sessionId}">
+            // Append new sessions
+            sessions.forEach((session, index) => {
+                const sessionId = session.session_id || ('session_' + (sessionsOffset + index));
+                const isActive = sessionId === currentActiveId || (index === 0 && sessionsOffset === 0 && !currentActiveId);
+                
+                const item = document.createElement('div');
+                item.className = `recent-session-item ${isActive ? 'active' : ''}`;
+                item.setAttribute('data-session-id', sessionId);
+                item.innerHTML = `
                     <svg class="recent-session-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                     </svg>
                     <div class="recent-session-info">
-                        <div class="recent-session-name">${escapeHtml(session.name || session.session_id || 'Chat ' + (index + 1))}</div>
+                        <div class="recent-session-name">${escapeHtml(session.name || session.session_id || 'Chat ' + (sessionsOffset + index + 1))}</div>
                         <div class="recent-session-preview">${escapeHtml(session.last_message || '')}</div>
                     </div>
-                </div>
-            `}).join('');
-            
-            // Add click handlers
-            recentSessionsList.querySelectorAll('.recent-session-item').forEach(item => {
+                `;
+                
+                // Add click handler
                 item.addEventListener('click', function(e) {
                     e.preventDefault();
-                    const sessionId = this.getAttribute('data-session-id');
-                    console.log('Clicked session:', sessionId);
-                    if (sessionId && sessionId !== 'undefined') {
-                        loadSession(sessionId);
-                        // Update active state
+                    const sid = this.getAttribute('data-session-id');
+                    console.log('Clicked session:', sid);
+                    if (sid && sid !== 'undefined') {
+                        loadSession(sid);
                         recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
                         this.classList.add('active');
                     }
                 });
+                
+                // Insert before sentinel so sentinel stays at bottom
+                const sentinel = document.getElementById('sessions-sentinel');
+                if (sentinel) {
+                    recentSessionsList.insertBefore(item, sentinel);
+                } else {
+                    recentSessionsList.appendChild(item);
+                }
             });
             
-            // Auto-load the first session if no current session
-            // First check if we have a persisted session_id in localStorage
-            const persistedSessionId = localStorage.getItem(SESSION_ID_KEY);
-            if (persistedSessionId && persistedSessionId !== 'null') {
-                // Verify this session exists in the list
-                const sessionExists = validSessions.find(s => s.session_id === persistedSessionId);
-                if (sessionExists) {
-                    console.log('Auto-loading persisted session:', persistedSessionId);
-                    loadSession(persistedSessionId);
-                    // Update active state
-                    recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => {
-                        if (i.getAttribute('data-session-id') === persistedSessionId) {
-                            i.classList.add('active');
-                        } else {
-                            i.classList.remove('active');
+            // Update offset for next load
+            sessionsOffset += sessions.length;
+            
+            // Ensure sentinel exists at bottom
+            let sentinel = document.getElementById('sessions-sentinel');
+            if (!sentinel) {
+                sentinel = createSessionsSentinel();
+                recentSessionsList.appendChild(sentinel);
+            }
+            
+            // Always update sentinel visibility at the end
+            if (sentinel) {
+                sentinel.style.display = sessionsHasMore ? 'block' : 'none';
+                sentinel.textContent = sessionsHasMore ? 'Loading more...' : 'No more sessions';
+            }
+            
+            // Setup intersection observer for infinite scroll (only once)
+            if (sessionsHasMore && !sessionsObserver) {
+                sessionsObserver = new IntersectionObserver((entries) => {
+                    entries.forEach(entry => {
+                        if (entry.isIntersecting && sessionsHasMore && !sessionsLoading) {
+                            loadRecentSessions(false);
                         }
                     });
-                } else {
-                    // Persisted session not found, load first session
-                    console.log('Persisted session not found, loading first session');
-                    const firstSession = validSessions[0];
-                    loadSession(firstSession.session_id);
+                }, { rootMargin: '100px' });
+                
+                if (sentinel) {
+                    sessionsObserver.observe(sentinel);
                 }
-            } else if (!currentSessionId && validSessions.length > 0) {
-                const firstSession = validSessions[0];
-                console.log('Auto-loading first session:', firstSession.session_id);
-                loadSession(firstSession.session_id);
+            }
+            
+            // Auto-load first session if none selected
+            if (sessionsOffset === sessions.length) {
+                // If we have a saved sessionId, load that one
+                if (currentSessionId) {
+                    const savedItem = recentSessionsList.querySelector(`[data-session-id="${currentSessionId}"]`);
+                    if (savedItem) {
+                        console.log('Auto-loading saved session:', currentSessionId);
+                        // Add active class to the saved session
+                        recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
+                        savedItem.classList.add('active');
+                        loadSession(currentSessionId);
+                    } else {
+                        // Saved session not in list, load first available
+                        const firstSession = recentSessionsList.querySelector('.recent-session-item');
+                        if (firstSession) {
+                            const firstSessionId = firstSession.getAttribute('data-session-id');
+                            console.log('Saved session not found, loading first:', firstSessionId);
+                            loadSession(firstSessionId);
+                        }
+                    }
+                } else {
+                    // No saved session, load first available
+                    const firstSession = recentSessionsList.querySelector('.recent-session-item');
+                    if (firstSession) {
+                        const firstSessionId = firstSession.getAttribute('data-session-id');
+                        console.log('Auto-loading first session:', firstSessionId);
+                        loadSession(firstSessionId);
+                    }
+                }
             }
             
         } catch (error) {
             console.error('Error loading sessions:', error);
-            recentSessionsList.innerHTML = '<div class="loading-sessions">Error loading sessions</div>';
+            if (sessionsOffset === 0) {
+                recentSessionsList.innerHTML = '<div class="loading-sessions">Error loading sessions</div>';
+            }
+        } finally {
+            sessionsLoading = false;
         }
+    }
+    
+    // Refresh button handler
+    if (refreshSessionsBtn) {
+        refreshSessionsBtn.addEventListener('click', () => {
+            loadRecentSessions(true);
+        });
     }
     
     /**
@@ -797,9 +944,12 @@
             } else {
                 messages.forEach(msg => {
                     const role = msg.role || 'user';
-                    addMessage(role, msg.content || '');
+                    addMessage(role, msg.content || '', msg.timestamp || msg.created_at);
                 });
             }
+            
+            // Remove active state from New Chat button when loading a session
+            if (newChatBtn) newChatBtn.classList.remove('active');
             
             statusSpan.textContent = 'Ready';
             
@@ -813,18 +963,13 @@
         }
     }
     
-    // Refresh sessions button
-    if (refreshSessionsBtn) {
-        refreshSessionsBtn.addEventListener('click', function() {
-            this.classList.add('loading');
-            loadRecentSessions().finally(() => {
-                this.classList.remove('loading');
-            });
-        });
-    }
-    
     // Load recent sessions on page load
-    loadRecentSessions();
+    loadRecentSessions(true);
+    
+    // Set New Chat button active if no persisted session
+    if (!localStorage.getItem(SESSION_ID_KEY) && newChatBtn) {
+        newChatBtn.classList.add('active');
+    }
     
     // ========== Sidebar Actions ==========
     
@@ -843,6 +988,7 @@
             `;
             statusSpan.textContent = 'Ready';
             recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
+            if (newChatBtn) newChatBtn.classList.add('active');
         } else if (action === 'files') {
             showFileExplorer();
         } else if (action === 'settings') {
@@ -852,12 +998,12 @@
     
     // ========== File Explorer ==========
     
-    const fileExplorerModal = document.getElementById('fileExplorerModal');
+    const fileExplorerPanel = document.getElementById('fileExplorerPanel');
     const closeFileExplorer = document.getElementById('closeFileExplorer');
     const fileExplorerContent = document.getElementById('fileExplorerContent');
     
-    async function showFileExplorer(path = '/root/.openclaw/workspace/engineering-flow') {
-        fileExplorerModal.classList.add('show');
+    async function showFileExplorer(path = '/root/engineering-flow-platform') {
+        fileExplorerPanel.classList.add('show');
         fileExplorerContent.innerHTML = '<div class="loading">Loading...</div>';
         
         try {
@@ -870,11 +1016,17 @@
             }
             
             const pathParts = data.path.split('/').filter(p => p);
-            let pathHtml = '<div class="file-explorer-path"><button data-path="/">/</button>';
+            let pathHtml = '<div class="file-explorer-path">';
+            pathHtml += '<button data-path="/">🏠</button>';
             let currentPath = '';
+            let isFirst = true;
             pathParts.forEach(part => {
                 currentPath += '/' + part;
-                pathHtml += ' / <button data-path="' + currentPath + '">' + escapeHtml(part) + '</button>';
+                if (!isFirst) {
+                    pathHtml += '<span class="separator">/</span>';
+                }
+                isFirst = false;
+                pathHtml += '<button data-path="' + currentPath + '">' + escapeHtml(part) + '</button>';
             });
             pathHtml += '</div>';
             
@@ -906,15 +1058,29 @@
             });
             
             fileExplorerContent.querySelectorAll('.file-explorer-item').forEach(item => {
-                item.addEventListener('click', function() {
-                    if (this.dataset.is_dir === 'true') {
-                        showFileExplorer(this.dataset.path);
+                item.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    const isDir = this.dataset.isDir === 'true';
+                    const path = this.dataset.path;
+                    console.log('File item clicked:', { path, isDir });
+                    if (isDir) {
+                        showFileExplorer(path);
                     } else {
-                        // Insert file path in chat
-                        messageInput.value += this.dataset.path;
-                        messageInput.focus();
-                        fileExplorerModal.classList.remove('show');
+                        // Double-click to view file content
+                        showFileViewer(path);
                     }
+                });
+                
+                // Right-click for options
+                item.addEventListener('contextmenu', function(e) {
+                    e.preventDefault();
+                    const path = this.dataset.path;
+                    const isDir = this.dataset.isDir === 'true';
+                    
+                    // Insert path in chat
+                    messageInput.value += path;
+                    messageInput.focus();
+                    fileExplorerPanel.classList.remove('show');
                 });
             });
             
@@ -926,62 +1092,436 @@
     
     if (closeFileExplorer) {
         closeFileExplorer.addEventListener('click', function() {
-            fileExplorerModal.classList.remove('show');
+            fileExplorerPanel.classList.remove('show');
         });
-        fileExplorerModal.addEventListener('click', function(e) {
-            if (e.target === fileExplorerModal) fileExplorerModal.classList.remove('show');
+    }
+    
+    // ========== File Viewer ==========
+    
+    const fileViewerPanel = document.getElementById('fileViewerPanel');
+    const closeFileViewer = document.getElementById('closeFileViewer');
+    const fileViewerTitleText = document.getElementById('fileViewerTitleText');
+    const fileViewerContent = document.getElementById('fileViewerContent');
+    
+    async function showFileViewer(path) {
+        fileViewerPanel.classList.add('show');
+        fileViewerContent.innerHTML = '<div class="loading">Loading...</div>';
+        
+        try {
+            const response = await fetch(`/api/files/read?path=${encodeURIComponent(path)}`);
+            const data = await response.json();
+            
+            if (data.error) {
+                fileViewerContent.innerHTML = `<div class="file-explorer-error">${escapeHtml(data.error)}</div>`;
+                return;
+            }
+            
+            fileViewerTitleText.textContent = data.name;
+            
+            // Render file content with syntax highlighting
+            const escapedContent = escapeHtml(data.content || '');
+            const language = data.language || 'text';
+            
+            fileViewerContent.innerHTML = `
+                <div class="file-viewer-info">
+                    <span>${escapeHtml(data.path)}</span>
+                    <span>${formatBytes(data.size || 0)}</span>
+                </div>
+                <pre class="file-viewer-code"><code class="language-${language}">${escapedContent}</code></pre>
+            `;
+            
+            // Apply syntax highlighting
+            if (typeof hljs !== 'undefined') {
+                fileViewerContent.querySelectorAll('pre code').forEach((block) => {
+                    hljs.highlightElement(block);
+                });
+            }
+            
+        } catch (error) {
+            console.error('Error reading file:', error);
+            fileViewerContent.innerHTML = `<div class="file-explorer-error">${escapeHtml(error.message)}</div>`;
+        }
+    }
+    
+    function formatBytes(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+    
+    if (closeFileViewer) {
+        closeFileViewer.addEventListener('click', function() {
+            fileViewerPanel.classList.remove('show');
         });
     }
     
     // ========== Settings ==========
     
-    const settingsModal = document.getElementById('settingsModal');
+    const settingsPanel = document.getElementById('settingsPanel');
     const closeSettings = document.getElementById('closeSettings');
-    const settingsContent = document.getElementById('settingsContent');
-    const settingsThemeToggle = document.getElementById('settingsThemeToggle');
-    const settingsDefaultModel = document.getElementById('settingsDefaultModel');
-    const settingsOpenAIKey = document.getElementById('settingsOpenAIKey');
-    const settingsAnthropicKey = document.getElementById('settingsAnthropicKey');
     const saveSettingsBtn = document.getElementById('saveSettings');
     
-    function showSettings() {
-        settingsModal.classList.add('show');
+    // Settings form elements
+    const llmProvider = document.getElementById('llmProvider');
+    const llmModel = document.getElementById('llmModel');
+    const llmApiKey = document.getElementById('llmApiKey');
+    const jiraEnabled = document.getElementById('jiraEnabled');
+    const jiraUrl = document.getElementById('jiraUrl');
+    const jiraUsername = document.getElementById('jiraUsername');
+    const jiraApiToken = document.getElementById('jiraApiToken');
+    const confluenceEnabled = document.getElementById('confluenceEnabled');
+    const confluenceUrl = document.getElementById('confluenceUrl');
+    const confluenceUsername = document.getElementById('confluenceUsername');
+    const confluenceApiToken = document.getElementById('confluenceApiToken');
+    const githubEnabled = document.getElementById('githubEnabled');
+    const githubToken = document.getElementById('githubToken');
+    const githubBaseUrl = document.getElementById('githubBaseUrl');
+    const gitName = document.getElementById('gitName');
+    const gitEmail = document.getElementById('gitEmail');
+    const sshEnabled = document.getElementById('sshEnabled');
+    const sshKeyPath = document.getElementById('sshKeyPath');
+    const debugEnabled = document.getElementById('debugEnabled');
+    
+    // Provider to Model mapping
+    const providerModels = {
+        github_copilot: [
+            { value: 'gpt-4', label: 'GPT-4' },
+            { value: 'gpt-4o', label: 'GPT-4o' },
+            { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+        ],
+        openai: [
+            { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
+            { value: 'gpt-4', label: 'GPT-4' },
+            { value: 'gpt-4o', label: 'GPT-4o' },
+            { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+        ],
+        anthropic: [
+            { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
+            { value: 'claude-haiku-4-20250514', label: 'Claude Haiku 4' },
+            { value: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
+        ],
+    };
+    
+    // Update model dropdown based on selected provider
+    function updateModelDropdown(provider, currentModel = '') {
+        const models = providerModels[provider] || [];
+        llmModel.innerHTML = models.map(m => 
+            `<option value="${m.value}" ${m.value === currentModel ? 'selected' : ''}>${m.label}</option>`
+        ).join('');
+    }
+    
+    // Listen for provider changes
+    if (llmProvider) {
+        llmProvider.addEventListener('change', function() {
+            updateModelDropdown(this.value);
+            // Show/hide GitHub Copilot auth button
+            const copilotSection = document.getElementById('copilotAuthSection');
+            const copilotStatus = document.getElementById('copilotAuthStatus');
+            if (this.value === 'github_copilot') {
+                if (copilotSection) copilotSection.style.display = 'block';
+                if (copilotStatus) copilotStatus.style.display = 'none';
+            } else {
+                if (copilotSection) copilotSection.style.display = 'none';
+                if (copilotStatus) copilotStatus.style.display = 'none';
+            }
+        });
+    }
+    
+    // GitHub Copilot Authorization
+    const copilotAuthBtn = document.getElementById('copilotAuthBtn');
+    const copilotAuthStatus = document.getElementById('copilotAuthStatus');
+    const copilotSsoUrl = document.getElementById('copilotSsoUrl');
+    const copilotDeviceUrl = document.getElementById('copilotDeviceUrl');
+    const copilotUserCode = document.getElementById('copilotUserCode');
+    const copilotCopyCode = document.getElementById('copilotCopyCode');
+    const copilotTimer = document.getElementById('copilotTimer');
+    const copilotStatusText = document.getElementById('copilotStatusText');
+    const copilotProgress = document.getElementById('copilotProgress');
+    
+    let copilotAuthInterval = null;
+    let copilotTimerInterval = null;
+    let copilotCurrentTimer = 30;
+    
+    async function startCopilotAuth() {
+        if (!copilotAuthStatus || !copilotSsoUrl || !copilotDeviceUrl || !copilotUserCode) return;
         
-        // Load saved settings
-        const theme = getTheme();
-        settingsThemeToggle.checked = theme === 'dark';
+        try {
+            const response = await fetch('/api/copilot/auth/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await response.json();
+            
+            if (data.error) {
+                alert('Failed to start authorization: ' + data.error);
+                return;
+            }
+            
+            // Store auth data
+            copilotAuthStatus.dataset.authId = data.auth_id;
+            copilotAuthStatus.dataset.deviceCode = data.verification_url.split('device_code=')[1] || '';
+            
+            // Update UI
+            copilotAuthStatus.style.display = 'block';
+            copilotAuthStatus.classList.remove('success');
+            copilotSsoUrl.href = data.verification_url;
+            copilotDeviceUrl.href = data.verification_complete_url;
+            copilotUserCode.textContent = data.user_code;
+            copilotTimer.textContent = data.expires_in + 's';
+            copilotTimer.className = 'copilot-timer';
+            copilotStatusText.textContent = 'Waiting for authorization...';
+            copilotProgress.classList.add('active');
+            
+            // Start countdown timer
+            copilotCurrentTimer = data.expires_in || 30;
+            if (copilotTimerInterval) clearInterval(copilotTimerInterval);
+            copilotTimerInterval = setInterval(() => {
+                copilotCurrentTimer--;
+                if (copilotTimer.textContent !== copilotCurrentTimer + 's') {
+                    copilotTimer.textContent = copilotCurrentTimer + 's';
+                }
+                if (copilotCurrentTimer <= 10) {
+                    copilotTimer.classList.add('warning');
+                }
+                if (copilotCurrentTimer <= 0) {
+                    copilotTimer.classList.add('error');
+                    stopCopilotAuth();
+                    copilotStatusText.textContent = 'Authorization timed out. Please try again.';
+                    copilotProgress.classList.remove('active');
+                }
+            }, 1000);
+            
+            // Start polling for authorization status
+            copilotAuthInterval = setInterval(async () => {
+                try {
+                    const checkResponse = await fetch('/api/copilot/auth/check', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            auth_id: data.auth_id,
+                            device_code: data.verification_complete_url.split('device_code=')[1] || ''
+                        })
+                    });
+                    const checkData = await checkResponse.json();
+                    
+                    if (checkData.status === 'authorized') {
+                        stopCopilotAuth();
+                        copilotAuthStatus.classList.add('success');
+                        copilotStatusText.textContent = 'Authorization successful!';
+                        copilotProgress.classList.remove('active');
+                        // Fill in the API key
+                        if (llmApiKey) {
+                            llmApiKey.value = checkData.token;
+                        }
+                        // Hide status after 3 seconds
+                        setTimeout(() => {
+                            copilotAuthStatus.style.display = 'none';
+                        }, 3000);
+                    } else if (checkData.status === 'expired' || checkData.status === 'declined') {
+                        stopCopilotAuth();
+                        copilotStatusText.textContent = checkData.message || 'Authorization failed. Please try again.';
+                        copilotProgress.classList.remove('active');
+                    }
+                } catch (e) {
+                    console.error('Error checking auth status:', e);
+                }
+            }, (data.interval || 5) * 1000);
+            
+        } catch (error) {
+            console.error('Error starting Copilot auth:', error);
+            alert('Failed to start authorization: ' + error.message);
+        }
+    }
+    
+    function stopCopilotAuth() {
+        if (copilotAuthInterval) {
+            clearInterval(copilotAuthInterval);
+            copilotAuthInterval = null;
+        }
+        if (copilotTimerInterval) {
+            clearInterval(copilotTimerInterval);
+            copilotTimerInterval = null;
+        }
+    }
+    
+    if (copilotAuthBtn) {
+        copilotAuthBtn.addEventListener('click', startCopilotAuth);
+    }
+    
+    if (copilotCopyCode) {
+        copilotCopyCode.addEventListener('click', function() {
+            const code = copilotUserCode.textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                this.textContent = 'Copied!';
+                this.classList.add('copied');
+                setTimeout(() => {
+                    this.textContent = 'Copy';
+                    this.classList.remove('copied');
+                }, 2000);
+            });
+        });
+    }
+    
+    // Password toggle buttons
+    document.querySelectorAll('.toggle-password').forEach(button => {
+        button.addEventListener('click', function() {
+            const targetId = this.getAttribute('data-target');
+            const input = document.getElementById(targetId);
+            if (input) {
+                const isPassword = input.type === 'password';
+                input.type = isPassword ? 'text' : 'password';
+                this.classList.toggle('showing', isPassword);
+            }
+        });
+    });
+    
+    async function showSettings() {
+        settingsPanel.classList.add('show');
         
-        // Load other settings from localStorage
-        const savedModel = localStorage.getItem('efp-default-model');
-        if (savedModel) settingsDefaultModel.value = savedModel;
+        // Hide copilot auth status initially
+        const copilotAuthStatus = document.getElementById('copilotAuthStatus');
+        const copilotAuthSection = document.getElementById('copilotAuthSection');
+        if (copilotAuthStatus) copilotAuthStatus.style.display = 'none';
+        if (copilotAuthSection) copilotAuthSection.style.display = 'none';
         
-        const savedOpenAIKey = localStorage.getItem('efp-openai-key');
-        if (savedOpenAIKey) settingsOpenAIKey.value = savedOpenAIKey;
-        
-        const savedAnthropicKey = localStorage.getItem('efp-anthropic-key');
-        if (savedAnthropicKey) settingsAnthropicKey.value = savedAnthropicKey;
+        // Load config from server
+        try {
+            const response = await fetch('/api/config');
+            const data = await response.json();
+            
+            if (data.config) {
+                const config = data.config;
+                
+                // LLM settings
+                if (config.llm) {
+                    const provider = config.llm.provider || 'github_copilot';
+                    const model = config.llm.model || 'gpt-4';
+                    llmProvider.value = provider;
+                    // Update model dropdown with current provider and model
+                    updateModelDropdown(provider, model);
+                    llmApiKey.value = config.llm.api_key || '';
+                    
+                    // Show/hide GitHub Copilot auth button based on provider
+                    if (copilotAuthSection && provider === 'github_copilot') {
+                        copilotAuthSection.style.display = 'block';
+                    }
+                } else {
+                    // Default to github_copilot with gpt-4
+                    llmProvider.value = 'github_copilot';
+                    updateModelDropdown('github_copilot', 'gpt-4');
+                    if (copilotAuthSection) copilotAuthSection.style.display = 'block';
+                }
+                
+                // Jira settings
+                if (config.jira) {
+                    jiraEnabled.checked = config.jira.enabled || false;
+                    jiraUrl.value = config.jira.url || '';
+                    jiraUsername.value = config.jira.username || '';
+                    jiraApiToken.value = config.jira.api_token || '';
+                }
+                
+                // Confluence settings
+                if (config.confluence) {
+                    confluenceEnabled.checked = config.confluence.enabled || false;
+                    confluenceUrl.value = config.confluence.url || '';
+                    confluenceUsername.value = config.confluence.username || '';
+                    confluenceApiToken.value = config.confluence.api_token || '';
+                }
+                
+                // GitHub settings
+                if (config.github) {
+                    githubEnabled.checked = config.github.enabled || false;
+                    githubToken.value = config.github.api_token || '';
+                    githubBaseUrl.value = config.github.base_url || '';
+                }
+                
+                // Git settings
+                if (config.git && config.git.user) {
+                    gitName.value = config.git.user.name || '';
+                    gitEmail.value = config.git.user.email || '';
+                }
+                
+                // SSH settings
+                if (config.ssh) {
+                    sshEnabled.checked = config.ssh.enabled || false;
+                    sshKeyPath.value = config.ssh.private_key_path || '';
+                }
+                
+                // Debug settings
+                if (config.debug) {
+                    debugEnabled.checked = config.debug.enabled || false;
+                }
+            }
+        } catch (error) {
+            console.error('Error loading config:', error);
+        }
     }
     
     if (saveSettingsBtn) {
-        saveSettingsBtn.addEventListener('click', function() {
-            // Save theme
-            setTheme(settingsThemeToggle.checked ? 'dark' : 'light');
+        saveSettingsBtn.addEventListener('click', async function() {
+            const config = {
+                llm: {
+                    provider: llmProvider.value,
+                    model: llmModel.value,
+                    api_key: llmApiKey.value,
+                },
+                jira: {
+                    enabled: jiraEnabled.checked,
+                    url: jiraUrl.value,
+                    username: jiraUsername.value,
+                    api_token: jiraApiToken.value,
+                },
+                confluence: {
+                    enabled: confluenceEnabled.checked,
+                    url: confluenceUrl.value,
+                    username: confluenceUsername.value,
+                    api_token: confluenceApiToken.value,
+                },
+                github: {
+                    enabled: githubEnabled.checked,
+                    api_token: githubToken.value,
+                    base_url: githubBaseUrl.value,
+                },
+                git: {
+                    user: {
+                        name: gitName.value,
+                        email: gitEmail.value,
+                    },
+                },
+                ssh: {
+                    enabled: sshEnabled.checked,
+                    private_key_path: sshKeyPath.value,
+                },
+                debug: {
+                    enabled: debugEnabled.checked,
+                },
+            };
             
-            // Save other settings
-            localStorage.setItem('efp-default-model', settingsDefaultModel.value);
-            localStorage.setItem('efp-openai-key', settingsOpenAIKey.value);
-            localStorage.setItem('efp-anthropic-key', settingsAnthropicKey.value);
-            
-            settingsModal.classList.remove('show');
+            try {
+                const response = await fetch('/api/config/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config),
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    alert('Configuration saved! Please restart the server for changes to take effect.');
+                    settingsPanel.classList.remove('show');
+                } else {
+                    alert('Error saving configuration: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error saving configuration: ' + error.message);
+            }
         });
     }
     
     if (closeSettings) {
         closeSettings.addEventListener('click', function() {
-            settingsModal.classList.remove('show');
-        });
-        settingsModal.addEventListener('click', function(e) {
-            if (e.target === settingsModal) settingsModal.classList.remove('show');
+            settingsPanel.classList.remove('show');
         });
     }
     
