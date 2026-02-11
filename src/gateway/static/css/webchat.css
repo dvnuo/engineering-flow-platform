@@ -621,6 +621,28 @@ body {
     transform: scale(0.98);
 }
 
+/* Secondary Button */
+.btn-secondary {
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 12px 20px;
+    color: var(--color-text);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--duration-fast);
+}
+
+.btn-secondary:hover {
+    background: var(--color-bg-input);
+    border-color: var(--color-border-hover);
+}
+
+.btn-secondary:active {
+    transform: scale(0.98);
+}
+
 /* Icon Button */
 .icon-button {
     display: flex;
@@ -1635,6 +1657,24 @@ input:checked + .slider:before {
     align-items: center;
     justify-content: center;
     gap: var(--space-sm);
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 12px 20px;
+    color: var(--color-text);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--duration-fast);
+}
+
+.copilot-auth-btn:hover {
+    background: var(--color-bg-input);
+    border-color: var(--color-border-hover);
+}
+
+.copilot-auth-btn:active {
+    transform: scale(0.98);
 }
 
 .copilot-auth-status {
