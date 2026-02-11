@@ -611,8 +611,13 @@
         
         isLoading = true;
         sendButton.disabled = true;
+        
+        // Clear input first (before addMessage to avoid any race conditions)
         messageInput.value = '';
         messageInput.style.height = 'auto';
+        // Force browser to update (fix for autocomplete/ cached values)
+        messageInput.blur();
+        messageInput.focus();
         
         addMessage('user', content);
         

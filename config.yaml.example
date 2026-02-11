@@ -65,7 +65,7 @@ session:
   persistence:
     enabled: true  # Enable session persistence
     storage_dir: "~/.efp/sessions"  # Where to store session files
-    ttl_seconds: 86400  # Session TTL in seconds (default: 24 hours)
+    ttl_seconds: 2592000  # Session TTL in seconds (30 days = 30 * 24 * 3600)
     max_file_size_mb: 100  # Max size before file rotation
 
   # Cache settings (for in-memory session cache)
