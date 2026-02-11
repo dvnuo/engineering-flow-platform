@@ -637,6 +637,185 @@ async def api_get_config(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e)}, status=500)
 
 
+# ========== GitHub Copilot Authorization ==========
+
+import httpx
+import uuid
+
+# In-memory storage for pending authorizations (in production, use Redis/database)
+_pending_authorizations: Dict[str, Dict[str, Any]] = {}
+
+
+async def api_copilot_auth_start(request: web.Request) -> web.Response:
+    """Start GitHub Copilot device authorization flow.
+    
+    POST /api/copilot/auth/start
+    
+    Returns:
+        - verification_url: URL for user to authorize
+        - user_code: Code to display to user
+        - device_code: Device code for polling
+        - expires_in: Seconds until expiration
+        - interval: Polling interval in seconds
+    """
+    try:
+        # Get GitHub base URL from config
+        github_base_url = config.get("github.base_url", "https://github.com").replace("https://github.com", "").strip("/")
+        api_base_url = config.get("github.api_base", "https://api.github.com")
+        
+        async with httpx.AsyncClient() as client:
+            # Request device authorization from GitHub
+            response = await client.post(
+                f"{api_base_url}/copilot/token_verification",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                json={
+                    "action": "create"
+                }
+            )
+            
+            if response.status_code != 201:
+                logger.error(f"GitHub Copilot auth failed: {response.status_code} {response.text}")
+                return web.json_response({
+                    'error': 'Failed to start authorization',
+                    'details': f'GitHub API returned {response.status_code}'
+                }, status=500)
+            
+            data = response.json()
+            
+            # Store pending authorization
+            device_code = data.get("device_code", str(uuid.uuid4()))
+            auth_id = str(uuid.uuid4())[:8]
+            
+            _pending_authorizations[auth_id] = {
+                'device_code': device_code,
+                'user_code': data.get("user_code", ""),
+                'verification_uri': data.get("verification_uri", ""),
+                'verification_uri_complete': data.get("verification_uri_complete", ""),
+                'expires_at': datetime.utcnow().timestamp() + data.get("expires_in", 600),
+                'interval': data.get("interval", 5),
+                'status': 'pending',
+                'token': None,
+                'created_at': datetime.utcnow().isoformat(),
+            }
+            
+            logger.info(f"GitHub Copilot auth started: {auth_id}")
+            
+            return web.json_response({
+                'auth_id': auth_id,
+                'user_code': data.get("user_code", ""),
+                'verification_url': data.get("verification_uri", ""),
+                'verification_complete_url': data.get("verification_uri_complete", ""),
+                'expires_in': data.get("expires_in", 600),
+                'interval': data.get("interval", 5),
+            })
+            
+    except Exception as e:
+        logger.error(f"Error starting Copilot auth: {e}", exc_info=True)
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_copilot_auth_check(request: web.Request) -> web.Response:
+    """Check GitHub Copilot authorization status.
+    
+    POST /api/copilot/auth/check
+    Body: { "auth_id": "...", "device_code": "..." }
+    
+    Returns:
+        - status: "pending" | "authorized" | "expired" | "failed"
+        - token: (only if authorized) the GitHub Copilot token
+    """
+    try:
+        import uuid
+        
+        data = await request.json()
+        auth_id = data.get("auth_id", "")
+        device_code = data.get("device_code", "")
+        
+        if not auth_id or not device_code:
+            return web.json_response({'error': 'auth_id and device_code required'}, status=400)
+        
+        # Check if authorization exists
+        auth = _pending_authorizations.get(auth_id)
+        if not auth:
+            return web.json_response({'error': 'Authorization not found or expired'}, status=404)
+        
+        # Check if expired
+        if datetime.utcnow().timestamp() > auth['expires_at']:
+            _pending_authorizations.pop(auth_id, None)
+            return web.json_response({'status': 'expired', 'message': 'Authorization expired'})
+        
+        # Check current status
+        if auth['status'] == 'authorized':
+            token = auth['token']
+            _pending_authorizations.pop(auth_id, None)
+            return web.json_response({
+                'status': 'authorized',
+                'token': token,
+            })
+        
+        # Get GitHub API base
+        api_base_url = config.get("github.api_base", "https://api.github.com")
+        
+        async with httpx.AsyncClient() as client:
+            # Check token status
+            response = await client.post(
+                f"{api_base_url}/copilot/token_verification",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                json={
+                    "action": "verify",
+                    "device_code": device_code
+                }
+            )
+            
+            if response.status_code == 200:
+                # Authorization complete!
+                token_data = response.json()
+                token = token_data.get("token", "")
+                
+                # Update authorization status
+                auth['status'] = 'authorized'
+                auth['token'] = token
+                
+                logger.info(f"GitHub Copilot authorized: {auth_id}")
+                
+                # Clean up and return
+                _pending_authorizations.pop(auth_id, None)
+                
+                return web.json_response({
+                    'status': 'authorized',
+                    'token': token,
+                })
+            elif response.status_code == 400:
+                error_data = response.json()
+                error = error_data.get("error", "")
+                
+                if error == "authorization_pending":
+                    return web.json_response({'status': 'pending'})
+                elif error == "expired_token":
+                    _pending_authorizations.pop(auth_id, None)
+                    return web.json_response({'status': 'expired', 'message': 'Device code expired'})
+                elif error == "authorization_declined":
+                    _pending_authorizations.pop(auth_id, None)
+                    return web.json_response({'status': 'declined', 'message': 'User declined authorization'})
+                else:
+                    return web.json_response({'status': 'failed', 'message': error})
+            else:
+                return web.json_response({
+                    'status': 'pending',
+                    'message': 'Still waiting...'
+                })
+                
+    except Exception as e:
+        logger.error(f"Error checking Copilot auth: {e}", exc_info=True)
+        return web.json_response({'error': str(e)}, status=500)
+
+
 def _parse_skill_from_file(skill_path: Path) -> Optional[Dict[str, Any]]:
     """Parse a skill from SKILL.md file.
     
@@ -785,6 +964,8 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/config', api_get_config)
     app.router.add_post('/api/config/save', api_save_config)
     app.router.add_get('/api/skills', api_skills)
+    app.router.add_post('/api/copilot/auth/start', api_copilot_auth_start)
+    app.router.add_post('/api/copilot/auth/check', api_copilot_auth_check)
     
     logger.info("WebChat routes registered:")
     logger.info("  GET  /              - WebChat UI (root)")

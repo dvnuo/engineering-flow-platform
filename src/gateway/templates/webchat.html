@@ -274,6 +274,53 @@
                         </button>
                     </div>
                 </div>
+                <!-- GitHub Copilot Auth -->
+                <div id="copilotAuthSection" class="setting-row copilot-auth-section" style="display: none;">
+                    <button type="button" id="copilotAuthBtn" class="btn btn-secondary copilot-auth-btn">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                            <path d="M2 17l10 5 10-5"/>
+                            <path d="M2 12l10 5 10-5"/>
+                        </svg>
+                        Authorize GitHub Copilot
+                    </button>
+                </div>
+                <!-- GitHub Copilot Auth Status -->
+                <div id="copilotAuthStatus" class="copilot-auth-status" style="display: none;">
+                    <div class="copilot-steps">
+                        <div class="copilot-step step-1">
+                            <span class="step-number">1</span>
+                            <div class="step-content">
+                                <p><strong>Step 1:</strong> Click the link below to authorize on GitHub</p>
+                                <a href="#" id="copilotSsoUrl" target="_blank" class="copilot-link">Open GitHub Authorization →</a>
+                            </div>
+                        </div>
+                        <div class="copilot-step step-2">
+                            <span class="step-number">2</span>
+                            <div class="step-content">
+                                <p><strong>Step 2:</strong> Copy this code</p>
+                                <div class="copilot-code-wrapper">
+                                    <code id="copilotUserCode"></code>
+                                    <button type="button" id="copilotCopyCode" class="btn-copy">Copy</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="copilot-step step-3">
+                            <span class="step-number">3</span>
+                            <div class="step-content">
+                                <p><strong>Step 3:</strong> Click link to complete device authorization</p>
+                                <a href="#" id="copilotDeviceUrl" target="_blank" class="copilot-link">Complete Authorization →</a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="copilot-status">
+                        <div id="copilotTimer" class="copilot-timer">30s</div>
+                        <div id="copilotStatusText" class="copilot-status-text">Waiting for authorization...</div>
+                        <div id="copilotProgress" class="copilot-progress">
+                            <div class="progress-bar"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
             
             <!-- Jira Settings -->

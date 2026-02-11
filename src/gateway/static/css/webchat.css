@@ -1624,3 +1624,183 @@ input:checked + .slider:before {
     position: relative;
 }
 
+/* GitHub Copilot Authorization */
+.copilot-auth-section {
+    margin-top: var(--space-sm);
+}
+
+.copilot-auth-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-sm);
+}
+
+.copilot-auth-status {
+    margin-top: var(--space-md);
+    padding: var(--space-md);
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.copilot-steps {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+.copilot-step {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-sm);
+}
+
+.step-number {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.step-content {
+    flex: 1;
+}
+
+.step-content p {
+    margin: 0 0 var(--space-xs) 0;
+    font-size: 13px;
+    color: var(--color-text);
+}
+
+.copilot-link {
+    display: inline-block;
+    padding: var(--space-xs) var(--space-sm);
+    background: var(--color-accent);
+    color: white;
+    text-decoration: none;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 500;
+    transition: background var(--duration-fast);
+}
+
+.copilot-link:hover {
+    background: var(--color-accent-hover);
+    color: white;
+}
+
+.copilot-code-wrapper {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.copilot-code-wrapper code {
+    flex: 1;
+    padding: var(--space-sm);
+    background: var(--color-bg-input);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 14px;
+    letter-spacing: 2px;
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.btn-copy {
+    padding: var(--space-xs) var(--space-sm);
+    background: var(--color-bg-input);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all var(--duration-fast);
+}
+
+.btn-copy:hover {
+    background: var(--color-border);
+}
+
+.btn-copy.copied {
+    background: var(--color-success);
+    border-color: var(--color-success);
+    color: white;
+}
+
+.copilot-status {
+    margin-top: var(--space-md);
+    padding-top: var(--space-md);
+    border-top: 1px solid var(--color-border);
+    text-align: center;
+}
+
+.copilot-timer {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    margin-bottom: var(--space-sm);
+}
+
+.copilot-timer.warning {
+    color: #f59e0b;
+}
+
+.copilot-timer.error {
+    color: #ef4444;
+}
+
+.copilot-status-text {
+    font-size: 13px;
+    color: var(--color-text-muted);
+    margin-bottom: var(--space-sm);
+}
+
+.copilot-progress {
+    display: none;
+}
+
+.copilot-progress.active {
+    display: block;
+}
+
+.copilot-progress .progress-bar {
+    height: 4px;
+    background: var(--color-bg-input);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.copilot-progress .progress-bar::after {
+    content: '';
+    display: block;
+    height: 100%;
+    width: 100%;
+    background: var(--color-accent);
+    animation: progressPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes progressPulse {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+.copilot-auth-status.success {
+    border-color: var(--color-success);
+    background: rgba(34, 197, 94, 0.1);
+}
+
+.copilot-auth-status.success .copilot-status-text {
+    color: var(--color-success);
+    font-weight: 600;
+}
+

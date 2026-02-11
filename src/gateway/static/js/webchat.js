@@ -1190,6 +1190,151 @@
     if (llmProvider) {
         llmProvider.addEventListener('change', function() {
             updateModelDropdown(this.value);
+            // Show/hide GitHub Copilot auth button
+            const copilotSection = document.getElementById('copilotAuthSection');
+            const copilotStatus = document.getElementById('copilotAuthStatus');
+            if (this.value === 'github_copilot') {
+                if (copilotSection) copilotSection.style.display = 'block';
+                if (copilotStatus) copilotStatus.style.display = 'none';
+            } else {
+                if (copilotSection) copilotSection.style.display = 'none';
+                if (copilotStatus) copilotStatus.style.display = 'none';
+            }
+        });
+    }
+    
+    // GitHub Copilot Authorization
+    const copilotAuthBtn = document.getElementById('copilotAuthBtn');
+    const copilotAuthStatus = document.getElementById('copilotAuthStatus');
+    const copilotSsoUrl = document.getElementById('copilotSsoUrl');
+    const copilotDeviceUrl = document.getElementById('copilotDeviceUrl');
+    const copilotUserCode = document.getElementById('copilotUserCode');
+    const copilotCopyCode = document.getElementById('copilotCopyCode');
+    const copilotTimer = document.getElementById('copilotTimer');
+    const copilotStatusText = document.getElementById('copilotStatusText');
+    const copilotProgress = document.getElementById('copilotProgress');
+    
+    let copilotAuthInterval = null;
+    let copilotTimerInterval = null;
+    let copilotCurrentTimer = 30;
+    
+    async function startCopilotAuth() {
+        if (!copilotAuthStatus || !copilotSsoUrl || !copilotDeviceUrl || !copilotUserCode) return;
+        
+        try {
+            const response = await fetch('/api/copilot/auth/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await response.json();
+            
+            if (data.error) {
+                alert('Failed to start authorization: ' + data.error);
+                return;
+            }
+            
+            // Store auth data
+            copilotAuthStatus.dataset.authId = data.auth_id;
+            copilotAuthStatus.dataset.deviceCode = data.verification_url.split('device_code=')[1] || '';
+            
+            // Update UI
+            copilotAuthStatus.style.display = 'block';
+            copilotAuthStatus.classList.remove('success');
+            copilotSsoUrl.href = data.verification_url;
+            copilotDeviceUrl.href = data.verification_complete_url;
+            copilotUserCode.textContent = data.user_code;
+            copilotTimer.textContent = data.expires_in + 's';
+            copilotTimer.className = 'copilot-timer';
+            copilotStatusText.textContent = 'Waiting for authorization...';
+            copilotProgress.classList.add('active');
+            
+            // Start countdown timer
+            copilotCurrentTimer = data.expires_in || 30;
+            if (copilotTimerInterval) clearInterval(copilotTimerInterval);
+            copilotTimerInterval = setInterval(() => {
+                copilotCurrentTimer--;
+                if (copilotTimer.textContent !== copilotCurrentTimer + 's') {
+                    copilotTimer.textContent = copilotCurrentTimer + 's';
+                }
+                if (copilotCurrentTimer <= 10) {
+                    copilotTimer.classList.add('warning');
+                }
+                if (copilotCurrentTimer <= 0) {
+                    copilotTimer.classList.add('error');
+                    stopCopilotAuth();
+                    copilotStatusText.textContent = 'Authorization timed out. Please try again.';
+                    copilotProgress.classList.remove('active');
+                }
+            }, 1000);
+            
+            // Start polling for authorization status
+            copilotAuthInterval = setInterval(async () => {
+                try {
+                    const checkResponse = await fetch('/api/copilot/auth/check', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            auth_id: data.auth_id,
+                            device_code: data.verification_complete_url.split('device_code=')[1] || ''
+                        })
+                    });
+                    const checkData = await checkResponse.json();
+                    
+                    if (checkData.status === 'authorized') {
+                        stopCopilotAuth();
+                        copilotAuthStatus.classList.add('success');
+                        copilotStatusText.textContent = 'Authorization successful!';
+                        copilotProgress.classList.remove('active');
+                        // Fill in the API key
+                        if (llmApiKey) {
+                            llmApiKey.value = checkData.token;
+                        }
+                        // Hide status after 3 seconds
+                        setTimeout(() => {
+                            copilotAuthStatus.style.display = 'none';
+                        }, 3000);
+                    } else if (checkData.status === 'expired' || checkData.status === 'declined') {
+                        stopCopilotAuth();
+                        copilotStatusText.textContent = checkData.message || 'Authorization failed. Please try again.';
+                        copilotProgress.classList.remove('active');
+                    }
+                } catch (e) {
+                    console.error('Error checking auth status:', e);
+                }
+            }, (data.interval || 5) * 1000);
+            
+        } catch (error) {
+            console.error('Error starting Copilot auth:', error);
+            alert('Failed to start authorization: ' + error.message);
+        }
+    }
+    
+    function stopCopilotAuth() {
+        if (copilotAuthInterval) {
+            clearInterval(copilotAuthInterval);
+            copilotAuthInterval = null;
+        }
+        if (copilotTimerInterval) {
+            clearInterval(copilotTimerInterval);
+            copilotTimerInterval = null;
+        }
+    }
+    
+    if (copilotAuthBtn) {
+        copilotAuthBtn.addEventListener('click', startCopilotAuth);
+    }
+    
+    if (copilotCopyCode) {
+        copilotCopyCode.addEventListener('click', function() {
+            const code = copilotUserCode.textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                this.textContent = 'Copied!';
+                this.classList.add('copied');
+                setTimeout(() => {
+                    this.textContent = 'Copy';
+                    this.classList.remove('copied');
+                }, 2000);
+            });
         });
     }
     
@@ -1209,6 +1354,12 @@
     async function showSettings() {
         settingsPanel.classList.add('show');
         
+        // Hide copilot auth status initially
+        const copilotAuthStatus = document.getElementById('copilotAuthStatus');
+        const copilotAuthSection = document.getElementById('copilotAuthSection');
+        if (copilotAuthStatus) copilotAuthStatus.style.display = 'none';
+        if (copilotAuthSection) copilotAuthSection.style.display = 'none';
+        
         // Load config from server
         try {
             const response = await fetch('/api/config');
@@ -1225,10 +1376,16 @@
                     // Update model dropdown with current provider and model
                     updateModelDropdown(provider, model);
                     llmApiKey.value = config.llm.api_key || '';
+                    
+                    // Show/hide GitHub Copilot auth button based on provider
+                    if (copilotAuthSection && provider === 'github_copilot') {
+                        copilotAuthSection.style.display = 'block';
+                    }
                 } else {
                     // Default to github_copilot with gpt-4
                     llmProvider.value = 'github_copilot';
                     updateModelDropdown('github_copilot', 'gpt-4');
+                    if (copilotAuthSection) copilotAuthSection.style.display = 'block';
                 }
                 
                 // Jira settings
