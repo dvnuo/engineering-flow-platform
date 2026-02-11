@@ -858,12 +858,33 @@
             }
             
             // Auto-load first session if none selected
-            if (sessionsOffset === sessions.length && !currentSessionId) {
-                const firstSession = recentSessionsList.querySelector('.recent-session-item');
-                if (firstSession) {
-                    const firstSessionId = firstSession.getAttribute('data-session-id');
-                    console.log('Auto-loading first session:', firstSessionId);
-                    loadSession(firstSessionId);
+            if (sessionsOffset === sessions.length) {
+                // If we have a saved sessionId, load that one
+                if (currentSessionId) {
+                    const savedItem = recentSessionsList.querySelector(`[data-session-id="${currentSessionId}"]`);
+                    if (savedItem) {
+                        console.log('Auto-loading saved session:', currentSessionId);
+                        // Add active class to the saved session
+                        recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
+                        savedItem.classList.add('active');
+                        loadSession(currentSessionId);
+                    } else {
+                        // Saved session not in list, load first available
+                        const firstSession = recentSessionsList.querySelector('.recent-session-item');
+                        if (firstSession) {
+                            const firstSessionId = firstSession.getAttribute('data-session-id');
+                            console.log('Saved session not found, loading first:', firstSessionId);
+                            loadSession(firstSessionId);
+                        }
+                    }
+                } else {
+                    // No saved session, load first available
+                    const firstSession = recentSessionsList.querySelector('.recent-session-item');
+                    if (firstSession) {
+                        const firstSessionId = firstSession.getAttribute('data-session-id');
+                        console.log('Auto-loading first session:', firstSessionId);
+                        loadSession(firstSessionId);
+                    }
                 }
             }
             
