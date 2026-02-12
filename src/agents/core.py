@@ -209,6 +209,43 @@ You have access to the following tools. When a user asks you to do something tha
             return {"response": fastlane_response, "usage": usage_data}
         # ===== END FAST LANE =====
 
+        # ===== SKILL MATCHING (FR-1, FR-2) =====
+        from src.skills import skill_registry, get_tracer
+        
+        # Initialize skill registry if needed
+        if not skill_registry._initialized:
+            skill_registry.load_skills()
+        
+        # Match user message against skill triggers
+        matched_skills = skill_registry.match_skill(message)
+        
+        # Start execution tracing
+        tracer = get_tracer()
+        execution_id = tracer.start_execution(
+            session_id=session_id,
+            user_message=message,
+            matched_skill=matched_skills[0].name if matched_skills else None,
+        )
+        
+        # Build skill prompt if matched (FR-3: Dynamic Skill Injection)
+        skill_prompt = ""
+        allowed_tools = set()  # Tool whitelist per skill (FR-5)
+        
+        if matched_skills:
+            # Use the best match
+            best_skill = matched_skills[0]
+            logger.info(f"[Skill] Matched skill: {best_skill.name}")
+            skill_prompt = skill_registry.get_skill_prompt(best_skill)
+            allowed_tools = set(best_skill.tools)
+            
+            # Log matched skill
+            tracer.log_tool_call(
+                tool_name="skill_matched",
+                arguments={"skill": best_skill.name},
+                result=f"Matched skill: {best_skill.name}",
+            )
+        # ===== END SKILL MATCHING =====
+
         # ===== MESSAGE COMPACTION =====
         # Check if messages need compaction to fit within token limits
         from src.agents.compaction import (
@@ -375,10 +412,32 @@ You have access to the following tools. When a user asks you to do something tha
             except json.JSONDecodeError:
                 args = {}
             
-            logger.info(f"Executing tool: {tool_name} with args: {args}")
-            
-            # Execute the tool
-            tool_result = await execute_tool_by_name(tool_name, **args)
+            # FR-5: Tool Whitelist per Skill
+            # Validate tool is allowed for the matched skill
+            if allowed_tools and tool_name not in allowed_tools:
+                logger.warning(f"[Skill] Tool {tool_name} not in allowed tools: {allowed_tools}")
+                tool_result = ToolResult(
+                    success=False,
+                    output="",
+                    error=f"Tool '{tool_name}' is not allowed for skill '{matched_skills[0].name if matched_skills else 'unknown'}'. Allowed tools: {', '.join(allowed_tools)}"
+                )
+                tracer.log_tool_call(
+                    tool_name=tool_name,
+                    arguments=args,
+                    result=str(tool_result),
+                    success=False,
+                    error=tool_result.error,
+                )
+            else:
+                logger.info(f"Executing tool: {tool_name} with args: {args}")
+                # Execute the tool
+                tool_result = await execute_tool_by_name(tool_name, **args)
+                tracer.log_tool_call(
+                    tool_name=tool_name,
+                    arguments=args,
+                    result=str(tool_result),
+                    success=tool_result.success,
+                )
             
             # Debug logging for tool result
             if _is_debug_enabled():
@@ -396,10 +455,16 @@ You have access to the following tools. When a user asks you to do something tha
             
             logger.info(f"Tool result: {str(tool_result)[:200]}")
 
+        # FR-3: Dynamic Skill Injection - Append skill prompt to system prompt
+        effective_system_prompt = self.system_prompt
+        if skill_prompt:
+            effective_system_prompt = f"{self.system_prompt}\n\n## Skill Guidance\n\n{skill_prompt}"
+            logger.info(f"[Skill] Injected skill guidance for: {matched_skills[0].name}")
+
         # Step 5: Get final response from LLM
         final_result = await llm_client.chat(
             messages=messages,
-            system_prompt=self.system_prompt,
+            system_prompt=effective_system_prompt,
             tools=self.tools
         )
         
@@ -426,6 +491,9 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Add final response to history
         await session_manager.add_message(session_id, "assistant", final_content)
+        
+        # Complete execution tracing (FR-7)
+        tracer.complete_execution(final_content)
         
         # Return response with reasoning if enabled
         result = {"response": final_content, "usage": usage_data}
