@@ -1,152 +1,46 @@
-# Git Skill - Local Git Management
+# Git Skill
 
-Execute any git command with flexible arguments.
+**Capability**: Execute git commands using the built-in `git` tool.
 
-## Skill Signature
+## Available Tools
 
+Your LLM has access to these git functions:
+
+### git_status
+Get git status of a repository.
 ```python
-git(command="status", args="", cwd=None) -> SkillResult
+git_status(workspace=".")
 ```
 
-## Parameters
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `command` | string | No | Git subcommand (default: "status") |
-| `args` | string | No | Additional arguments (space-separated) |
-| `cwd` | string | No | Working directory |
-
-## Examples
-
-### Basic Commands
-
+### git_commit
+Create a git commit with a message.
 ```python
-# Check repository status
-git(command="status")
-
-# View current branch and changes
-git(command="status", args="--short")
-
-# List all branches
-git(command="branch", args="-a")
-
-# View recent commits
-git(command="log", args="--oneline -10")
-
-# Show differences
-git(command="diff")
-
-# Stage all changes
-git(command="add", args="-A")
+git_commit(message="your commit message", workspace=".")
 ```
 
-### Common Operations
-
+### git_push
+Push changes to remote.
 ```python
-# Clone a repository (HTTPS)
-git(command="clone", args="https://github.com/owner/repo.git")
-
-# Clone a repository (SSH)
-git(command="clone", args="git@github.com:owner/repo.git")
-
-# Commit with message
-git(command="commit", args="-m 'feat: add new feature'")
-
-# Push to remote
-git(command="push", args="origin main")
-
-# Pull from remote
-git(command="pull", args="origin main")
-
-# Create and switch to new branch
-git(command="checkout", args="-b feature/new-feature")
-
-# Switch to existing branch
-git(command="checkout", args="develop")
-
-# Delete a branch
-git(command="branch", args="-d feature/old-feature")
+git_push(workspace=".")
 ```
 
-### Advanced Commands
-
+### git_clone
+Clone a repository from URL.
 ```python
-# Rebase onto main branch
-git(command="rebase", args="main")
-
-# Stash changes
-git(command="stash", args="push -m 'WIP: work in progress'")
-
-# List stashes
-git(command="stash", args="list")
-
-# Apply stash
-git(command="stash", args="apply stash@{0}")
-
-# Cherry-pick a commit
-git(command="cherry-pick", args="abc123def")
-
-# Reset to previous commit (soft)
-git(command="reset", args="HEAD~1")
-
-# Reset hard (discard changes)
-git(command="reset", args="--hard HEAD~1")
-
-# Merge a branch
-git(command="merge", args="feature-branch")
-
-# Fetch all remotes
-git(command="fetch", args="--all --prune")
-
-# View tags
-git(command="tag", args="-l")
-
-# Create tag
-git(command="tag", args="v1.0.0")
-
-# Show remote URLs
-git(command="remote", args="-v")
-
-# Add remote
-git(command="remote", args="add origin https://github.com/owner/repo.git")
-
-# Blame a file
-git(command="blame", args="README.md")
-
-# Search in history
-git(command="grep", args="'TODO' -- '*.py'")
-
-# Show file at specific commit
-git(command="show", args="abc123:path/to/file.py")
-
-# Start bisect
-git(command="bisect", args="start")
+git_clone(repo_url="https://github.com/owner/repo.git", workspace=".")
 ```
 
-## Working Directory
+## Usage Examples
 
-By default, git commands run in `~/.efp/workspace`. Override with `cwd`:
+When user asks about git operations, use the appropriate tool:
 
-```python
-# Run in specific directory
-git(command="status", cwd="/path/to/my/repo")
-```
+- **"git status"** → Use `git_status()`
+- **"git commit -m 'msg'"** → Use `git_commit(message="msg")`
+- **"git push"** → Use `git_push()`
+- **"git clone url"** → Use `git_clone(repo_url="url")`
 
-## SSH Key Setup
+## Notes
 
-For private repositories, configure SSH key in `config.yaml`:
-
-```yaml
-ssh:
-  enabled: true
-  private_key_path: "/run/secrets/github_ssh_key"
-```
-
-The SSH key is automatically copied to `~/.ssh/` with proper permissions (600) at startup.
-
-## Tips
-
-1. **Use `--` to separate file paths from options**: `git(command="log", args="--oneline -10 -- .")`
-2. **Quote arguments with spaces**: `args="-m 'commit message'"`
-3. **Use `-` for stdin**: `git(command="apply", args="- < patch.diff")`
-4. **Combine commands**: Stage → Commit → Push in one flow
+- The workspace defaults to current directory (".")
+- Git commands run in `~/.efp/workspace` by default
+- SSH keys are automatically configured from config.yaml

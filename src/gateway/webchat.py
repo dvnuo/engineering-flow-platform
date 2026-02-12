@@ -16,7 +16,6 @@ from aiohttp import web
 
 from src.agents.core import Agent as AgentCore
 from src.agents.errors import extract_error_details, LLMError
-from src.agents.executor import skills_executor
 from src.config import config
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
@@ -132,35 +131,9 @@ async def api_chat(request: web.Request) -> web.Response:
         if not session_manager._initialized:
             await session_manager.initialize()
         
-        # ===== SKILL MATCHING =====
-        skill_name = skills_executor.match_skill(message)
-        if skill_name:
-            logger.info(f"[api_chat] Skill matched: {skill_name}")
-            # Execute skill directly
-            skill_result = await skills_executor.execute_skill(
-                skill_name,
-                message=message,
-            )
-            
-            if skill_result.success:
-                skill_response = skill_result.output
-                await session_manager.add_message(session_id, "user", message)
-                await session_manager.add_message(session_id, "assistant", skill_response)
-                # Save session
-                await session_persistence.save_session(
-                    session_id=session_id,
-                    channel="",
-                    messages=await session_manager.get_history(session_id),
-                    metadata={},
-                )
-                return web.json_response({
-                    'response': skill_response,
-                    'session_id': session_id,
-                    'usage': {},
-                })
-            else:
-                logger.warning(f"[api_chat] Skill {skill_name} failed: {skill_result.error}")
-        # ===== END SKILL MATCHING = =====
+        # All requests go through LLM - LLM decides when to use tools based on user input
+        # Tools are registered via src/__init__.py and available to LLM via tool_calls
+        # This is the Claude Code style - no separate skill matching/execution needed
         
         # Run agent (history is managed internally by session_manager)
         agent = AgentCore()
