@@ -160,7 +160,7 @@ async def api_chat(request: web.Request) -> web.Response:
                 })
             else:
                 logger.warning(f"[api_chat] Skill {skill_name} failed: {skill_result.error}")
-        # ===== END SKILL MATCHING =====
+        # ===== END SKILL MATCHING = =====
         
         # Run agent (history is managed internally by session_manager)
         agent = AgentCore()
