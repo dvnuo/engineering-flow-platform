@@ -229,25 +229,13 @@ class SkillsExecutor:
         request_lower = request.lower()
 
         # Direct skill mentions
-        if "create test" in request_lower or "generate test" in request_lower:
-            return "test_case_generator"
+        # Note: test_case_generator skill is not implemented (only SKILL.md exists)
+        # It requires LLM to generate test cases, so let it go through normal LLM flow
         
-        # Summarize skill
-        if any(phrase in request_lower for phrase in [
-            "summarize", "summarise", "summary of", "what's this about",
-            "what is this about", "tl;dr", "tldr"
-        ]):
-            return "summarize"
+        # Note: summarize and cron skills are not implemented
+        # They would require additional skill.py files to work
         
-        # Cron/Scheduler skill
-        if any(phrase in request_lower for phrase in [
-            "schedule", "remind me", "set a reminder", "cron job",
-            "recurring", "repeat every", "cron status", "list cron",
-            "cron jobs", "show cron", "get cron"
-        ]):
-            return "cron"
-        
-        # Git skill
+        # Git skill (only implemented skill)
         if any(phrase in request_lower for phrase in [
             "git status", "git commit", "git push", "git pull",
             "git branch", "git checkout", "git log", "git diff",
