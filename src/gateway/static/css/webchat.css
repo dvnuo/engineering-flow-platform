@@ -667,37 +667,112 @@ body {
     transform: scale(0.95);
 }
 
-/* Typing Indicator */
+/* Typing Indicator with Status Text */
 .typing-indicator {
     display: none;
-    padding: var(--space-md);
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
     background: var(--color-bg-card);
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-accent);
     border-radius: var(--radius-lg);
     margin-left: 52px;
     margin-bottom: var(--space-sm);
-    gap: 6px;
-    width: fit-content;
+    min-width: 180px;
+    box-shadow: var(--shadow-sm);
 }
 
 .typing-indicator.show {
     display: flex;
 }
 
-.typing-dot {
-    width: 8px;
-    height: 8px;
+.typing-indicator.sending {
+    border-color: var(--color-warning);
+}
+
+.typing-indicator.sending .typing-status-text {
+    color: var(--color-warning);
+}
+
+.typing-indicator.processing {
+    border-color: var(--color-accent);
+}
+
+.typing-indicator.processing .typing-status-text {
+    color: var(--color-accent);
+}
+
+.typing-indicator.ready {
+    border-color: var(--color-success);
+}
+
+.typing-indicator.ready .typing-status-text {
+    color: var(--color-success);
+}
+
+.typing-indicator.error {
+    border-color: var(--color-error);
+}
+
+.typing-indicator.error .typing-status-text {
+    color: var(--color-error);
+}
+
+.typing-status-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+}
+
+.typing-status-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.typing-status-icon.processing svg {
+    animation: spin 1.5s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.typing-status-text {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-accent);
+    white-space: nowrap;
+}
+
+.typing-status-subtext {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    margin-left: 4px;
+}
+
+/* Legacy typing dots for compatibility */
+.typing-indicator .typing-dots {
+    display: flex;
+    gap: 4px;
+}
+
+.typing-indicator .typing-dot {
+    width: 6px;
+    height: 6px;
     background: var(--color-text-muted);
     border-radius: 50%;
     animation: typing 1.4s infinite ease-in-out;
 }
 
-.typing-dot:nth-child(2) { animation-delay: 0.2s; }
-.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+.typing-indicator .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-indicator .typing-dot:nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes typing {
     0%, 60%, 100% { transform: translateY(0); }
-    30% { transform: translateY(-6px); }
+    30% { transform: translateY(-4px); }
 }
 
 /* Status Bar */

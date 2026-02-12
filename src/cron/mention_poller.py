@@ -19,6 +19,8 @@ from src.channels.jira import jira_channel
 from src.channels.confluence import confluence_channel
 from src.agents.executor import execute_tool
 
+logger = logging.getLogger(__name__)
+
 # Import memory module for tracking processed issues
 try:
     from src.memory import get_memory_store
@@ -26,8 +28,6 @@ try:
 except ImportError:
     MEMORY_AVAILABLE = False
     logger.warning("Memory module not available, using in-memory tracking only")
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
