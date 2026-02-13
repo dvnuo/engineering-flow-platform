@@ -16,7 +16,6 @@ from aiohttp import web
 
 from src.agents.core import Agent as AgentCore
 from src.agents.errors import extract_error_details, LLMError
-from src.agents.executor import skills_executor
 from src.config import config
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
@@ -132,35 +131,9 @@ async def api_chat(request: web.Request) -> web.Response:
         if not session_manager._initialized:
             await session_manager.initialize()
         
-        # ===== SKILL MATCHING =====
-        skill_name = skills_executor.match_skill(message)
-        if skill_name:
-            logger.info(f"[api_chat] Skill matched: {skill_name}")
-            # Execute skill directly
-            skill_result = await skills_executor.execute_skill(
-                skill_name,
-                message=message,
-            )
-            
-            if skill_result.success:
-                skill_response = skill_result.output
-                await session_manager.add_message(session_id, "user", message)
-                await session_manager.add_message(session_id, "assistant", skill_response)
-                # Save session
-                await session_persistence.save_session(
-                    session_id=session_id,
-                    channel="",
-                    messages=await session_manager.get_history(session_id),
-                    metadata={},
-                )
-                return web.json_response({
-                    'response': skill_response,
-                    'session_id': session_id,
-                    'usage': {},
-                })
-            else:
-                logger.warning(f"[api_chat] Skill {skill_name} failed: {skill_result.error}")
-        # ===== END SKILL MATCHING = =====
+        # All requests go through LLM - LLM decides when to use tools based on user input
+        # Tools are registered via src/__init__.py and available to LLM via tool_calls
+        # This is the Claude Code style - no separate skill matching/execution needed
         
         # Run agent (history is managed internally by session_manager)
         agent = AgentCore()
@@ -280,30 +253,37 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             }
         )
         
-        await response.prepare()
+        await response.prepare(request)
         
         # Send start event
-        await response.write(f"event: start\ndata: {json.dumps({'session_id': session_id})}\n\n")
+        await response.write(f"event: start\ndata: {json.dumps({'session_id': session_id})}\n\n".encode())
+        
+        # Create an async queue for streaming events
+        import asyncio
+        event_queue = asyncio.Queue()
         
         # Run agent and stream response
         agent = AgentCore()
         
-        async def stream_callback(chunk: str):
-            """Callback for streaming chunks."""
-            try:
-                # Escape newlines for SSE format
-                escaped = chunk.replace('\n', '\\n').replace('\r', '\\r')
-                await response.write(f"event: chunk\ndata: {escaped}\n\n")
-            except Exception as e:
-                logger.error(f"Error writing stream chunk: {e}")
-        
+        # Pass the queue to the agent for real-time events
         result = await agent.process(
             message=message,
             session_id=session_id,
             user_name="webchat-user",
             track_usage=True,
-            stream_callback=stream_callback,
+            stream_callback=event_queue,
         )
+        
+        # Stream events from queue while agent is running
+        while not event_queue.empty():
+            try:
+                event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                escaped = event.replace('\n', '\\n').replace('\r', '\\r')
+                await response.write(f"event: progress\ndata: {escaped}\n\n".encode())
+            except asyncio.TimeoutError:
+                break
+            except Exception as e:
+                logger.error(f"Error streaming event: {e}")
         
         response_text = result.get("response", "") if result else ""
         usage = result.get("usage", {}) if result else {}
@@ -324,10 +304,10 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             'usage': usage,
             'session_id': session_id,
         })
-        await response.write(f"event: usage\ndata: {usage_data}\n\n")
+        await response.write(f"event: usage\ndata: {usage_data}\n\n".encode())
         
         # Send done event
-        await response.write(f"event: done\ndata: \n\n")
+        await response.write(f"event: done\ndata: \n\n".encode())
         
         return response
         
@@ -338,7 +318,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         logger.error(f"Stream error: {e}")
         error_data = json.dumps({'error': str(e)})
         try:
-            await response.write(f"event: error\ndata: {error_data}\n\n")
+            await response.write(f"event: error\ndata: {error_data}\n\n".encode())
         except Exception:
             pass
         return web.Response(status=500, text=str(e))
@@ -946,18 +926,17 @@ async def api_skills(request: web.Request) -> web.Response:
     """Get list of available skills.
     
     GET /api/skills
-    Returns: List of skills with name, description, emoji
+    Returns: List of skills with name, description, triggers
     """
     try:
-        query = request.query.get('q', '').lower()
-        skills = _get_skills_list()
+        from src.skills import skill_registry
         
-        if query:
-            # Filter skills by query
-            skills = [
-                s for s in skills
-                if query in s.get('name', '') or query in s.get('description', '')
-            ]
+        # Load skills if not already loaded
+        if not skill_registry._initialized:
+            skill_registry.load_skills()
+        
+        # Return new skill registry format
+        skills = skill_registry.get_all_skill_summaries()
         
         return web.json_response({'skills': skills})
     except Exception as e:

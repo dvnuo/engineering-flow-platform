@@ -10,7 +10,7 @@ __all__ = ["GitHubClient", "github_channel", "github_get_issue", "github_search_
 async def github_get_issue(owner: str, repo: str, issue_number: int) -> str:
     """Get GitHub issue or PR details."""
     try:
-        issue = await github_client.get_issue(owner, repo, issue_number)
+        issue = await github_channel.get_issue(owner, repo, issue_number)
         state = issue.get("state", "unknown")
         title = issue.get("title", "Untitled")
         body = issue.get("body", "")[:200]

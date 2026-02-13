@@ -5,7 +5,7 @@ import logging
 import os
 import platform
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from src.agents.heartbeat import get_heartbeat, start_heartbeat, stop_heartbeat
 from src.agents.llm import llm_client
@@ -18,6 +18,7 @@ from src.agents.executor import (
     SkillResult,
     get_tools_schemas,
     execute_tool_by_name,
+    ToolResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -175,6 +176,7 @@ You have access to the following tools. When a user asks you to do something tha
         user_name: Optional[str] = None,
         track_usage: bool = True,
         reasoning_replay: Optional[bool] = None,
+        stream_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         """Process a user message with ReAct pattern.
         
@@ -184,6 +186,7 @@ You have access to the following tools. When a user asks you to do something tha
             reasoning_replay: Enable reasoning_replay to see model's internal reasoning.
                 When enabled, includes model's thinking process in response.
                 Default: Uses config.llm.reasoning_replay setting.
+            stream_callback: Optional callback for streaming events (tool calls, progress, etc.)
         
         Returns:
             Dict with:
@@ -208,6 +211,43 @@ You have access to the following tools. When a user asks you to do something tha
             await session_manager.add_message(session_id, "assistant", fastlane_response)
             return {"response": fastlane_response, "usage": usage_data}
         # ===== END FAST LANE =====
+
+        # ===== SKILL MATCHING (FR-1, FR-2) =====
+        from src.skills import skill_registry, get_tracer
+        
+        # Initialize skill registry if needed
+        if not skill_registry._initialized:
+            skill_registry.load_skills()
+        
+        # Match user message against skill triggers
+        matched_skills = skill_registry.match_skill(message)
+        
+        # Start execution tracing
+        tracer = get_tracer()
+        execution_id = tracer.start_execution(
+            session_id=session_id,
+            user_message=message,
+            matched_skill=matched_skills[0].name if matched_skills else None,
+        )
+        
+        # Build skill prompt if matched (FR-3: Dynamic Skill Injection)
+        skill_prompt = ""
+        allowed_tools = set()  # Tool whitelist per skill (FR-5)
+        
+        if matched_skills:
+            # Use the best match
+            best_skill = matched_skills[0]
+            logger.info(f"[Skill] Matched skill: {best_skill.name}")
+            skill_prompt = skill_registry.get_skill_prompt(best_skill)
+            allowed_tools = set(best_skill.tools)
+            
+            # Log matched skill
+            tracer.log_tool_call(
+                tool_name="skill_matched",
+                arguments={"skill": best_skill.name},
+                result=f"Matched skill: {best_skill.name}",
+            )
+        # ===== END SKILL MATCHING =====
 
         # ===== MESSAGE COMPACTION =====
         # Check if messages need compaction to fit within token limits
@@ -302,137 +342,214 @@ You have access to the following tools. When a user asks you to do something tha
         enable_reasoning = reasoning_replay if reasoning_replay is not None else config.llm.get('reasoning_replay', False)
         logger.info(f"[{session_id}] reasoning_replay={enable_reasoning}")
         
-        # Step 1: Call LLM with tools
-        logger.debug(f"Calling LLM with {len(self.tools)} tools")
+        # ===== BUILD EFFECTIVE SYSTEM PROMPT (with Skill Guidance) =====
+        # FR-3: Dynamic Skill Injection - Include skill prompt from FIRST call
+        effective_system_prompt = self.system_prompt
+        if skill_prompt:
+            effective_system_prompt = f"{self.system_prompt}\n\n## Skill Guidance\n\n{skill_prompt}"
+            logger.info(f"[Skill] Injected skill guidance for: {matched_skills[0].name}")
         
-        llm_result = await llm_client.chat(
-            messages=messages,
-            system_prompt=self.system_prompt,
-            tools=self.tools,
-            reasoning_replay=enable_reasoning,
-        )
+        # ===== TOOL LOOP (REACT Pattern) =====
+        # Continue calling LLM until it stops requesting tools
+        # This is the proper agent loop, not a single-step execution
         
-        # Debug logging for LLM response
-        if _is_debug_enabled():
-            logger.debug(f"=== [AGENT] LLM RESPONSE ===")
-            content = llm_result.get('content') or ''
-            logger.debug(f"Content length: {len(content)} chars")
-            logger.debug(f"Content: {_format_content(content, max_length=1000)}")
-            
-            # Log reasoning if present
-            reasoning = llm_result.get('reasoning')
-            if reasoning:
-                logger.debug(f"Reasoning length: {len(reasoning)} chars")
-                logger.debug(f"Reasoning: {_format_content(reasoning, max_length=2000)}")
-            
-            tool_calls = llm_result.get('tool_calls', [])
-            logger.debug(f"Tool calls: {len(tool_calls)}")
-            for tc in tool_calls:
-                tc_name = tc.get('function', {}).get('name', 'unknown')
-                tc_args = tc.get('function', {}).get('arguments', '')
-                logger.debug(f"  - {tc_name}: {_format_content(tc_args, max_length=300)}")
-            
-            usage = llm_result.get('usage', {})
-            logger.debug(f"Usage: {usage}")
+        max_tool_iterations = 10  # Prevent infinite loops
+        iteration = 0
         
-        # Track usage if enabled
-        if track_usage:
-            usage_data = llm_result.get("usage", {})
-        
-        content = (llm_result.get("content") or "").strip()
-        tool_calls = llm_result.get("tool_calls", [])
-        
-        # If no tool calls, return directly
-        if not tool_calls:
-            await session_manager.add_message(session_id, "assistant", content)
-            result = {"response": content, "usage": usage_data}
-            if enable_reasoning:
-                result["reasoning"] = llm_result.get("reasoning", "")
-            return result
-        
-        logger.info(f"LLM requested {len(tool_calls)} tool calls")
-        
-        # Step 2-4: Execute each tool and collect results
-        # IMPORTANT: assistant message must contain tool_calls for OpenAI API
-        assistant_msg = {"role": "assistant"}
-        
-        # If LLM returned tool_calls, include them in the assistant message
-        if tool_calls:
-            assistant_msg["tool_calls"] = tool_calls
-            # Content can be empty when using tool_calls
-            assistant_msg["content"] = content if content else None
-        
-        messages.append(assistant_msg)
-        
-        # Execute each tool call
-        for tool_call in tool_calls:
-            tool_call_id = tool_call.get("id", "unknown")
-            function = tool_call.get("function", {})
-            tool_name = function.get("name", "")
-            
+        # Helper function to send stream events
+        # Supports both simple callbacks and asyncio.Queue
+        def send_event(event_type: str, data: dict):
+            """Send event via stream_callback and event bus."""
+            # Emit to event bus for WebSocket clients
             try:
-                args = json.loads(function.get("arguments", "{}"))
-            except json.JSONDecodeError:
-                args = {}
+                from src.gateway.event_bus import emit_agent_event_sync
+                emit_agent_event_sync(event_type, data)
+            except Exception as e:
+                logger.info(f"Event bus emit error: {e}")
             
-            logger.info(f"Executing tool: {tool_name} with args: {args}")
+            # Also send via callback if provided
+            if stream_callback:
+                import json
+                event = json.dumps({"type": event_type, **data})
+                try:
+                    # Check if it's an asyncio.Queue
+                    if hasattr(stream_callback, 'put'):
+                        # It's a queue - put the event (will be read by API)
+                        import asyncio
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                # We're in an async context, schedule the put
+                                asyncio.create_task(stream_callback.put(event))
+                            else:
+                                # Loop not running, put directly
+                                stream_callback.put_nowait(event)
+                        except RuntimeError:
+                            stream_callback.put_nowait(event)
+                    else:
+                        # Regular callback
+                        stream_callback(event)
+                except Exception as e:
+                    logger.debug(f"Stream event error: {e}")
+        
+        # Send skill matched event
+        if matched_skills:
+            send_event("skill_matched", {"skill": matched_skills[0].name})
+        
+        while iteration < max_tool_iterations:
+            iteration += 1
             
-            # Execute the tool
-            tool_result = await execute_tool_by_name(tool_name, **args)
+            # Send iteration start event
+            send_event("iteration_start", {"iteration": iteration, "total": max_tool_iterations})
             
-            # Debug logging for tool result
+            # Step 1: Call LLM with tools (include skill_prompt from first call)
+            logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM")
+            send_event("llm_thinking", {"message": "LLM is thinking..."})
+            
+            llm_result = await llm_client.chat(
+                messages=messages,
+                system_prompt=effective_system_prompt,
+                tools=self.tools,
+                reasoning_replay=enable_reasoning,
+            )
+            
+            # Debug logging for LLM response
             if _is_debug_enabled():
-                logger.debug(f"=== [AGENT] TOOL RESULT ===")
-                logger.debug(f"Tool: {tool_name}")
-                logger.debug(f"Success: {tool_result.success}")
-                logger.debug(f"Result: {_format_content(str(tool_result), max_length=1000)}")
+                logger.debug(f"=== [AGENT] LLM RESPONSE (iter {iteration}) ===")
+                content = llm_result.get('content') or ''
+                logger.debug(f"Content length: {len(content)} chars")
+                
+                tool_calls = llm_result.get('tool_calls', [])
+                logger.debug(f"Tool calls: {len(tool_calls)}")
+                for tc in tool_calls:
+                    tc_name = tc.get('function', {}).get('name', 'unknown')
+                    logger.debug(f"  - {tc_name}")
             
-            # Add tool result - MUST follow the assistant message with tool_calls
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call_id,
-                "content": str(tool_result),
-            })
+            # Track usage
+            if track_usage:
+                iter_usage = llm_result.get("usage", {})
+                if usage_data:
+                    usage_data = {
+                        "prompt_tokens": usage_data.get("prompt_tokens", 0) + iter_usage.get("prompt_tokens", 0),
+                        "completion_tokens": usage_data.get("completion_tokens", 0) + iter_usage.get("completion_tokens", 0),
+                        "total_tokens": usage_data.get("total_tokens", 0) + iter_usage.get("total_tokens", 0),
+                    }
+                else:
+                    usage_data = iter_usage
             
-            logger.info(f"Tool result: {str(tool_result)[:200]}")
-
-        # Step 5: Get final response from LLM
-        final_result = await llm_client.chat(
-            messages=messages,
-            system_prompt=self.system_prompt,
-            tools=self.tools
-        )
+            content = (llm_result.get("content") or "").strip()
+            tool_calls = llm_result.get("tool_calls", [])
+            
+            # If no tool calls, we're done - return the response
+            if not tool_calls:
+                await session_manager.add_message(session_id, "assistant", content)
+                result = {"response": content, "usage": usage_data}
+                if enable_reasoning:
+                    result["reasoning"] = llm_result.get("reasoning", "")
+                
+                # Send completion event
+                send_event("complete", {
+                    "response": content[:500] if content else "",
+                    "total_iterations": iteration
+                })
+                
+                # Complete execution tracing
+                tracer.complete_execution(content)
+                return result
+            
+            logger.info(f"[Tool Loop] Iteration {iteration}: LLM requested {len(tool_calls)} tool calls")
+            
+            # Step 2: Execute each tool and collect results
+            # IMPORTANT: assistant message must contain tool_calls for OpenAI API
+            assistant_msg = {"role": "assistant"}
+            if tool_calls:
+                assistant_msg["tool_calls"] = tool_calls
+                assistant_msg["content"] = content if content else None
+            
+            messages.append(assistant_msg)
+            
+            # Execute each tool call
+            for tool_call in tool_calls:
+                tool_call_id = tool_call.get("id", "unknown")
+                function = tool_call.get("function", {})
+                tool_name = function.get("name", "")
+                
+                # Parse arguments
+                try:
+                    args = json.loads(function.get("arguments", "{}"))
+                except json.JSONDecodeError:
+                    args = {}
+                
+                # Send tool call start event
+                send_event("tool_call", {
+                    "tool": tool_name,
+                    "args": args,
+                    "status": "executing"
+                })
+                
+                # ===== CONFIRMATION GATE (FR-4) =====
+                # Check if this is a write operation that requires confirmation
+                write_tools = {'github_comment_pr', 'github_add_comment', 'jira_add_comment', 
+                              'git_commit', 'git_push', 'jira_transition'}
+                
+                if tool_name in write_tools:
+                    logger.info(f"[Confirmation] Tool '{tool_name}' requires confirmation")
+                    send_event("confirmation", {
+                        "tool": tool_name,
+                        "message": f"Write operation '{tool_name}' requires confirmation",
+                        "auto_confirm": True
+                    })
+                    # For now, auto-confirm in default mode (can be made interactive later)
+                    # TODO: Implement actual user confirmation flow
+                    logger.info(f"[Confirmation] Auto-confirming write operation: {tool_name}")
+                
+                # Execute the tool
+                logger.info(f"Executing tool: {tool_name} with args: {args}")
+                tool_result = await execute_tool_by_name(tool_name, **args)
+                tracer.log_tool_call(
+                    tool_name=tool_name,
+                    arguments=args,
+                    result=str(tool_result),
+                    success=tool_result.success,
+                )
+                
+                # Send tool result event
+                result_preview = str(tool_result)[:200]
+                send_event("tool_result", {
+                    "tool": tool_name,
+                    "result": result_preview,
+                    "success": tool_result.success
+                })
+                
+                # Add tool result - MUST follow the assistant message with tool_calls
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": str(tool_result),
+                })
+                
+                logger.info(f"Tool result: {str(tool_result)[:200]}")
+            
+            # Send iteration complete event
+            send_event("iteration_end", {"iteration": iteration})
+            
+            # Loop continues - LLM will decide next action based on tool results
+            # This is the key: don't return after one tool call, let LLM decide
         
-        final_content = (final_result.get("content") or "").strip()
+        # Safety: max iterations reached
+        logger.warning(f"[Tool Loop] Max iterations ({max_tool_iterations}) reached")
+        await session_manager.add_message(session_id, "assistant", "Task completed after maximum iterations.")
         
-        # Debug logging for final response
-        if _is_debug_enabled():
-            logger.debug(f"=== [AGENT] FINAL RESPONSE ===")
-            logger.debug(f"Content length: {len(final_content)} chars")
-            logger.debug(f"Content: {_format_content(final_content, max_length=1000)}")
-            logger.debug(f"Usage: {final_result.get('usage', {})}")
+        # Send completion event
+        send_event("complete", {
+            "response": "Task completed (max iterations reached)",
+            "total_iterations": max_tool_iterations,
+            "note": "max_iterations"
+        })
         
-        # Track final usage and merge
-        if track_usage:
-            final_usage = final_result.get("usage", {})
-            if usage_data:
-                usage_data = {
-                    "prompt_tokens": usage_data.get("prompt_tokens", 0) + final_usage.get("prompt_tokens", 0),
-                    "completion_tokens": usage_data.get("completion_tokens", 0) + final_usage.get("completion_tokens", 0),
-                    "total_tokens": usage_data.get("total_tokens", 0) + final_usage.get("total_tokens", 0),
-                }
-            else:
-                usage_data = final_usage
+        tracer.complete_execution("max_iterations_reached")
         
-        # Add final response to history
-        await session_manager.add_message(session_id, "assistant", final_content)
-        
-        # Return response with reasoning if enabled
-        result = {"response": final_content, "usage": usage_data}
-        if enable_reasoning:
-            result["reasoning"] = llm_result.get("reasoning", "")
-        
-        return result
+        return {"response": "Task completed (max iterations reached)", "usage": usage_data or {}}
 
     async def _execute_skill(
         self,

@@ -1571,4 +1571,144 @@
         log: () => console.log('[WebChat] session_id:', localStorage.getItem('efp-session-id'))
     };
     
+    // ========== Real-time Agent Events (WebSocket) ==========
+    
+    let eventWs = null;
+    let eventQueue = [];
+    let currentAgentEventDiv = null;
+    let isReceivingEvents = false;
+    
+    /**
+     * Connect to WebSocket for real-time agent events
+     */
+    function connectEventWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/api/events`;
+        
+        console.log('[WebSocket] Connecting to:', wsUrl);
+        
+        try {
+            eventWs = new WebSocket(wsUrl);
+            
+            eventWs.onopen = function() {
+                console.log('[WebSocket] Connected to event stream');
+            };
+            
+            eventWs.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    handleAgentEvent(data);
+                } catch (e) {
+                    console.error('[WebSocket] Error parsing event:', e);
+                }
+            };
+            
+            eventWs.onclose = function() {
+                console.log('[WebSocket] Disconnected from event stream');
+                // Reconnect after 3 seconds
+                setTimeout(connectEventWebSocket, 3000);
+            };
+            
+            eventWs.onerror = function(error) {
+                console.error('[WebSocket] Error:', error);
+            };
+            
+        } catch (error) {
+            console.error('[WebSocket] Failed to connect:', error);
+        }
+    }
+    
+    /**
+     * Handle incoming agent events
+     */
+    function handleAgentEvent(data) {
+        const type = data.type;
+        const eventData = data.data || {};
+        
+        console.log('[Agent Event]', type, eventData);
+        
+        // Skip non-relevant events
+        if (type === 'connected' || type === 'pong') return;
+        
+        switch (type) {
+            case 'skill_matched':
+                showAgentEvent('skill-matched', `🎯 Skill: ${eventData.skill || 'Unknown'}`);
+                break;
+                
+            case 'iteration_start':
+                showAgentEvent('iteration-start', `🔄 Iteration ${eventData.iteration || 1}${eventData.total ? '/' + eventData.total : ''}`);
+                break;
+                
+            case 'llm_thinking':
+                showAgentEvent('llm-thinking', `🤔 ${eventData.message || 'LLM is thinking...'}`);
+                break;
+                
+            case 'tool_call':
+                showAgentEvent('tool-call', `🔧 Calling: ${eventData.tool || 'Unknown tool'}`);
+                break;
+                
+            case 'tool_result':
+                const resultStatus = eventData.success ? '✅' : '❌';
+                showAgentEvent('tool-result', `${resultStatus} ${eventData.tool || 'Tool'} completed`);
+                break;
+                
+            case 'confirmation':
+                showAgentEvent('confirmation', `⚠️ ${eventData.message || 'Confirmation required'}`);
+                break;
+                
+            case 'iteration_end':
+                hideAgentEvent();
+                break;
+                
+            case 'complete':
+                hideAgentEvent();
+                break;
+                
+            default:
+                // Show unknown events briefly
+                showAgentEvent('agent-event', `${type}: ${JSON.stringify(eventData).substring(0, 50)}...`);
+                setTimeout(hideAgentEvent, 2000);
+        }
+    }
+    
+    /**
+     * Show agent event in chat
+     */
+    function showAgentEvent(eventClass, message) {
+        // Remove welcome message if present
+        const welcome = messagesContainer.querySelector('.welcome-message');
+        if (welcome) {
+            welcome.remove();
+        }
+        
+        // Remove any existing agent event
+        hideAgentEvent();
+        
+        currentAgentEventDiv = document.createElement('div');
+        currentAgentEventDiv.className = `message agent-event ${eventClass}`;
+        currentAgentEventDiv.innerHTML = `
+            <div class="avatar" aria-hidden="true">⚡</div>
+            <div>
+                <div class="agent-event-content">${escapeHtml(message)}</div>
+                <div class="agent-event-label">Agent Activity</div>
+            </div>
+        `;
+        
+        messagesContainer.appendChild(currentAgentEventDiv);
+        scrollToBottom();
+    }
+    
+    /**
+     * Hide current agent event
+     */
+    function hideAgentEvent() {
+        if (currentAgentEventDiv) {
+            currentAgentEventDiv.remove();
+            currentAgentEventDiv = null;
+        }
+    }
+    
+    // Connect to WebSocket on page load
+    connectEventWebSocket();
+    
 })();
