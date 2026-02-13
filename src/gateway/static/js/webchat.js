@@ -1593,7 +1593,15 @@
     /**
      * Connect to WebSocket for real-time agent events
      */
+    let wsConnected = false;
+    
     function connectEventWebSocket() {
+        // Prevent multiple connections
+        if (wsConnected && eventWs && eventWs.readyState === WebSocket.OPEN) {
+            console.log('[WebSocket] Already connected');
+            return;
+        }
+        
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/api/events`;
         
@@ -1603,6 +1611,7 @@
             eventWs = new WebSocket(wsUrl);
             
             eventWs.onopen = function() {
+                wsConnected = true;
                 console.log('[WebSocket] Connected to event stream');
             };
             
@@ -1616,6 +1625,7 @@
             };
             
             eventWs.onclose = function() {
+                wsConnected = false;
                 console.log('[WebSocket] Disconnected from event stream');
                 // Reconnect after 3 seconds
                 setTimeout(connectEventWebSocket, 3000);
@@ -1799,25 +1809,46 @@
      * Show "View Thinking Process" button after completion
      */
     function showThinkingProcessButton() {
-        if (currentEvents.length === 0) return;
+        // Use a snapshot of events to avoid mutation issues
+        const eventsSnapshot = currentEvents.slice();
         
-        // Find the assistant message (just added)
-        const assistantMessages = messagesContainer.querySelectorAll('.message.assistant:not(.has-thinking)');
-        if (assistantMessages.length === 0) return;
+        if (eventsSnapshot.length === 0) {
+            console.log('[Events] No events to show');
+            return;
+        }
         
-        const lastMessage = assistantMessages[assistantMessages.length - 1];
-        lastMessage.classList.add('has-thinking');
+        console.log('[Events] Showing thinking process with', eventsSnapshot.length, 'events');
+        
+        // Find the assistant message that was just added (most recent one without has-thinking)
+        const assistantMessages = messagesContainer.querySelectorAll('.message.assistant');
+        
+        // Find the most recent assistant message that doesn't have thinking yet
+        let lastAssistantMessage = null;
+        for (let i = assistantMessages.length - 1; i >= 0; i--) {
+            if (!assistantMessages[i].classList.contains('has-thinking')) {
+                lastAssistantMessage = assistantMessages[i];
+                break;
+            }
+        }
+        
+        if (!lastAssistantMessage) {
+            console.log('[Events] No assistant message found to attach thinking process');
+            return;
+        }
+        
+        lastAssistantMessage.classList.add('has-thinking');
         
         // Create toggle button
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'thinking-process-toggle';
+        const eventCount = eventsSnapshot.length;
         toggleBtn.innerHTML = `
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10"/>
                 <path d="M12 16v-4"/>
                 <path d="M12 8h.01"/>
             </svg>
-            <span>View Thinking Process (${currentEvents.length} steps)</span>
+            <span>View Thinking Process (${eventCount} steps)</span>
             <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="6 9 12 15 18 9"/>
             </svg>
@@ -1828,11 +1859,11 @@
         processContent.className = 'thinking-process-content';
         processContent.style.display = 'none';
         
-        // Build event timeline
+        // Build event timeline using the snapshot
         let timelineHtml = '<div class="thinking-timeline">';
-        currentEvents.forEach((event, index) => {
+        eventsSnapshot.forEach((event, index) => {
             const display = event.display;
-            const isLast = index === currentEvents.length - 1;
+            const isLast = index === eventsSnapshot.length - 1;
             timelineHtml += `
                 <div class="thinking-item ${isLast ? 'last' : ''}">
                     <div class="thinking-icon">${display.icon}</div>
@@ -1848,7 +1879,7 @@
         processContent.innerHTML = timelineHtml;
         
         // Insert after the message bubble
-        const bubble = lastMessage.querySelector('.message-bubble');
+        const bubble = lastAssistantMessage.querySelector('.message-bubble');
         if (bubble) {
             bubble.appendChild(toggleBtn);
             bubble.appendChild(processContent);
@@ -1883,7 +1914,7 @@
                         <path d="M12 16v-4"/>
                         <path d="M12 8h.01"/>
                     </svg>
-                    <span>View Thinking Process (${currentEvents.length} steps)</span>
+                    <span>View Thinking Process (${eventCount} steps)</span>
                     <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <polyline points="6 9 12 15 18 9"/>
                     </svg>
@@ -1893,10 +1924,16 @@
             scrollToBottom();
         });
         
-        // Clear events for next request
-        setTimeout(() => {
-            currentEvents = [];
-        }, 1000);
+        // Clear events AFTER this function completes (not immediately)
+        // Use a flag to prevent multiple clear operations
+        if (!window._eventsCleared) {
+            window._eventsCleared = true;
+            setTimeout(() => {
+                currentEvents = [];
+                window._eventsCleared = false;
+                console.log('[Events] Events cleared');
+            }, 100);
+        }
     }
     
     // Connect to WebSocket on page load
