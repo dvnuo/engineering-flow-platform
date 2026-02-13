@@ -915,22 +915,21 @@ def _get_skills_list() -> List[Dict[str, Any]]:
     return skills
 
 
-async def api_skills(request: web.Request) -> web.Response:
+async def api_skills(request: web.Request) -> web.Response):
     """Get list of available skills.
     
     GET /api/skills
-    Returns: List of skills with name, description, emoji
+    Returns: List of skills with name, description, triggers
     """
     try:
-        query = request.query.get('q', '').lower()
-        skills = _get_skills_list()
+        from src.skills import skill_registry
         
-        if query:
-            # Filter skills by query
-            skills = [
-                s for s in skills
-                if query in s.get('name', '') or query in s.get('description', '')
-            ]
+        # Load skills if not already loaded
+        if not skill_registry._initialized:
+            skill_registry.load_skills()
+        
+        # Return new skill registry format
+        skills = skill_registry.get_all_skill_summaries()
         
         return web.json_response({'skills': skills})
     except Exception as e:
