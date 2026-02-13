@@ -915,7 +915,7 @@ def _get_skills_list() -> List[Dict[str, Any]]:
     return skills
 
 
-async def api_skills(request: web.Request) -> web.Response):
+async def api_skills(request: web.Request) -> web.Response:
     """Get list of available skills.
     
     GET /api/skills
