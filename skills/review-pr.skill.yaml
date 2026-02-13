@@ -13,6 +13,7 @@ trigger:
   - "code review"
   - "analyze pull request"
   - "/skill review-pr"
+  - "/review-pr"
 
 # Tools this skill is allowed to use
 # LLM cannot call tools outside this list (deterministic guardrail)
