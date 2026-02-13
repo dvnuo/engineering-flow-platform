@@ -256,7 +256,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         await response.prepare(request)
         
         # Send start event
-        await response.write(f"event: start\ndata: {json.dumps({'session_id': session_id})}\n\n")
+        await response.write(f"event: start\ndata: {json.dumps({'session_id': session_id})}\n\n".encode())
         
         # Run agent and stream response
         agent = AgentCore()
@@ -266,7 +266,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             try:
                 # Escape newlines for SSE format
                 escaped = chunk.replace('\n', '\\n').replace('\r', '\\r')
-                await response.write(f"event: chunk\ndata: {escaped}\n\n")
+                await response.write(f"event: chunk\ndata: {escaped}\n\n".encode())
             except Exception as e:
                 logger.error(f"Error writing stream chunk: {e}")
         
@@ -297,10 +297,10 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             'usage': usage,
             'session_id': session_id,
         })
-        await response.write(f"event: usage\ndata: {usage_data}\n\n")
+        await response.write(f"event: usage\ndata: {usage_data}\n\n".encode())
         
         # Send done event
-        await response.write(f"event: done\ndata: \n\n")
+        await response.write(f"event: done\ndata: \n\n".encode())
         
         return response
         
@@ -311,7 +311,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         logger.error(f"Stream error: {e}")
         error_data = json.dumps({'error': str(e)})
         try:
-            await response.write(f"event: error\ndata: {error_data}\n\n")
+            await response.write(f"event: error\ndata: {error_data}\n\n".encode())
         except Exception:
             pass
         return web.Response(status=500, text=str(e))
