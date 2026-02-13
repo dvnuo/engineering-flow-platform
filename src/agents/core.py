@@ -18,6 +18,7 @@ from src.agents.executor import (
     SkillResult,
     get_tools_schemas,
     execute_tool_by_name,
+    ToolResult,
 )
 
 logger = logging.getLogger(__name__)
