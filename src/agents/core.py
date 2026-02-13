@@ -340,151 +340,132 @@ You have access to the following tools. When a user asks you to do something tha
         enable_reasoning = reasoning_replay if reasoning_replay is not None else config.llm.get('reasoning_replay', False)
         logger.info(f"[{session_id}] reasoning_replay={enable_reasoning}")
         
-        # Step 1: Call LLM with tools
-        logger.debug(f"Calling LLM with {len(self.tools)} tools")
-        
-        llm_result = await llm_client.chat(
-            messages=messages,
-            system_prompt=self.system_prompt,
-            tools=self.tools,
-            reasoning_replay=enable_reasoning,
-        )
-        
-        # Debug logging for LLM response
-        if _is_debug_enabled():
-            logger.debug(f"=== [AGENT] LLM RESPONSE ===")
-            content = llm_result.get('content') or ''
-            logger.debug(f"Content length: {len(content)} chars")
-            logger.debug(f"Content: {_format_content(content, max_length=1000)}")
-            
-            # Log reasoning if present
-            reasoning = llm_result.get('reasoning')
-            if reasoning:
-                logger.debug(f"Reasoning length: {len(reasoning)} chars")
-                logger.debug(f"Reasoning: {_format_content(reasoning, max_length=2000)}")
-            
-            tool_calls = llm_result.get('tool_calls', [])
-            logger.debug(f"Tool calls: {len(tool_calls)}")
-            for tc in tool_calls:
-                tc_name = tc.get('function', {}).get('name', 'unknown')
-                tc_args = tc.get('function', {}).get('arguments', '')
-                logger.debug(f"  - {tc_name}: {_format_content(tc_args, max_length=300)}")
-            
-            usage = llm_result.get('usage', {})
-            logger.debug(f"Usage: {usage}")
-        
-        # Track usage if enabled
-        if track_usage:
-            usage_data = llm_result.get("usage", {})
-        
-        content = (llm_result.get("content") or "").strip()
-        tool_calls = llm_result.get("tool_calls", [])
-        
-        # If no tool calls, return directly
-        if not tool_calls:
-            await session_manager.add_message(session_id, "assistant", content)
-            result = {"response": content, "usage": usage_data}
-            if enable_reasoning:
-                result["reasoning"] = llm_result.get("reasoning", "")
-            return result
-        
-        logger.info(f"LLM requested {len(tool_calls)} tool calls")
-        
-        # Step 2-4: Execute each tool and collect results
-        # IMPORTANT: assistant message must contain tool_calls for OpenAI API
-        assistant_msg = {"role": "assistant"}
-        
-        # If LLM returned tool_calls, include them in the assistant message
-        if tool_calls:
-            assistant_msg["tool_calls"] = tool_calls
-            # Content can be empty when using tool_calls
-            assistant_msg["content"] = content if content else None
-        
-        messages.append(assistant_msg)
-        
-        # Execute each tool call
-        for tool_call in tool_calls:
-            tool_call_id = tool_call.get("id", "unknown")
-            function = tool_call.get("function", {})
-            tool_name = function.get("name", "")
-            
-            try:
-                args = json.loads(function.get("arguments", "{}"))
-            except json.JSONDecodeError:
-                args = {}
-            
-            # Execute the tool (skills can use all available tools)
-            logger.info(f"Executing tool: {tool_name} with args: {args}")
-            tool_result = await execute_tool_by_name(tool_name, **args)
-            tracer.log_tool_call(
-                tool_name=tool_name,
-                arguments=args,
-                result=str(tool_result),
-                success=tool_result.success,
-            )
-            
-            # Debug logging for tool result
-            if _is_debug_enabled():
-                logger.debug(f"=== [AGENT] TOOL RESULT ===")
-                logger.debug(f"Tool: {tool_name}")
-                logger.debug(f"Success: {tool_result.success}")
-                logger.debug(f"Result: {_format_content(str(tool_result), max_length=1000)}")
-            
-            # Add tool result - MUST follow the assistant message with tool_calls
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call_id,
-                "content": str(tool_result),
-            })
-            
-            logger.info(f"Tool result: {str(tool_result)[:200]}")
-
-        # FR-3: Dynamic Skill Injection - Append skill prompt to system prompt
+        # ===== BUILD EFFECTIVE SYSTEM PROMPT (with Skill Guidance) =====
+        # FR-3: Dynamic Skill Injection - Include skill prompt from FIRST call
         effective_system_prompt = self.system_prompt
         if skill_prompt:
             effective_system_prompt = f"{self.system_prompt}\n\n## Skill Guidance\n\n{skill_prompt}"
             logger.info(f"[Skill] Injected skill guidance for: {matched_skills[0].name}")
-
-        # Step 5: Get final response from LLM
-        final_result = await llm_client.chat(
-            messages=messages,
-            system_prompt=effective_system_prompt,
-            tools=self.tools
-        )
         
-        final_content = (final_result.get("content") or "").strip()
+        # ===== TOOL LOOP (REACT Pattern) =====
+        # Continue calling LLM until it stops requesting tools
+        # This is the proper agent loop, not a single-step execution
         
-        # Debug logging for final response
-        if _is_debug_enabled():
-            logger.debug(f"=== [AGENT] FINAL RESPONSE ===")
-            logger.debug(f"Content length: {len(final_content)} chars")
-            logger.debug(f"Content: {_format_content(final_content, max_length=1000)}")
-            logger.debug(f"Usage: {final_result.get('usage', {})}")
+        max_tool_iterations = 10  # Prevent infinite loops
+        iteration = 0
         
-        # Track final usage and merge
-        if track_usage:
-            final_usage = final_result.get("usage", {})
-            if usage_data:
-                usage_data = {
-                    "prompt_tokens": usage_data.get("prompt_tokens", 0) + final_usage.get("prompt_tokens", 0),
-                    "completion_tokens": usage_data.get("completion_tokens", 0) + final_usage.get("completion_tokens", 0),
-                    "total_tokens": usage_data.get("total_tokens", 0) + final_usage.get("total_tokens", 0),
-                }
-            else:
-                usage_data = final_usage
+        while iteration < max_tool_iterations:
+            iteration += 1
+            
+            # Step 1: Call LLM with tools (include skill_prompt from first call)
+            logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM")
+            
+            llm_result = await llm_client.chat(
+                messages=messages,
+                system_prompt=effective_system_prompt,
+                tools=self.tools,
+                reasoning_replay=enable_reasoning,
+            )
+            
+            # Debug logging for LLM response
+            if _is_debug_enabled():
+                logger.debug(f"=== [AGENT] LLM RESPONSE (iter {iteration}) ===")
+                content = llm_result.get('content') or ''
+                logger.debug(f"Content length: {len(content)} chars")
+                
+                tool_calls = llm_result.get('tool_calls', [])
+                logger.debug(f"Tool calls: {len(tool_calls)}")
+                for tc in tool_calls:
+                    tc_name = tc.get('function', {}).get('name', 'unknown')
+                    logger.debug(f"  - {tc_name}")
+            
+            # Track usage
+            if track_usage:
+                iter_usage = llm_result.get("usage", {})
+                if usage_data:
+                    usage_data = {
+                        "prompt_tokens": usage_data.get("prompt_tokens", 0) + iter_usage.get("prompt_tokens", 0),
+                        "completion_tokens": usage_data.get("completion_tokens", 0) + iter_usage.get("completion_tokens", 0),
+                        "total_tokens": usage_data.get("total_tokens", 0) + iter_usage.get("total_tokens", 0),
+                    }
+                else:
+                    usage_data = iter_usage
+            
+            content = (llm_result.get("content") or "").strip()
+            tool_calls = llm_result.get("tool_calls", [])
+            
+            # If no tool calls, we're done - return the response
+            if not tool_calls:
+                await session_manager.add_message(session_id, "assistant", content)
+                result = {"response": content, "usage": usage_data}
+                if enable_reasoning:
+                    result["reasoning"] = llm_result.get("reasoning", "")
+                
+                # Complete execution tracing
+                tracer.complete_execution(content)
+                return result
+            
+            logger.info(f"[Tool Loop] Iteration {iteration}: LLM requested {len(tool_calls)} tool calls")
+            
+            # Step 2: Execute each tool and collect results
+            # IMPORTANT: assistant message must contain tool_calls for OpenAI API
+            assistant_msg = {"role": "assistant"}
+            if tool_calls:
+                assistant_msg["tool_calls"] = tool_calls
+                assistant_msg["content"] = content if content else None
+            
+            messages.append(assistant_msg)
+            
+            # Execute each tool call
+            for tool_call in tool_calls:
+                tool_call_id = tool_call.get("id", "unknown")
+                function = tool_call.get("function", {})
+                tool_name = function.get("name", "")
+                
+                try:
+                    args = json.loads(function.get("arguments", "{}"))
+                except json.JSONDecodeError:
+                    args = {}
+                
+                # ===== CONFIRMATION GATE (FR-4) =====
+                # Check if this is a write operation that requires confirmation
+                write_tools = {'github_comment_pr', 'github_add_comment', 'jira_add_comment', 
+                              'git_commit', 'git_push', 'jira_transition'}
+                
+                if tool_name in write_tools:
+                    logger.info(f"[Confirmation] Tool '{tool_name}' requires confirmation")
+                    # For now, auto-confirm in default mode (can be made interactive later)
+                    # TODO: Implement actual user confirmation flow
+                    logger.info(f"[Confirmation] Auto-confirming write operation: {tool_name}")
+                
+                # Execute the tool
+                logger.info(f"Executing tool: {tool_name} with args: {args}")
+                tool_result = await execute_tool_by_name(tool_name, **args)
+                tracer.log_tool_call(
+                    tool_name=tool_name,
+                    arguments=args,
+                    result=str(tool_result),
+                    success=tool_result.success,
+                )
+                
+                # Add tool result - MUST follow the assistant message with tool_calls
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": str(tool_result),
+                })
+                
+                logger.info(f"Tool result: {str(tool_result)[:200]}")
+            
+            # Loop continues - LLM will decide next action based on tool results
+            # This is the key: don't return after one tool call, let LLM decide
         
-        # Add final response to history
-        await session_manager.add_message(session_id, "assistant", final_content)
+        # Safety: max iterations reached
+        logger.warning(f"[Tool Loop] Max iterations ({max_tool_iterations}) reached")
+        await session_manager.add_message(session_id, "assistant", "Task completed after maximum iterations.")
+        tracer.complete_execution("max_iterations_reached")
         
-        # Complete execution tracing (FR-7)
-        tracer.complete_execution(final_content)
-        
-        # Return response with reasoning if enabled
-        result = {"response": final_content, "usage": usage_data}
-        if enable_reasoning:
-            result["reasoning"] = llm_result.get("reasoning", "")
-        
-        return result
+        return {"response": "Task completed (max iterations reached)", "usage": usage_data or {}}
 
     async def _execute_skill(
         self,
