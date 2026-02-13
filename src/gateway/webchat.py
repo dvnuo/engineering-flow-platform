@@ -261,14 +261,20 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         # Run agent and stream response
         agent = AgentCore()
         
-        async def stream_callback(chunk: str):
-            """Callback for streaming chunks."""
+        async def stream_callback(event_data: str):
+            """Callback for streaming events (tool calls, progress, final response)."""
             try:
+                import json
+                # Parse the event data
+                data = json.loads(event_data)
+                event_type = data.get("type", "chunk")
+                
+                # Format as SSE event
                 # Escape newlines for SSE format
-                escaped = chunk.replace('\n', '\\n').replace('\r', '\\r')
-                await response.write(f"event: chunk\ndata: {escaped}\n\n")
+                escaped = event_data.replace('\n', '\\n').replace('\r', '\\r')
+                await response.write(f"event: {event_type}\ndata: {escaped}\n\n")
             except Exception as e:
-                logger.error(f"Error writing stream chunk: {e}")
+                logger.error(f"Error writing stream event: {e}")
         
         result = await agent.process(
             message=message,
@@ -280,6 +286,13 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         
         response_text = result.get("response", "") if result else ""
         usage = result.get("usage", {}) if result else {}
+        
+        # Stream the final response as a chunk event
+        if response_text:
+            await stream_callback(json.dumps({
+                "type": "chunk",
+                "content": response_text
+            }))
         
         # Record usage
         if usage:

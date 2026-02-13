@@ -176,6 +176,7 @@ You have access to the following tools. When a user asks you to do something tha
         user_name: Optional[str] = None,
         track_usage: bool = True,
         reasoning_replay: Optional[bool] = None,
+        stream_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         """Process a user message with ReAct pattern.
         
@@ -185,6 +186,7 @@ You have access to the following tools. When a user asks you to do something tha
             reasoning_replay: Enable reasoning_replay to see model's internal reasoning.
                 When enabled, includes model's thinking process in response.
                 Default: Uses config.llm.reasoning_replay setting.
+            stream_callback: Optional callback for streaming events (tool calls, progress, etc.)
         
         Returns:
             Dict with:
@@ -354,11 +356,27 @@ You have access to the following tools. When a user asks you to do something tha
         max_tool_iterations = 10  # Prevent infinite loops
         iteration = 0
         
+        # Helper function to send stream events
+        def send_event(event_type: str, data: dict):
+            """Send event via stream_callback if available."""
+            if stream_callback:
+                import json
+                event = json.dumps({"type": event_type, **data})
+                stream_callback(event)
+        
+        # Send skill matched event
+        if matched_skills:
+            send_event("skill_matched", {"skill": matched_skills[0].name})
+        
         while iteration < max_tool_iterations:
             iteration += 1
             
+            # Send iteration start event
+            send_event("iteration_start", {"iteration": iteration, "total": max_tool_iterations})
+            
             # Step 1: Call LLM with tools (include skill_prompt from first call)
             logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM")
+            send_event("llm_thinking", {"message": "LLM is thinking..."})
             
             llm_result = await llm_client.chat(
                 messages=messages,
@@ -401,6 +419,12 @@ You have access to the following tools. When a user asks you to do something tha
                 if enable_reasoning:
                     result["reasoning"] = llm_result.get("reasoning", "")
                 
+                # Send completion event
+                send_event("complete", {
+                    "response": content[:500] if content else "",
+                    "total_iterations": iteration
+                })
+                
                 # Complete execution tracing
                 tracer.complete_execution(content)
                 return result
@@ -422,10 +446,18 @@ You have access to the following tools. When a user asks you to do something tha
                 function = tool_call.get("function", {})
                 tool_name = function.get("name", "")
                 
+                # Parse arguments
                 try:
                     args = json.loads(function.get("arguments", "{}"))
                 except json.JSONDecodeError:
                     args = {}
+                
+                # Send tool call start event
+                send_event("tool_call", {
+                    "tool": tool_name,
+                    "args": args,
+                    "status": "executing"
+                })
                 
                 # ===== CONFIRMATION GATE (FR-4) =====
                 # Check if this is a write operation that requires confirmation
@@ -434,6 +466,11 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 if tool_name in write_tools:
                     logger.info(f"[Confirmation] Tool '{tool_name}' requires confirmation")
+                    send_event("confirmation", {
+                        "tool": tool_name,
+                        "message": f"Write operation '{tool_name}' requires confirmation",
+                        "auto_confirm": True
+                    })
                     # For now, auto-confirm in default mode (can be made interactive later)
                     # TODO: Implement actual user confirmation flow
                     logger.info(f"[Confirmation] Auto-confirming write operation: {tool_name}")
@@ -448,6 +485,14 @@ You have access to the following tools. When a user asks you to do something tha
                     success=tool_result.success,
                 )
                 
+                # Send tool result event
+                result_preview = str(tool_result)[:200]
+                send_event("tool_result", {
+                    "tool": tool_name,
+                    "result": result_preview,
+                    "success": tool_result.success
+                })
+                
                 # Add tool result - MUST follow the assistant message with tool_calls
                 messages.append({
                     "role": "tool",
@@ -457,12 +502,23 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 logger.info(f"Tool result: {str(tool_result)[:200]}")
             
+            # Send iteration complete event
+            send_event("iteration_end", {"iteration": iteration})
+            
             # Loop continues - LLM will decide next action based on tool results
             # This is the key: don't return after one tool call, let LLM decide
         
         # Safety: max iterations reached
         logger.warning(f"[Tool Loop] Max iterations ({max_tool_iterations}) reached")
         await session_manager.add_message(session_id, "assistant", "Task completed after maximum iterations.")
+        
+        # Send completion event
+        send_event("complete", {
+            "response": "Task completed (max iterations reached)",
+            "total_iterations": max_tool_iterations,
+            "note": "max_iterations"
+        })
+        
         tracer.complete_execution("max_iterations_reached")
         
         return {"response": "Task completed (max iterations reached)", "usage": usage_data or {}}
