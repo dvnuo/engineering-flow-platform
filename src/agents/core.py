@@ -365,7 +365,7 @@ You have access to the following tools. When a user asks you to do something tha
                 from src.gateway.event_bus import emit_agent_event_sync
                 emit_agent_event_sync(event_type, data)
             except Exception as e:
-                logger.debug(f"Event bus emit error: {e}")
+                logger.info(f"Event bus emit error: {e}")
             
             # Also send via callback if provided
             if stream_callback:
