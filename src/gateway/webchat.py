@@ -261,31 +261,25 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         # Run agent and stream response
         agent = AgentCore()
         
-        # Use a simple callback that just logs (for now)
-        # Events are still generated and logged server-side
-        def stream_callback(event_data: str):
-            """Callback for streaming events - logs for now."""
-            logger.debug(f"[Stream Event] {event_data[:100]}...")
+        async def stream_callback(chunk: str):
+            """Callback for streaming chunks."""
+            try:
+                # Escape newlines for SSE format
+                escaped = chunk.replace('\n', '\\n').replace('\r', '\\r')
+                await response.write(f"event: chunk\ndata: {escaped}\n\n")
+            except Exception as e:
+                logger.error(f"Error writing stream chunk: {e}")
         
-        try:
-            result = await agent.process(
-                message=message,
-                session_id=session_id,
-                user_name="webchat-user",
-                track_usage=True,
-                stream_callback=stream_callback,
-            )
-        except Exception as e:
-            logger.error(f"Agent process error: {e}", exc_info=True)
-            result = {"response": f"Error: {str(e)}", "usage": {}}
+        result = await agent.process(
+            message=message,
+            session_id=session_id,
+            user_name="webchat-user",
+            track_usage=True,
+            stream_callback=stream_callback,
+        )
         
         response_text = result.get("response", "") if result else ""
         usage = result.get("usage", {}) if result else {}
-        
-        # Stream the final response
-        if response_text:
-            escaped = json.dumps(response_text).replace('\n', '\\n').replace('\r', '\\r')
-            await response.write(f"event: chunk\ndata: {escaped}\n\n")
         
         # Record usage
         if usage:
