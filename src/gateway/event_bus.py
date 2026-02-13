@@ -57,17 +57,15 @@ class EventBus:
         import json
         logger.info(f"[EventBus] emit_sync: {event_type}")
         
-        # Simply add to listeners if any are sync-compatible
-        # For async contexts, use emit() directly
         event = json.dumps({
             "type": event_type,
             "data": data,
             "ts": 0
         })
         
-        # Add directly to all listener queues (if they're asyncio.Queue, this works)
-        async with self._lock:
-            listeners = list(self._listeners)
+        # Add directly to all listener queues - this works from sync context
+        # We iterate over a copy of the list
+        listeners = list(self._listeners)
         
         for listener in listeners:
             try:
