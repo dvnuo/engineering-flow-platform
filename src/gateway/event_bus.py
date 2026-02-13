@@ -50,23 +50,32 @@ class EventBus:
                 logger.error(f"Error sending event to listener: {e}")
     
     def emit_sync(self, event_type: str, data: Dict[str, Any]):
-        """Synchronous emit for use in async contexts."""
+        """Synchronous emit for use in callbacks.
+        
+        This is called from sync callbacks, so we need to be careful about the event loop.
+        """
         import json
+        logger.info(f"[EventBus] emit_sync: {event_type}")
+        
+        # Simply add to listeners if any are sync-compatible
+        # For async contexts, use emit() directly
         event = json.dumps({
             "type": event_type,
             "data": data,
             "ts": 0
         })
         
-        # Schedule async emit
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(self.emit(event_type, data))
-            else:
-                loop.run_until_complete(self.emit(event_type, data))
-        except Exception as e:
-            logger.debug(f"Event emit error: {e}")
+        # Add directly to all listener queues (if they're asyncio.Queue, this works)
+        async with self._lock:
+            listeners = list(self._listeners)
+        
+        for listener in listeners:
+            try:
+                # Try non-blocking put
+                listener.put_nowait(event)
+                logger.info(f"[EventBus] Event sent to listener")
+            except Exception as e:
+                logger.error(f"[EventBus] Error: {e}")
 
 
 # Global event bus instance
