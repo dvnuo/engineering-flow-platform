@@ -10,14 +10,14 @@ triggers:
   - /skill review-pr
   - /review-pr
 tools:
-  - github_get_pr
-  - github_get_diff
-  - github_comment_pr
+  - github_get_issue
+  - github_search_issues
+  - github_add_comment
 strategy:
-  - "1. Fetch PR details using github_get_pr"
-  - "2. Analyze the diff using github_get_diff"
+  - "1. Use github_get_issue to fetch PR details (title, description, state, author)"
+  - "2. Use github_search_issues to find related issues"
   - "3. Generate structured review feedback"
-  - "4. Comment on the PR with findings"
+  - "4. Use github_add_comment to post review findings"
 output_format: markdown
 ---
 
