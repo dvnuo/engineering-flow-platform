@@ -357,12 +357,32 @@ You have access to the following tools. When a user asks you to do something tha
         iteration = 0
         
         # Helper function to send stream events
+        # Supports both simple callbacks and asyncio.Queue
         def send_event(event_type: str, data: dict):
             """Send event via stream_callback if available."""
             if stream_callback:
                 import json
                 event = json.dumps({"type": event_type, **data})
-                stream_callback(event)
+                try:
+                    # Check if it's an asyncio.Queue
+                    if hasattr(stream_callback, 'put'):
+                        # It's a queue - put the event (will be read by API)
+                        import asyncio
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                # We're in an async context, schedule the put
+                                asyncio.create_task(stream_callback.put(event))
+                            else:
+                                # Loop not running, put directly
+                                stream_callback.put_nowait(event)
+                        except RuntimeError:
+                            stream_callback.put_nowait(event)
+                    else:
+                        # Regular callback
+                        stream_callback(event)
+                except Exception as e:
+                    logger.debug(f"Stream event error: {e}")
         
         # Send skill matched event
         if matched_skills:

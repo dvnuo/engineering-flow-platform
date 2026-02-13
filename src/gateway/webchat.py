@@ -258,25 +258,32 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         # Send start event
         await response.write(f"event: start\ndata: {json.dumps({'session_id': session_id})}\n\n".encode())
         
+        # Create an async queue for streaming events
+        import asyncio
+        event_queue = asyncio.Queue()
+        
         # Run agent and stream response
         agent = AgentCore()
         
-        async def stream_callback(chunk: str):
-            """Callback for streaming chunks."""
-            try:
-                # Escape newlines for SSE format
-                escaped = chunk.replace('\n', '\\n').replace('\r', '\\r')
-                await response.write(f"event: chunk\ndata: {escaped}\n\n".encode())
-            except Exception as e:
-                logger.error(f"Error writing stream chunk: {e}")
-        
+        # Pass the queue to the agent for real-time events
         result = await agent.process(
             message=message,
             session_id=session_id,
             user_name="webchat-user",
             track_usage=True,
-            stream_callback=stream_callback,
+            stream_callback=event_queue,
         )
+        
+        # Stream events from queue while agent is running
+        while not event_queue.empty():
+            try:
+                event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                escaped = event.replace('\n', '\\n').replace('\r', '\\r')
+                await response.write(f"event: progress\ndata: {escaped}\n\n".encode())
+            except asyncio.TimeoutError:
+                break
+            except Exception as e:
+                logger.error(f"Error streaming event: {e}")
         
         response_text = result.get("response", "") if result else ""
         usage = result.get("usage", {}) if result else {}
