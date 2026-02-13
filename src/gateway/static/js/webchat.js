@@ -624,6 +624,9 @@
         statusSpan.textContent = 'Thinking...';
         typingIndicator.classList.remove('show');
         
+        // Reset events for new request
+        resetEvents();
+        
         // Use regular API directly (SSE streaming not yet implemented)
         await sendMessageFallback(content);
         
@@ -1580,6 +1583,14 @@
     let activeSessionId = null;
     
     /**
+     * Reset events for new request
+     */
+    function resetEvents() {
+        currentEvents = [];
+        console.log('[Events] Reset events for new request');
+    }
+    
+    /**
      * Connect to WebSocket for real-time agent events
      */
     function connectEventWebSocket() {
@@ -1641,6 +1652,7 @@
         };
         
         currentEvents.push(eventRecord);
+        console.log('[Events] Added event, total:', currentEvents.length, 'type:', type);
         
         switch (type) {
             case 'skill_matched':
@@ -1673,6 +1685,7 @@
                 break;
                 
             case 'complete':
+                console.log('[Events] Complete, total events:', currentEvents.length);
                 hideAgentEvent();
                 // Show thinking process button after complete
                 showThinkingProcessButton();
