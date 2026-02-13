@@ -28,6 +28,20 @@ async def handle_websocket(request: web.Request) -> WebSocketResponse:
     
     logger.info(f"WebSocket client connected. Total listeners: {len(event_bus._listeners)}")
     
+    async def read_events():
+        """Background task to read from queue and send to WebSocket."""
+        while not ws.closed:
+            try:
+                # Wait for event from queue with timeout
+                event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                await ws.send_str(event)
+            except asyncio.TimeoutError:
+                # No event, continue checking
+                continue
+            except Exception as e:
+                logger.error(f"Error reading from queue: {e}")
+                break
+    
     try:
         # Send welcome message
         await ws.send_str(json.dumps({
@@ -35,7 +49,10 @@ async def handle_websocket(request: web.Request) -> WebSocketResponse:
             "message": "Connected to EFP event bus"
         }))
         
-        # Also handle incoming messages (for future use)
+        # Start background task to read events from queue
+        event_reader = asyncio.create_task(read_events())
+        
+        # Also handle incoming messages from client
         async for msg in ws:
             if msg.type == web.WSMsgType.TEXT:
                 try:
@@ -48,6 +65,9 @@ async def handle_websocket(request: web.Request) -> WebSocketResponse:
             elif msg.type == web.WSMsgType.ERROR:
                 logger.error(f"WebSocket error: {ws.exception()}")
                 break
+        
+        # Cancel event reader
+        event_reader.cancel()
         
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
