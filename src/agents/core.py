@@ -413,32 +413,15 @@ You have access to the following tools. When a user asks you to do something tha
             except json.JSONDecodeError:
                 args = {}
             
-            # FR-5: Tool Whitelist per Skill
-            # Validate tool is allowed for the matched skill
-            if allowed_tools and tool_name not in allowed_tools:
-                logger.warning(f"[Skill] Tool {tool_name} not in allowed tools: {allowed_tools}")
-                tool_result = ToolResult(
-                    success=False,
-                    output="",
-                    error=f"Tool '{tool_name}' is not allowed for skill '{matched_skills[0].name if matched_skills else 'unknown'}'. Allowed tools: {', '.join(allowed_tools)}"
-                )
-                tracer.log_tool_call(
-                    tool_name=tool_name,
-                    arguments=args,
-                    result=str(tool_result),
-                    success=False,
-                    error=tool_result.error,
-                )
-            else:
-                logger.info(f"Executing tool: {tool_name} with args: {args}")
-                # Execute the tool
-                tool_result = await execute_tool_by_name(tool_name, **args)
-                tracer.log_tool_call(
-                    tool_name=tool_name,
-                    arguments=args,
-                    result=str(tool_result),
-                    success=tool_result.success,
-                )
+            # Execute the tool (skills can use all available tools)
+            logger.info(f"Executing tool: {tool_name} with args: {args}")
+            tool_result = await execute_tool_by_name(tool_name, **args)
+            tracer.log_tool_call(
+                tool_name=tool_name,
+                arguments=args,
+                result=str(tool_result),
+                success=tool_result.success,
+            )
             
             # Debug logging for tool result
             if _is_debug_enabled():
