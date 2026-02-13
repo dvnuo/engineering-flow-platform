@@ -253,7 +253,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             }
         )
         
-        await response.prepare()
+        await response.prepare(request)
         
         # Send start event
         await response.write(f"event: start\ndata: {json.dumps({'session_id': session_id})}\n\n")
