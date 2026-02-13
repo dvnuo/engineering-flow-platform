@@ -148,6 +148,13 @@ class Gateway:
         # WebChat routes (if available)
         if setup_webchat_routes:
             setup_webchat_routes(self.app)
+        
+        # Setup event routes (WebSocket for real-time events)
+        try:
+            from .events import setup_event_routes
+            setup_event_routes(self.app)
+        except Exception as e:
+            logger.warning(f"Could not setup event routes: {e}")
             logger.info("WebChat UI enabled at /chat")
 
         # Settings page

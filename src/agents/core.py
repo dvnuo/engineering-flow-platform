@@ -359,7 +359,15 @@ You have access to the following tools. When a user asks you to do something tha
         # Helper function to send stream events
         # Supports both simple callbacks and asyncio.Queue
         def send_event(event_type: str, data: dict):
-            """Send event via stream_callback if available."""
+            """Send event via stream_callback and event bus."""
+            # Emit to event bus for WebSocket clients
+            try:
+                from src.gateway.event_bus import emit_agent_event_sync
+                emit_agent_event_sync(event_type, data)
+            except Exception as e:
+                logger.debug(f"Event bus emit error: {e}")
+            
+            # Also send via callback if provided
             if stream_callback:
                 import json
                 event = json.dumps({"type": event_type, **data})
