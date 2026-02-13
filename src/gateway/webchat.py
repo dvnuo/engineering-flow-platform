@@ -261,6 +261,9 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         # Run agent and stream response
         agent = AgentCore()
         
+        # Use a queue to handle async writes safely
+        event_queue = []
+        
         async def stream_callback(event_data: str):
             """Callback for streaming events (tool calls, progress, final response)."""
             try:
@@ -269,12 +272,11 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 data = json.loads(event_data)
                 event_type = data.get("type", "chunk")
                 
-                # Format as SSE event
-                # Escape newlines for SSE format
-                escaped = event_data.replace('\n', '\\n').replace('\r', '\\r')
-                await response.write(f"event: {event_type}\ndata: {escaped}\n\n")
+                # Queue the event to be written after agent completes
+                # This avoids async issues with the callback
+                event_queue.append((event_type, event_data))
             except Exception as e:
-                logger.error(f"Error writing stream event: {e}")
+                logger.error(f"Error queuing stream event: {e}")
         
         result = await agent.process(
             message=message,
@@ -287,12 +289,18 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         response_text = result.get("response", "") if result else ""
         usage = result.get("usage", {}) if result else {}
         
+        # Flush all queued events
+        for event_type, event_data in event_queue:
+            try:
+                escaped = event_data.replace('\n', '\\n').replace('\r', '\\r')
+                await response.write(f"event: {event_type}\ndata: {escaped}\n\n")
+            except Exception as e:
+                logger.error(f"Error writing queued event: {e}")
+        
         # Stream the final response as a chunk event
         if response_text:
-            await stream_callback(json.dumps({
-                "type": "chunk",
-                "content": response_text
-            }))
+            escaped = json.dumps({"type": "chunk", "content": response_text}).replace('\n', '\\n').replace('\r', '\\r')
+            await response.write(f"event: chunk\ndata: {escaped}\n\n")
         
         # Record usage
         if usage:
