@@ -37,7 +37,8 @@ class Skill:
     @classmethod
     def from_dict(cls, data: Dict) -> "Skill":
         """Create Skill from dictionary (parsed YAML)."""
-        triggers = data.get("trigger", [])
+        # Support both "trigger" and "triggers" keys
+        triggers = data.get("trigger") or data.get("triggers", [])
         patterns = [re.compile(re.escape(t), re.IGNORECASE) for t in triggers]
         
         return cls(
