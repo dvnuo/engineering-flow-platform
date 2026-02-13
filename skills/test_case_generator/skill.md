@@ -1,3 +1,21 @@
+---
+name: test-case-generator
+description: Generate automated test cases from requirements
+version: 1.0.0
+owner: devops-team
+triggers:
+  - create tests
+  - generate test cases
+  - write tests
+  - test case
+tools: []
+strategy:
+  - "1. Extract requirements from user input"
+  - "2. Generate pytest-compatible test code"
+  - "3. Return formatted code block"
+output_format: markdown
+---
+
 # Test Case Generator
 
 **Capability**: Generate automated test cases from requirements using LLM.
@@ -28,11 +46,5 @@ class TestUserLogin:
 
 Just ask naturally:
 - "create tests for user login"
-- "generate test cases for this feature"
-- "write pytest tests"
-
-## Notes
-
-- LLM generates test code based on requirements
-- Uses pytest conventions by default
-- Includes TODO comments for implementation details
+- "generate test cases for the payment module"
+- "write unit tests for user authentication"

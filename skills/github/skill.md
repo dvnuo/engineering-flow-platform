@@ -1,6 +1,28 @@
+---
+name: github
+description: Interact with GitHub using the GitHub API
+version: 1.0.0
+owner: devops-team
+triggers:
+  - github issue
+  - github pr
+  - github search
+  - github comment
+  - github repo
+tools:
+  - github_get_issue
+  - github_search_issues
+  - github_add_comment
+strategy:
+  - "1. Parse the GitHub request to determine the appropriate action"
+  - "2. Execute the GitHub API call using the appropriate tool"
+  - "3. Return the result in a clear format"
+output_format: markdown
+---
+
 # GitHub Skill
 
-**Capability**: Interact with GitHub using the `gh` CLI or GitHub API.
+**Capability**: Interact with GitHub using the GitHub API.
 
 ## Available Tools
 
@@ -34,5 +56,5 @@ When user asks about GitHub operations, use the appropriate tool:
 
 ## Notes
 
-- Requires GitHub CLI (`gh`) to be configured
+- Requires GitHub API authentication
 - Uses environment variable `GITHUB_TOKEN` or config for authentication

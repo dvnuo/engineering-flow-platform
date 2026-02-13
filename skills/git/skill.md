@@ -1,3 +1,27 @@
+---
+name: git
+description: Execute git commands and manage version control
+version: 1.0.0
+owner: devops-team
+triggers:
+  - git status
+  - git commit
+  - git push
+  - git clone
+  - git branch
+  - git checkout
+tools:
+  - git_status
+  - git_commit
+  - git_push
+  - git_clone
+strategy:
+  - "1. Parse the user's git request to determine the appropriate action"
+  - "2. Execute the git command using the appropriate tool"
+  - "3. Return the result in a clear format"
+output_format: markdown
+---
+
 # Git Skill
 
 **Capability**: Execute git commands using the built-in `git` tool.

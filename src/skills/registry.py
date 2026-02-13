@@ -66,7 +66,9 @@ class SkillRegistry:
     def load_skills(self) -> int:
         """Load all skills from skills directory.
         
-        Supports both .skill.yaml and .skill.md (with frontmatter) formats.
+        Supports both:
+        - skills/*.md (single file skills, e.g., review-pr.md)
+        - skills/*/skill.md (directory-based skills, e.g., coding_agent/skill.md)
         
         Returns:
             Number of skills loaded
@@ -76,10 +78,20 @@ class SkillRegistry:
             return 0
         
         loaded = 0
-        # Support both .skill.yaml and .skill.md formats
-        skill_files = list(self.skills_dir.glob("*.skill.yaml")) + list(self.skills_dir.glob("*.skill.md"))
+        # Pattern 1: Single file skills in skills/ directory (e.g., review-pr.md)
+        single_file_skills = [
+            f for f in self.skills_dir.glob("*.md")
+            if f.name.lower() != "readme.md"
+        ]
         
-        for skill_file in skill_files:
+        # Pattern 2: Directory-based skills (e.g., skills/coding_agent/skill.md)
+        for skill_dir in self.skills_dir.iterdir():
+            if skill_dir.is_dir():
+                skill_file = skill_dir / "skill.md"
+                if skill_file.exists():
+                    single_file_skills.append(skill_file)
+        
+        for skill_file in single_file_skills:
             try:
                 skill = self._load_skill_file(skill_file)
                 if skill:
