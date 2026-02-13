@@ -279,14 +279,6 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             logger.error(f"Agent process error: {e}", exc_info=True)
             result = {"response": f"Error: {str(e)}", "usage": {}}
         
-        result = await agent.process(
-            message=message,
-            session_id=session_id,
-            user_name="webchat-user",
-            track_usage=True,
-            stream_callback=stream_callback,
-        )
-        
         response_text = result.get("response", "") if result else ""
         usage = result.get("usage", {}) if result else {}
         
