@@ -1574,9 +1574,10 @@
     // ========== Real-time Agent Events (WebSocket) ==========
     
     let eventWs = null;
-    let eventQueue = [];
     let currentAgentEventDiv = null;
-    let isReceivingEvents = false;
+    let currentEvents = [];  // Store events for current request
+    let currentSessionEvents = {};  // Store events by session_id
+    let activeSessionId = null;
     
     /**
      * Connect to WebSocket for real-time agent events
@@ -1624,11 +1625,22 @@
     function handleAgentEvent(data) {
         const type = data.type;
         const eventData = data.data || {};
+        const timestamp = data.ts || Date.now() / 1000;
         
         console.log('[Agent Event]', type, eventData);
         
         // Skip non-relevant events
         if (type === 'connected' || type === 'pong') return;
+        
+        // Store event
+        const eventRecord = {
+            type: type,
+            data: eventData,
+            timestamp: timestamp,
+            display: getEventDisplay(type, eventData)
+        };
+        
+        currentEvents.push(eventRecord);
         
         switch (type) {
             case 'skill_matched':
@@ -1662,13 +1674,75 @@
                 
             case 'complete':
                 hideAgentEvent();
+                // Show thinking process button after complete
+                showThinkingProcessButton();
                 break;
                 
             default:
-                // Show unknown events briefly
                 showAgentEvent('agent-event', `${type}: ${JSON.stringify(eventData).substring(0, 50)}...`);
                 setTimeout(hideAgentEvent, 2000);
         }
+    }
+    
+    /**
+     * Get display info for event type
+     */
+    function getEventDisplay(type, data) {
+        const eventIcons = {
+            'skill_matched': '🎯',
+            'iteration_start': '🔄',
+            'llm_thinking': '🤔',
+            'tool_call': '🔧',
+            'tool_result': '✅',
+            'confirmation': '⚠️',
+            'iteration_end': '📍',
+            'complete': '🎉'
+        };
+        
+        const eventNames = {
+            'skill_matched': 'Skill Matched',
+            'iteration_start': 'Iteration Start',
+            'llm_thinking': 'LLM Thinking',
+            'tool_call': 'Tool Call',
+            'tool_result': 'Tool Result',
+            'confirmation': 'Confirmation',
+            'iteration_end': 'Iteration End',
+            'complete': 'Complete'
+        };
+        
+        let message = '';
+        switch (type) {
+            case 'skill_matched':
+                message = `Skill: ${data.skill || 'Unknown'}`;
+                break;
+            case 'iteration_start':
+                message = `Iteration ${data.iteration || 1}${data.total ? '/' + data.total : ''}`;
+                break;
+            case 'llm_thinking':
+                message = data.message || 'LLM is thinking...';
+                break;
+            case 'tool_call':
+                message = `Calling: ${data.tool || 'Unknown tool'}`;
+                break;
+            case 'tool_result':
+                message = `${data.success ? '✅' : '❌'} ${data.tool || 'Tool'} - ${data.result || ''}`;
+                break;
+            case 'confirmation':
+                message = data.message || 'Confirmation required';
+                break;
+            case 'complete':
+                message = 'Execution complete';
+                break;
+            default:
+                message = `${type}: ${JSON.stringify(data).substring(0, 50)}`;
+        }
+        
+        return {
+            icon: eventIcons[type] || '📌',
+            name: eventNames[type] || type,
+            message: message,
+            details: data
+        };
     }
     
     /**
@@ -1706,6 +1780,110 @@
             currentAgentEventDiv.remove();
             currentAgentEventDiv = null;
         }
+    }
+    
+    /**
+     * Show "View Thinking Process" button after completion
+     */
+    function showThinkingProcessButton() {
+        if (currentEvents.length === 0) return;
+        
+        // Find the assistant message (just added)
+        const assistantMessages = messagesContainer.querySelectorAll('.message.assistant:not(.has-thinking)');
+        if (assistantMessages.length === 0) return;
+        
+        const lastMessage = assistantMessages[assistantMessages.length - 1];
+        lastMessage.classList.add('has-thinking');
+        
+        // Create toggle button
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'thinking-process-toggle';
+        toggleBtn.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M12 16v-4"/>
+                <path d="M12 8h.01"/>
+            </svg>
+            <span>View Thinking Process (${currentEvents.length} steps)</span>
+            <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 12 15 18 9"/>
+            </svg>
+        `;
+        
+        // Create thinking process content
+        const processContent = document.createElement('div');
+        processContent.className = 'thinking-process-content';
+        processContent.style.display = 'none';
+        
+        // Build event timeline
+        let timelineHtml = '<div class="thinking-timeline">';
+        currentEvents.forEach((event, index) => {
+            const display = event.display;
+            const isLast = index === currentEvents.length - 1;
+            timelineHtml += `
+                <div class="thinking-item ${isLast ? 'last' : ''}">
+                    <div class="thinking-icon">${display.icon}</div>
+                    <div class="thinking-details">
+                        <div class="thinking-name">${display.name}</div>
+                        <div class="thinking-message">${escapeHtml(display.message)}</div>
+                    </div>
+                </div>
+            `;
+        });
+        timelineHtml += '</div>';
+        
+        processContent.innerHTML = timelineHtml;
+        
+        // Insert after the message bubble
+        const bubble = lastMessage.querySelector('.message-bubble');
+        if (bubble) {
+            bubble.appendChild(toggleBtn);
+            bubble.appendChild(processContent);
+        }
+        
+        // Toggle functionality
+        let expanded = false;
+        toggleBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            expanded = !expanded;
+            
+            if (expanded) {
+                processContent.style.display = 'block';
+                toggleBtn.classList.add('expanded');
+                toggleBtn.innerHTML = `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 16v-4"/>
+                        <path d="M12 8h.01"/>
+                    </svg>
+                    <span>Hide Thinking Process</span>
+                    <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="18 15 12 9 6 15"/>
+                    </svg>
+                `;
+            } else {
+                processContent.style.display = 'none';
+                toggleBtn.classList.remove('expanded');
+                toggleBtn.innerHTML = `
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 16v-4"/>
+                        <path d="M12 8h.01"/>
+                    </svg>
+                    <span>View Thinking Process (${currentEvents.length} steps)</span>
+                    <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="6 9 12 15 18 9"/>
+                    </svg>
+                `;
+            }
+            
+            scrollToBottom();
+        });
+        
+        // Clear events for next request
+        setTimeout(() => {
+            currentEvents = [];
+        }, 1000);
     }
     
     // Connect to WebSocket on page load
