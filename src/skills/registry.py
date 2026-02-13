@@ -65,6 +65,8 @@ class SkillRegistry:
     def load_skills(self) -> int:
         """Load all skills from skills directory.
         
+        Supports both .skill.yaml and .skill.md (with frontmatter) formats.
+        
         Returns:
             Number of skills loaded
         """
@@ -73,7 +75,10 @@ class SkillRegistry:
             return 0
         
         loaded = 0
-        for skill_file in self.skills_dir.glob("*.skill.yaml"):
+        # Support both .skill.yaml and .skill.md formats
+        skill_files = list(self.skills_dir.glob("*.skill.yaml")) + list(self.skills_dir.glob("*.skill.md"))
+        
+        for skill_file in skill_files:
             try:
                 skill = self._load_skill_file(skill_file)
                 if skill:
@@ -88,11 +93,24 @@ class SkillRegistry:
         return loaded
     
     def _load_skill_file(self, file_path: Path) -> Optional[Skill]:
-        """Load a single skill from YAML file."""
+        """Load a single skill from YAML or MD file."""
         import yaml
         
         with open(file_path, 'r', encoding='utf-8') as f:
-            data = yaml.safe_load(f)
+            content = f.read()
+        
+        # Check if it's a markdown file with frontmatter
+        if file_path.suffix == '.md' and content.startswith('---'):
+            # Extract frontmatter between first two ---
+            parts = content.split('---', 2)
+            if len(parts) >= 3:
+                frontmatter = parts[1]
+                data = yaml.safe_load(frontmatter)
+            else:
+                data = {}
+        else:
+            # Plain YAML file
+            data = yaml.safe_load(content)
         
         if not data:
             return None
