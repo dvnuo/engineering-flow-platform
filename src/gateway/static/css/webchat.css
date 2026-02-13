@@ -1844,3 +1844,102 @@ input:checked + .slider:before {
     font-weight: 600;
 }
 
+/* Agent Real-time Events */
+.message.agent-event {
+    border-left: 3px solid var(--color-accent);
+    animation: eventSlideIn 0.3s ease-out;
+}
+
+.message.agent-event .avatar {
+    background: var(--color-accent);
+    font-size: 14px;
+}
+
+.message.agent-event.skill-matched {
+    border-left-color: #8b5cf6;
+}
+
+.message.agent-event.skill-matched .avatar {
+    background: #8b5cf6;
+}
+
+.message.agent-event.iteration-start {
+    border-left-color: #3b82f6;
+}
+
+.message.agent-event.iteration-start .avatar {
+    background: #3b82f6;
+}
+
+.message.agent-event.llm-thinking {
+    border-left-color: #f59e0b;
+}
+
+.message.agent-event.llm-thinking .avatar {
+    background: #f59e0b;
+    animation: thinkingPulse 1.5s ease-in-out infinite;
+}
+
+.message.agent-event.tool-call {
+    border-left-color: #06b6d4;
+}
+
+.message.agent-event.tool-call .avatar {
+    background: #06b6d4;
+}
+
+.message.agent-event.tool-result {
+    border-left-color: #22c55e;
+}
+
+.message.agent-event.tool-result .avatar {
+    background: #22c55e;
+}
+
+.message.agent-event.confirmation {
+    border-left-color: #ef4444;
+}
+
+.message.agent-event.confirmation .avatar {
+    background: #ef4444;
+}
+
+.agent-event-content {
+    font-size: 14px;
+    color: var(--color-text);
+    font-family: var(--font-sans);
+}
+
+.agent-event-label {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    margin-top: var(--space-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+@keyframes eventSlideIn {
+    from {
+        opacity: 0;
+        transform: translateX(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes thinkingPulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.7;
+    }
+}
+
+/* Hide agent events when streaming message appears */
+.message.streaming-message ~ .message.agent-event {
+    display: none;
+}
+
