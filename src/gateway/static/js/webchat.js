@@ -476,7 +476,7 @@
     
     /**
      * Add a message to the chat
-     * @param {string} role - 'user', 'assistant', or 'error'
+     * @param {string} role - 'user', 'assistant', 'tool', or 'error'
      * @param {string} content - Message content
      * @param {string} [timestamp] - Optional timestamp
      */
@@ -490,12 +490,31 @@
         const div = document.createElement('div');
         div.className = `message ${role}`;
         
-        const avatar = role === 'user' ? 'U' : role === 'assistant' ? 'AI' : '!';
+        // Set avatar based on role
+        let avatar;
+        switch (role) {
+            case 'user':
+                avatar = 'U';
+                break;
+            case 'assistant':
+                avatar = 'AI';
+                break;
+            case 'tool':
+                avatar = '🔧';
+                break;
+            default:
+                avatar = '?';
+        }
+        
         const time = timestamp ? formatSmartDate(timestamp) : formatSmartDate(new Date());
+        
+        // For tool messages, show a tool badge
+        const toolBadge = role === 'tool' ? '<span class="tool-badge">🔧 Tool Result</span>' : '';
         
         div.innerHTML = `
             <div class="avatar" aria-hidden="true">${avatar}</div>
             <div>
+                ${toolBadge}
                 <div class="message-bubble">${renderMarkdown(content)}</div>
                 <div class="message-timestamp" aria-label="Message time">${time}</div>
             </div>

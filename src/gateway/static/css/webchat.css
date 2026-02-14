@@ -386,6 +386,31 @@ body {
     color: white;
 }
 
+.message.tool .avatar {
+    background: var(--color-warning);
+    color: white;
+}
+
+.message.tool .message-bubble {
+    background: var(--color-bg-input);
+    border-left: 3px solid var(--color-warning);
+}
+
+.tool-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xs);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--color-warning);
+    background: rgba(245, 158, 11, 0.1);
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    margin-bottom: var(--space-xs);
+}
+
 /* Message Content */
 .message-bubble {
     padding: var(--space-md);
