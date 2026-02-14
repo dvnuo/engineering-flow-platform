@@ -508,33 +508,77 @@
         if (role === 'assistant') {
             markPendingAssistant(div);
         }
+        
+        // Apply syntax highlighting to code blocks
+        if (typeof hljs !== 'undefined') {
+            div.querySelectorAll('pre code').forEach((block) => {
+                hljs.highlightElement(block);
+            });
+        }
     }
     
     /**
-     * Simple markdown-like rendering
-     * @param {string} text - Text to render
-     * @returns {string} HTML
-     */
-    function renderMarkdown(text) {
-        // Escape HTML first
+     * Render markdown text to HTML
+        if (!text || typeof text !== 'string') {
+            return '';
+        }
+        
+        // Escape HTML first to prevent XSS
         let html = escapeHtml(text);
         
-        // Code blocks (```...```)
-        html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+        // Code blocks with language class (```lang ... ```)
+        html = html.replace(/```(\w*)\s*([\s\S]*?)```/g, function(match, lang, code) {
+            const langClass = lang ? `language-${lang}` : '';
+            return `<pre><code class="${langClass}">${code.trim()}</code></pre>`;
+        });
         
         // Inline code (`...`)
         html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
         
-        // Bold (**...**)
+        // Bold (**...** or __...__)
         html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+        
+        // Italic (*...* or _..._)
+        html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+        html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
+        
+        // Strikethrough (~~...~~)
+        html = html.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+        
+        // Spoiler (||...||) - collapsible content
+        html = html.replace(/\|\|([^|]+)\|\|/g, '<span class="spoiler">$1</span>');
         
         // Headers (# ## ### ####)
+        html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
         html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
         html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
         html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
         
+        // Blockquotes (> ...)
+        html = html.replace(/^&gt;\s*(.+)$/gm, '<blockquote>$1</blockquote>');
+        html = html.replace(/^>\s*(.+)$/gm, '<blockquote>$1</blockquote>');
+        
+        // Unordered lists (- or * or +)
+        html = html.replace(/^[\-\*\+]\s+(.+)$/gm, '<li>$1</li>');
+        
+        // Ordered lists (1. 2. etc.)
+        html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+        
+        // Wrap consecutive list items in <ul> or <ol>
+        html = html.replace(/(<li>.*<\/li>)+/g, function(match) {
+            // Check if it's ordered (starts with digit) or unordered
+            if (/^\d+\./.test(match)) {
+                return '<ol>' + match + '</ol>';
+            }
+            return '<ul>' + match + '</ul>';
+        });
+        
         // Links ([text](url))
-        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="link">$1</a>');
+        
+        // Horizontal rules (--- or ***)
+        html = html.replace(/^[\-\*]{3,}$/gm, '<hr class="divider">');
         
         return html;
     }
@@ -543,6 +587,13 @@
     document.addEventListener('click', function(e) {
         if (!skillSelector.contains(e.target)) {
             hideSkillSelector();
+        }
+    });
+    
+    // Handle spoiler click-to-reveal
+    messagesContainer.addEventListener('click', function(e) {
+        if (e.target.classList.contains('spoiler')) {
+            e.target.classList.toggle('revealed');
         }
     });
     
@@ -603,6 +654,13 @@
         timestamp.setAttribute('aria-label', 'Message time');
         timestamp.textContent = formatSmartDate(new Date());
         bubble.appendChild(timestamp);
+        
+        // Apply syntax highlighting to finished message
+        if (typeof hljs !== 'undefined') {
+            div.querySelectorAll('pre code').forEach((block) => {
+                hljs.highlightElement(block);
+            });
+        }
     }
     
     /**

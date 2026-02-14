@@ -475,6 +475,19 @@ body {
 
 .message-bubble li {
     margin-bottom: var(--space-xs);
+    line-height: 1.6;
+}
+
+.message-bubble li + li {
+    margin-top: var(--space-xs);
+}
+
+.message-bubble ul ul,
+.message-bubble ol ol,
+.message-bubble ul ol,
+.message-bubble ol ul {
+    margin-top: var(--space-xs);
+    margin-bottom: var(--space-xs);
 }
 
 .message-bubble blockquote {
@@ -483,6 +496,11 @@ body {
     padding: var(--space-sm) var(--space-md);
     background: var(--color-bg-input);
     color: var(--color-text-muted);
+    font-style: italic;
+}
+
+.message-bubble blockquote p {
+    margin: 0;
 }
 
 .message-bubble a {
@@ -492,6 +510,44 @@ body {
 
 .message-bubble a:hover {
     text-decoration: underline;
+}
+
+.message-bubble a.link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xs);
+}
+
+.message-bubble a.link::after {
+    content: '';
+    width: 12px;
+    height: 12px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ff5c5c' stroke-width='2'%3E%3Cpath d='M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6'/%3E%3Cpolyline points='15 3 21 3 21 9'/%3E%3Cline x1='10' y1='14' x2='21' y2='3'/%3E%3C/svg%3E");
+    background-size: contain;
+    opacity: 0.6;
+}
+
+.message-bubble .spoiler {
+    background: var(--color-bg-input);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--duration-fast) var(--ease-out);
+    user-select: none;
+}
+
+.message-bubble .spoiler:hover,
+.message-bubble .spoiler.revealed {
+    background: var(--color-accent-muted);
+    color: var(--color-text);
+    user-select: text;
+}
+
+.message-bubble hr.divider {
+    border: none;
+    height: 1px;
+    background: var(--color-border);
+    margin: var(--space-md) 0;
 }
 
 /* Timestamp */
