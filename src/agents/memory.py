@@ -122,18 +122,18 @@ class MemorySystem:
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Add a memory entry to vector store.
+        """Add a memory entry to search index.
         
         Args:
             key: Unique key for the memory
             content: Content to store
             metadata: Optional metadata
         """
-        if not self._vector_enabled or not self.vector_memory:
+        if not self.search_memory:
             return
         
         try:
-            self.vector_memory.add(key=key, content=content, metadata=metadata)
+            self.search_memory.add(key=key, content=content, metadata=metadata)
         except Exception as e:
             logger.error(f"Failed to add memory: {e}")
     

@@ -2,52 +2,31 @@
 
 Features:
 - SQLite storage for memory chunks
-- FTS5 full-text search (BM25 ranking)
-- Hybrid search ready for vector integration
-- Session transcript indexing (optional)
+- TF-IDF lightweight search (keyword matching)
+- Fast and memory efficient
+- No ML dependencies
 
-## Vector Search Options (Future Enhancement)
+## Memory Search
 
-Current: FTS5 full-text search only (BM25)
-
-For semantic/vector search, choose one:
-
-### Option A: sqlite-vec (Recommended by Engineering Flow Platform)
-- Native SQLite extension for vector storage
-- Fast in-process vector operations
-- Requires: `pip install sqlite-vec`
-- Config: `memory.store.vector.extensionPath`
-
-### Option B: External Vector DB
-- ChromaDB, Weaviate, Milvus, Qdrant
-- Requires: `pip install chromadb` etc.
-- Better for large-scale deployments
-
-### Option C: Local Embeddings
-- sentence-transformers (no API key)
-- Model: `all-MiniLM-L6-v2` (~90MB, CPU-friendly)
-- Requires: `pip install sentence-transformers`
+Uses TF-IDF with cosine similarity for keyword-based search.
+No external ML models required - pure Python implementation.
 
 ## Configuration
 
 ```yaml
 memory:
   enabled: true
-  provider: "openai"  # or "local", "gemini"
-  model: "text-embedding-3-small"
-  hybrid:
+  search:
     enabled: true
-    vector_weight: 0.7
-    text_weight: 0.3
-  cache:
-    enabled: true
-    max_entries: 50000
+    score_threshold: 0.1
+    max_results: 5
 ```
 
 ## Memory Layers
 
 1. Daily Notes: memory/YYYY-MM-DD.md
 2. Long-term Memory: MEMORY.md
+3. Workspace Files: SOUL.md, USER.md, AGENTS.md, TOOLS.md
 3. Session Transcripts: ~/.efp/sessions/*.jsonl (future)
 """
 
@@ -260,11 +239,11 @@ async def write_long_term_memory(content: str) -> Path:
     return memory_file
 
 
-# Vector Memory exports
-from src.memory.vector import VectorMemory, MemoryEntry
+# Lightweight Memory exports
+from src.memory.lightweight import LightweightMemory, MemoryEntry
 
 __all__ = [
-    'VectorMemory',
+    'LightweightMemory',
     'MemoryEntry',
     'MemoryConfig',
     'MemoryStore',
