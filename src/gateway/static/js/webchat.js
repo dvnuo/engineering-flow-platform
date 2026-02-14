@@ -1584,6 +1584,7 @@
     let eventWs = null;
     let currentAgentEventDiv = null;
     let currentEvents = [];  // Store events for current request
+    let pendingEventsSnapshot = null;  // Snapshot saved when complete event fires
     let pendingAssistantMessage = null;  // Track the assistant message waiting for thinking process
     
     /**
@@ -1591,6 +1592,7 @@
      */
     function resetEvents() {
         currentEvents = [];
+        pendingEventsSnapshot = null;
         pendingAssistantMessage = null;
         console.log('[Events] Reset events for new request');
     }
@@ -1601,6 +1603,13 @@
     function markPendingAssistant(element) {
         pendingAssistantMessage = element;
         console.log('[Events] Marked pending assistant message');
+        
+        // If we have a pending snapshot, show the thinking process now
+        if (pendingEventsSnapshot && pendingEventsSnapshot.length > 0) {
+            console.log('[Events] Showing pending thinking process with', pendingEventsSnapshot.length, 'events');
+            showThinkingProcessButtonWithEvents(pendingEventsSnapshot);
+            pendingEventsSnapshot = null;
+        }
     }
     
     /**
@@ -1710,8 +1719,20 @@
             case 'complete':
                 console.log('[Events] Complete, total events:', currentEvents.length);
                 hideAgentEvent();
-                // Show thinking process button after complete
-                showThinkingProcessButton();
+                
+                // Save snapshot and wait for assistant message
+                if (currentEvents.length > 0) {
+                    pendingEventsSnapshot = currentEvents.slice();
+                    console.log('[Events] Saved pending snapshot with', pendingEventsSnapshot.length, 'events');
+                    
+                    // If assistant message already exists, show now
+                    if (pendingAssistantMessage) {
+                        showThinkingProcessButtonWithEvents(pendingEventsSnapshot);
+                        pendingEventsSnapshot = null;
+                    } else {
+                        console.log('[Events] Waiting for assistant message...');
+                    }
+                }
                 break;
                 
             default:
@@ -1819,13 +1840,10 @@
     }
     
     /**
-     * Show "View Thinking Process" button after completion
+     * Show "View Thinking Process" button with specific events snapshot
      */
-    function showThinkingProcessButton() {
-        // Use a snapshot of events to avoid mutation issues
-        const eventsSnapshot = currentEvents.slice();
-        
-        if (eventsSnapshot.length === 0) {
+    function showThinkingProcessButtonWithEvents(eventsSnapshot) {
+        if (!eventsSnapshot || eventsSnapshot.length === 0) {
             console.log('[Events] No events to show');
             return;
         }
@@ -1940,8 +1958,7 @@
             scrollToBottom();
         });
         
-        // Clear events AFTER this function completes (not immediately)
-        // Use a flag to prevent multiple clear operations
+        // Clear events AFTER this function completes
         if (!window._eventsCleared) {
             window._eventsCleared = true;
             setTimeout(() => {
@@ -1950,6 +1967,13 @@
                 console.log('[Events] Events cleared');
             }, 100);
         }
+    }
+    
+    /**
+     * Show thinking process button (legacy - uses currentEvents)
+     */
+    function showThinkingProcessButton() {
+        showThinkingProcessButtonWithEvents(currentEvents.slice());
     }
     
     // Connect to WebSocket on page load
