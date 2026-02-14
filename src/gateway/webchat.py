@@ -573,7 +573,10 @@ async def api_save_config(request: web.Request) -> web.Response:
     """Save configuration to config.yaml.
     
     POST /api/config/save
-    Body: JSON with config sections to update
+    Body: JSON with config sections to update (partial updates supported)
+    
+    This endpoint performs partial saves - only modified fields are updated,
+    preserving existing values for unchanged fields within each section.
     """
     try:
         data = await request.json()
@@ -583,6 +586,7 @@ async def api_save_config(request: web.Request) -> web.Response:
         project_example = Path(__file__).parent.parent.parent / 'config.yaml.example'
         efp_config = Path.home() / '.efp' / 'config.yaml'
         
+        # Determine config path
         if project_config.exists():
             config_path = project_config
         elif efp_config.exists():
@@ -598,35 +602,45 @@ async def api_save_config(request: web.Request) -> web.Response:
                 config_path = efp_config
             config = {}
         
-        # Read existing config if file exists and wasn't just created
+        # Read existing config if file exists
         import yaml
-        if config_path.exists() and 'config' not in locals():
+        existing_config = {}
+        if config_path.exists():
             with open(config_path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f) or {}
-        elif 'config' not in locals():
-            config = {}
+                existing_config = yaml.safe_load(f) or {}
         
-        # Update sections
-        if 'llm' in data:
-            config['llm'] = data['llm']
-        if 'jira' in data:
-            config['jira'] = data['jira']
-        if 'confluence' in data:
-            config['confluence'] = data['confluence']
-        if 'github' in data:
-            config['github'] = data['github']
-        if 'git' in data:
-            config['git'] = data['git']
-        if 'ssh' in data:
-            config['ssh'] = data['ssh']
-        if 'debug' in data:
-            config['debug'] = data['debug']
+        # Deep merge function - only updates provided fields, preserves others
+        def deep_merge(base: Dict, update: Dict) -> Dict:
+            """Deep merge update into base, preserving unchanged fields."""
+            result = base.copy()
+            for key, value in update.items():
+                if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                    result[key] = deep_merge(result[key], value)
+                else:
+                    result[key] = value
+            return result
         
-        # Write back
+        # Perform partial update - only merge provided sections
+        config = existing_config.copy()
+        sections = ['llm', 'jira', 'confluence', 'github', 'git', 'ssh', 'debug']
+        
+        for section in sections:
+            if section in data:
+                # Deep merge to preserve other fields in this section
+                if section in config and isinstance(config[section], dict):
+                    config[section] = deep_merge(config[section], data[section])
+                else:
+                    config[section] = data[section]
+        
+        # Write back with preserved formatting
         with open(config_path, 'w', encoding='utf-8') as f:
-            yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+            yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
         
-        return web.json_response({'success': True, 'message': 'Configuration saved. Restart required.'})
+        return web.json_response({
+            'success': True, 
+            'message': 'Configuration saved. Restart required.',
+            'updated_sections': [s for s in sections if s in data]
+        })
     except Exception as e:
         logger.error(f"Error saving config: {e}")
         return web.json_response({'error': str(e)}, status=500)
