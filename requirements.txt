@@ -8,10 +8,6 @@ httpx
 discord.py>=2.3.0
 requests
 
-# No ML dependencies - using lightweight TF-IDF search
-# Removed: qdrant-client, sentence-transformers, torch, transformers
-# For semantic-like search, we use TF-IDF with keyword matching
-
 # Testing
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
