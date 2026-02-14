@@ -172,6 +172,68 @@ class ExecutionTracer:
             for e in self.execution_history[-limit:]
         ]
     
+    def get_events_for_ui(self, limit: int = 10) -> List[Dict]:
+        """Get events formatted for UI display.
+        
+        Returns a list of events with type, data, and display info.
+        """
+        events = []
+        
+        for execution in self.execution_history[-limit:]:
+            # Skill matched
+            if execution.matched_skill:
+                events.append({
+                    "type": "skill_matched",
+                    "data": {"skill": execution.matched_skill},
+                    "timestamp": execution.started_at,
+                    "display": {
+                        "icon": "🎯",
+                        "name": "Skill Matched",
+                        "message": f"Skill: {execution.matched_skill}"
+                    }
+                })
+            
+            # Tool calls
+            iteration = 1
+            for tool_call in execution.tool_calls:
+                events.append({
+                    "type": "tool_call",
+                    "data": {"tool": tool_call.tool_name, "args": tool_call.arguments},
+                    "timestamp": tool_call.timestamp,
+                    "display": {
+                        "icon": "🔧",
+                        "name": "Tool Call",
+                        "message": f"Calling: {tool_call.tool_name}"
+                    }
+                })
+                
+                # Tool result
+                events.append({
+                    "type": "tool_result",
+                    "data": {"tool": tool_call.tool_name, "result": tool_call.result[:200], "success": tool_call.success},
+                    "timestamp": tool_call.timestamp,
+                    "display": {
+                        "icon": "✅" if tool_call.success else "❌",
+                        "name": "Tool Result",
+                        "message": f"{'✅' if tool_call.success else '❌'} {tool_call.tool_name}"
+                    }
+                })
+            
+            # Complete
+            if execution.completed_at:
+                events.append({
+                    "type": "complete",
+                    "data": {"response": execution.final_response, "total_iterations": execution.total_tool_calls},
+                    "timestamp": execution.completed_at,
+                    "display": {
+                        "icon": "🎉",
+                        "name": "Complete",
+                        "message": "Execution complete"
+                    }
+                })
+        
+        return events
+    
     def replay_execution(self, execution_id: str) -> Optional[Dict]:
         """Replay an execution for debugging.
         

@@ -180,6 +180,16 @@ async def api_chat(request: web.Request) -> web.Response:
             'usage': usage
         }
         
+        # Include events for thinking process display
+        events = result.get("events", []) if result else []
+        if events:
+            response_data['events'] = events
+            # Save events to session for persistence
+            session = await session_manager.get_session(session_id)
+            if session:
+                session['metadata'] = session.get("metadata", {})
+                session['metadata']['thinking_events'] = events
+        
         # Include reasoning if available
         if reasoning:
             response_data['reasoning'] = reasoning

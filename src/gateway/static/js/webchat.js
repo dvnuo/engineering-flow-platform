@@ -956,6 +956,111 @@
                 });
             }
             
+            // Show thinking events from session metadata
+            const metadata = data.metadata || {};
+            const thinkingEvents = metadata.thinking_events || [];
+            if (thinkingEvents.length > 0) {
+                // Get the last assistant message
+                const assistantMessages = messagesContainer.querySelectorAll('.message.assistant');
+                if (assistantMessages.length > 0) {
+                    const lastAssistant = assistantMessages[assistantMessages.length - 1];
+                    if (!lastAssistant.classList.contains('has-thinking')) {
+                        // Create events snapshot from stored events
+                        const eventsSnapshot = thinkingEvents.map(event => ({
+                            type: event.type,
+                            data: event.data || {},
+                            display: event.display || {
+                                icon: '📌',
+                                name: event.type,
+                                message: JSON.stringify(event.data || {}).substring(0, 50)
+                            }
+                        }));
+                        
+                        // Manually add thinking process button
+                        lastAssistant.classList.add('has-thinking');
+                        const bubble = lastAssistant.querySelector('.message-bubble');
+                        if (bubble) {
+                            // Create toggle button
+                            const toggleBtn = document.createElement('button');
+                            toggleBtn.className = 'thinking-process-toggle';
+                            const eventCount = eventsSnapshot.length;
+                            toggleBtn.innerHTML = `
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <path d="M12 16v-4"/>
+                                    <path d="M12 8h.01"/>
+                                </svg>
+                                <span>View Thinking Process (${eventCount} steps)</span>
+                                <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="6 9 12 15 18 9"/>
+                                </svg>
+                            `;
+                            
+                            // Create content
+                            const processContent = document.createElement('div');
+                            processContent.className = 'thinking-process-content';
+                            processContent.style.display = 'none';
+                            
+                            let timelineHtml = '<div class="thinking-timeline">';
+                            eventsSnapshot.forEach((event, index) => {
+                                const display = event.display;
+                                const isLast = index === eventsSnapshot.length - 1;
+                                timelineHtml += `
+                                    <div class="thinking-item ${isLast ? 'last' : ''}">
+                                        <div class="thinking-icon">${display.icon}</div>
+                                        <div class="thinking-details">
+                                            <div class="thinking-name">${display.name}</div>
+                                            <div class="thinking-message">${escapeHtml(display.message)}</div>
+                                        </div>
+                                    </div>
+                                `;
+                            });
+                            timelineHtml += '</div>';
+                            processContent.innerHTML = timelineHtml;
+                            
+                            bubble.appendChild(toggleBtn);
+                            bubble.appendChild(processContent);
+                            
+                            // Toggle
+                            let expanded = false;
+                            toggleBtn.addEventListener('click', function(e) {
+                                e.preventDefault();
+                                expanded = !expanded;
+                                if (expanded) {
+                                    processContent.style.display = 'block';
+                                    toggleBtn.classList.add('expanded');
+                                    toggleBtn.innerHTML = `
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <circle cx="12" cy="12" r="10"/>
+                                            <path d="M12 16v-4"/>
+                                            <path d="M12 8h.01"/>
+                                        </svg>
+                                        <span>Hide Thinking Process</span>
+                                        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <polyline points="18 15 12 9 6 15"/>
+                                        </svg>
+                                    `;
+                                } else {
+                                    processContent.style.display = 'none';
+                                    toggleBtn.classList.remove('expanded');
+                                    toggleBtn.innerHTML = `
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <circle cx="12" cy="12" r="10"/>
+                                            <path d="M12 16v-4"/>
+                                            <path d="M12 8h.01"/>
+                                        </svg>
+                                        <span>View Thinking Process (${eventCount} steps)</span>
+                                        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <polyline points="6 9 12 15 18 9"/>
+                                        </svg>
+                                    `;
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+            
             // Remove active state from New Chat button when loading a session
             if (newChatBtn) newChatBtn.classList.remove('active');
             

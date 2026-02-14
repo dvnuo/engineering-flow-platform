@@ -549,7 +549,12 @@ You have access to the following tools. When a user asks you to do something tha
         
         tracer.complete_execution("max_iterations_reached")
         
-        return {"response": "Task completed (max iterations reached)", "usage": usage_data or {}}
+        # Get events for UI
+        from src.skills import get_tracer
+        tracer_instance = get_tracer()
+        events = tracer_instance.get_events_for_ui(limit=10)
+        
+        return {"response": "Task completed (max iterations reached)", "usage": usage_data or {}, "events": events}
 
     async def _execute_skill(
         self,
