@@ -455,6 +455,13 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 # Complete execution tracing
                 tracer.complete_execution(content)
+                
+                # Get events for UI
+                from src.skills import get_tracer
+                tracer_instance = get_tracer()
+                events = tracer_instance.get_events_for_ui(limit=10)
+                result["events"] = events
+                
                 return result
             
             logger.info(f"[Tool Loop] Iteration {iteration}: LLM requested {len(tool_calls)} tool calls")
