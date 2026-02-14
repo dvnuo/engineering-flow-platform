@@ -14,8 +14,7 @@ agents/
 ├── model_fallback.py    # Model fallback logic
 ├── queue.py             # Message queue
 ├── thinking.py          # Thinking levels
-├── compaction.py        # Context compaction
-└── fastlane/           # Fastlane integration (optional)
+└── compaction.py        # Context compaction
 ```
 
 ## Components
