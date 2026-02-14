@@ -144,18 +144,11 @@ A modular, agentic platform with clear separation between skill declarations and
 ```
 engineering-flow/
 ├── skills/                    # 🎯 Skill Declarations (.md files)
-│   ├── coding_agent/
-│   │   └── skill.md
-│   ├── git/
-│   │   └── skill.md
-│   ├── github/
-│   │   └── skill.md
-│   ├── test_case_generator/
-│   │   └── skill.md
+│   ├── review-pr.md           # Single-file skills
 │   ├── skill_creator/
-│   │   ├── skill.md
-│   │   └── references/
-│   └── review-pr.md          # Single-file skills
+│   │   └── skill.md
+│   └── test_case_generator/
+│       └── skill.md
 │
 ├── main.py                    # Entry point
 ├── __init__.py               # Package exports
@@ -210,7 +203,7 @@ engineering-flow/
 1. **skills/** - Declarative skill definitions (.md files with YAML frontmatter)
 2. **src/** - All implementation code 
 3. **main.py** and **__init__.py** at root for easy execution
-4. All modules (agents, channels, cron, gateway, memory, sessions) in `src/`
+4. Skills follow naming: `skills/*.md` or `skills/*/skill.md`
 
 ## Features
 
@@ -321,6 +314,14 @@ Export from `src/__init__.py` if needed.
 | **Gateway** | `src/gateway/` | Web API server, WebChat UI |
 | **Memory** | `src/memory/` | Persistent memory storage |
 | **Session** | `src/sessions/` | Session lifecycle management |
+
+## Available Skills
+
+| Skill | Type | Description |
+|-------|------|-------------|
+| `review-pr` | Single file | Review GitHub pull requests |
+| `skill-creator` | Directory | Create and manage skills |
+| `test-case-generator` | Directory | Generate test cases from requirements |
 
 ---
 
