@@ -360,6 +360,17 @@ You have access to the following tools. When a user asks you to do something tha
         # Supports both simple callbacks and asyncio.Queue
         def send_event(event_type: str, data: dict):
             """Send event via stream_callback and event bus."""
+            # Also log to tracer for persistence
+            if event_type == 'llm_thinking':
+                try:
+                    from src.skills import get_tracer
+                    tracer_instance = get_tracer()
+                    message = data.get('message', '')
+                    if message:
+                        tracer_instance.log_thinking(message)
+                except Exception:
+                    pass  # Tracer may not be initialized
+            
             # Emit to event bus for WebSocket clients
             try:
                 from src.gateway.event_bus import emit_agent_event_sync
