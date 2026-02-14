@@ -296,6 +296,44 @@ class MemorySystem:
         
         return "\n\n".join(parts)
     
+    def build_context_with_search(
+        self,
+        query: str,
+        include_memory: bool = True,
+        limit: int = 3,
+        score_threshold: Optional[float] = None,
+    ) -> str:
+        """Build context section with semantic search results.
+        
+        Args:
+            query: User message to search for
+            include_memory: Include MEMORY.md in context
+            limit: Maximum search results
+            score_threshold: Minimum similarity score
+            
+        Returns:
+            Context section with semantic search results
+        """
+        parts = []
+        
+        # Perform semantic search
+        search_results = self.search_semantic(query, limit, score_threshold)
+        
+        if search_results:
+            context_parts = []
+            for i, result in enumerate(search_results, 1):
+                source = result.get('metadata', {}).get('source', 'Unknown')
+                content = result.get('content', '')[:500]  # Truncate long content
+                score = result.get('score', 0)
+                context_parts.append(f"[{i}] {source} (relevance: {score:.2f})\n{content}")
+            
+            parts.append(f"=== SEMANTIC CONTEXT (from memory search) ===\n")
+            parts.append("Relevant information found:\n\n")
+            parts.append("\n\n---\n\n".join(context_parts))
+            parts.append("\n\nUse the above context if relevant to the user's query.")
+        
+        return "\n".join(parts)
+    
     def clear_cache(self):
         """Clear the memory cache (forces reload on next access)."""
         self._cache.clear()

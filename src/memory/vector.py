@@ -1,11 +1,11 @@
-"""Vector memory with Qdrant backend for semantic search.
+"""Vector memory with ONNX embedding backend for semantic search.
 
-Provides semantic search capability for workspace memory files.
+Uses onnxruntime for fast, lightweight inference with ONNX models.
+Stores embeddings in local NumPy format for simplicity.
 """
 
 import json
 import logging
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -26,27 +26,30 @@ class MemoryEntry:
 
 
 class VectorMemory:
-    """Qdrant-based vector memory with semantic search.
+    """ONNX-based vector memory with semantic search.
     
-    Falls back to numpy-based storage if Qdrant is unavailable.
+    Uses onnxruntime for fast, lightweight inference.
+    Stores embeddings in local NumPy format.
     """
     
     def __init__(
         self,
         collection_name: str = "efp_memory",
         storage_dir: str = "~/.efp/workspace/vector_memory",
-        embedding_model: str = "all-MiniLM-L6-v2",
+        embedding_model: str = "Xenova/all-MiniLM-L6-v2",
         dimension: int = 384,
         score_threshold: float = 0.5,
+        max_tokens: int = 256,
     ):
         """Initialize vector memory.
         
         Args:
-            collection_name: Qdrant collection name
+            collection_name: Storage collection name
             storage_dir: Directory for persistent storage
-            embedding_model: Sentence transformer model name
+            embedding_model: ONNX model name (HuggingFace Xenova format)
             dimension: Embedding dimension
             score_threshold: Minimum similarity score for search results
+            max_tokens: Maximum tokens for embedding input
         """
         self.collection_name = collection_name
         self.storage_dir = Path(storage_dir).expanduser()
@@ -54,45 +57,96 @@ class VectorMemory:
         self.embedding_model = embedding_model
         self.dimension = dimension
         self.score_threshold = score_threshold
+        self.max_tokens = max_tokens
         
-        self.qdrant = None
-        self.has_qdrant = False
-        self._init_qdrant()
+        self.ort_session = None
+        self.tokenizer = None
+        self._init_onnx()
         
-        if not self.has_qdrant:
-            self._init_fallback()
+        # Initialize numpy-based storage
+        self._init_storage()
     
-    def _init_qdrant(self):
-        """Initialize Qdrant client."""
+    def _init_onnx(self):
+        """Initialize ONNX runtime session."""
+        self.has_onnx = False
+        
         try:
-            from qdrant_client import QdrantClient
-            from qdrant_client.models import VectorParams, Distance
+            import onnxruntime as ort
+            from huggingface_hub import hf_hub_download
             
-            # Try to use local Qdrant first
-            qdrant_path = self.storage_dir / "qdrant"
-            self.qdrant = QdrantClient(path=str(qdrant_path))
+            cache_dir = self.storage_dir / "models" / self.embedding_model.replace("/", "_")
+            cache_dir.mkdir(parents=True, exist_ok=True)
             
-            # Try to get collection, create if not exists
-            try:
-                self.qdrant.get_collection(self.collection_name)
-            except Exception:
-                self.qdrant.create_collection(
-                    collection_name=self.collection_name,
-                    vectors_config=VectorParams(size=self.dimension, distance=Distance.COSINE),
-                )
+            # Try loading Xenova's ONNX model
+            if self.embedding_model.startswith("Xenova/"):
+                try:
+                    model_path = hf_hub_download(
+                        repo_id=self.embedding_model,
+                        filename="model.onnx",
+                        cache_dir=str(cache_dir)
+                    )
+                    tokenizer_path = hf_hub_download(
+                        repo_id=self.embedding_model,
+                        filename="tokenizer.json",
+                        cache_dir=str(cache_dir)
+                    )
+                    
+                    # Load ONNX session
+                    providers = ['CPUExecutionProvider']
+                    self.ort_session = ort.InferenceSession(model_path, providers=providers)
+                    
+                    # Load tokenizer
+                    with open(tokenizer_path, 'r', encoding='utf-8') as f:
+                        tokenizer_data = json.load(f)
+                    
+                    vocab = tokenizer_data.get('model', {}).get('vocab', {})
+                    
+                    def simple_tokenize(text: str) -> np.ndarray:
+                        """Simple word-level tokenization."""
+                        words = text.lower().split()[:self.max_tokens]
+                        return np.array([[vocab.get(w, 0) for w in words]], dtype=np.int64)
+                    
+                    self.tokenizer = simple_tokenize
+                    self.has_onnx = True
+                    logger.info(f"ONNX model loaded: {self.embedding_model}")
+                    
+                except Exception as e:
+                    logger.debug(f"Failed to load Xenova ONNX model: {e}")
             
-            self.has_qdrant = True
-            logger.info(f"Qdrant initialized successfully at {qdrant_path}")
+            # Fallback: try loading as standard transformers model
+            if not self.has_onnx:
+                try:
+                    from transformers import AutoTokenizer
+                    from optimum.onnxruntime import ORTModelForFeatureExtraction
+                    
+                    model = ORTModelForFeatureExtraction.from_pretrained(
+                        self.embedding_model,
+                        export=False,
+                        cache_dir=str(cache_dir)
+                    )
+                    self.ort_session = model.session
+                    self.tokenizer = AutoTokenizer.from_pretrained(
+                        self.embedding_model,
+                        cache_dir=str(cache_dir)
+                    )
+                    self.has_onnx = True
+                    logger.info(f"ONNX model loaded: {self.embedding_model}")
+                    
+                except ImportError:
+                    logger.debug("optimum/transformers not available")
+                except Exception as e:
+                    logger.debug(f"Failed to load ONNX model: {e}")
             
         except ImportError:
-            logger.debug("qdrant-client not installed, using fallback")
-            self.has_qdrant = False
+            logger.debug("onnxruntime not installed")
         except Exception as e:
-            logger.debug(f"Failed to initialize Qdrant: {e}, using fallback")
-            self.has_qdrant = False
+            logger.debug(f"ONNX initialization failed: {e}")
+        
+        if not self.has_onnx:
+            logger.info("Using fallback hash-based embeddings")
     
-    def _init_fallback(self):
-        """Initialize numpy-based fallback storage."""
+    def _init_storage(self):
+        """Initialize numpy-based storage."""
         self.vectors_file = self.storage_dir / "vectors.npz"
         self.metadata_file = self.storage_dir / "metadata.jsonl"
         
@@ -103,7 +157,7 @@ class VectorMemory:
             self.fallback_vectors = np.array([]).reshape(0, self.dimension)
         
         self.fallback_metadata = self._load_metadata()
-        logger.info(f"Fallback vector storage initialized at {self.storage_dir}")
+        logger.info(f"Vector storage initialized at {self.storage_dir}")
     
     def _load_metadata(self) -> List[Dict[str, Any]]:
         """Load metadata from file."""
@@ -127,16 +181,48 @@ class VectorMemory:
         Returns:
             Embedding vector as list of floats
         """
-        try:
-            from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer(self.embedding_model)
-            return model.encode(text).tolist()
-        except ImportError:
-            logger.debug("sentence-transformers not installed, using simple embedding")
-            return self._simple_embedding(text)
-        except Exception as e:
-            logger.debug(f"Failed to generate embedding: {e}, using simple embedding")
-            return self._simple_embedding(text)
+        if self.has_onnx and self.ort_session:
+            try:
+                # Tokenize
+                if callable(self.tokenizer):
+                    input_ids = self.tokenizer(text)
+                else:
+                    inputs = self.tokenizer(
+                        text,
+                        padding=True,
+                        truncation=True,
+                        max_length=self.max_tokens,
+                        return_tensors="np"
+                    )
+                    input_ids = inputs["input_ids"]
+                
+                # Ensure correct shape
+                if len(input_ids.shape) == 1:
+                    input_ids = input_ids.reshape(1, -1)
+                
+                # Run inference
+                input_name = self.ort_session.get_inputs()[0].name
+                outputs = self.ort_session.run(None, {input_name: input_ids})
+                
+                # Get last hidden state and apply mean pooling
+                hidden_states = outputs[0]
+                attention_mask = np.ones_like(input_ids)
+                
+                mask_expanded = np.expand_dims(attention_mask, -1)
+                sum_embeddings = np.sum(hidden_states * mask_expanded, axis=1)
+                sum_mask = np.clip(attention_mask.sum(axis=1), a_min=1e-9)
+                embedding = sum_embeddings / sum_mask
+                
+                # Normalize
+                norm = np.linalg.norm(embedding, axis=1, keepdims=True)
+                normalized = embedding / norm
+                
+                return normalized[0].astype(np.float32).tolist()
+                
+            except Exception as e:
+                logger.debug(f"ONNX embedding failed: {e}")
+        
+        return self._simple_embedding(text)
     
     def _simple_embedding(self, text: str) -> List[float]:
         """Generate a simple deterministic embedding from text hash.
@@ -145,12 +231,12 @@ class VectorMemory:
             text: Input text
             
         Returns:
-            Deterministic embedding vector
+            Deterministic embedding vector (non-semantic, for fallback)
         """
         import hashlib
         
         hash_bytes = hashlib.sha256(text.encode()).digest()
-        # Generate 48 bytes (384 bits) from hash
+        # Generate 384 bits (48 bytes) from hash
         vector = [float(b) / 255.0 for b in hash_bytes[:48]]
         
         # Pad or truncate to dimension
@@ -182,44 +268,19 @@ class VectorMemory:
             created_at=datetime.utcnow().isoformat(),
         )
         
-        if self.has_qdrant and self.qdrant:
-            try:
-                from qdrant_client.models import PointStruct
-                
-                # Use hash of key as point ID
-                import hashlib
-                point_id = int(hashlib.md5(key.encode()).hexdigest()[:8], 16)
-                
-                self.qdrant.upsert_points(
-                    collection_name=self.collection_name,
-                    points=[PointStruct(
-                        id=point_id,
-                        vector=vector,
-                        payload={
-                            "key": key,
-                            "content": content,
-                            "metadata": entry.metadata,
-                            "created_at": entry.created_at,
-                        }
-                    )]
-                )
-            except Exception as e:
-                logger.error(f"Failed to add to Qdrant: {e}")
+        # Add to numpy storage
+        if len(self.fallback_vectors) == 0:
+            self.fallback_vectors = np.array([vector])
+        else:
+            self.fallback_vectors = np.vstack([self.fallback_vectors, vector])
         
-        if not self.has_qdrant:
-            # Add to fallback storage
-            if len(self.fallback_vectors) == 0:
-                self.fallback_vectors = np.array([vector])
-            else:
-                self.fallback_vectors = np.vstack([self.fallback_vectors, vector])
-            
-            self.fallback_metadata.append({
-                "key": key,
-                "content": content,
-                "metadata": entry.metadata,
-                "created_at": entry.created_at,
-            })
-            self._save_fallback()
+        self.fallback_metadata.append({
+            "key": key,
+            "content": content,
+            "metadata": entry.metadata,
+            "created_at": entry.created_at,
+        })
+        self._save_storage()
     
     def search(
         self,
@@ -241,18 +302,18 @@ class VectorMemory:
         
         try:
             query_vector = self._get_embedding(query)
-            return self._search_vector(query_vector, limit, threshold)
+            return self._search_vectors(query_vector, limit, threshold)
         except Exception as e:
             logger.error(f"Search failed: {e}")
             return []
     
-    def _search_vector(
+    def _search_vectors(
         self,
         query_vector: List[float],
         limit: int,
         threshold: float,
     ) -> List[Dict[str, Any]]:
-        """Perform vector search.
+        """Perform vector search using cosine similarity.
         
         Args:
             query_vector: Query embedding
@@ -260,46 +321,7 @@ class VectorMemory:
             threshold: Minimum score
             
         Returns:
-            Search results
-        """
-        if self.has_qdrant and self.qdrant:
-            try:
-                results = self.qdrant.search(
-                    collection_name=self.collection_name,
-                    query_vector=query_vector,
-                    limit=limit,
-                    score_threshold=threshold,
-                )
-                return [
-                    {
-                        "key": r.payload.get("key", ""),
-                        "content": r.payload.get("content", ""),
-                        "score": float(r.score),
-                        "metadata": r.payload.get("metadata", {}),
-                    }
-                    for r in results
-                ]
-            except Exception as e:
-                logger.error(f"Qdrant search failed: {e}")
-        
-        # Fallback: numpy-based search
-        return self._fallback_search(query_vector, limit, threshold)
-    
-    def _fallback_search(
-        self,
-        query_vector: List[float],
-        limit: int,
-        threshold: float,
-    ) -> List[Dict[str, Any]]:
-        """Perform fallback numpy-based search.
-        
-        Args:
-            query_vector: Query embedding
-            limit: Maximum results
-            threshold: Minimum score
-            
-        Returns:
-            Search results
+            Search results sorted by score
         """
         if len(self.fallback_vectors) == 0:
             return []
@@ -331,8 +353,8 @@ class VectorMemory:
         
         return results
     
-    def _save_fallback(self) -> None:
-        """Save fallback storage to disk."""
+    def _save_storage(self):
+        """Save storage to disk."""
         try:
             np.save(str(self.vectors_file), self.fallback_vectors)
             
@@ -340,7 +362,7 @@ class VectorMemory:
                 for meta in self.fallback_metadata:
                     f.write(json.dumps(meta) + "\n")
         except Exception as e:
-            logger.error(f"Failed to save fallback storage: {e}")
+            logger.error(f"Failed to save storage: {e}")
     
     def delete(self, key: str) -> bool:
         """Delete a memory entry by key.
@@ -351,47 +373,20 @@ class VectorMemory:
         Returns:
             True if deleted, False if not found
         """
-        if self.has_qdrant and self.qdrant:
-            try:
-                import hashlib
-                point_id = int(hashlib.md5(key.encode()).hexdigest()[:8], 16)
-                self.qdrant.delete_points(
-                    collection_name=self.collection_name,
-                    points=[point_id],
-                )
-                return True
-            except Exception:
-                pass
-        
-        # Fallback: remove from metadata
         for i, meta in enumerate(self.fallback_metadata):
             if meta.get("key") == key:
                 self.fallback_metadata.pop(i)
                 self.fallback_vectors = np.delete(self.fallback_vectors, i, axis=0)
-                self._save_fallback()
+                self._save_storage()
                 return True
         
         return False
     
-    def clear(self) -> None:
+    def clear(self):
         """Clear all memories."""
-        if self.has_qdrant and self.qdrant:
-            try:
-                self.qdrant.delete_collection(self.collection_name)
-                self.qdrant.create_collection(
-                    collection_name=self.collection_name,
-                    vectors_config=self.qdrant.models.VectorParams(
-                        size=self.dimension,
-                        distance=self.qdrant.models.Distance.COSINE,
-                    ),
-                )
-            except Exception as e:
-                logger.error(f"Failed to clear Qdrant collection: {e}")
-        
-        # Clear fallback
         self.fallback_vectors = np.array([]).reshape(0, self.dimension)
         self.fallback_metadata = []
-        self._save_fallback()
+        self._save_storage()
     
     def count(self) -> int:
         """Get total number of stored memories.
@@ -399,12 +394,6 @@ class VectorMemory:
         Returns:
             Number of entries
         """
-        if self.has_qdrant and self.qdrant:
-            try:
-                return self.qdrant.get_collection(self.collection_name).points_count
-            except Exception:
-                pass
-        
         return len(self.fallback_metadata)
     
     def health_check(self) -> Dict[str, Any]:
@@ -414,10 +403,10 @@ class VectorMemory:
             Health status dictionary
         """
         return {
-            "qdrant_available": self.has_qdrant,
+            "onnx_available": self.has_onnx,
+            "embedding_model": self.embedding_model,
             "storage_dir": str(self.storage_dir),
             "collection_name": self.collection_name,
             "dimension": self.dimension,
-            "embedding_model": self.embedding_model,
             "entry_count": self.count(),
         }
