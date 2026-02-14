@@ -1,7 +1,7 @@
 """Memory system for loading workspace MD files.
 
 Loads SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, and daily notes.
-Integrates with VectorMemory for semantic search.
+Integrates with LightweightMemory for TF-IDF search.
 """
 
 import logging
@@ -23,62 +23,54 @@ class MemorySystem:
         self,
         workspace_path: Optional[str] = None,
         cache_ttl_seconds: int = 60,
-        vector_enabled: bool = True,
-        vector_config: Optional[Dict] = None,
+        search_enabled: bool = True,
+        search_config: Optional[Dict] = None,
     ):
         """Initialize memory system.
         
         Args:
             workspace_path: Path to workspace directory. Defaults to ~/.efp/workspace
-            cache_ttl_seconds: Cache TTL in seconds (default: 60). Set to 0 to disable caching.
-            vector_enabled: Whether to enable vector memory for semantic search
-            vector_config: Configuration for vector memory
+            cache_ttl_seconds: Cache TTL in seconds (default: 60)
+            search_enabled: Whether to enable memory search
+            search_config: Configuration for memory search
         """
         self.workspace = Path(workspace_path) if workspace_path else DEFAULT_WORKSPACE
         self._cache: Dict[str, Any] = {}
         self._cache_time: Optional[datetime] = None
         self._cache_ttl_seconds = cache_ttl_seconds
         
-        # Initialize vector memory
-        self.vector_memory = None
-        self._vector_enabled = vector_enabled
-        if vector_enabled:
-            self._init_vector_memory(vector_config or {})
+        # Initialize lightweight search
+        self.search_enabled = search_enabled
+        self.search_config = search_config or {}
+        self._init_search()
     
-    def _init_vector_memory(self, config: Dict) -> None:
-        """Initialize vector memory.
-        
-        Args:
-            config: Vector memory configuration
-        """
+    def _init_search(self) -> None:
+        """Initialize lightweight memory search."""
+        if not self.search_enabled:
+            return
+            
         try:
-            from src.memory.vector import VectorMemory
+            from src.memory.lightweight import LightweightMemory
             
-            storage_dir = config.get("storage_dir", str(self.workspace / "vector_memory"))
-            embedding_model = config.get("model", "all-MiniLM-L6-v2")
-            dimension = config.get("dimension", 384)
-            score_threshold = config.get("score_threshold", 0.5)
+            storage_dir = self.search_config.get("storage_dir", str(self.workspace / "memory_search"))
+            score_threshold = self.search_config.get("score_threshold", 0.1)
             
-            self.vector_memory = VectorMemory(
+            self.search_memory = LightweightMemory(
                 storage_dir=storage_dir,
-                embedding_model=embedding_model,
-                dimension=dimension,
                 score_threshold=score_threshold,
             )
-            self._vector_enabled = True
-            logger.info("Vector memory initialized successfully")
+            logger.info("Lightweight memory search initialized")
             
             # Index existing memory files
             self._index_memory_files()
             
         except Exception as e:
-            logger.debug(f"Failed to initialize vector memory: {e}")
-            self._vector_enabled = False
-            self.vector_memory = None
+            logger.debug(f"Failed to initialize search: {e}")
+            self.search_memory = None
     
     def _index_memory_files(self) -> None:
-        """Index all memory files into vector store."""
-        if not self.vector_memory:
+        """Index memory files into search."""
+        if not self.search_memory:
             return
         
         files = ["SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md", "MEMORY.md"]
@@ -89,7 +81,7 @@ class MemorySystem:
                 try:
                     content = filepath.read_text(encoding='utf-8')
                     key = f"memory:{filename}"
-                    self.vector_memory.add(
+                    self.search_memory.add(
                         key=key,
                         content=content,
                         metadata={"source": filename, "type": "memory_file"},
@@ -97,29 +89,31 @@ class MemorySystem:
                 except Exception as e:
                     logger.debug(f"Failed to index {filename}: {e}")
     
-    def search_semantic(
+    def search(
         self,
         query: str,
         limit: int = 5,
         score_threshold: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
-        """Search memories using semantic similarity.
+        """Search memories using TF-IDF scoring.
         
         Args:
             query: Search query
             limit: Maximum results
-            score_threshold: Minimum similarity score
+            score_threshold: Minimum score
             
         Returns:
             List of matching entries with scores
         """
-        if not self._vector_enabled or not self.vector_memory:
+        if not self.search_memory:
             return []
         
         try:
-            return self.vector_memory.search(query, limit, score_threshold)
+            threshold = score_threshold or self.search_config.get("score_threshold", 0.1)
+            results = self.search_memory.search(query, limit)
+            return [r for r in results if r["score"] >= threshold]
         except Exception as e:
-            logger.error(f"Semantic search failed: {e}")
+            logger.debug(f"Search failed: {e}")
             return []
     
     def add_memory(
@@ -303,7 +297,7 @@ class MemorySystem:
         limit: int = 3,
         score_threshold: Optional[float] = None,
     ) -> str:
-        """Build context section with semantic search results.
+        """Build context section with search results.
         
         Args:
             query: User message to search for
@@ -312,12 +306,12 @@ class MemorySystem:
             score_threshold: Minimum similarity score
             
         Returns:
-            Context section with semantic search results
+            Context section with search results
         """
         parts = []
         
-        # Perform semantic search
-        search_results = self.search_semantic(query, limit, score_threshold)
+        # Perform search
+        search_results = self.search(query, limit, score_threshold)
         
         if search_results:
             context_parts = []
@@ -327,7 +321,7 @@ class MemorySystem:
                 score = result.get('score', 0)
                 context_parts.append(f"[{i}] {source} (relevance: {score:.2f})\n{content}")
             
-            parts.append(f"=== SEMANTIC CONTEXT (from memory search) ===\n")
+            parts.append("=== RELEVANT CONTEXT (from memory search) ===\n")
             parts.append("Relevant information found:\n\n")
             parts.append("\n\n---\n\n".join(context_parts))
             parts.append("\n\nUse the above context if relevant to the user's query.")
