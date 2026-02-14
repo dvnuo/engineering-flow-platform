@@ -185,10 +185,10 @@ async def api_chat(request: web.Request) -> web.Response:
         if events:
             response_data['events'] = events
             # Save events to session for persistence
-            session = await session_manager.get_session(session_id)
-            if session:
-                session['metadata'] = session.get("metadata", {})
-                session['metadata']['thinking_events'] = events
+            if 'metadata' not in session:
+                session['metadata'] = {}
+            session['metadata']['thinking_events'] = events
+            logger.info(f"[api_chat] Saved {len(events)} thinking events to session metadata")
         
         # Include reasoning if available
         if reasoning:
@@ -438,6 +438,7 @@ async def api_load_session(request: web.Request) -> web.Response:
             'session_id': session_id,
             'name': session_name,
             'messages': history,
+            'metadata': session_info.get('metadata', {}),
         })
     except Exception as e:
         logger.error(f"Error loading session: {e}")
