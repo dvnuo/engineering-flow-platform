@@ -342,12 +342,28 @@ You have access to the following tools. When a user asks you to do something tha
         enable_reasoning = reasoning_replay if reasoning_replay is not None else config.llm.get('reasoning_replay', False)
         logger.info(f"[{session_id}] reasoning_replay={enable_reasoning}")
         
-        # ===== BUILD EFFECTIVE SYSTEM PROMPT (with Skill Guidance) =====
-        # FR-3: Dynamic Skill Injection - Include skill prompt from FIRST call
+        # ===== BUILD EFFECTIVE SYSTEM PROMPT (with Skill Guidance + Semantic Context) =====
         effective_system_prompt = self.system_prompt
+        
+        # FR-3: Dynamic Skill Injection - Include skill prompt from FIRST call
         if skill_prompt:
             effective_system_prompt = f"{self.system_prompt}\n\n## Skill Guidance\n\n{skill_prompt}"
             logger.info(f"[Skill] Injected skill guidance for: {matched_skills[0].name}")
+        
+        # Semantic Context Search - Find relevant memory context
+        semantic_context = ""
+        try:
+            semantic_context = memory_system.build_context_with_search(
+                query=message,
+                include_memory=include_memory,
+                limit=3,
+                score_threshold=0.3,
+            )
+            if semantic_context:
+                effective_system_prompt = f"{effective_system_prompt}\n\n## Relevant Context (Semantic Search)\n\n{semantic_context}"
+                logger.info(f"[Memory] Added semantic context from search")
+        except Exception as e:
+            logger.debug(f"[Memory] Semantic search failed: {e}")
         
         # ===== TOOL LOOP (REACT Pattern) =====
         # Continue calling LLM until it stops requesting tools

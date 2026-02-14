@@ -8,10 +8,9 @@ httpx
 discord.py>=2.3.0
 requests
 
-# Vector memory for semantic search
-qdrant-client>=1.3.0
-sentence-transformers>=2.2.0
-numpy>=1.21.0
+# No ML dependencies - using lightweight TF-IDF search
+# Removed: qdrant-client, sentence-transformers, torch, transformers
+# For semantic-like search, we use TF-IDF with keyword matching
 
 # Testing
 pytest>=7.0.0
