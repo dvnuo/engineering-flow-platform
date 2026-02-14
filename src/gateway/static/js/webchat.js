@@ -1580,7 +1580,7 @@
             
             // Store auth data
             copilotAuthStatus.dataset.authId = data.auth_id;
-            copilotAuthStatus.dataset.deviceCode = data.verification_url.split('device_code=')[1] || '';
+            copilotAuthStatus.dataset.deviceCode = data.device_code;
             
             // Update UI
             copilotAuthStatus.style.display = 'block';
@@ -1620,7 +1620,7 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             auth_id: data.auth_id,
-                            device_code: data.verification_complete_url.split('device_code=')[1] || ''
+                            device_code: data.device_code
                         })
                     });
                     const checkData = await checkResponse.json();
