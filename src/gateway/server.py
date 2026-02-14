@@ -155,12 +155,7 @@ class Gateway:
             setup_event_routes(self.app)
         except Exception as e:
             logger.warning(f"Could not setup event routes: {e}")
-            logger.info("WebChat UI enabled at /chat")
-
-        # Settings page
-        self.app.router.add_get("/settings", lambda r: web.FileResponse("src/gateway/templates/settings/index.html"))
-        self.app.router.add_get("/static/css/settings.css", lambda r: web.FileResponse("src/gateway/static/css/settings.css"))
-        self.app.router.add_get("/static/js/settings.js", lambda r: web.FileResponse("src/gateway/static/js/settings.js"))
+            logger.info("WebChat UI enabled at /")
 
     async def handle_health(self, request: Request) -> web.Response:
         """Health check endpoint."""

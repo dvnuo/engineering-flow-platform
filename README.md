@@ -143,18 +143,12 @@ A modular, agentic platform with clear separation between skill declarations and
 
 ```
 engineering-flow/
-├── skills/                    # 🎯 Skill Declarations (SKILL.md only)
-│   ├── coding_agent/
-│   │   └── SKILL.md
-│   ├── git/
-│   │   └── SKILL.md
-│   ├── github/
-│   │   └── SKILL.md
-│   ├── test_case_generator/
-│   │   └── SKILL.md
-│   └── skill_creator/
-│       ├── SKILL.md
-│       └── references/
+├── skills/                    # 🎯 Skill Declarations (.md files)
+│   ├── review-pr.md           # Single-file skills
+│   ├── skill_creator/
+│   │   └── skill.md
+│   └── test_case_generator/
+│       └── skill.md
 │
 ├── main.py                    # Entry point
 ├── __init__.py               # Package exports
@@ -206,15 +200,15 @@ engineering-flow/
 
 ### Architecture Principles
 
-1. **skills/** - Declarative skill definitions only (SKILL.md)
+1. **skills/** - Declarative skill definitions (.md files with YAML frontmatter)
 2. **src/** - All implementation code 
 3. **main.py** and **__init__.py** at root for easy execution
-4. All modules (agents, channels, cron, gateway, memory, sessions) in `src/`
+4. Skills follow naming: `skills/*.md` or `skills/*/skill.md`
 
 ## Features
 
 - **Modular Architecture** - Clean separation of concerns
-- **Declarative Skills** - Skills defined as SKILL.md, implementation in src/
+- **Declarative Skills** - Skills defined as .md files with YAML frontmatter
 - **Tool Integration** - Git, GitHub, Jira, Confluence support
 - **SubAgent System** - Spawn and manage sub-agent sessions
 - **Session Management** - Persistent conversation context
@@ -222,6 +216,7 @@ engineering-flow/
 - **Heartbeat** - Periodic background checks
 - **Extensible** - Easy to add new channels or tools
 - **Shell Tools** - File operations and secure command execution
+- **WebChat UI** - Full-featured chat interface at `/`
 
 ---
 
@@ -263,19 +258,29 @@ pytest tests/ -v
 
 ### 1. Create Skill Declaration
 
-Create `skills/my_skill/SKILL.md`:
+Create `skills/my_skill/skill.md`:
 
 ```yaml
 ---
 name: my-skill
 description: "Description of what my skill does"
+triggers:
+  - /my-skill
+tools:
+  - my_tool
+strategy:
+  - "Step 1: Do something"
+  - "Step 2: Do something else"
+output_format: markdown
 ---
 
 # My Skill
 
-## Usage
+Describe the skill here...
 
-Describe how to use this skill...
+### Usage
+
+How to use this skill...
 ```
 
 ### 2. Create Tool Implementation
@@ -300,15 +305,23 @@ Export from `src/__init__.py` if needed.
 
 | Module | Path | Description |
 |--------|------|-------------|
-| **Agent** | [`agent/`](agent/) | Agent core logic, heartbeat |
-| **Channel** | [`channel/`](channel/) | Multi-channel adapters |
-| **Skills** | [`skills/`](skills/) | Skill framework, SKILL.md files |
-| **Src** | [`src/`](src/) | Tool implementations, executor |
-| **Tests** | [`tests/`](tests/) | Test suite |
-| **Cron** | [`cron/`](cron/) | Scheduled task scheduler |
-| **Gateway** | [`gateway/`](gateway/) | Web API server |
-| **Memory** | [`memory/`](memory/) | Persistent memory storage |
-| **Session** | [`session/`](session/) | Session lifecycle management |
+| **Agent** | `src/agents/` | Agent core logic, heartbeat |
+| **Channel** | `src/channels/` | Multi-channel adapters |
+| **Skills** | `skills/` | Skill framework (.md files) |
+| **Src** | `src/` | Tool implementations, executor |
+| **Tests** | `tests/` | Test suite |
+| **Cron** | `src/cron/` | Scheduled task scheduler |
+| **Gateway** | `src/gateway/` | Web API server, WebChat UI |
+| **Memory** | `src/memory/` | Persistent memory storage |
+| **Session** | `src/sessions/` | Session lifecycle management |
+
+## Available Skills
+
+| Skill | Type | Description |
+|-------|------|-------------|
+| `review-pr` | Single file | Review GitHub pull requests |
+| `skill-creator` | Directory | Create and manage skills |
+| `test-case-generator` | Directory | Generate test cases from requirements |
 
 ---
 
@@ -404,6 +417,36 @@ The following environment variables are blocked by default:
 - `PYTHONPATH`, `PYTHONHOME` - Python code injection
 - `BASH_ENV`, `ENV` - Shell execution injection
 - Custom `PATH` - Binary hijacking prevention
+
+---
+
+## WebChat UI
+
+The platform includes a full-featured web interface for interacting with the agent.
+
+### Access
+
+- **WebChat**: `http://localhost:8000/` (root URL)
+
+### Features
+
+- **Chat Interface** - Send messages and view responses
+- **Session History** - Persisted conversation context
+- **Skills Panel** - Browse available skills
+- **Thinking Process** - View agent's reasoning steps (expandable)
+- **File Explorer** - Browse workspace files
+- **Settings** - Configure LLM, integrations, and preferences
+
+### API Endpoints
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/` | GET | WebChat UI |
+| `/api/chat` | POST | Send message |
+| `/api/sessions` | GET | List sessions |
+| `/api/sessions/{id}` | GET | Load session |
+| `/api/skills` | GET | List skills |
+| `/api/events` | WS | Real-time events (WebSocket) |
 
 ---
 

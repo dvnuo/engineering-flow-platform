@@ -18,31 +18,34 @@ src/
 │   └── compaction.py     # Context compaction
 │
 ├── channels/             # Channel adapters
-│   ├── discord.py
-│   ├── github.py
-│   ├── jira.py
-│   └── confluence.py
+│   ├── discord.py       # Discord bot
+│   ├── github.py        # GitHub webhook/comments
+│   ├── jira.py         # Jira
+│   └── confluence.py    # Confluence
 │
 ├── cron/                 # Scheduled tasks
 │   └── mention_poller.py
 │
 ├── gateway/              # Web API server
-│   ├── server.py
-│   └── webchat.py
+│   ├── server.py        # Main gateway
+│   └── webchat.py       # WebChat UI
 │
 ├── memory/               # Memory storage
 │   ├── __init__.py
 │   └── sqlite_store.py
 │
 ├── sessions/            # Session management
-│   └── manager.py
+│   ├── manager.py
+│   ├── persistence.py
+│   ├── pruning.py
+│   └── usage.py
 │
 ├── git/                 # Git tool
 ├── github/              # GitHub tool
 ├── jira/                # Jira tool
-├── confluence/           # Confluence tool
-├── skill_creator/        # Skill creation tool
-│   └── scripts/
+├── confluence/          # Confluence tool
+├── skill_creator/       # Skill creation tool
+├── bash_tools/          # Shell/bash tools
 ├── config.py           # Configuration
 └── utils/              # Utilities
     └── logger.py
@@ -53,3 +56,4 @@ src/
 - Flat structure within each module
 - Single responsibility per file
 - Clean imports via `from src.<module> import ...`
+- Skills in `skills/` use YAML frontmatter (.md files)

@@ -68,7 +68,7 @@ class SkillRegistry:
         
         Supports both:
         - skills/*.md (single file skills, e.g., review-pr.md)
-        - skills/*/skill.md (directory-based skills, e.g., coding_agent/skill.md)
+        - skills/*/skill.md (directory-based skills, e.g., skill_creator/skill.md)
         
         Returns:
             Number of skills loaded
@@ -84,7 +84,7 @@ class SkillRegistry:
             if f.name.lower() != "readme.md"
         ]
         
-        # Pattern 2: Directory-based skills (e.g., skills/coding_agent/skill.md)
+        # Pattern 2: Directory-based skills (e.g., skills/skill_creator/skill.md)
         for skill_dir in self.skills_dir.iterdir():
             if skill_dir.is_dir():
                 skill_file = skill_dir / "skill.md"
