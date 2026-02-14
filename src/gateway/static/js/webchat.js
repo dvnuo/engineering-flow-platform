@@ -476,11 +476,12 @@
     
     /**
      * Add a message to the chat
-     * @param {string} role - 'user', 'assistant', or 'error'
+     * @param {string} role - 'user', 'assistant', 'tool', or 'error'
      * @param {string} content - Message content
      * @param {string} [timestamp] - Optional timestamp
+     * @param {Object} [toolCalls] - Optional tool calls array for assistant messages
      */
-    function addMessage(role, content, timestamp) {
+    function addMessage(role, content, timestamp, toolCalls = null) {
         // Remove welcome message if present
         const welcome = messagesContainer.querySelector('.welcome-message');
         if (welcome) {
@@ -490,13 +491,42 @@
         const div = document.createElement('div');
         div.className = `message ${role}`;
         
-        const avatar = role === 'user' ? 'U' : role === 'assistant' ? 'AI' : '!';
+        // Set avatar based on role
+        let avatar;
+        switch (role) {
+            case 'user':
+                avatar = 'U';
+                break;
+            case 'assistant':
+                avatar = 'AI';
+                break;
+            case 'tool':
+                avatar = '🔧';
+                break;
+            default:
+                avatar = '?';
+        }
+        
         const time = timestamp ? formatSmartDate(timestamp) : formatSmartDate(new Date());
+        
+        // Handle different message types
+        let badge = '';
+        let messageContent = content || '';
+        
+        if (role === 'tool') {
+            badge = '<span class="tool-badge">🔧 Tool Result</span>';
+        } else if (role === 'assistant' && toolCalls && toolCalls.length > 0) {
+            // Assistant message with tool calls but no content (pending tool execution)
+            badge = '<span class="tool-calls-badge">⚙️ Calling Tools</span>';
+            const toolNames = toolCalls.map(tc => tc.function?.name || tc.name).join(', ');
+            messageContent = `_Calling: ${toolNames}_`;
+        }
         
         div.innerHTML = `
             <div class="avatar" aria-hidden="true">${avatar}</div>
             <div>
-                <div class="message-bubble">${renderMarkdown(content)}</div>
+                ${badge}
+                <div class="message-bubble">${renderMarkdown(messageContent)}</div>
                 <div class="message-timestamp" aria-label="Message time">${time}</div>
             </div>
         `;
@@ -508,33 +538,91 @@
         if (role === 'assistant') {
             markPendingAssistant(div);
         }
+        
+        // Apply syntax highlighting to code blocks
+        if (typeof hljs !== 'undefined') {
+            div.querySelectorAll('pre code').forEach((block) => {
+                hljs.highlightElement(block);
+            });
+        }
     }
     
     /**
-     * Simple markdown-like rendering
-     * @param {string} text - Text to render
+     * Render markdown text to HTML
+     * @param {string} text - Markdown text to render
      * @returns {string} HTML
      */
     function renderMarkdown(text) {
-        // Escape HTML first
+        if (!text || typeof text !== 'string') {
+            return '';
+        }
+        
+        // Input length validation to prevent ReDoS and memory issues
+        const MAX_INPUT_LENGTH = 100000; // 100KB limit
+        if (text.length > MAX_INPUT_LENGTH) {
+            text = text.substring(0, MAX_INPUT_LENGTH);
+        }
+        
+        // Escape HTML first to prevent XSS
         let html = escapeHtml(text);
         
-        // Code blocks (```...```)
-        html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+        // Code blocks with language class (```lang ... ```)
+        html = html.replace(/```(\w*)\s*([\s\S]*?)```/g, function(match, lang, code) {
+            const langClass = lang ? `language-${lang}` : '';
+            const escapedCode = escapeHtml(code.trim());
+            return `<pre><code class="${langClass}">${escapedCode}</code></pre>`;
+        });
         
         // Inline code (`...`)
-        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+        html = html.replace(/`([^`]+)`/g, function(match, code) {
+            return '<code>' + escapeHtml(code) + '</code>';
+        });
         
-        // Bold (**...**)
+        // Bold (**...** or __...__)
         html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+        
+        // Italic (*...* or _..._)
+        html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+        html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
+        
+        // Strikethrough (~~...~~)
+        html = html.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+        
+        // Spoiler (||...||) - collapsible content
+        html = html.replace(/\|\|([^|]+)\|\|/g, '<span class="spoiler">$1</span>');
         
         // Headers (# ## ### ####)
+        html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
         html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
         html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
         html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
         
+        // Blockquotes (> ...)
+        html = html.replace(/^&gt;\s*(.+)$/gm, '<blockquote>$1</blockquote>');
+        html = html.replace(/^>\s*(.+)$/gm, '<blockquote>$1</blockquote>');
+        
+        // Unordered lists (- or * or +)
+        html = html.replace(/^[\-\*\+]\s+(.+)$/gm, '<li>$1</li>');
+        
+        // Ordered lists (1. 2. etc.)
+        html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+        
+        // Wrap consecutive list items in <ul> or <ol>
+        html = html.replace(/(<li>.*<\/li>)+/g, function(match) {
+            // Check if any item starts with a digit pattern (ordered list)
+            const hasOrdered = /<li>\s*\d+\./.test(match);
+            if (hasOrdered) {
+                return '<ol>' + match + '</ol>';
+            }
+            return '<ul>' + match + '</ul>';
+        });
+        
         // Links ([text](url))
-        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="link">$1</a>');
+        
+        // Horizontal rules (--- or ***)
+        html = html.replace(/^[\-\*]{3,}$/gm, '<hr class="divider">');
         
         return html;
     }
@@ -543,6 +631,13 @@
     document.addEventListener('click', function(e) {
         if (!skillSelector.contains(e.target)) {
             hideSkillSelector();
+        }
+    });
+    
+    // Handle spoiler click-to-reveal
+    messagesContainer.addEventListener('click', function(e) {
+        if (e.target.classList.contains('spoiler')) {
+            e.target.classList.toggle('revealed');
         }
     });
     
@@ -603,6 +698,13 @@
         timestamp.setAttribute('aria-label', 'Message time');
         timestamp.textContent = formatSmartDate(new Date());
         bubble.appendChild(timestamp);
+        
+        // Apply syntax highlighting to finished message
+        if (typeof hljs !== 'undefined') {
+            div.querySelectorAll('pre code').forEach((block) => {
+                hljs.highlightElement(block);
+            });
+        }
     }
     
     /**
@@ -675,37 +777,141 @@
             if (data.error) {
                 addMessage('error', `Error: ${data.error}`);
                 statusSpan.textContent = 'Error';
-            } else {
-                // Update current session ID from response and persist
-                console.log('[WebChat] data.session_id:', data.session_id);
-                if (data.session_id) {
-                    currentSessionId = data.session_id;
-                    console.log('[WebChat] Received session_id from server:', currentSessionId);
-                    localStorage.setItem(SESSION_ID_KEY, currentSessionId);
-                    console.log('[WebChat] Saved sessionId to localStorage:', currentSessionId);
-                    // Verify it was saved
-                    const saved = localStorage.getItem(SESSION_ID_KEY);
-                    console.log('[WebChat] Verified localStorage.getItem:', saved);
-                }
-                
-                addMessage('assistant', data.response);
-                
-                if (data.usage) {
-                    if (data.usage.total_tokens) {
-                        totalTokens += data.usage.total_tokens;
-                        tokenCountSpan.textContent = `Tokens: ${totalTokens}`;
-                    }
-                    if (data.usage.cost) {
-                        totalCost += data.usage.cost;
-                        costDisplaySpan.textContent = `Cost: $${totalCost.toFixed(4)}`;
-                    }
-                }
-                
-                statusSpan.textContent = 'Ready';
-                
-                // Refresh sessions list to show the new session
-                loadRecentSessions();
+                return;
             }
+            
+            // Update current session ID from response and persist
+            console.log('[WebChat] data.session_id:', data.session_id);
+            if (data.session_id) {
+                currentSessionId = data.session_id;
+                console.log('[WebChat] Received session_id from server:', currentSessionId);
+                localStorage.setItem(SESSION_ID_KEY, currentSessionId);
+                console.log('[WebChat] Saved sessionId to localStorage:', currentSessionId);
+                // Verify it was saved
+                const saved = localStorage.getItem(SESSION_ID_KEY);
+                console.log('[WebChat] Verified localStorage.getItem:', saved);
+            }
+            
+            // Fetch full session to get complete message history including tool calls/results
+            try {
+                const sessionResponse = await fetch('/api/sessions/' + encodeURIComponent(currentSessionId));
+                const sessionData = await sessionResponse.json();
+                
+                if (sessionData.messages && sessionData.messages.length > 0) {
+                    // Clear loading message and render full history
+                    messagesContainer.innerHTML = '';
+                    
+                    // Render all messages from session history
+                    sessionData.messages.forEach(msg => {
+                        const role = msg.role || 'user';
+                        const content = msg.content || '';
+                        const timestamp = msg.timestamp || msg.created_at;
+                        addMessage(role, content, timestamp, msg.tool_calls);
+                    });
+                    
+                    // Scroll to bottom after rendering all messages
+                    scrollToBottom();
+                    
+                    // Show thinking events from session metadata
+                    const metadata = sessionData.metadata || {};
+                    const thinkingEvents = metadata.thinking_events || [];
+                    if (thinkingEvents.length > 0) {
+                        // Get the last assistant message
+                        const assistantMessages = messagesContainer.querySelectorAll('.message.assistant');
+                        if (assistantMessages.length > 0) {
+                            const lastAssistant = assistantMessages[assistantMessages.length - 1];
+                            if (!lastAssistant.classList.contains('has-thinking')) {
+                                // Create events snapshot from stored events
+                                const eventsSnapshot = thinkingEvents.map(event => ({
+                                    type: event.type,
+                                    data: event.data || {},
+                                    display: event.display || {
+                                        icon: '📌',
+                                        name: event.type,
+                                        message: JSON.stringify(event.data || {}).substring(0, 50)
+                                    }
+                                }));
+                                
+                                // Manually add thinking process button
+                                lastAssistant.classList.add('has-thinking');
+                                const bubble = lastAssistant.querySelector('.message-bubble');
+                                if (bubble) {
+                                    // Create toggle button
+                                    const toggleBtn = document.createElement('button');
+                                    toggleBtn.className = 'thinking-process-toggle';
+                                    const eventCount = eventsSnapshot.length;
+                                    toggleBtn.innerHTML = `
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <circle cx="12" cy="12" r="10"/>
+                                            <path d="M12 16v-4"/>
+                                            <path d="M12 8h.01"/>
+                                        </svg>
+                                        <span>View Thinking Process (${eventCount} steps)</span>
+                                        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <polyline points="6 9 12 15 18 9"/>
+                                        </svg>
+                                    `;
+                                    
+                                    // Create content
+                                    const processContent = document.createElement('div');
+                                    processContent.className = 'thinking-process-content';
+                                    processContent.style.display = 'none';
+                                    
+                                    let timelineHtml = '<div class="thinking-timeline">';
+                                    eventsSnapshot.forEach((event, index) => {
+                                        const display = event.display;
+                                        const isLast = index === eventsSnapshot.length - 1;
+                                        timelineHtml += `
+                                            <div class="thinking-item ${isLast ? 'last' : ''}">
+                                                <div class="thinking-icon">${display.icon}</div>
+                                                <div class="thinking-details">
+                                                    <div class="thinking-name">${display.name}</div>
+                                                    <div class="thinking-message">${escapeHtml(display.message)}</div>
+                                                </div>
+                                            </div>`;
+                                    });
+                                    timelineHtml += '</div>';
+                                    
+                                    processContent.innerHTML = timelineHtml;
+                                    
+                                    // Add toggle functionality
+                                    toggleBtn.addEventListener('click', function() {
+                                        const isHidden = processContent.style.display === 'none';
+                                        processContent.style.display = isHidden ? 'block' : 'none';
+                                        toggleBtn.querySelector('.chevron').style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+                                    });
+                                    
+                                    bubble.appendChild(toggleBtn);
+                                    bubble.appendChild(processContent);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Fallback to simple response display
+                    addMessage('assistant', data.response);
+                }
+            } catch (sessionError) {
+                console.error('[WebChat] Error loading session:', sessionError);
+                // Fallback to simple response display
+                addMessage('assistant', data.response);
+            }
+            
+            if (data.usage) {
+                if (data.usage.total_tokens) {
+                    totalTokens += data.usage.total_tokens;
+                    tokenCountSpan.textContent = `Tokens: ${totalTokens}`;
+                }
+                if (data.usage.cost) {
+                    totalCost += data.usage.cost;
+                    costDisplaySpan.textContent = `Cost: $${totalCost.toFixed(4)}`;
+                }
+            }
+            
+            statusSpan.textContent = 'Ready';
+            
+            // Refresh sessions list to show the new session
+            loadRecentSessions();
         } catch (error) {
             addMessage('error', `Connection error: ${error.message}`);
             statusSpan.textContent = 'Disconnected';
@@ -952,7 +1158,7 @@
             } else {
                 messages.forEach(msg => {
                     const role = msg.role || 'user';
-                    addMessage(role, msg.content || '', msg.timestamp || msg.created_at);
+                    addMessage(role, msg.content || '', msg.timestamp || msg.created_at, msg.tool_calls);
                 });
             }
             
