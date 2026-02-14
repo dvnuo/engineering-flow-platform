@@ -1,7 +1,7 @@
 """Event bus for real-time agent events.
 
-Similar to OpenClaw's emitAgentEvent pattern - in-memory event bus
-that allows WebSocket connections to receive agent events in real-time.
+In-memory event bus that allows WebSocket connections to receive
+agent events in real-time.
 """
 
 import asyncio
