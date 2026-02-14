@@ -960,7 +960,7 @@ def setup_webchat_routes(app: web.Application):
     
     Routes:
         GET  /             - WebChat UI (root)
-        GET  /chat         - WebChat UI (backward compatibility)
+        GET  /chat         - WebChat UI
         GET  /static/*     - Static files (CSS, JS)
         POST /api/chat     - Send message
         POST /api/chat/stream - Send message (streaming SSE)
@@ -972,7 +972,7 @@ def setup_webchat_routes(app: web.Application):
         GET  /api/skills  - Get available skills
     """
     app.router.add_get('/', serve_webchat)
-    app.router.add_get('/chat', serve_webchat)  # Backward compatibility
+    
     app.router.add_get('/static/{path:.*}', serve_static)
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)
@@ -990,7 +990,7 @@ def setup_webchat_routes(app: web.Application):
     
     logger.info("WebChat routes registered:")
     logger.info("  GET  /              - WebChat UI (root)")
-    logger.info("  GET  /chat         - WebChat UI (backward compat)")
+    
     logger.info("  GET  /static/*     - Static files (CSS, JS)")
     logger.info("  POST /api/chat     - Send message")
     logger.info("  POST /api/chat/stream - Send message (streaming SSE)")
