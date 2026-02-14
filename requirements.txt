@@ -9,9 +9,9 @@ discord.py>=2.3.0
 requests
 
 # Memory and embeddings
-onnxruntime>=1.15.0
+transformers>=4.30.0
+torch>=2.0.0
 tokenizers>=0.13.0
-huggingface-hub>=0.16.0
 
 # Testing
 pytest>=7.0.0

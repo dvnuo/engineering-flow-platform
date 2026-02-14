@@ -1,7 +1,6 @@
-"""Vector memory with ONNX embedding backend for semantic search.
+"""Vector memory with embedding backend for semantic search.
 
-Uses onnxruntime for fast, lightweight inference with ONNX models.
-Stores embeddings in local NumPy format for simplicity.
+Uses transformers for embeddings with local NumPy storage.
 """
 
 import json
@@ -27,9 +26,9 @@ class MemoryEntry:
 
 
 class VectorMemory:
-    """ONNX-based vector memory with semantic search.
+    """Vector memory with transformer embeddings for semantic search.
     
-    Uses onnxruntime for fast, lightweight inference.
+    Uses transformers library for embeddings.
     Stores embeddings in local NumPy format.
     """
     
@@ -37,7 +36,7 @@ class VectorMemory:
         self,
         collection_name: str = "efp_memory",
         storage_dir: str = "~/.efp/workspace/vector_memory",
-        embedding_model: str = "Xenova/all-MiniLM-L6-v2",
+        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
         dimension: int = 384,
         score_threshold: float = 0.5,
         max_tokens: int = 256,
@@ -47,7 +46,7 @@ class VectorMemory:
         Args:
             collection_name: Storage collection name
             storage_dir: Directory for persistent storage
-            embedding_model: ONNX model name (HuggingFace Xenova format)
+            embedding_model: HuggingFace model name
             dimension: Embedding dimension
             score_threshold: Minimum similarity score for search results
             max_tokens: Maximum tokens for embedding input
@@ -60,91 +59,111 @@ class VectorMemory:
         self.score_threshold = score_threshold
         self.max_tokens = max_tokens
         
-        self.ort_session = None
+        self.model = None
         self.tokenizer = None
-        self._init_onnx()
+        self._init_model()
         
         # Initialize numpy-based storage
         self._init_storage()
     
-    def _init_onnx(self):
-        """Initialize ONNX runtime session."""
-        self.has_onnx = False
+    def _init_model(self):
+        """Initialize transformer model for embeddings."""
+        self.has_model = False
         
         try:
-            import onnxruntime as ort
-            from huggingface_hub import hf_hub_download
+            from transformers import AutoTokenizer, AutoModel
+            import torch
             
-            cache_dir = self.storage_dir / "models" / self.embedding_model.replace("/", "_")
+            cache_dir = self.storage_dir / "models"
             cache_dir.mkdir(parents=True, exist_ok=True)
             
-            # Try loading Xenova's ONNX model
-            if self.embedding_model.startswith("Xenova/"):
-                try:
-                    model_path = hf_hub_download(
-                        repo_id=self.embedding_model,
-                        filename="model.onnx",
-                        cache_dir=str(cache_dir)
-                    )
-                    tokenizer_path = hf_hub_download(
-                        repo_id=self.embedding_model,
-                        filename="tokenizer.json",
-                        cache_dir=str(cache_dir)
-                    )
-                    
-                    # Load ONNX session
-                    providers = ['CPUExecutionProvider']
-                    self.ort_session = ort.InferenceSession(model_path, providers=providers)
-                    
-                    # Load tokenizer
-                    with open(tokenizer_path, 'r', encoding='utf-8') as f:
-                        tokenizer_data = json.load(f)
-                    
-                    vocab = tokenizer_data.get('model', {}).get('vocab', {})
-                    
-                    def simple_tokenize(text: str) -> np.ndarray:
-                        """Simple word-level tokenization."""
-                        words = text.lower().split()[:self.max_tokens]
-                        return np.array([[vocab.get(w, 0) for w in words]], dtype=np.int64)
-                    
-                    self.tokenizer = simple_tokenize
-                    self.has_onnx = True
-                    logger.info(f"ONNX model loaded: {self.embedding_model}")
-                    
-                except Exception as e:
-                    logger.debug(f"Failed to load Xenova ONNX model: {e}")
+            logger.info(f"Loading embedding model: {self.embedding_model}")
             
-            # Fallback: try loading as standard transformers model
-            if not self.has_onnx:
-                try:
-                    from transformers import AutoTokenizer
-                    from optimum.onnxruntime import ORTModelForFeatureExtraction
-                    
-                    model = ORTModelForFeatureExtraction.from_pretrained(
-                        self.embedding_model,
-                        export=False,
-                        cache_dir=str(cache_dir)
-                    )
-                    self.ort_session = model.session
-                    self.tokenizer = AutoTokenizer.from_pretrained(
-                        self.embedding_model,
-                        cache_dir=str(cache_dir)
-                    )
-                    self.has_onnx = True
-                    logger.info(f"ONNX model loaded: {self.embedding_model}")
-                    
-                except ImportError:
-                    logger.debug("optimum/transformers not available")
-                except Exception as e:
-                    logger.debug(f"Failed to load ONNX model: {e}")
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                self.embedding_model,
+                cache_dir=str(cache_dir)
+            )
+            self.model = AutoModel.from_pretrained(
+                self.embedding_model,
+                cache_dir=str(cache_dir)
+            )
+            self.model.eval()
+            
+            self.has_model = True
+            logger.info(f"Embedding model loaded: {self.embedding_model}")
             
         except ImportError:
-            logger.debug("onnxruntime not installed")
+            logger.debug("transformers not installed")
         except Exception as e:
-            logger.debug(f"ONNX initialization failed: {e}")
+            logger.debug(f"Failed to load model: {e}")
         
-        if not self.has_onnx:
+        if not self.has_model:
             logger.info("Using fallback hash-based embeddings")
+    
+    def _get_embedding(self, text: str) -> List[float]:
+        """Get embedding for text using transformer model.
+        
+        Args:
+            text: Text to embed
+            
+        Returns:
+            Embedding vector as list of floats
+        """
+        if self.has_model and self.model:
+            try:
+                import torch
+                
+                # Tokenize
+                inputs = self.tokenizer(
+                    text,
+                    padding=True,
+                    truncation=True,
+                    max_length=self.max_tokens,
+                    return_tensors="pt"
+                )
+                
+                # Get embeddings
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                    # Mean pooling
+                    attention_mask = inputs["attention_mask"]
+                    token_embeddings = outputs.last_hidden_state
+                    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+                    sum_embeddings = torch.sum(token_embeddings * input_mask_expanded, 1)
+                    sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+                    embedding = (sum_embeddings / sum_mask).squeeze()
+                    
+                    # Normalize
+                    embedding = torch.nn.functional.normalize(embedding, p=2, dim=0)
+                    
+                    return embedding.numpy().tolist()
+                    
+            except Exception as e:
+                logger.debug(f"Embedding failed: {e}")
+        
+        return self._simple_embedding(text)
+    
+    def _simple_embedding(self, text: str) -> List[float]:
+        """Generate a simple deterministic embedding from text hash.
+        
+        Args:
+            text: Input text
+            
+        Returns:
+            Deterministic embedding vector (non-semantic, for fallback)
+        """
+        import hashlib
+        
+        hash_bytes = hashlib.sha256(text.encode()).digest()
+        # Generate 384 bits (48 bytes) from hash
+        vector = [float(b) / 255.0 for b in hash_bytes[:48]]
+        
+        # Pad or truncate to dimension
+        while len(vector) < self.dimension:
+            vector.extend(vector[:self.dimension - len(vector)])
+        vector = vector[:self.dimension]
+        
+        return vector
     
     def _init_storage(self):
         """Initialize numpy-based storage."""
@@ -172,80 +191,6 @@ class VectorMemory:
                         pass
             return metadata
         return []
-    
-    def _get_embedding(self, text: str) -> List[float]:
-        """Get embedding for text.
-        
-        Args:
-            text: Text to embed
-            
-        Returns:
-            Embedding vector as list of floats
-        """
-        if self.has_onnx and self.ort_session:
-            try:
-                # Tokenize
-                if callable(self.tokenizer):
-                    input_ids = self.tokenizer(text)
-                else:
-                    inputs = self.tokenizer(
-                        text,
-                        padding=True,
-                        truncation=True,
-                        max_length=self.max_tokens,
-                        return_tensors="np"
-                    )
-                    input_ids = inputs["input_ids"]
-                
-                # Ensure correct shape
-                if len(input_ids.shape) == 1:
-                    input_ids = input_ids.reshape(1, -1)
-                
-                # Run inference
-                input_name = self.ort_session.get_inputs()[0].name
-                outputs = self.ort_session.run(None, {input_name: input_ids})
-                
-                # Get last hidden state and apply mean pooling
-                hidden_states = outputs[0]
-                attention_mask = np.ones_like(input_ids)
-                
-                mask_expanded = np.expand_dims(attention_mask, -1)
-                sum_embeddings = np.sum(hidden_states * mask_expanded, axis=1)
-                sum_mask = np.clip(attention_mask.sum(axis=1), a_min=1e-9)
-                embedding = sum_embeddings / sum_mask
-                
-                # Normalize
-                norm = np.linalg.norm(embedding, axis=1, keepdims=True)
-                normalized = embedding / norm
-                
-                return normalized[0].astype(np.float32).tolist()
-                
-            except Exception as e:
-                logger.debug(f"ONNX embedding failed: {e}")
-        
-        return self._simple_embedding(text)
-    
-    def _simple_embedding(self, text: str) -> List[float]:
-        """Generate a simple deterministic embedding from text hash.
-        
-        Args:
-            text: Input text
-            
-        Returns:
-            Deterministic embedding vector (non-semantic, for fallback)
-        """
-        import hashlib
-        
-        hash_bytes = hashlib.sha256(text.encode()).digest()
-        # Generate 384 bits (48 bytes) from hash
-        vector = [float(b) / 255.0 for b in hash_bytes[:48]]
-        
-        # Pad or truncate to dimension
-        while len(vector) < self.dimension:
-            vector.extend(vector[:self.dimension - len(vector)])
-        vector = vector[:self.dimension]
-        
-        return vector
     
     def add(
         self,
@@ -404,7 +349,7 @@ class VectorMemory:
             Health status dictionary
         """
         return {
-            "onnx_available": self.has_onnx,
+            "model_available": self.has_model,
             "embedding_model": self.embedding_model,
             "storage_dir": str(self.storage_dir),
             "collection_name": self.collection_name,
