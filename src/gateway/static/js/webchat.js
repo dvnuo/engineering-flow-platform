@@ -767,37 +767,70 @@
             if (data.error) {
                 addMessage('error', `Error: ${data.error}`);
                 statusSpan.textContent = 'Error';
-            } else {
-                // Update current session ID from response and persist
-                console.log('[WebChat] data.session_id:', data.session_id);
-                if (data.session_id) {
-                    currentSessionId = data.session_id;
-                    console.log('[WebChat] Received session_id from server:', currentSessionId);
-                    localStorage.setItem(SESSION_ID_KEY, currentSessionId);
-                    console.log('[WebChat] Saved sessionId to localStorage:', currentSessionId);
-                    // Verify it was saved
-                    const saved = localStorage.getItem(SESSION_ID_KEY);
-                    console.log('[WebChat] Verified localStorage.getItem:', saved);
-                }
-                
-                addMessage('assistant', data.response);
-                
-                if (data.usage) {
-                    if (data.usage.total_tokens) {
-                        totalTokens += data.usage.total_tokens;
-                        tokenCountSpan.textContent = `Tokens: ${totalTokens}`;
-                    }
-                    if (data.usage.cost) {
-                        totalCost += data.usage.cost;
-                        costDisplaySpan.textContent = `Cost: $${totalCost.toFixed(4)}`;
-                    }
-                }
-                
-                statusSpan.textContent = 'Ready';
-                
-                // Refresh sessions list to show the new session
-                loadRecentSessions();
+                return;
             }
+            
+            // Update current session ID from response and persist
+            console.log('[WebChat] data.session_id:', data.session_id);
+            if (data.session_id) {
+                currentSessionId = data.session_id;
+                console.log('[WebChat] Received session_id from server:', currentSessionId);
+                localStorage.setItem(SESSION_ID_KEY, currentSessionId);
+                console.log('[WebChat] Saved sessionId to localStorage:', currentSessionId);
+                // Verify it was saved
+                const saved = localStorage.getItem(SESSION_ID_KEY);
+                console.log('[WebChat] Verified localStorage.getItem:', saved);
+            }
+            
+            // Fetch full session to get complete message history including tool calls/results
+            try {
+                const sessionResponse = await fetch('/api/sessions/' + encodeURIComponent(currentSessionId));
+                const sessionData = await sessionResponse.json();
+                
+                if (sessionData.messages && sessionData.messages.length > 0) {
+                    // Clear loading message and render full history
+                    messagesContainer.innerHTML = '';
+                    
+                    // Render all messages from session history
+                    sessionData.messages.forEach(msg => {
+                        const role = msg.role || 'user';
+                        const content = msg.content || '';
+                        const timestamp = msg.timestamp || msg.created_at;
+                        addMessage(role, content, timestamp, msg.tool_calls);
+                    });
+                    
+                    // Scroll to bottom after rendering all messages
+                    scrollToBottom();
+                    
+                    // Render thinking events if available
+                    if (sessionData.metadata && sessionData.metadata.thinking_events) {
+                        renderThinkingEvents(sessionData.metadata.thinking_events);
+                    }
+                } else {
+                    // Fallback to simple response display
+                    addMessage('assistant', data.response);
+                }
+            } catch (sessionError) {
+                console.error('[WebChat] Error loading session:', sessionError);
+                // Fallback to simple response display
+                addMessage('assistant', data.response);
+            }
+            
+            if (data.usage) {
+                if (data.usage.total_tokens) {
+                    totalTokens += data.usage.total_tokens;
+                    tokenCountSpan.textContent = `Tokens: ${totalTokens}`;
+                }
+                if (data.usage.cost) {
+                    totalCost += data.usage.cost;
+                    costDisplaySpan.textContent = `Cost: $${totalCost.toFixed(4)}`;
+                }
+            }
+            
+            statusSpan.textContent = 'Ready';
+            
+            // Refresh sessions list to show the new session
+            loadRecentSessions();
         } catch (error) {
             addMessage('error', `Connection error: ${error.message}`);
             statusSpan.textContent = 'Disconnected';
