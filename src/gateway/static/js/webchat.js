@@ -503,6 +503,11 @@
         
         messagesContainer.appendChild(div);
         scrollToBottom();
+        
+        // Mark assistant messages as pending thinking process
+        if (role === 'assistant') {
+            markPendingAssistant(div);
+        }
     }
     
     /**
@@ -1579,15 +1584,23 @@
     let eventWs = null;
     let currentAgentEventDiv = null;
     let currentEvents = [];  // Store events for current request
-    let currentSessionEvents = {};  // Store events by session_id
-    let activeSessionId = null;
+    let pendingAssistantMessage = null;  // Track the assistant message waiting for thinking process
     
     /**
      * Reset events for new request
      */
     function resetEvents() {
         currentEvents = [];
+        pendingAssistantMessage = null;
         console.log('[Events] Reset events for new request');
+    }
+    
+    /**
+     * Mark a message element as pending thinking process
+     */
+    function markPendingAssistant(element) {
+        pendingAssistantMessage = element;
+        console.log('[Events] Marked pending assistant message');
     }
     
     /**
@@ -1819,15 +1832,17 @@
         
         console.log('[Events] Showing thinking process with', eventsSnapshot.length, 'events');
         
-        // Find the assistant message that was just added (most recent one without has-thinking)
-        const assistantMessages = messagesContainer.querySelectorAll('.message.assistant');
+        // Use the pending assistant message (most reliable)
+        let lastAssistantMessage = pendingAssistantMessage;
         
-        // Find the most recent assistant message that doesn't have thinking yet
-        let lastAssistantMessage = null;
-        for (let i = assistantMessages.length - 1; i >= 0; i--) {
-            if (!assistantMessages[i].classList.contains('has-thinking')) {
-                lastAssistantMessage = assistantMessages[i];
-                break;
+        // Fallback: find the most recent assistant message without has-thinking
+        if (!lastAssistantMessage) {
+            const assistantMessages = messagesContainer.querySelectorAll('.message.assistant');
+            for (let i = assistantMessages.length - 1; i >= 0; i--) {
+                if (!assistantMessages[i].classList.contains('has-thinking')) {
+                    lastAssistantMessage = assistantMessages[i];
+                    break;
+                }
             }
         }
         
@@ -1837,6 +1852,7 @@
         }
         
         lastAssistantMessage.classList.add('has-thinking');
+        pendingAssistantMessage = null;  // Clear the pending reference
         
         // Create toggle button
         const toggleBtn = document.createElement('button');
