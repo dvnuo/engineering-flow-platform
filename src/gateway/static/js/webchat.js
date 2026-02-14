@@ -519,6 +519,10 @@
     
     /**
      * Render markdown text to HTML
+     * @param {string} text - Markdown text to render
+     * @returns {string} HTML
+     */
+    function renderMarkdown(text) {
         if (!text || typeof text !== 'string') {
             return '';
         }
