@@ -557,17 +557,26 @@
             return '';
         }
         
+        // Input length validation to prevent ReDoS and memory issues
+        const MAX_INPUT_LENGTH = 100000; // 100KB limit
+        if (text.length > MAX_INPUT_LENGTH) {
+            text = text.substring(0, MAX_INPUT_LENGTH);
+        }
+        
         // Escape HTML first to prevent XSS
         let html = escapeHtml(text);
         
         // Code blocks with language class (```lang ... ```)
         html = html.replace(/```(\w*)\s*([\s\S]*?)```/g, function(match, lang, code) {
             const langClass = lang ? `language-${lang}` : '';
-            return `<pre><code class="${langClass}">${code.trim()}</code></pre>`;
+            const escapedCode = escapeHtml(code.trim());
+            return `<pre><code class="${langClass}">${escapedCode}</code></pre>`;
         });
         
         // Inline code (`...`)
-        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+        html = html.replace(/`([^`]+)`/g, function(match, code) {
+            return '<code>' + escapeHtml(code) + '</code>';
+        });
         
         // Bold (**...** or __...__)
         html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -601,8 +610,9 @@
         
         // Wrap consecutive list items in <ul> or <ol>
         html = html.replace(/(<li>.*<\/li>)+/g, function(match) {
-            // Check if it's ordered (starts with digit) or unordered
-            if (/^\d+\./.test(match)) {
+            // Check if any item starts with a digit pattern (ordered list)
+            const hasOrdered = /<li>\s*\d+\./.test(match);
+            if (hasOrdered) {
                 return '<ol>' + match + '</ol>';
             }
             return '<ul>' + match + '</ul>';
