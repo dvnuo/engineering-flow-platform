@@ -479,8 +479,9 @@
      * @param {string} role - 'user', 'assistant', 'tool', or 'error'
      * @param {string} content - Message content
      * @param {string} [timestamp] - Optional timestamp
+     * @param {Object} [toolCalls] - Optional tool calls array for assistant messages
      */
-    function addMessage(role, content, timestamp) {
+    function addMessage(role, content, timestamp, toolCalls = null) {
         // Remove welcome message if present
         const welcome = messagesContainer.querySelector('.welcome-message');
         if (welcome) {
@@ -508,14 +509,24 @@
         
         const time = timestamp ? formatSmartDate(timestamp) : formatSmartDate(new Date());
         
-        // For tool messages, show a tool badge
-        const toolBadge = role === 'tool' ? '<span class="tool-badge">🔧 Tool Result</span>' : '';
+        // Handle different message types
+        let badge = '';
+        let messageContent = content || '';
+        
+        if (role === 'tool') {
+            badge = '<span class="tool-badge">🔧 Tool Result</span>';
+        } else if (role === 'assistant' && toolCalls && toolCalls.length > 0) {
+            // Assistant message with tool calls but no content (pending tool execution)
+            badge = '<span class="tool-calls-badge">⚙️ Calling Tools</span>';
+            const toolNames = toolCalls.map(tc => tc.function?.name || tc.name).join(', ');
+            messageContent = `_Calling: ${toolNames}_`;
+        }
         
         div.innerHTML = `
             <div class="avatar" aria-hidden="true">${avatar}</div>
             <div>
-                ${toolBadge}
-                <div class="message-bubble">${renderMarkdown(content)}</div>
+                ${badge}
+                <div class="message-bubble">${renderMarkdown(messageContent)}</div>
                 <div class="message-timestamp" aria-label="Message time">${time}</div>
             </div>
         `;
@@ -1033,7 +1044,7 @@
             } else {
                 messages.forEach(msg => {
                     const role = msg.role || 'user';
-                    addMessage(role, msg.content || '', msg.timestamp || msg.created_at);
+                    addMessage(role, msg.content || '', msg.timestamp || msg.created_at, msg.tool_calls);
                 });
             }
             
