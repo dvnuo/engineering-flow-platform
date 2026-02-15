@@ -200,9 +200,8 @@ async def exec(
     timeout: int = DEFAULT_TIMEOUT,
     workdir: Optional[str] = None,
     env: Optional[dict[str, str]] = None,
-    # Security parameters
+    # Security parameters - simplified
     security: Optional[str] = None,
-    ask: Optional[str] = None,
     host: Optional[str] = None,
 ) -> str:
     """Execute a shell command with security controls.
@@ -212,45 +211,32 @@ async def exec(
         timeout: Timeout in seconds (default: 60)
         workdir: Working directory (optional)
         env: Environment variables (optional)
-        security: Security mode (deny|allowlist|full)
-        ask: Approval mode (off|on-miss|always)
-        host: Execution host (gateway|sandbox|node)
+        security: Security mode (allowlist|full) - default: allowlist
     
     Returns:
         Command output (stdout + stderr) or error message
     
     Security Modes:
-        - deny: Block all commands (default)
-        - allowlist: Only allow commands in whitelist
-        - full: Allow all commands
-    
-    Approval Modes:
-        - off: No approval needed
-        - on-miss: Request approval when not in allowlist
-        - always: Always request approval
+        - allowlist: Only allow commands in whitelist (default)
+        - full: Allow all commands (use with caution)
     
     Examples:
         exec(command="ls -la")
-        exec(command="git status", security="allowlist")
-        exec(command="pip install requests", security="allowlist", ask="on-miss")
+        exec(command="git status")
+        exec(command="cat file.txt")
     """
     if not command or not command.strip():
         return "Error: Empty command"
     
-    # Build security config from parameters
+    # Get security config
     config = get_security_config()
     
+    # Override security if specified
     if security:
         try:
             config.security = ExecSecurity(security.lower())
         except ValueError:
-            return f"Error: Invalid security mode '{security}'. Must be: deny, allowlist, or full"
-    
-    if ask:
-        try:
-            config.ask = ExecAsk(ask.lower())
-        except ValueError:
-            return f"Error: Invalid ask mode '{ask}'. Must be: off, on-miss, or always"
+            return f"Error: Invalid security mode '{security}'. Must be: allowlist or full"
     
     # Validate environment variables
     if env:
@@ -259,7 +245,7 @@ async def exec(
             return f"Error: {error}"
     
     # Get current working directory
-    cwd = os.getcwd()
+    actual_cwd = str(Path.cwd())
     if workdir:
         workdir_path = Path(workdir).resolve()
         try:
@@ -267,22 +253,6 @@ async def exec(
             actual_cwd = str(workdir_path)
         except ValueError:
             actual_cwd = str(Path.cwd())
-    else:
-        actual_cwd = str(Path.cwd())
-    
-    # Check if command requires approval
-    needs_approval, approval_reason = requires_approval(command, config, True, actual_cwd)
-    
-    if needs_approval:
-        return (
-            f"⚠️  Command requires approval\n"
-            f"Reason: {approval_reason}\n"
-            f"Security: {config.security.value}\n"
-            f"Approval: {config.ask.value}\n\n"
-            f"To approve, configure security settings:\n"
-            f"- security=allowlist: Add command to allowlist\n"
-            f"- security=full: Allow all commands (use with caution)"
-        )
     
     # Evaluate command
     allowed, reason = evaluate_command(command, config, actual_cwd)
@@ -290,11 +260,10 @@ async def exec(
     if not allowed:
         return (
             f"🚫 Command blocked\n"
-            f"Reason: {reason}\n"
-            f"Security: {config.security.value}\n\n"
+            f"Reason: {reason}\n\n"
             f"To allow this command:\n"
-            f"- Add to security allowlist\n"
-            f"- Use security=full (not recommended)"
+            f"- Set security=full (allows all commands)\n"
+            f"- Add command to allowlist"
         )
     
     # Execute command
@@ -327,7 +296,7 @@ async def exec(
         
         if stderr:
             stderr_text = stderr.decode('utf-8', errors='replace').strip()
-            if stderr_text:
+            if stderr_text and "Warning:" not in stderr_text and "DeprecationWarning" not in stderr_text:
                 output.append(f"STDERR:\n{stderr_text}")
         
         result = '\n'.join(output)
@@ -335,7 +304,7 @@ async def exec(
         if process.returncode != 0:
             result = f"Exit code: {process.returncode}\n\n{result}"
         
-        logger.info(f"exec: {command} (exit: {process.returncode}, security: {config.security.value})")
+        logger.info(f"exec: {command} (exit: {process.returncode})")
         
         return result if result else "(no output)"
         
@@ -461,91 +430,33 @@ def exec_sync(
 # ============ Tool Schemas ============
 
 def get_tools_schemas() -> list:
-    """Return tool schemas for LLM function calling."""
+    """Return tool schemas for LLM function calling.
+    
+    Simplified schema - only one exec tool that allows full shell access.
+    Agent can use any Linux CLI commands (vim, cat, echo, sed, awk, etc.).
+    """
     return [
-        # File tools
-        {
-            "type": "function",
-            "function": {
-                "name": "read",
-                "description": "Read file contents. Shows line numbers and metadata.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "Path to file to read"},
-                        "limit": {"type": "integer", "description": "Maximum lines to read (optional)"},
-                        "offset": {"type": "integer", "description": "Start line number, 1-indexed (optional)"}
-                    },
-                    "required": ["file_path"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "write",
-                "description": "Create or overwrite a file with content.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "Path to file to write"},
-                        "content": {"type": "string", "description": "Content to write"}
-                    },
-                    "required": ["file_path", "content"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "edit",
-                "description": "Edit file by replacing old text with new text.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "Path to file to edit"},
-                        "oldText": {"type": "string", "description": "Text to find and replace"},
-                        "newText": {"type": "string", "description": "Replacement text"}
-                    },
-                    "required": ["file_path", "oldText", "newText"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "list_dir",
-                "description": "List directory contents (files and folders).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Directory path (default: current directory)"}
-                    },
-                    "required": ["path"]
-                }
-            }
-        },
-        # Exec tool with security
         {
             "type": "function",
             "function": {
                 "name": "exec",
-                "description": "Execute a shell command with security controls. Default: deny all.",
+                "description": """Execute any Linux shell command. Use standard CLI tools as needed:
+- File read: cat, less, head, tail, nl
+- File write: echo, tee, cat > file
+- File edit: sed, awk, perl -i
+- Directory: ls, find, tree, cd
+- Search: grep, rg, find, ack
+- Text processing: jq, tr, sort, uniq, wc
+- System: ps, top, df, du, free
+- Any other Linux commands
+
+The agent should choose the appropriate tool for the task.""",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "command": {"type": "string", "description": "Shell command to execute"},
                         "timeout": {"type": "integer", "description": "Timeout in seconds (default: 60)"},
-                        "workdir": {"type": "string", "description": "Working directory (optional)"},
-                        "env": {"type": "object", "description": "Environment variables (optional)"},
-                        "security": {
-                            "type": "string",
-                            "description": "Security mode: deny|allowlist|full (default: deny)"
-                        },
-                        "ask": {
-                            "type": "string",
-                            "description": "Approval mode: off|on-miss|always (default: on-miss)"
-                        }
+                        "workdir": {"type": "string", "description": "Working directory (optional)"}
                     },
                     "required": ["command"]
                 }
