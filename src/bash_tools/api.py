@@ -1,4 +1,7 @@
-"""Tools API - File operations and shell execution tools."""
+"""Shell execution tools for LLM agent.
+
+Only one tool: exec - Agent can use any Linux CLI command directly.
+"""
 
 import asyncio
 import logging
@@ -8,12 +11,9 @@ from typing import Optional
 
 from .bash_tools import (
     ExecSecurity,
-    ExecAsk,
     ExecSecurityConfig,
-    ExecAllowlistEntry,
     evaluate_command,
     validate_environment,
-    requires_approval,
     create_default_config,
     DEFAULT_SAFE_BINS,
     DANGEROUS_ENV_VARS,
@@ -22,13 +22,11 @@ from .bash_tools import (
 
 logger = logging.getLogger(__name__)
 
-# Default timeout for commands
 DEFAULT_TIMEOUT = 60
 
 
 # ============ Security Configuration ============
 
-# Global security config (can be overridden)
 _security_config: Optional[ExecSecurityConfig] = None
 
 
@@ -36,7 +34,7 @@ def set_security_config(config: ExecSecurityConfig) -> None:
     """Set the global security configuration."""
     global _security_config
     _security_config = config
-    logger.info(f"Security config updated: security={config.security.value}, ask={config.ask.value}")
+    logger.info(f"Security config: {config.security.value}")
 
 
 def get_security_config() -> ExecSecurityConfig:
@@ -45,231 +43,37 @@ def get_security_config() -> ExecSecurityConfig:
     return _security_config if _security_config is not None else create_default_config()
 
 
-def reset_security_config() -> None:
-    """Reset security config to defaults."""
-    global _security_config
-    _security_config = None
-    logger.info("Security config reset to defaults")
-
-
-# ============ File Operations ============
-
-def read(file_path: str, limit: Optional[int] = None, offset: Optional[int] = None) -> str:
-    """Read file contents.
-    
-    Args:
-        file_path: Path to the file to read
-        limit: Maximum number of lines to read (optional)
-        offset: Line number to start reading from (optional, 1-indexed)
-    
-    Returns:
-        File contents as string
-    """
-    path = Path(file_path)
-    
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        
-        start = (offset - 1) if offset else 0
-        
-        if limit:
-            lines = lines[start:start + limit]
-        elif offset:
-            lines = lines[start:]
-        
-        content = ''.join(lines)
-        
-        line_count = len(lines)
-        total_lines = len(open(path, 'r').readlines())
-        
-        header = f"File: {file_path}\nLines: {start + 1}-{start + line_count} of {total_lines}\n\n"
-        return header + content
-        
-    except UnicodeDecodeError:
-        return f"Error: Cannot read binary file: {file_path}"
-    except FileNotFoundError:
-        return f"Error: File not found: {file_path}"
-    except PermissionError:
-        return f"Error: Permission denied: {file_path}"
-    except Exception as e:
-        return f"Error reading file: {e}"
-
-
-def write(file_path: str, content: str) -> str:
-    """Create or overwrite a file.
-    
-    Args:
-        file_path: Path to the file to write
-        content: Content to write
-    
-    Returns:
-        Success or error message
-    """
-    path = Path(file_path)
-    
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        
-        logger.info(f"File written: {file_path}")
-        return f"✅ File written: {file_path}"
-        
-    except PermissionError:
-        return f"Error: Permission denied: {file_path}"
-    except Exception as e:
-        return f"Error writing file: {e}"
-
-
-def edit(file_path: str, oldText: str, newText: str) -> str:
-    """Edit file contents by replacing text.
-    
-    Args:
-        file_path: Path to the file to edit
-        oldText: Text to find and replace
-        newText: Replacement text
-    
-    Returns:
-        Success or error message
-    """
-    path = Path(file_path)
-    
-    if not path.is_file():
-        return f"Error: File not found: {file_path}"
-    
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        if oldText not in content:
-            return f"Error: Text not found in file"
-        
-        new_content = content.replace(oldText, newText)
-        
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(new_content)
-        
-        logger.info(f"File edited: {file_path}")
-        return f"✅ File edited: {file_path}"
-        
-    except PermissionError:
-        return f"Error: Permission denied: {file_path}"
-    except Exception as e:
-        return f"Error editing file: {e}"
-
-
-def list_dir(path: str = ".") -> str:
-    """List directory contents.
-    
-    Args:
-        path: Directory path (default: current directory)
-    
-    Returns:
-        Directory listing
-    """
-    dir_path = Path(path)
-    
-    if not dir_path.is_dir():
-        return f"Error: Directory not found: {path}"
-    
-    try:
-        items = []
-        for item in sorted(dir_path.iterdir()):
-            if item.is_dir():
-                items.append(f"📁 {item.name}/")
-            else:
-                items.append(f"📄 {item.name}")
-        
-        if not items:
-            return f"Directory is empty: {path}"
-        
-        return f"Directory: {path}\n\n" + "\n".join(items)
-        
-    except PermissionError:
-        return f"Error: Permission denied: {path}"
-    except Exception as e:
-        return f"Error listing directory: {e}"
-
-
 # ============ Shell Execution ============
 
-async def exec(
-    command: str,
-    timeout: int = DEFAULT_TIMEOUT,
-    workdir: Optional[str] = None,
-    env: Optional[dict[str, str]] = None,
-    # Security parameters - simplified
-    security: Optional[str] = None,
-    host: Optional[str] = None,
-) -> str:
-    """Execute a shell command with security controls.
+async def exec(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
+    """Execute a shell command.
     
     Args:
         command: Shell command to execute
         timeout: Timeout in seconds (default: 60)
-        workdir: Working directory (optional)
-        env: Environment variables (optional)
-        security: Security mode (allowlist|full) - default: allowlist
     
     Returns:
-        Command output (stdout + stderr) or error message
-    
-    Security Modes:
-        - allowlist: Only allow commands in whitelist (default)
-        - full: Allow all commands (use with caution)
-    
-    Examples:
-        exec(command="ls -la")
-        exec(command="git status")
-        exec(command="cat file.txt")
+        Command output or error message
     """
     if not command or not command.strip():
         return "Error: Empty command"
     
-    # Get security config
     config = get_security_config()
     
-    # Override security if specified
-    if security:
-        try:
-            config.security = ExecSecurity(security.lower())
-        except ValueError:
-            return f"Error: Invalid security mode '{security}'. Must be: allowlist or full"
+    # Validate environment
+    # (env is not exposed to LLM, only internal use)
     
-    # Validate environment variables
-    if env:
-        valid, error = validate_environment(env)
-        if not valid:
-            return f"Error: {error}"
-    
-    # Get current working directory
+    # Get working directory
     actual_cwd = str(Path.cwd())
-    if workdir:
-        workdir_path = Path(workdir).resolve()
-        try:
-            workdir_path.relative_to(Path.cwd())
-            actual_cwd = str(workdir_path)
-        except ValueError:
-            actual_cwd = str(Path.cwd())
     
     # Evaluate command
     allowed, reason = evaluate_command(command, config, actual_cwd)
     
     if not allowed:
-        return (
-            f"🚫 Command blocked\n"
-            f"Reason: {reason}\n\n"
-            f"To allow this command:\n"
-            f"- Set security=full (allows all commands)\n"
-            f"- Add command to allowlist"
-        )
+        return f"Blocked: {reason}\n\nTo allow: security=full"
     
     # Execute command
     merged_env = os.environ.copy()
-    if env:
-        merged_env.update(env)
     
     try:
         process = await asyncio.create_subprocess_shell(
@@ -287,115 +91,43 @@ async def exec(
             )
         except asyncio.TimeoutError:
             process.kill()
-            return f"Error: Command timed out after {timeout} seconds"
+            return f"Error: Timeout after {timeout}s"
         
         output = []
-        
         if stdout:
             output.append(stdout.decode('utf-8', errors='replace').strip())
-        
         if stderr:
             stderr_text = stderr.decode('utf-8', errors='replace').strip()
-            if stderr_text and "Warning:" not in stderr_text and "DeprecationWarning" not in stderr_text:
+            if stderr_text and "Warning:" not in stderr_text:
                 output.append(f"STDERR:\n{stderr_text}")
         
         result = '\n'.join(output)
         
         if process.returncode != 0:
-            result = f"Exit code: {process.returncode}\n\n{result}"
-        
-        logger.info(f"exec: {command} (exit: {process.returncode})")
+            result = f"Exit: {process.returncode}\n\n{result}"
         
         return result if result else "(no output)"
         
-    except asyncio.CancelledError:
-        return "Error: Command cancelled"
     except Exception as e:
-        return f"Error executing command: {e}"
+        return f"Error: {e}"
 
 
-def exec_sync(
-    command: str,
-    timeout: int = DEFAULT_TIMEOUT,
-    workdir: Optional[str] = None,
-    env: Optional[dict[str, str]] = None,
-    security: Optional[str] = None,
-    ask: Optional[str] = None,
-) -> str:
-    """Synchronous wrapper for exec with security controls.
-    
-    Args:
-        command: Command to execute
-        timeout: Timeout in seconds (default: 60)
-        workdir: Working directory (optional)
-        env: Environment variables (optional)
-        security: Security mode (deny|allowlist|full)
-        ask: Approval mode (off|on-miss|always)
-    
-    Returns:
-        Command output
-    """
+def exec_sync(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
+    """Synchronous exec wrapper."""
     import subprocess
     
     if not command or not command.strip():
         return "Error: Empty command"
     
-    # Build security config from parameters
     config = get_security_config()
-    
-    if security:
-        try:
-            config.security = ExecSecurity(security.lower())
-        except ValueError:
-            return f"Error: Invalid security mode '{security}'. Must be: deny, allowlist, or full"
-    
-    if ask:
-        try:
-            config.ask = ExecAsk(ask.lower())
-        except ValueError:
-            return f"Error: Invalid ask mode '{ask}'. Must be: off, on-miss, or always"
-    
-    # Validate environment variables
-    if env:
-        valid, error = validate_environment(env)
-        if not valid:
-            return f"Error: {error}"
-    
-    # Get current working directory
     actual_cwd = str(Path.cwd())
-    if workdir:
-        workdir_path = Path(workdir).resolve()
-        try:
-            workdir_path.relative_to(Path.cwd())
-            actual_cwd = str(workdir_path)
-        except ValueError:
-            actual_cwd = str(Path.cwd())
     
-    # Check if command requires approval
-    needs_approval, approval_reason = requires_approval(command, config, True, actual_cwd)
-    
-    if needs_approval:
-        return (
-            f"⚠️  Command requires approval\n"
-            f"Reason: {approval_reason}\n"
-            f"Security: {config.security.value}\n"
-            f"Approval: {config.ask.value}"
-        )
-    
-    # Evaluate command
     allowed, reason = evaluate_command(command, config, actual_cwd)
     
     if not allowed:
-        return (
-            f"🚫 Command blocked\n"
-            f"Reason: {reason}\n"
-            f"Security: {config.security.value}"
-        )
+        return f"Blocked: {reason}"
     
-    # Execute command
     merged_env = os.environ.copy()
-    if env:
-        merged_env.update(env)
     
     try:
         result = subprocess.run(
@@ -415,107 +147,58 @@ def exec_sync(
             output.append(f"STDERR:\n{result.stderr.strip()}")
         
         if result.returncode != 0:
-            output.insert(0, f"Exit code: {result.returncode}")
-        
-        logger.info(f"exec_sync: {command} (exit: {result.returncode}, security: {config.security.value})")
+            output.insert(0, f"Exit: {result.returncode}")
         
         return '\n'.join(output) if output else "(no output)"
         
     except subprocess.TimeoutExpired:
-        return f"Error: Command timed out after {timeout} seconds"
+        return f"Error: Timeout after {timeout}s"
     except Exception as e:
-        return f"Error executing command: {e}"
+        return f"Error: {e}"
 
 
-# ============ Tool Schemas ============
+# ============ Tool Schema ============
 
 def get_tools_schemas() -> list:
-    """Return tool schemas for LLM function calling.
+    """Return tool schema for LLM.
     
-    Tools that map to common Linux commands. All operations use shell commands under the hood.
+    Only one tool: exec - Agent uses Linux CLI directly.
     """
     return [
         {
             "type": "function",
             "function": {
-                "name": "read",
-                "description": "Read file contents using cat. Shows line numbers and metadata.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "Path to file to read"},
-                        "limit": {"type": "integer", "description": "Maximum lines to read (optional)"},
-                        "offset": {"type": "integer", "description": "Start line number (optional)"}
-                    },
-                    "required": ["file_path"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "write",
-                "description": "Create or overwrite a file using echo redirection.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "Path to file to write"},
-                        "content": {"type": "string", "description": "Content to write"}
-                    },
-                    "required": ["file_path", "content"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "edit",
-                "description": "Edit file using sed to replace text patterns.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "Path to file to edit"},
-                        "oldText": {"type": "string", "description": "Text pattern to find and replace"},
-                        "newText": {"type": "string", "description": "Replacement text"}
-                    },
-                    "required": ["file_path", "oldText", "newText"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "list_dir",
-                "description": "List directory contents using ls with details.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Directory path (default: current)"}
-                    },
-                    "required": ["path"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
                 "name": "exec",
-                "description": """Execute any Linux shell command:
+                "description": """Execute a Linux shell command:
 
-**File Ops:** cat, less, head, tail, nl, more, wc
-**Edit:** sed, awk, perl -i, vim, nano
-**Dir:** ls, find, tree, cd, pwd, mkdir, rm, cp, mv
-**Search:** grep, rg (ripgrep), find, ack
-**Data:** jq (JSON), yq (YAML), xmllint
-**Git:** git status, git diff, git log, git add/commit/push
-**GitHub:** gh issue, gh pr, gh repo
-**System:** ps, df, du, free, curl, wget, tar, zip""",
+**File:**
+- cat file, head -n 20 file, tail -n 10 file
+- echo "text" > file, cat > file <<EOF
+- sed -i 's/old/new/g' file, awk '{print $1}' file
+
+**Dir:**
+- ls -la, find . -name "*.py", tree
+- cd dir, pwd, mkdir -p dir, rm -rf dir
+
+**Git:**
+- git status, git add ., git commit -m "msg", git push
+- git log --oneline -10, git diff, git checkout -b branch
+
+**GitHub (gh):**
+- gh repo view, gh issue list, gh pr list
+- gh pr view 123, gh pr checkout 123
+
+**Search:**
+- grep -r "pattern" ., rg "pattern" --type py
+- jq '.key' file.json, yq '.key' file.yaml
+
+**System:**
+- ps aux, df -h, free -h, curl, wget""",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "command": {"type": "string", "description": "Shell command to execute"},
-                        "timeout": {"type": "integer", "description": "Timeout in seconds (default: 60)"},
-                        "workdir": {"type": "string", "description": "Working directory (optional)"}
+                        "timeout": {"type": "integer", "description": "Timeout in seconds (default: 60)"}
                     },
                     "required": ["command"]
                 }
@@ -524,43 +207,41 @@ def get_tools_schemas() -> list:
     ]
 
 
-def get_security_info() -> dict:
-    """Get information about the current security configuration."""
-    config = get_security_config()
-    return {
-        "security": config.security.value,
-        "ask": config.ask.value,
-        "safe_bins": config.safe_bins,
-        "allowlist_count": len(config.allowlist),
-        "dangerous_env_vars": list(DANGEROUS_ENV_VARS),
-        "dangerous_env_prefixes": DANGEROUS_ENV_PREFIXES,
-    }
+# ============ Legacy wrappers (for backward compat) ============
+
+def read(file_path: str, limit: int = None, offset: int = None) -> str:
+    """Legacy: Use exec with 'cat' instead."""
+    cmd = f"cat '{file_path}'"
+    if offset:
+        cmd += f" | tail -n +{offset}"
+    if limit:
+        cmd += f" | head -n {limit}"
+    return exec_sync(cmd)
 
 
-# Re-export security functions for external use
+def write(file_path: str, content: str) -> str:
+    """Legacy: Use exec with 'echo' instead."""
+    escaped = content.replace("'", "'\\''")
+    return exec_sync(f"echo '{escaped}' > '{file_path}'")
+
+
+def edit(file_path: str, oldText: str, newText: str) -> str:
+    """Legacy: Use exec with 'sed' instead."""
+    escaped_old = oldText.replace("'", "'\\''").replace("/", "\\/")
+    escaped_new = newText.replace("'", "'\\''").replace("/", "\\/")
+    return exec_sync(f"sed -i \"s/{escaped_old}/{escaped_new}/g\" '{file_path}'")
+
+
+def list_dir(path: str = ".") -> str:
+    """Legacy: Use exec with 'ls' instead."""
+    return exec_sync(f"ls -la '{path}'")
+
+
 __all__ = [
-    # File tools
-    "read",
-    "write",
-    "edit",
-    "list_dir",
-    # Exec tools
     "exec",
     "exec_sync",
-    # Tool schemas
     "get_tools_schemas",
-    # Security functions
-    "get_security_info",
     "set_security_config",
     "get_security_config",
-    "reset_security_config",
-    "validate_environment",
-    # Security types
-    "ExecSecurity",
-    "ExecAsk",
-    "ExecSecurityConfig",
-    "ExecAllowlistEntry",
     "DEFAULT_SAFE_BINS",
-    "DANGEROUS_ENV_VARS",
-    "DANGEROUS_ENV_PREFIXES",
 ]
