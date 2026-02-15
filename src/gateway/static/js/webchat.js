@@ -2015,8 +2015,20 @@
                 break;
                 
             case 'tool_result':
-                const resultStatus = eventData.success ? '✅' : '❌';
-                showAgentEvent('tool-result', `${resultStatus} ${eventData.tool || 'Tool'} completed`);
+                // Show detailed result or error - ALWAYS show the result field
+                const success = eventData.success;
+                const tool = eventData.tool || 'Unknown tool';
+                const result = eventData.result;
+                
+                if (success) {
+                    // Success: show brief result preview
+                    const preview = result ? (result.length > 100 ? result.substring(0, 100) + '...' : result) : '(no result)';
+                    showAgentEvent('tool-result', `✅ ${tool}\nResult: ${preview}`);
+                } else {
+                    // Error: show full error message
+                    const errorMsg = result || 'Unknown error (no details)';
+                    showAgentEvent('tool-result', `❌ ${tool} Error:\n${errorMsg}`);
+                }
                 break;
                 
             case 'confirmation':
