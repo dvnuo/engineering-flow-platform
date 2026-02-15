@@ -31,7 +31,7 @@ DEFAULT_SAFE_BINS = [
     "jq", "grep", "cut", "sort", "uniq",
     "head", "tail", "tr", "wc", "cat", "less", "more",
     "sed", "awk", "perl", "find", "xargs",
-    "echo", "printf", "date",
+    "vi", "vim", "echo", "printf", "date",
     # Version control
     "git", "gh",
     # File operations
