@@ -17,6 +17,12 @@ from aiohttp import web
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
+# Module-level YAML instance for reuse
+_yaml = YAML()
+_yaml.preserve_quotes = True
+_yaml.indent(mapping=2, sequence=4, offset=2)
+_yaml.width = 4096
+
 from src.agents.core import Agent as AgentCore
 from src.agents.errors import extract_error_details, LLMError
 from src.config import config
@@ -605,17 +611,18 @@ async def api_save_config(request: web.Request) -> web.Response:
                 config_path = efp_config
             config = {}
         
-        # Use ruamel.yaml to preserve comments and formatting
-        yaml = YAML()
-        yaml.preserve_quotes = True
-        yaml.indent(mapping=2, sequence=4, offset=2)
-        yaml.width = 4096  # Prevent line wrapping
+        # Use module-level YAML instance (reused for performance)
+        yaml = _yaml
         
         # Read existing config with ruamel.yaml (preserves comments)
         existing_config = CommentedMap()
-        if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
-                existing_config = yaml.load(f) or CommentedMap()
+        try:
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    existing_config = yaml.load(f) or CommentedMap()
+        except Exception as e:
+            logger.warning(f"Could not parse existing config, starting fresh: {e}")
+            existing_config = CommentedMap()
         
         # Deep merge function - only updates provided fields, preserves others
         def deep_merge(base: Dict, update: Dict) -> Dict:
@@ -671,10 +678,15 @@ async def api_get_config(request: web.Request) -> web.Response:
         else:
             return web.json_response({'error': 'config.yaml not found (checked: project dir and ~/.efp/)'}, status=404)
         
-        # Use ruamel.yaml to preserve formatting
-        yaml = YAML()
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.load(f) or {}
+        # Use module-level YAML instance
+        yaml = _yaml
+        
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.load(f) or {}
+        except Exception as e:
+            logger.error(f"YAML parse error: {e}")
+            return web.json_response({'error': f'YAML parse error: {e}'}, status=500)
         
         # Convert CommentedMap to regular dict for JSON response
         if hasattr(config, 'to_dict'):

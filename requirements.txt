@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 aiohttp
-ruamel.yaml
+ruamel.yaml>=0.18.0
 openai
 python-dotenv
 httpx

@@ -8,6 +8,12 @@ from typing import Any, Dict, Optional
 from ruamel.yaml import YAML
 
 
+# Module-level YAML instance for reuse
+_yaml = YAML()
+_yaml.preserve_quotes = True
+_yaml.indent(mapping=2, sequence=4, offset=2)
+
+
 class Config:
     """Configuration management.
     
@@ -29,7 +35,7 @@ class Config:
             self.config_path = Path(config_path)
         self._config: Dict[str, Any] = {}
         self._last_modified: float = 0
-        self._yaml = YAML()
+        self._yaml = _yaml  # Use module-level instance
         self.load()
 
     def _find_config(self) -> Path:
