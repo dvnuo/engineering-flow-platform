@@ -25,10 +25,21 @@ class ExecAsk(Enum):
     ALWAYS = "always"
 
 
-# Default safe binaries (text processing utilities)
+# Default safe binaries (text processing utilities and VCS)
 DEFAULT_SAFE_BINS = [
+    # Text processing
     "jq", "grep", "cut", "sort", "uniq",
-    "head", "tail", "tr", "wc"
+    "head", "tail", "tr", "wc", "cat", "less", "more",
+    "sed", "awk", "perl", "find", "xargs",
+    # Version control
+    "git", "gh",
+    # File operations
+    "ls", "pwd", "cd", "mkdir", "rm", "cp", "mv", "touch",
+    "tar", "zip", "unzip", "gzip", "bzip2",
+    # Network
+    "curl", "wget",
+    # System
+    "ps", "df", "du", "free", "top",
 ]
 
 # Dangerous environment variables that can alter execution flow
