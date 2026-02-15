@@ -14,6 +14,9 @@ from typing import Any, Dict, List, Optional
 
 from aiohttp import web
 
+from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
+
 from src.agents.core import Agent as AgentCore
 from src.agents.errors import extract_error_details, LLMError
 from src.config import config
@@ -602,19 +605,24 @@ async def api_save_config(request: web.Request) -> web.Response:
                 config_path = efp_config
             config = {}
         
-        # Read existing config if file exists
-        import yaml
-        existing_config = {}
+        # Use ruamel.yaml to preserve comments and formatting
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        yaml.indent(mapping=2, sequence=4, offset=2)
+        yaml.width = 4096  # Prevent line wrapping
+        
+        # Read existing config with ruamel.yaml (preserves comments)
+        existing_config = CommentedMap()
         if config_path.exists():
             with open(config_path, 'r', encoding='utf-8') as f:
-                existing_config = yaml.safe_load(f) or {}
+                existing_config = yaml.load(f) or CommentedMap()
         
         # Deep merge function - only updates provided fields, preserves others
         def deep_merge(base: Dict, update: Dict) -> Dict:
             """Deep merge update into base, preserving unchanged fields."""
             result = base.copy()
             for key, value in update.items():
-                if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                if key in result and isinstance(result.get(key), (dict, CommentedMap)) and isinstance(value, dict):
                     result[key] = deep_merge(result[key], value)
                 else:
                     result[key] = value
@@ -627,14 +635,14 @@ async def api_save_config(request: web.Request) -> web.Response:
         for section in sections:
             if section in data:
                 # Deep merge to preserve other fields in this section
-                if section in config and isinstance(config[section], dict):
+                if section in config and isinstance(config.get(section), (dict, CommentedMap)):
                     config[section] = deep_merge(config[section], data[section])
                 else:
                     config[section] = data[section]
         
-        # Write back with preserved formatting
+        # Write back with preserved formatting and comments
         with open(config_path, 'w', encoding='utf-8') as f:
-            yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            yaml.dump(config, f)
         
         return web.json_response({
             'success': True, 
@@ -663,9 +671,14 @@ async def api_get_config(request: web.Request) -> web.Response:
         else:
             return web.json_response({'error': 'config.yaml not found (checked: project dir and ~/.efp/)'}, status=404)
         
-        import yaml
+        # Use ruamel.yaml to preserve formatting
+        yaml = YAML()
         with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f) or {}
+            config = yaml.load(f) or {}
+        
+        # Convert CommentedMap to regular dict for JSON response
+        if hasattr(config, 'to_dict'):
+            config = config.to_dict()
         
         return web.json_response({'config': config})
     except Exception as e:

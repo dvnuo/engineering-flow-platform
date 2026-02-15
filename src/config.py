@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import yaml
+from ruamel.yaml import YAML
 
 
 class Config:
@@ -29,6 +29,7 @@ class Config:
             self.config_path = Path(config_path)
         self._config: Dict[str, Any] = {}
         self._last_modified: float = 0
+        self._yaml = YAML()
         self.load()
 
     def _find_config(self) -> Path:
@@ -43,7 +44,7 @@ class Config:
         """Load configuration from YAML file."""
         if self.config_path.exists():
             with open(self.config_path, "r", encoding="utf-8") as f:
-                self._config = yaml.safe_load(f) or {}
+                self._config = self._yaml.load(f) or {}
             self._last_modified = self.config_path.stat().st_mtime
         else:
             self._config = {}
