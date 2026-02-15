@@ -31,6 +31,7 @@ DEFAULT_SAFE_BINS = [
     "jq", "grep", "cut", "sort", "uniq",
     "head", "tail", "tr", "wc", "cat", "less", "more",
     "sed", "awk", "perl", "find", "xargs",
+    "echo", "printf", "date",
     # Version control
     "git", "gh",
     # File operations
@@ -326,8 +327,8 @@ def requires_approval(
 def create_default_config() -> ExecSecurityConfig:
     """Create a default security configuration."""
     return ExecSecurityConfig(
-        security=ExecSecurity.DENY,
-        ask=ExecAsk.ON_MISS,
+        security=ExecSecurity.ALLOWLIST,
+        ask=ExecAsk.OFF,
         safe_bins=DEFAULT_SAFE_BINS.copy(),
         allowlist=[]
     )
