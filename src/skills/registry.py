@@ -36,6 +36,7 @@ class Skill:
     strategy: List[str] = field(default_factory=list)
     output_format: str = "markdown"
     deprecated: bool = False
+    path: str = ""  # Directory containing skill.md
     
     # Compiled patterns for fast matching
     trigger_patterns: List[re.Pattern] = field(default_factory=list)
@@ -249,6 +250,7 @@ class SkillRegistry:
             return None
         
         skill = Skill.from_dict(data)
+        skill.path = str(file_path.parent.resolve())  # Store the directory path
         skill_file = file_path.name
         
         return skill

@@ -1,5 +1,6 @@
 """Agent core implementation following modern agent loop patterns."""
 
+import contextvars
 import json
 import logging
 import os
@@ -22,6 +23,22 @@ from src.agents.executor import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Context variable for skill workdir - async-safe
+_skill_workdir: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar('skill_workdir', default=None)
+
+
+def set_skill_workdir(path: Optional[str]) -> None:
+    """Set the current skill working directory (async-safe)."""
+    _skill_workdir.set(path)
+    if path:
+        logger.debug(f"[Skill] Workdir: {path}")
+
+
+def get_skill_workdir() -> Optional[str]:
+    """Get the current skill working directory (async-safe)."""
+    return _skill_workdir.get()
+
 
 # Debug logging is enabled when logger.level is DEBUG
 # Set log_level: DEBUG in config.yaml to enable
@@ -238,6 +255,12 @@ You have access to the following tools. When a user asks you to do something tha
             # Use the best match
             best_skill = matched_skills[0]
             logger.info(f"[Skill] Matched skill: {best_skill.name}")
+            
+            # Set skill workdir for exec tool (async-safe via contextvars)
+            if best_skill.path:
+                set_skill_workdir(best_skill.path)
+                logger.info(f"[Skill] Workdir: {best_skill.path}")
+            
             skill_prompt = skill_registry.get_skill_prompt(best_skill)
             allowed_tools = set(best_skill.tools)
             

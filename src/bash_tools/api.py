@@ -24,6 +24,13 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 60
 
+# Try to import skill workdir from agent core (async-safe via contextvars)
+try:
+    from src.agents.core import get_skill_workdir
+    _HAS_SKILL_WORKDIR = True
+except ImportError:
+    _HAS_SKILL_WORKDIR = False
+
 
 # ============ Security Configuration ============
 
@@ -63,8 +70,17 @@ async def exec(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
     # Validate environment
     # (env is not exposed to LLM, only internal use)
     
-    # Get working directory
+    # Get working directory - prefer skill workdir if set (async-safe via contextvars)
     actual_cwd = str(Path.cwd())
+    if _HAS_SKILL_WORKDIR:
+        skill_workdir = get_skill_workdir()
+        if skill_workdir:
+            skill_path = Path(skill_workdir)
+            if skill_path.exists() and skill_path.is_dir():
+                actual_cwd = skill_workdir
+                logger.debug(f"[exec] Using skill dir: {actual_cwd}")
+            else:
+                logger.debug(f"[exec] Skill dir not found: {skill_workdir}")
     
     # Evaluate command
     allowed, reason = evaluate_command(command, config, actual_cwd)
