@@ -83,17 +83,97 @@ class SkillRegistry:
         Returns:
             Number of skills loaded
         """
+        # Validate paths - user dir should not be inside project dir
+        try:
+            project_resolved = self.project_skills_dir.resolve()
+            user_resolved = self.user_skills_dir.resolve()
+            
+            # Check if user dir is inside project dir
+            if str(user_resolved).startswith(str(project_resolved) and user_resolved != project_resolved:
+                logger.warning(f"User skills dir is inside project dir - skipping user skills")
+                self.user_skills_dir = Path("/nonexistent/user/skills")  # Invalid path
+        except Exception as e:
+            logger.debug(f"Path validation skipped: {e}")
+        
         # Load project skills first
-        project_count = self._load_skills_from_dir(self.project_skills_dir, override=False)
+        project_skills = {}
+        project_count = self._load_skills_into(project_skills, self.project_skills_dir, override=False)
+        
+        # Count overrides
+        overridden = []
         
         # Load user skills (may override project skills)
-        user_count = self._load_skills_from_dir(self.user_skills_dir, override=True)
+        user_skills = {}
+        user_count = self._load_skills_into(user_skills, self.user_skills_dir, override=True)
+        
+        # Merge: user skills override project skills
+        self.skills = {**project_skills, **user_skills}
+        
+        # Count overrides
+        for skill_name in user_skills:
+            if skill_name in project_skills:
+                overridden.append(skill_name)
         
         self._initialized = True
-        logger.info(f"Skill registry initialized: {len(self.skills)} skills loaded ({project_count} project + {user_count} user)")
+        
+        # Log summary
+        override_msg = f" ({len(overridden)} overridden)" if overridden else ""
+        logger.info(f"Skill registry: {len(self.skills)} skills ({project_count} project + {user_count} user{override_msg})")
+        
+        if overridden:
+            logger.info(f"  Overridden skills: {', '.join(overridden)}")
+        
         return len(self.skills)
     
-    def _load_skills_from_dir(self, skills_dir: Path, override: bool = False) -> int:
+    def _load_skills_into(self, skills_dict: Dict, skills_dir: Path, override: bool) -> int:
+        """Load skills into the provided dictionary.
+        
+        Args:
+            skills_dict: Dictionary to load skills into
+            skills_dir: Directory containing skills
+            override: If True, skills can override existing entries
+            
+        Returns:
+            Number of skills loaded
+        """
+        if not skills_dir.exists():
+            return 0
+        
+        loaded = 0
+        skill_files = []
+        
+        # Pattern 1: Single file skills (e.g., review-pr.md)
+        for f in skills_dir.glob("*.md"):
+            if f.name.lower() != "readme.md":
+                skill_files.append((f, override))
+        
+        # Pattern 2: Directory-based skills (e.g., skill_creator/skill.md)
+        for skill_dir in skills_dir.iterdir():
+            if skill_dir.is_dir():
+                skill_file = skill_dir / "skill.md"
+                if skill_file.exists():
+                    skill_files.append((skill_file, override))
+        
+        for skill_file, can_override in skill_files:
+            try:
+                skill = self._load_skill_file(skill_file)
+                if skill:
+                    skill_name = skill.name
+                    
+                    # Check for duplicates
+                    if skill_name in skills_dict:
+                        if not can_override:
+                            continue  # Skip duplicate
+                    
+                    skills_dict[skill_name] = skill
+                    loaded += 1
+                    source = "user" if can_override else "project"
+                    logger.debug(f"Loaded: {skill.name} v{skill.version} ({source})")
+                    
+            except Exception as e:
+                logger.error(f"Failed to load skill {skill_file}: {e}")
+        
+        return loaded
         """Load skills from a specific directory.
         
         Args:
