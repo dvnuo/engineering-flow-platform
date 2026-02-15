@@ -13,6 +13,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Any
+import os
 from dataclasses import dataclass, field
 
 from ruamel.yaml import YAML
@@ -61,53 +62,169 @@ class Skill:
 
 
 class SkillRegistry:
-    """Central registry for all available skills."""
+    """Central registry for all available skills.
     
-    def __init__(self, skills_dir: str = "skills"):
-        self.skills_dir = Path(skills_dir)
+    Supports two skill directories:
+    1. Project skills: <project>/skills/
+    2. User skills: ~/.efp/skills/ (user skills override project skills)
+    """
+    
+    def __init__(self, project_skills_dir: str = "skills", user_skills_dir: str = "~/.efp/skills"):
+        self.project_skills_dir = Path(project_skills_dir)
+        self.user_skills_dir = Path(user_skills_dir).expanduser()
         self.skills: Dict[str, Skill] = {}
         self._initialized = False
     
     def load_skills(self) -> int:
-        """Load all skills from skills directory.
+        """Load all skills from project and user directories.
         
-        Supports both:
-        - skills/*.md (single file skills, e.g., review-pr.md)
-        - skills/*/skill.md (directory-based skills, e.g., skill_creator/skill.md)
+        User skills in ~/.efp/skills override project skills with the same name.
         
         Returns:
             Number of skills loaded
         """
-        if not self.skills_dir.exists():
-            logger.warning(f"Skills directory not found: {self.skills_dir}")
+        # Validate paths - user dir should not be inside project dir
+        try:
+            project_resolved = self.project_skills_dir.resolve()
+            user_resolved = self.user_skills_dir.resolve()
+            
+            # Check if user dir is inside project dir
+            if str(user_resolved).startswith(str(project_resolved) and user_resolved != project_resolved:
+                logger.warning(f"User skills dir is inside project dir - skipping user skills")
+                self.user_skills_dir = Path("/nonexistent/user/skills")  # Invalid path
+        except Exception as e:
+            logger.debug(f"Path validation skipped: {e}")
+        
+        # Load project skills first
+        project_skills = {}
+        project_count = self._load_skills_into(project_skills, self.project_skills_dir, override=False)
+        
+        # Count overrides
+        overridden = []
+        
+        # Load user skills (may override project skills)
+        user_skills = {}
+        user_count = self._load_skills_into(user_skills, self.user_skills_dir, override=True)
+        
+        # Merge: user skills override project skills
+        self.skills = {**project_skills, **user_skills}
+        
+        # Count overrides
+        for skill_name in user_skills:
+            if skill_name in project_skills:
+                overridden.append(skill_name)
+        
+        self._initialized = True
+        
+        # Log summary
+        override_msg = f" ({len(overridden)} overridden)" if overridden else ""
+        logger.info(f"Skill registry: {len(self.skills)} skills ({project_count} project + {user_count} user{override_msg})")
+        
+        if overridden:
+            logger.info(f"  Overridden skills: {', '.join(overridden)}")
+        
+        return len(self.skills)
+    
+    def _load_skills_into(self, skills_dict: Dict, skills_dir: Path, override: bool) -> int:
+        """Load skills into the provided dictionary.
+        
+        Args:
+            skills_dict: Dictionary to load skills into
+            skills_dir: Directory containing skills
+            override: If True, skills can override existing entries
+            
+        Returns:
+            Number of skills loaded
+        """
+        if not skills_dir.exists():
             return 0
         
         loaded = 0
-        # Pattern 1: Single file skills in skills/ directory (e.g., review-pr.md)
-        single_file_skills = [
-            f for f in self.skills_dir.glob("*.md")
-            if f.name.lower() != "readme.md"
-        ]
+        skill_files = []
         
-        # Pattern 2: Directory-based skills (e.g., skills/skill_creator/skill.md)
-        for skill_dir in self.skills_dir.iterdir():
+        # Pattern 1: Single file skills (e.g., review-pr.md)
+        for f in skills_dir.glob("*.md"):
+            if f.name.lower() != "readme.md":
+                skill_files.append((f, override))
+        
+        # Pattern 2: Directory-based skills (e.g., skill_creator/skill.md)
+        for skill_dir in skills_dir.iterdir():
             if skill_dir.is_dir():
                 skill_file = skill_dir / "skill.md"
                 if skill_file.exists():
-                    single_file_skills.append(skill_file)
+                    skill_files.append((skill_file, override))
         
-        for skill_file in single_file_skills:
+        for skill_file, can_override in skill_files:
             try:
                 skill = self._load_skill_file(skill_file)
                 if skill:
-                    self.skills[skill.name] = skill
+                    skill_name = skill.name
+                    
+                    # Check for duplicates
+                    if skill_name in skills_dict:
+                        if not can_override:
+                            continue  # Skip duplicate
+                    
+                    skills_dict[skill_name] = skill
                     loaded += 1
-                    logger.info(f"Loaded skill: {skill.name} v{skill.version}")
+                    source = "user" if can_override else "project"
+                    logger.debug(f"Loaded: {skill.name} v{skill.version} ({source})")
+                    
             except Exception as e:
                 logger.error(f"Failed to load skill {skill_file}: {e}")
         
-        self._initialized = True
-        logger.info(f"Skill registry initialized: {loaded} skills loaded")
+        return loaded
+        """Load skills from a specific directory.
+        
+        Args:
+            skills_dir: Directory containing skills
+            override: If True, these skills can override existing ones with same name
+            
+        Returns:
+            Number of skills loaded
+        """
+        if not skills_dir.exists():
+            if override:
+                logger.debug(f"User skills directory not found: {skills_dir}")
+            return 0
+        
+        loaded = 0
+        skill_files = []
+        
+        # Pattern 1: Single file skills (e.g., review-pr.md)
+        for f in skills_dir.glob("*.md"):
+            if f.name.lower() != "readme.md":
+                skill_files.append((f, override))
+        
+        # Pattern 2: Directory-based skills (e.g., skill_creator/skill.md)
+        for skill_dir in skills_dir.iterdir():
+            if skill_dir.is_dir():
+                skill_file = skill_dir / "skill.md"
+                if skill_file.exists():
+                    skill_files.append((skill_file, override))
+        
+        for skill_file, can_override in skill_files:
+            try:
+                skill = self._load_skill_file(skill_file)
+                if skill:
+                    skill_name = skill.name
+                    
+                    # Check if skill exists and override is allowed
+                    if skill_name in self.skills:
+                        if can_override:
+                            logger.info(f"Overriding skill '{skill_name}' with user version")
+                        else:
+                            logger.debug(f"Skipping duplicate skill: {skill_name}")
+                            continue
+                    
+                    self.skills[skill_name] = skill
+                    loaded += 1
+                    source = "user" if can_override else "project"
+                    logger.debug(f"Loaded skill: {skill.name} v{skill.version} ({source})")
+                    
+            except Exception as e:
+                logger.error(f"Failed to load skill {skill_file}: {e}")
+        
         return loaded
     
     def _load_skill_file(self, file_path: Path) -> Optional[Skill]:
@@ -227,12 +344,19 @@ class SkillRegistry:
         ]
 
 
-# Global registry instance
-skill_registry = SkillRegistry()
+# Global registry instance (loads both project and user skills)
+skill_registry = SkillRegistry(
+    project_skills_dir="skills",
+    user_skills_dir=str(Path.home() / ".efp" / "skills")
+)
 
 
 def load_all_skills(skills_dir: str = "skills") -> SkillRegistry:
-    """Convenience function to load all skills."""
+    """Convenience function to load skills from a single directory.
+    
+    Note: For loading both project and user skills with override,
+    use SkillRegistry directly.
+    """
     registry = SkillRegistry(skills_dir)
     registry.load_skills()
     return registry
