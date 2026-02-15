@@ -433,24 +433,45 @@ def get_tools_schemas() -> list:
     """Return tool schemas for LLM function calling.
     
     Simplified schema - only one exec tool that allows full shell access.
-    Agent can use any Linux CLI commands (vim, cat, echo, sed, awk, etc.).
+    Agent can use any Linux CLI commands including git and gh.
     """
     return [
         {
             "type": "function",
             "function": {
                 "name": "exec",
-                "description": """Execute any Linux shell command. Use standard CLI tools as needed:
-- File read: cat, less, head, tail, nl
-- File write: echo, tee, cat > file
-- File edit: sed, awk, perl -i
-- Directory: ls, find, tree, cd
-- Search: grep, rg, find, ack
-- Text processing: jq, tr, sort, uniq, wc
-- System: ps, top, df, du, free
-- Any other Linux commands
+                "description": """Execute any Linux shell command. Available command categories:
 
-The agent should choose the appropriate tool for the task.""",
+**File Operations:**
+- Read: cat, less, head, tail, nl, more
+- Write: echo, tee, cat > file
+- Edit: sed, awk, perl -i, vim, nano
+- Directory: ls, find, tree, cd, pwd, mkdir, rm, cp, mv
+
+**Search & Analysis:**
+- Search: grep, rg (ripgrep), find, ack
+- Content: jq (JSON), yq (YAML), xmllint
+- Diff: diff, meld, vimdiff
+
+**Git Commands:**
+- Status: git status, git diff, git log --oneline
+- Commit: git add, git commit, git push, git pull
+- Branch: git branch, git checkout, git switch
+- History: git log, git show, git blame
+- Remote: git remote, git fetch
+
+**GitHub CLI (gh):**
+- Issues: gh issue list, gh issue view, gh issue create
+- PRs: gh pr list, gh pr view, gh pr checkout, gh pr create
+- Repo: gh repo view, gh repo clone, gh repo create
+- Actions: gh run list, gh run view
+
+**System & Info:**
+- System: ps, top, df, du, free, uname
+- Network: curl, wget, ping, ssh
+- Archives: tar, zip, unzip
+
+The agent should choose the appropriate command for the task.""",
                 "parameters": {
                     "type": "object",
                     "properties": {
