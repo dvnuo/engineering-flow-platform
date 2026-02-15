@@ -11,12 +11,17 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+from ruamel.yaml import YAML
+
 from src.config import config
 
 logger = logging.getLogger(__name__)
 
 # Default workspace path using home directory
 DEFAULT_WORKSPACE = Path.home() / ".efp" / "workspace"
+
+# Module-level YAML instance
+_yaml = YAML()
 
 
 class GitClient:
@@ -225,13 +230,12 @@ async def setup_gh_config() -> bool:
     hosts_file = gh_config_dir / "hosts.yml"
     hostname = base_url.replace("https://", "").replace("http://", "") if base_url else "github.com"
     
-    import yaml
     hosts_config = {hostname: {"oauth_token": token, "user": user}}
     if not base_url:
         hosts_config = {"github.com": {"oauth_token": token, "user": ""}}
     
     with open(hosts_file, "w") as f:
-        yaml.dump(hosts_config, f)
+        _yaml.dump(hosts_config, f)
     
     os.chmod(hosts_file, 0o600)
     return True
