@@ -23,6 +23,25 @@ from src.agents.executor import (
 
 logger = logging.getLogger(__name__)
 
+# Global state for current skill context (workdir)
+_current_skill_workdir: Optional[str] = None
+
+
+def set_skill_workdir(path: Optional[str]) -> None:
+    """Set the current skill working directory."""
+    global _current_skill_workdir
+    _current_skill_workdir = path
+    if path:
+        logger.debug(f"[Skill] Skill workdir set to: {path}")
+    else:
+        logger.debug(f"[Skill] Skill workdir cleared")
+
+
+def get_skill_workdir() -> Optional[str]:
+    """Get the current skill working directory."""
+    return _current_skill_workdir
+
+
 # Debug logging is enabled when logger.level is DEBUG
 # Set log_level: DEBUG in config.yaml to enable
 # When DEBUG, complete input/output is logged (no truncation)
@@ -238,6 +257,13 @@ You have access to the following tools. When a user asks you to do something tha
             # Use the best match
             best_skill = matched_skills[0]
             logger.info(f"[Skill] Matched skill: {best_skill.name}")
+            
+            # Set skill workdir for exec tool
+            if best_skill.path:
+                set_skill_workdir(best_skill.path)
+            else:
+                set_skill_workdir(None)
+            
             skill_prompt = skill_registry.get_skill_prompt(best_skill)
             allowed_tools = set(best_skill.tools)
             
