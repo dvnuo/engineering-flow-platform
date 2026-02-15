@@ -207,36 +207,6 @@ def get_tools_schemas() -> list:
     ]
 
 
-# ============ Legacy wrappers (for backward compat) ============
-
-def read(file_path: str, limit: int = None, offset: int = None) -> str:
-    """Legacy: Use exec with 'cat' instead."""
-    cmd = f"cat '{file_path}'"
-    if offset:
-        cmd += f" | tail -n +{offset}"
-    if limit:
-        cmd += f" | head -n {limit}"
-    return exec_sync(cmd)
-
-
-def write(file_path: str, content: str) -> str:
-    """Legacy: Use exec with 'echo' instead."""
-    escaped = content.replace("'", "'\\''")
-    return exec_sync(f"echo '{escaped}' > '{file_path}'")
-
-
-def edit(file_path: str, oldText: str, newText: str) -> str:
-    """Legacy: Use exec with 'sed' instead."""
-    escaped_old = oldText.replace("'", "'\\''").replace("/", "\\/")
-    escaped_new = newText.replace("'", "'\\''").replace("/", "\\/")
-    return exec_sync(f"sed -i \"s/{escaped_old}/{escaped_new}/g\" '{file_path}'")
-
-
-def list_dir(path: str = ".") -> str:
-    """Legacy: Use exec with 'ls' instead."""
-    return exec_sync(f"ls -la '{path}'")
-
-
 __all__ = [
     "exec",
     "exec_sync",
