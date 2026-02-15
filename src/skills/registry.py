@@ -89,7 +89,7 @@ class SkillRegistry:
             user_resolved = self.user_skills_dir.resolve()
             
             # Check if user dir is inside project dir
-            if str(user_resolved).startswith(str(project_resolved) and user_resolved != project_resolved:
+            if str(user_resolved).startswith(str(project_resolved)) and user_resolved != project_resolved:
                 logger.warning(f"User skills dir is inside project dir - skipping user skills")
                 self.user_skills_dir = Path("/nonexistent/user/skills")  # Invalid path
         except Exception as e:
