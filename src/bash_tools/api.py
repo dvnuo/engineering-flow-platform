@@ -24,12 +24,20 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 60
 
-# Try to import skill workdir from agent core (async-safe via contextvars)
-try:
-    from src.agents.core import get_skill_workdir
-    _HAS_SKILL_WORKDIR = True
-except ImportError:
-    _HAS_SKILL_WORKDIR = False
+# Cache for skill workdir getter (lazy import to avoid circular imports)
+_skill_workdir_getter = None
+
+
+def _get_skill_workdir_getter():
+    """Get the skill workdir getter function (lazy import to avoid circular imports)."""
+    global _skill_workdir_getter
+    if _skill_workdir_getter is None:
+        try:
+            from src.agents.core import get_skill_workdir
+            _skill_workdir_getter = get_skill_workdir
+        except ImportError:
+            _skill_workdir_getter = lambda: None
+    return _skill_workdir_getter
 
 
 # ============ Security Configuration ============
@@ -72,8 +80,9 @@ async def exec(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
     
     # Get working directory - prefer skill workdir if set (async-safe via contextvars)
     actual_cwd = str(Path.cwd())
-    if _HAS_SKILL_WORKDIR:
-        skill_workdir = get_skill_workdir()
+    skill_workdir_getter = _get_skill_workdir_getter()
+    if skill_workdir_getter:
+        skill_workdir = skill_workdir_getter()
         if skill_workdir:
             skill_path = Path(skill_workdir)
             if skill_path.exists() and skill_path.is_dir():
