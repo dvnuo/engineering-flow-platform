@@ -65,7 +65,7 @@ from . import bash_tools
 def get_all_tools() -> list:
     """Get all tool schemas."""
     tools = []
-    tools.extend(get_bash_tools())   # Bash/Shell tools: read, write, edit, list_dir, exec
+    tools.extend(get_bash_tools())   # Bash/Shell tools: exec only (simplified)
     tools.extend(get_github_tools())
     tools.extend(get_jira_tools())
     tools.extend(get_confluence_tools())
@@ -128,11 +128,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     elif name == "exec":
         command = kwargs.get("command", "")
         timeout = kwargs.get("timeout", 60)
-        workdir = kwargs.get("workdir")
-        env = kwargs.get("env")
-        security = kwargs.get("security")
-        ask = kwargs.get("ask")
-        result = await bash_tools_module.exec(command, timeout, workdir, env, security, ask)
+        result = await bash_tools_module.exec(command, timeout)
         # Check for success (not blocked, no error)
         is_success = "Error" not in result and "blocked" not in result.lower() and "requires approval" not in result.lower()
         return ToolResult(success=is_success, content=result)
