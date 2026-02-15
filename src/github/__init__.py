@@ -22,7 +22,7 @@ async def github_get_issue(owner: str, repo: str, issue_number: int) -> str:
 async def github_search_issues(query: str, max_results: int = 10) -> str:
     """Search GitHub issues and PRs."""
     try:
-        result = await github_client.search_issues(query, max_results)
+        result = await github_channel.search_issues(query, max_results)
         items = result.get("items", [])
         if not items:
             return "No issues found."
@@ -42,7 +42,7 @@ async def github_search_issues(query: str, max_results: int = 10) -> str:
 async def github_add_comment(owner: str, repo: str, issue_number: int, comment: str) -> str:
     """Add a comment to a GitHub issue or PR."""
     try:
-        result = await github_client.add_comment(owner, repo, issue_number, comment)
+        result = await github_channel.add_comment(owner, repo, issue_number, comment)
         comment_id = result.get("id", "unknown")
         return f"Comment added: {owner}/{repo}#{issue_number} (ID: {comment_id})"
     except Exception as e:
