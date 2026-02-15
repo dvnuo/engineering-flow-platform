@@ -1,10 +1,6 @@
 """Tools module - File operations and shell execution tools."""
 
 from .api import (
-    read,
-    write,
-    edit,
-    list_dir,
     exec,
     exec_sync,
     get_tools_schemas,
@@ -29,47 +25,60 @@ def get_all_tools() -> list:
 
 
 def execute_tool(name: str, **kwargs) -> str:
-    """Execute a tool by name (sync version).
+    """Execute a tool by name.
     
-    Supports security parameters for exec:
-    - security: Security mode (deny|allowlist|full)
-    - ask: Approval mode (off|on-miss|always)
-    - env: Environment variables dict
+    All file operations map to shell commands under the hood.
     """
+    command = ""
+    
     if name == "read":
-        return read(kwargs.get("file_path", ""), kwargs.get("limit"), kwargs.get("offset"))
+        file_path = kwargs.get("file_path", "")
+        limit = kwargs.get("limit")
+        offset = kwargs.get("offset")
+        command = f"cat '{file_path}'"
+        if offset:
+            command += f" | tail -n +{offset}"
+        if limit:
+            command += f" | head -n {limit}"
     
     elif name == "write":
-        return write(kwargs.get("file_path", ""), kwargs.get("content", ""))
+        file_path = kwargs.get("file_path", "")
+        content = kwargs.get("content", "")
+        # Escape single quotes in content
+        escaped_content = content.replace("'", "'\\''")
+        command = f"echo '{escaped_content}' > '{file_path}'"
     
     elif name == "edit":
-        return edit(
-            kwargs.get("file_path", ""),
-            kwargs.get("oldText", ""),
-            kwargs.get("newText", "")
-        )
+        file_path = kwargs.get("file_path", "")
+        oldText = kwargs.get("oldText", "")
+        newText = kwargs.get("newText", "")
+        # Use sed for editing - escape special characters
+        escaped_old = oldText.replace("'", "'\\''").replace("/", "\\/").replace("&", "\\&")
+        escaped_new = newText.replace("'", "'\\''").replace("/", "\\/").replace("&", "\\&")
+        command = f"sed -i \"s/{escaped_old}/{escaped_new}/g\" '{file_path}'"
     
     elif name == "list_dir":
-        return list_dir(kwargs.get("path", "."))
+        path = kwargs.get("path", ".")
+        command = f"ls -la '{path}'"
     
     elif name == "exec":
+        command = kwargs.get("command", "")
         return exec_sync(
-            kwargs.get("command", ""),
+            command,
             kwargs.get("timeout", 60),
             kwargs.get("workdir"),
             kwargs.get("env"),
-            kwargs.get("security"),
-            kwargs.get("ask")
+            kwargs.get("security")
         )
     
-    return f"Error: Unknown tool: {name}"
+    else:
+        return f"Error: Unknown tool: {name}"
+    
+    # Execute the constructed command
+    return exec_sync(command, kwargs.get("timeout", 60), kwargs.get("workdir"), kwargs.get("env"), kwargs.get("security"))
 
 
 __all__ = [
-    "read",
-    "write",
-    "edit",
-    "list_dir",
     "exec",
     "exec_sync",
     "get_all_tools",

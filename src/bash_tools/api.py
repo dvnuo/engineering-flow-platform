@@ -432,46 +432,84 @@ def exec_sync(
 def get_tools_schemas() -> list:
     """Return tool schemas for LLM function calling.
     
-    Simplified schema - only one exec tool that allows full shell access.
-    Agent can use any Linux CLI commands including git and gh.
+    Tools that map to common Linux commands. All operations use shell commands under the hood.
     """
     return [
         {
             "type": "function",
             "function": {
+                "name": "read",
+                "description": "Read file contents using cat. Shows line numbers and metadata.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string", "description": "Path to file to read"},
+                        "limit": {"type": "integer", "description": "Maximum lines to read (optional)"},
+                        "offset": {"type": "integer", "description": "Start line number (optional)"}
+                    },
+                    "required": ["file_path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write",
+                "description": "Create or overwrite a file using echo redirection.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string", "description": "Path to file to write"},
+                        "content": {"type": "string", "description": "Content to write"}
+                    },
+                    "required": ["file_path", "content"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "edit",
+                "description": "Edit file using sed to replace text patterns.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string", "description": "Path to file to edit"},
+                        "oldText": {"type": "string", "description": "Text pattern to find and replace"},
+                        "newText": {"type": "string", "description": "Replacement text"}
+                    },
+                    "required": ["file_path", "oldText", "newText"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_dir",
+                "description": "List directory contents using ls with details.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Directory path (default: current)"}
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "exec",
-                "description": """Execute any Linux shell command. Available command categories:
+                "description": """Execute any Linux shell command:
 
-**File Operations:**
-- Read: cat, less, head, tail, nl, more
-- Write: echo, tee, cat > file
-- Edit: sed, awk, perl -i, vim, nano
-- Directory: ls, find, tree, cd, pwd, mkdir, rm, cp, mv
-
-**Search & Analysis:**
-- Search: grep, rg (ripgrep), find, ack
-- Content: jq (JSON), yq (YAML), xmllint
-- Diff: diff, meld, vimdiff
-
-**Git Commands:**
-- Status: git status, git diff, git log --oneline
-- Commit: git add, git commit, git push, git pull
-- Branch: git branch, git checkout, git switch
-- History: git log, git show, git blame
-- Remote: git remote, git fetch
-
-**GitHub CLI (gh):**
-- Issues: gh issue list, gh issue view, gh issue create
-- PRs: gh pr list, gh pr view, gh pr checkout, gh pr create
-- Repo: gh repo view, gh repo clone, gh repo create
-- Actions: gh run list, gh run view
-
-**System & Info:**
-- System: ps, top, df, du, free, uname
-- Network: curl, wget, ping, ssh
-- Archives: tar, zip, unzip
-
-The agent should choose the appropriate command for the task.""",
+**File Ops:** cat, less, head, tail, nl, more, wc
+**Edit:** sed, awk, perl -i, vim, nano
+**Dir:** ls, find, tree, cd, pwd, mkdir, rm, cp, mv
+**Search:** grep, rg (ripgrep), find, ack
+**Data:** jq (JSON), yq (YAML), xmllint
+**Git:** git status, git diff, git log, git add/commit/push
+**GitHub:** gh issue, gh pr, gh repo
+**System:** ps, df, du, free, curl, wget, tar, zip""",
                 "parameters": {
                     "type": "object",
                     "properties": {
