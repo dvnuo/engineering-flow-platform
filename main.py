@@ -4,8 +4,9 @@
 import asyncio
 import logging
 import sys
-import yaml
 from pathlib import Path
+
+from ruamel.yaml import YAML
 
 # Get the directory containing this script
 script_dir = Path(__file__).resolve().parent
