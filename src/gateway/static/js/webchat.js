@@ -2090,10 +2090,14 @@
                 message = data.message || 'LLM is thinking...';
                 break;
             case 'tool_call':
-                message = `Calling: ${data.tool || 'Unknown tool'}`;
+                // Show tool name and arguments in debug mode
+                const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '';
+                message = `🔧 ${data.tool || 'Unknown tool'}\n📝 Args: ${argsStr || 'none'}`;
                 break;
             case 'tool_result':
-                message = `${data.success ? '✅' : '❌'} ${data.tool || 'Tool'} - ${data.result || ''}`;
+                // Show tool result or error
+                const statusIcon = data.success ? '✅' : '❌';
+                message = `${statusIcon} ${data.tool || 'Tool'} Result:\n${data.result || '(no result)'}`;
                 break;
             case 'confirmation':
                 message = data.message || 'Confirmation required';
@@ -2117,6 +2121,11 @@
      * Show agent event in chat
      */
     function showAgentEvent(eventClass, message) {
+        // Check if debug mode is enabled - only show agent events in debug mode
+        if (debugEnabled && !debugEnabled.checked) {
+            return;  // Skip showing events if debug is disabled
+        }
+        
         // Remove welcome message if present
         const welcome = messagesContainer.querySelector('.welcome-message');
         if (welcome) {
