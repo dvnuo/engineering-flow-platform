@@ -20,6 +20,11 @@ import zipfile
 from pathlib import Path
 from datetime import datetime
 
+from ruamel.yaml import YAML
+
+# Module-level YAML instance
+_yaml = YAML()
+
 
 def validate_skill(skill_path: Path) -> tuple[bool, list]:
     """Validate skill structure and content.
@@ -106,11 +111,10 @@ def validate_skill(skill_path: Path) -> tuple[bool, list]:
 
 def parse_frontmatter(yaml_str: str) -> dict:
     """Parse YAML frontmatter string."""
-    import yaml
     try:
-        data = yaml.safe_load(yaml_str)
+        data = _yaml.load(yaml_str)
         return data if data else {}
-    except yaml.YAMLError as e:
+    except Exception as e:
         return {}
 
 

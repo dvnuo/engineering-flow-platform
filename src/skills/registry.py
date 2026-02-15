@@ -15,7 +15,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 
+from ruamel.yaml import YAML
+
 logger = logging.getLogger(__name__)
+
+# Module-level YAML instance
+_yaml = YAML()
 
 
 @dataclass
@@ -107,8 +112,6 @@ class SkillRegistry:
     
     def _load_skill_file(self, file_path: Path) -> Optional[Skill]:
         """Load a single skill from YAML or MD file."""
-        import yaml
-        
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
@@ -118,12 +121,12 @@ class SkillRegistry:
             parts = content.split('---', 2)
             if len(parts) >= 3:
                 frontmatter = parts[1]
-                data = yaml.safe_load(frontmatter)
+                data = _yaml.load(frontmatter)
             else:
                 data = {}
         else:
             # Plain YAML file
-            data = yaml.safe_load(content)
+            data = _yaml.load(content)
         
         if not data:
             return None
