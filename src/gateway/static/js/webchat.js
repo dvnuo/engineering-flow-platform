@@ -2025,9 +2025,9 @@
                     const preview = result ? (result.length > 100 ? result.substring(0, 100) + '...' : result) : '(no result)';
                     showAgentEvent('tool-result', `✅ ${tool}\nResult: ${preview}`);
                 } else {
-                    // Error: show full error message
+                    // Error: result already contains "Error:" prefix from __str__, don't duplicate
                     const errorMsg = result || 'Unknown error (no details)';
-                    showAgentEvent('tool-result', `❌ ${tool} Error:\n${errorMsg}`);
+                    showAgentEvent('tool-result', `❌ ${tool}\n${errorMsg}`);
                 }
                 break;
                 
