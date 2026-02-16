@@ -2133,13 +2133,6 @@
      * Show agent event in chat
      */
     function showAgentEvent(eventClass, message) {
-        // Tool results should always be visible regardless of debug mode
-        if (eventClass !== 'tool-result') {
-            if (debugEnabled && !debugEnabled.checked) {
-                return;  // Skip showing events if debug is disabled
-            }
-        }
-        
         // Remove welcome message if present
         const welcome = messagesContainer.querySelector('.welcome-message');
         if (welcome) {
