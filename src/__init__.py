@@ -30,7 +30,7 @@ class ToolResult:
     def __str__(self) -> str:
         if self.success:
             return self.content if self.content else "(no result)"
-        # Error case: prefer content (actual error message) over error field
+        # Error case: prefer error field, fallback to content
         if self.error:
             return f"Error: {self.error}"
         return self.content if self.content else "Error: Unknown (no details)"
