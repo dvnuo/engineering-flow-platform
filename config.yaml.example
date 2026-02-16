@@ -340,6 +340,21 @@ debug:
 # - Agent processing: Messages, tool execution, final responses
 
 # ============================================
+# Task Configuration
+# ============================================
+# Settings for task execution and iteration limits
+
+task:
+  # Maximum iterations for tool execution loop
+  # Prevents infinite loops when LLM keeps requesting tools
+  # Default: 30
+  max_iterations: 30
+
+# Example usage:
+# task:
+#   max_iterations: 50
+
+# ============================================
 # Bash/Shell Tools Configuration
 # ============================================
 # Security settings for shell command execution
