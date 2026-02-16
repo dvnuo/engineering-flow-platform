@@ -1506,9 +1506,13 @@
     // Provider to Model mapping
     const providerModels = {
         github_copilot: [
-            { value: 'gpt-4', label: 'GPT-4' },
-            { value: 'gpt-4o', label: 'GPT-4o' },
-            { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+            { value: 'gpt-4o', label: 'GPT-4o' }, 
+            { value: 'gpt-5-mini', label: 'GPT-5 mini' }, 
+            { value: 'gpt-5', label: 'GPT-5' }, 
+            { value: 'gpt-5.1-codex', label: 'GPT-5.1-Codex' }, 
+            { value: 'gpt-5.1-codex-max', label: 'GPT-5.1-Codex-Max' }, 
+            { value: 'gpt-5.2', label: 'GPT-5.2' }, 
+            { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
         ],
         openai: [
             { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
