@@ -34,6 +34,8 @@ DEFAULT_SAFE_BINS = [
     "vi", "vim", "echo", "printf", "date",
     # Version control
     "git", "gh",
+    # Code program
+    "python3", "pip",
     # File operations
     "ls", "pwd", "cd", "mkdir", "rm", "cp", "mv", "touch",
     "tar", "zip", "unzip", "gzip", "bzip2",
