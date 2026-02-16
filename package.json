@@ -1,0 +1,35 @@
+{
+  "name": "engineering-flow-platform-tests",
+  "version": "1.0.0",
+  "description": "Frontend automated tests for Engineering Flow Platform",
+  "scripts": {
+    "test": "jest",
+    "test:unit": "jest --testPathPattern=unit",
+    "test:e2e": "jest --testPathPattern=e2e",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  },
+  "dependencies": {
+    "jest": "^29.7.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "playwright": "^1.40.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "verbose": true,
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ],
+    "collectCoverageFrom": [
+      "src/gateway/static/js/**/*.js",
+      "!src/gateway/static/js/webchat.js"
+    ],
+    "coverageDirectory": "coverage",
+    "testTimeout": 30000
+  }
+}
