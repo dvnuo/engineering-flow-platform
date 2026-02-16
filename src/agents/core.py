@@ -393,7 +393,7 @@ You have access to the following tools. When a user asks you to do something tha
         # This is the proper agent loop, not a single-step execution
         
         # Get max iterations from config, default to 30
-        max_tool_iterations = config.task.get("max_iterations", 30) if hasattr(config, 'task') else 30
+        max_tool_iterations = config.session.get("max_iterations", 30) if hasattr(config, 'session') else 30
         iteration = 0
         
         # Helper function to send stream events
