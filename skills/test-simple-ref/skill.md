@@ -4,7 +4,6 @@ description: A simple test skill with reference files
 version: 1.0.0
 owner: test
 triggers:
-  - /test-simple-ref
   - test ref
 tools:
   - exec
