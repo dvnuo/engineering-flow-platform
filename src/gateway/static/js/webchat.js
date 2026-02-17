@@ -1321,7 +1321,7 @@
     const closeFileExplorer = document.getElementById('closeFileExplorer');
     const fileExplorerContent = document.getElementById('fileExplorerContent');
     
-    async function showFileExplorer(path = '/root/engineering-flow-platform') {
+    async function showFileExplorer(path = '/root') {
         fileExplorerPanel.classList.add('show');
         fileExplorerContent.innerHTML = '<div class="loading">Loading...</div>';
         
