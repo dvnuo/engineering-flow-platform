@@ -287,7 +287,7 @@ class SkillRegistry:
                     matches.append((skill, 1.0))  # Perfect match
                     continue
             
-            # Check trigger patterns
+            # Check trigger patterns (from skill.yaml)
             for pattern in skill.trigger_patterns:
                 if pattern.search(message_lower):
                     # Simple scoring: longer trigger = better match
@@ -295,6 +295,12 @@ class SkillRegistry:
                     score = min(score, 0.9)  # Cap at 0.9
                     matches.append((skill, score))
                     break
+            
+            # Auto-detected trigger: /<skill-name> (no explicit trigger needed)
+            auto_trigger = f"/{skill.name.lower()}"
+            # Exact match to avoid over-matching (e.g., /test should not match skill "test-ref")
+            if message_lower.strip() == auto_trigger:
+                matches.append((skill, 0.85))  # Slightly lower than explicit triggers
         
         # Sort by score descending
         matches.sort(key=lambda x: x[1], reverse=True)
