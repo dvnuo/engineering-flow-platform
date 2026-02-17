@@ -522,7 +522,8 @@ You have access to the following tools. When a user asks you to do something tha
             assistant_msg = {"role": "assistant"}
             if tool_calls:
                 assistant_msg["tool_calls"] = tool_calls
-                assistant_msg["content"] = content if content else None
+                # IMPORTANT: content must be empty string, not None for GitHub Copilot API
+                assistant_msg["content"] = content if content else ""
             
             messages.append(assistant_msg)
             
