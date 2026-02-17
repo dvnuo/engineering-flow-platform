@@ -461,7 +461,8 @@ async def api_browse_files(request: web.Request) -> web.Response:
     Returns: List of files and directories
     """
     try:
-        path = request.query.get('path', str(Path.home() / ".efp/workspace/engineering-flow"))
+        # Default to /root for file browser
+        path = request.query.get('path', '/root')
         base_path = Path(path)
         
         if not base_path.exists():
