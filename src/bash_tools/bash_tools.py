@@ -255,6 +255,10 @@ def evaluate_command(
     executable, resolved_path = resolve_command_path(command, cwd)
     
     if not resolved_path:
+        # For shell builtins (like cd), check if they're in safe_bins
+        # Shell builtins like 'cd' are not in PATH but should be allowed
+        if executable and executable in config.safe_bins:
+            return True, f"safe bin (builtin): {executable}"
         return False, f"command not found: {executable}"
     
     # Check safe bins first
