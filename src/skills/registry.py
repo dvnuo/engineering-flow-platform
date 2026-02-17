@@ -299,7 +299,7 @@ class SkillRegistry:
             # Auto-detected trigger: /<skill-name> (no explicit trigger needed)
             auto_trigger = f"/{skill.name.lower()}"
             # Exact match to avoid over-matching (e.g., /test should not match skill "test-ref")
-            if message_lower.strip() == auto_trigger:
+            if message_lower.strip() == auto_trigger or message_lower.strip().startswith(f"{auto_trigger} "):
                 matches.append((skill, 0.85))  # Slightly lower than explicit triggers
         
         # Sort by score descending
