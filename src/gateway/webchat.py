@@ -652,9 +652,13 @@ async def api_save_config(request: web.Request) -> web.Response:
         with open(config_path, 'w', encoding='utf-8') as f:
             yaml.dump(config, f)
         
+        # Reload global config to make changes take effect immediately
+        from src.config import config
+        config.reload()
+        
         return web.json_response({
             'success': True, 
-            'message': 'Configuration saved. Restart required.',
+            'message': 'Configuration saved and reloaded.',
             'updated_sections': [s for s in sections if s in data]
         })
     except Exception as e:
