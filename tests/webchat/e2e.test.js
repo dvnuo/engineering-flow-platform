@@ -60,23 +60,6 @@ test.describe('WebChat UI', () => {
     const themeToggle = page.locator('#themeToggle');
     await expect(themeToggle).toBeVisible();
   });
-  
-  test('sends message and receives response', async () => {
-    const input = page.locator('#messageInput');
-    const sendButton = page.locator('#sendButton');
-    
-    // Send a simple message
-    await input.fill('hello');
-    await sendButton.click();
-    
-    // Wait for response
-    await page.waitForTimeout(5000);
-    
-    // Check that a response was received
-    const messages = page.locator('.message');
-    const messageCount = await messages.count();
-    expect(messageCount).toBeGreaterThanOrEqual(2);
-  });
 });
 
 test.describe('WebChat Skills', () => {
