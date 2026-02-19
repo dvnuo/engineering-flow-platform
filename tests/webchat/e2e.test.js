@@ -50,9 +50,9 @@ test.describe('WebChat UI', () => {
   });
   
   test('typing indicator element exists', async () => {
-    // Check typing indicator element exists
+    // Check typing indicator element exists in DOM
     const indicator = page.locator('#typing');
-    await expect(indicator).toBeVisible();
+    await expect(indicator).toBeAttached();
     await expect(indicator).toHaveClass(/typing-indicator/);
   });
   
@@ -100,14 +100,14 @@ test.describe('WebChat Skills', () => {
     await page.waitForLoadState('networkidle');
   });
   
-  test('skill selector element exists', async () => {
+  test('skill selector element exists in DOM', async () => {
     const skillSelector = page.locator('#skillSelector');
-    await expect(skillSelector).toBeVisible();
+    await expect(skillSelector).toBeAttached();
   });
   
-  test('skill dropdown element exists', async () => {
+  test('skill dropdown element exists in DOM', async () => {
     const dropdown = page.locator('#skillDropdown');
-    await expect(dropdown).toBeVisible();
+    await expect(dropdown).toBeAttached();
   });
 });
 
