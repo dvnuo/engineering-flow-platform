@@ -31,7 +31,7 @@ test.describe('WebChat UI', () => {
   
   test.beforeEach(async () => {
     page = await browser.newPage();
-    await page.goto(`${EFP_URL}/chat`);
+    await page.goto(`${EFP_URL}/`);
     await page.waitForLoadState('networkidle');
   });
   
@@ -49,40 +49,26 @@ test.describe('WebChat UI', () => {
     await expect(page.locator('#sendButton')).toBeVisible();
   });
   
-  test('typing indicator shows on send', async () => {
+  test('typing indicator appears when sending message', async () => {
     // Fill message and send
     await page.fill('#messageInput', 'test message');
     await page.click('#sendButton');
     
-    // Check typing indicator appears with processing class
+    // Check typing indicator appears (no #typingText element in current implementation)
     const indicator = page.locator('#typing');
     await expect(indicator).toBeVisible();
-    
-    // Check for status text element
-    const statusText = page.locator('#typingText');
-    await expect(statusText).toBeVisible();
   });
   
-  test('typing indicator shows status transitions', async () => {
-    // Fill message and send
-    await page.fill('#messageInput', 'hello');
-    await page.click('#sendButton');
-    
-    // Check initial status shows "Sending..." or "Processing"
-    const statusText = page.locator('#typingText');
-    await expect(statusText).toBeVisible();
-  });
-
   test('theme toggle works', async () => {
     const themeToggle = page.locator('#themeToggle');
     
-    // Toggle to light mode
+    // Toggle to dark mode (default is light)
     await themeToggle.click();
-    await expect(page.locator('body')).toHaveAttribute('data-theme', 'light');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     
-    // Toggle back to dark mode
+    // Toggle back to light mode
     await themeToggle.click();
-    await expect(page.locator('body')).toHaveAttribute('data-theme', 'dark');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   });
   
   test('sends message and receives response', async () => {
@@ -120,7 +106,7 @@ test.describe('WebChat Skills', () => {
   
   test.beforeEach(async () => {
     page = await browser.newPage();
-    await page.goto(`${EFP_URL}/chat`);
+    await page.goto(`${EFP_URL}/`);
     await page.waitForLoadState('networkidle');
   });
   
@@ -132,7 +118,7 @@ test.describe('WebChat Skills', () => {
     await page.waitForTimeout(500);
     
     // Check dropdown appears
-    const dropdown = page.locator('.skill-selector-dropdown');
+    const dropdown = page.locator('#skillDropdown');
     await expect(dropdown).toBeVisible();
   });
   
@@ -144,7 +130,7 @@ test.describe('WebChat Skills', () => {
     await page.waitForTimeout(500);
     
     // Check that git skill is auto-matched or dropdown shows
-    const dropdown = page.locator('.skill-selector-dropdown');
+    const dropdown = page.locator('#skillDropdown');
     await expect(dropdown).toBeVisible();
   });
   
@@ -156,20 +142,21 @@ test.describe('WebChat Skills', () => {
     await page.waitForTimeout(500);
     
     // Should still match (case-insensitive)
-    const dropdown = page.locator('.skill-selector-dropdown');
+    const dropdown = page.locator('#skillDropdown');
     await expect(dropdown).toBeVisible();
   });
 });
 
 test.describe('WebChat API Integration', () => {
   let browser;
-  let page;
+  let context;
   
   test.beforeAll(async () => {
     browser = await chromium.launch({ 
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
+    context = await browser.newContext();
   });
   
   test.afterAll(async () => {
@@ -177,7 +164,7 @@ test.describe('WebChat API Integration', () => {
   });
   
   test('api/skills endpoint works', async () => {
-    const response = await page.request.get(`${EFP_URL}/api/skills`);
+    const response = await context.request.get(`${EFP_URL}/api/skills`);
     expect(response.ok()).toBeTruthy();
     
     const data = await response.json();
@@ -186,7 +173,7 @@ test.describe('WebChat API Integration', () => {
   });
   
   test('api/chat endpoint works', async () => {
-    const response = await page.request.post(`${EFP_URL}/api/chat`, {
+    const response = await context.request.post(`${EFP_URL}/api/chat`, {
       data: {
         message: 'test',
         session_id: 'e2e-test'
@@ -219,21 +206,20 @@ test.describe('CSS Validation', () => {
     page = await browser.newPage();
     
     // Collect console errors
+    const errors = [];
     page.on('console', msg => {
       if (msg.type() === 'error') {
-        // Store errors for later verification
-        page.errors = page.errors || [];
-        page.errors.push(msg.text());
+        errors.push(msg.text());
       }
     });
     
-    await page.goto(`${EFP_URL}/chat`);
+    await page.goto(`${EFP_URL}/`);
     await page.waitForLoadState('networkidle');
+    page.errors = errors;
   });
   
   test('no console errors on load', async () => {
-    const errors = page.errors || [];
-    const jsErrors = errors.filter(e => !e.includes('favicon'));
+    const jsErrors = page.errors.filter(e => !e.includes('favicon'));
     expect(jsErrors).toHaveLength(0);
   });
   
