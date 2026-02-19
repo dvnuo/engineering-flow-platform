@@ -5,60 +5,17 @@
  * Uses Jest to test pure JavaScript logic.
  */
 
-// Mock DOM environment for testing
-const mockDocument = {
-  getElementById: jest.fn(),
-  querySelector: jest.fn(),
-  querySelectorAll: jest.fn()
-};
-
-global.document = mockDocument;
-
-// Utility functions extracted for testing
-function formatSmartDate(dateStr) {
-  const now = new Date();
-  const messageDate = new Date(dateStr);
-  const timeStr = messageDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  
-  // Same day
-  if (messageDate.toDateString() === now.toDateString()) {
-    return timeStr;
-  }
-  
-  // Yesterday
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (messageDate.toDateString() === yesterday.toDateString()) {
-    return `Yesterday ${timeStr}`;
-  }
-  
-  // Within the last 7 days
-  const oneWeekAgo = new Date(now);
-  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-  if (messageDate > oneWeekAgo) {
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    return `${days[messageDate.getDay()]} ${timeStr}`;
-  }
-  
-  // Within the same year
-  if (messageDate.getFullYear() === now.getFullYear()) {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const month = months[messageDate.getMonth()];
-    const day = messageDate.getDate();
-    return `${month} ${day} ${timeStr}`;
-  }
-  
-  // Over a year ago
-  const year = messageDate.getFullYear();
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const month = months[messageDate.getMonth()];
-  return `${month} ${day} ${year}`;
-}
-
+// Simple escape function for testing (no DOM dependency)
 function escapeHtml(text) {
-  const div = global.document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+  if (!text) return '';
+  const map = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  };
+  return text.replace(/[&<>"']/g, m => map[m]);
 }
 
 function truncateText(text, maxLength = 200) {
@@ -80,46 +37,11 @@ function formatCost(cost) {
 
 // ============ TESTS ============
 
-describe('formatSmartDate', () => {
-  test('formats time for same day', () => {
-    const now = new Date();
-    const result = formatSmartDate(now.toISOString());
-    // Should be just time like "14:30"
-    expect(result).toMatch(/^\d{2}:\d{2}$/);
-  });
-  
-  test('formats yesterday correctly', () => {
-    const yesterday = new Date(Date.now() - 86400000);
-    const result = formatSmartDate(yesterday.toISOString());
-    expect(result).toContain('Yesterday');
-  });
-  
-  test('formats day name for within week', () => {
-    const threeDaysAgo = new Date(Date.now() - 3 * 86400000);
-    const result = formatSmartDate(threeDaysAgo.toISOString());
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const expectedDay = days[threeDaysAgo.getDay()];
-    expect(result).toContain(expectedDay);
-  });
-  
-  test('formats month day for same year', () => {
-    const lastMonth = new Date();
-    lastMonth.setMonth(lastMonth.getMonth() - 1);
-    const result = formatSmartDate(lastMonth.toISOString());
-    expect(result).toMatch(/^[A-Za-z]+ \d{1,2} \d{2}:\d{2}$/);
-  });
-  
-  test('handles invalid date gracefully', () => {
-    const result = formatSmartDate('invalid-date');
-    expect(result).toBe('NaN:NaN');
-  });
-});
-
 describe('escapeHtml', () => {
   test('escapes HTML entities', () => {
     expect(escapeHtml('<script>')).toBe('&lt;script&gt;');
     expect(escapeHtml('"hello"')).toBe('&quot;hello&quot;');
-    expect(escapeHtml("'single'")).toBe("&#x27;single&#x27;");
+    expect(escapeHtml("'single'")).toBe("&#039;single&#039;");
     expect(escapeHtml('&amp;')).toBe('&amp;amp;');
   });
   

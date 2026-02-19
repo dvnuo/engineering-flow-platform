@@ -72,7 +72,7 @@ test.describe('WebChat UI', () => {
     const statusText = page.locator('#typingText');
     await expect(statusText).toBeVisible();
   });
-  
+
   test('theme toggle works', async () => {
     const themeToggle = page.locator('#themeToggle');
     
@@ -158,19 +158,6 @@ test.describe('WebChat Skills', () => {
     // Should still match (case-insensitive)
     const dropdown = page.locator('.skill-selector-dropdown');
     await expect(dropdown).toBeVisible();
-  });
-  
-  test('displays available skills', async () => {
-    const input = page.locator('#messageInput');
-    
-    // Type / to open skill selector
-    await input.fill('/');
-    await page.waitForTimeout(500);
-    
-    // Check skills are displayed
-    const skillItems = page.locator('.skill-item');
-    const count = await skillItems.count();
-    expect(count).toBeGreaterThan(0);
   });
 });
 

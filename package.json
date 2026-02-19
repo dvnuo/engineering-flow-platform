@@ -4,17 +4,15 @@
   "description": "Frontend automated tests for Engineering Flow Platform",
   "scripts": {
     "test": "jest",
-    "test:unit": "jest --testPathPattern=unit",
-    "test:e2e": "jest --testPathPattern=e2e",
+    "test:unit": "jest tests/webchat/utils.test.js",
+    "test:e2e": "npx playwright test tests/webchat/e2e.test.js",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage"
   },
-  "dependencies": {
-    "jest": "^29.7.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@playwright/test": "^1.40.0",
-    "playwright": "^1.40.0"
+    "jest": "^29.7.0"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -25,11 +23,14 @@
     "testMatch": [
       "**/tests/**/*.test.js"
     ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "e2e.test.js"
+    ],
     "collectCoverageFrom": [
       "src/gateway/static/js/**/*.js",
       "!src/gateway/static/js/webchat.js"
     ],
-    "coverageDirectory": "coverage",
-    "testTimeout": 30000
+    "coverageDirectory": "coverage"
   }
 }
