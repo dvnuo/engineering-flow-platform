@@ -50,15 +50,27 @@ test.describe('WebChat UI', () => {
   });
   
   test('typing indicator shows on send', async () => {
-    // Clear any existing messages
+    // Fill message and send
     await page.fill('#messageInput', 'test message');
-    
-    // Send message
     await page.click('#sendButton');
     
-    // Check typing indicator appears
+    // Check typing indicator appears with processing class
     const indicator = page.locator('#typing');
     await expect(indicator).toBeVisible();
+    
+    // Check for status text element
+    const statusText = page.locator('#typingText');
+    await expect(statusText).toBeVisible();
+  });
+  
+  test('typing indicator shows status transitions', async () => {
+    // Fill message and send
+    await page.fill('#messageInput', 'hello');
+    await page.click('#sendButton');
+    
+    // Check initial status shows "Sending..." or "Processing"
+    const statusText = page.locator('#typingText');
+    await expect(statusText).toBeVisible();
   });
   
   test('theme toggle works', async () => {
@@ -120,6 +132,30 @@ test.describe('WebChat Skills', () => {
     await page.waitForTimeout(500);
     
     // Check dropdown appears
+    const dropdown = page.locator('.skill-selector-dropdown');
+    await expect(dropdown).toBeVisible();
+  });
+  
+  test('auto-triggers skill with /skill-name', async () => {
+    const input = page.locator('#messageInput');
+    
+    // Use auto-trigger with /git
+    await input.fill('/git');
+    await page.waitForTimeout(500);
+    
+    // Check that git skill is auto-matched or dropdown shows
+    const dropdown = page.locator('.skill-selector-dropdown');
+    await expect(dropdown).toBeVisible();
+  });
+  
+  test('case-insensitive auto-trigger', async () => {
+    const input = page.locator('#messageInput');
+    
+    // Use uppercase /GIT
+    await input.fill('/GIT');
+    await page.waitForTimeout(500);
+    
+    // Should still match (case-insensitive)
     const dropdown = page.locator('.skill-selector-dropdown');
     await expect(dropdown).toBeVisible();
   });

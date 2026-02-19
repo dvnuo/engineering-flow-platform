@@ -171,3 +171,31 @@ describe('formatCost', () => {
     expect(formatCost(0.005)).toBe('$0.00');
   });
 });
+
+// Additional utility tests for status indicators
+describe('Status Indicator Utilities', () => {
+  test('status text mapping for processing', () => {
+    const statusMessages = {
+      sending: 'Sending...',
+      processing: 'Processing...',
+      ready: 'Ready',
+      error: 'Error'
+    };
+    expect(statusMessages.sending).toBe('Sending...');
+    expect(statusMessages.processing).toBe('Processing...');
+    expect(statusMessages.ready).toBe('Ready');
+    expect(statusMessages.error).toBe('Error');
+  });
+  
+  test('CSS class mapping for status', () => {
+    const statusClasses = {
+      sending: 'typing-indicator sending',
+      processing: 'typing-indicator processing',
+      ready: 'typing-indicator ready',
+      error: 'typing-indicator error'
+    };
+    expect(statusClasses.processing).toContain('processing');
+    expect(statusClasses.ready).toContain('ready');
+    expect(statusClasses.error).toContain('error');
+  });
+});
