@@ -1,0 +1,13 @@
+{
+  "name": "engineering-flow-platform",
+  "version": "1.0.0",
+  "description": "Engineering Flow Platform - WebChat UI Testing",
+  "scripts": {
+    "test": "jest --testPathPattern=utils",
+    "test:e2e": "playwright test --testPathPattern=e2e",
+    "test:all": "npm test && npm run test:e2e"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.40.0"
+  }
+}
