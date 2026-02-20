@@ -88,6 +88,24 @@ class GitHubChannel:
         """Check if GitHub is properly configured."""
         return bool(self.token and self.enabled)
     
+    def reinit(self):
+        """Reinitialize GitHubChannel (called when config changes)."""
+        logger.info("Reinitializing GitHubChannel...")
+        github_config = config.github or {}
+        self.base_url = github_config.get("base_url", "https://api.github.com")
+        self.token = github_config.get("api_token", "")
+        self.enabled = github_config.get("enabled", False)
+        self.hostname = github_config.get("hostname", "")
+        
+        self._headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "Engineering Flow Platform-Mini",
+        }
+        if self.token:
+            self._headers["Authorization"] = f"Bearer {self.token}"
+        
+        logger.info("GitHubChannel reinitialized")
+    
     async def _request(
         self,
         method: str,
@@ -477,6 +495,10 @@ class GitHubChannel:
 
 # Global instance
 github_channel = GitHubChannel()
+
+# Register for config reload
+from src.config import service_reload_manager
+service_reload_manager.register('github', github_channel.reinit)
 
 
 # ========== Tool Functions ==========
