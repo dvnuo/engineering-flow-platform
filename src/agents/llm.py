@@ -163,6 +163,29 @@ class BaseProvider:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+    
+    def _check_api_key(self) -> Optional[Dict]:
+        """Check if API key is configured, return error dict if not.
+        
+        Note: If api_key_env is empty (e.g., for local providers like Ollama), skip the check.
+        """
+        # Skip check if api_key_env is empty (local providers like Ollama)
+        if not self.api_key_env:
+            return None
+        
+        api_key = os.environ.get(self.api_key_env) if self.api_key_env else ''
+        if not api_key:
+            api_key = config.llm.get('api_key', '')
+        
+        if not api_key:
+            return {
+                "error": {
+                    "message": "LLM API key not configured. Please configure api_key in webchat settings.",
+                    "type": "configuration_error",
+                    "code": "api_key_missing"
+                }
+            }
+        return None
 
     async def chat(self, **kwargs) -> Dict[str, Any]:
         raise NotImplementedError
@@ -172,6 +195,11 @@ class BaseProvider:
 
     async def _call_api(self, endpoint: str, payload: Dict) -> Dict:
         """Make API call with retry logic and debug logging."""
+        # Check if API key is configured
+        error = self._check_api_key()
+        if error:
+            return error
+        
         headers = self._get_headers()
         url = f"{self.api_base}{endpoint}"
 
@@ -395,6 +423,17 @@ class GitHubCopilotProvider(BaseProvider):
         reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Call GitHub Copilot Chat API."""
+        # Check if API key is configured
+        api_key = os.environ.get('GITHUB_COPILOT_TOKEN') or config.llm.get('api_key', '')
+        if not api_key:
+            return {
+                "error": {
+                    "message": "LLM API key not configured. Please configure api_key in webchat settings.",
+                    "type": "configuration_error",
+                    "code": "api_key_missing"
+                }
+            }
+        
         import os
         headers = {
             "Authorization": f"Bearer {os.environ.get('GITHUB_COPILOT_TOKEN', config.llm.get('api_key', ''))}",
@@ -537,6 +576,17 @@ class ClaudeProvider(BaseProvider):
         reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Call Anthropic Claude API."""
+        # Check if API key is configured
+        api_key = os.environ.get('ANTHROPIC_API_KEY') or config.llm.get('api_key', '')
+        if not api_key:
+            return {
+                "error": {
+                    "message": "LLM API key not configured. Please configure api_key in webchat settings.",
+                    "type": "configuration_error",
+                    "code": "api_key_missing"
+                }
+            }
+        
         all_messages = []
         for msg in messages:
             if msg["role"] == "system" and system_prompt:
