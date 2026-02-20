@@ -1,17 +1,82 @@
 """Configuration loader for Engineering Flow Platform."""
 
+import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ruamel.yaml import YAML
 
+
+logger = logging.getLogger(__name__)
 
 # Module-level YAML instance for reuse
 _yaml = YAML()
 _yaml.preserve_quotes = True
 _yaml.indent(mapping=2, sequence=4, offset=2)
+
+
+class ServiceReloadManager:
+    """Manager for services that need to be reinitialized when config changes."""
+    
+    def __init__(self):
+        self._services: Dict[str, Callable[[], None]] = {}
+    
+    def register(self, name: str, reinit_func: Callable[[], None]) -> None:
+        """Register a service for reinitialization on config change.
+        
+        Args:
+            name: Service name (e.g., 'llm', 'jira', 'discord')
+            reinit_func: Function to call to reinitialize the service
+        """
+        self._services[name] = reinit_func
+        logger.debug(f"Registered service for config reload: {name}")
+    
+    def unregister(self, name: str) -> None:
+        """Unregister a service."""
+        if name in self._services:
+            del self._services[name]
+    
+    def reload_all(self, changed_sections: List[str]) -> Dict[str, bool]:
+        """Reload all registered services that match changed config sections.
+        
+        Args:
+            changed_sections: List of config sections that changed (e.g., ['llm', 'jira'])
+        
+        Returns:
+            Dict mapping service names to reload success status
+        """
+        results = {}
+        
+        # Map config sections to services
+        section_to_services = {
+            'llm': ['llm'],
+            'jira': ['jira'],
+            'confluence': ['confluence'],
+            'github': ['github'],
+            'git': ['git'],
+            'discord': ['discord'],
+            'session': ['session'],
+        }
+        
+        for section in changed_sections:
+            services = section_to_services.get(section, [])
+            for service_name in services:
+                if service_name in self._services:
+                    try:
+                        logger.info(f"Reloading service: {service_name}")
+                        self._services[service_name]()
+                        results[service_name] = True
+                    except Exception as e:
+                        logger.error(f"Failed to reload service {service_name}: {e}")
+                        results[service_name] = False
+        
+        return results
+
+
+# Global service reload manager
+service_reload_manager = ServiceReloadManager()
 
 
 class Config:
@@ -60,8 +125,16 @@ class Config:
         """Return the path to the loaded config file."""
         return str(self.config_path)
 
-    def reload(self) -> bool:
-        """Reload configuration from file."""
+    def reload(self, changed_sections: Optional[List[str]] = None) -> bool:
+        """Reload configuration from file and optionally notify services.
+        
+        Args:
+            changed_sections: Optional list of config sections that changed.
+                             If provided, registered services will be reinitialized.
+        
+        Returns:
+            True if config was reloaded, False otherwise.
+        """
         if not self.config_path.exists():
             return False
         
@@ -69,6 +142,14 @@ class Config:
             current_mtime = self.config_path.stat().st_mtime
             if current_mtime > self._last_modified:
                 self.load()
+                # Notify registered services if sections are specified
+                if changed_sections:
+                    results = service_reload_manager.reload_all(changed_sections)
+                    for service, success in results.items():
+                        if success:
+                            logger.info(f"Service reloaded: {service}")
+                        else:
+                            logger.warning(f"Service reload failed: {service}")
                 return True
         except Exception:
             pass
