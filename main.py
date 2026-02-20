@@ -69,7 +69,8 @@ def check_config() -> tuple[bool, list[str]]:
     llm_api_key = config.llm.get("api_key")
     if not llm_api_key:
         warnings.append("LLM api_key is not configured (Agent will not respond to messages)")
-        can_start = False
+        # Allow startup without api_key - user can configure via webchat settings
+        # can_start = False  # Disabled: allow startup without api_key
     
     return can_start, warnings
 
