@@ -91,10 +91,11 @@ class GitHubChannel:
     def reinit(self):
         """Reinitialize GitHubChannel (called when config changes)."""
         logger.info("Reinitializing GitHubChannel...")
-        self.base_url = config.get("github.base_url", "https://api.github.com")
-        self.token = config.get("github.api_token", "")
-        self.enabled = config.get("github.enabled", False)
-        self.hostname = config.get("github.hostname", "")
+        github_config = config.github or {}
+        self.base_url = github_config.get("base_url", "https://api.github.com")
+        self.token = github_config.get("api_token", "")
+        self.enabled = github_config.get("enabled", False)
+        self.hostname = github_config.get("hostname", "")
         
         self._headers = {
             "Accept": "application/vnd.github.v3+json",
@@ -486,23 +487,6 @@ class GitHubChannel:
             f"/repos/{owner}/{repo}/commits",
             params=params
         )
-    
-    def reinit(self):
-        """Reinitialize GitHubChannel (called when config changes)."""
-        logger.info("Reinitializing GitHubChannel...")
-        self.base_url = config.get("github.base_url", "https://api.github.com")
-        self.token = config.get("github.api_token", "")
-        self.enabled = config.get("github.enabled", False)
-        self.hostname = config.get("github.hostname", "")
-        
-        self._headers = {
-            "Accept": "application/vnd.github.v3+json",
-            "User-Agent": "Engineering Flow Platform-Mini",
-        }
-        if self.token:
-            self._headers["Authorization"] = f"Bearer {self.token}"
-        
-        logger.info("GitHubChannel reinitialized")
     
     async def close(self):
         """Close the HTTP client."""

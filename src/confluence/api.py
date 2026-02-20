@@ -357,17 +357,6 @@ class ConfluenceChannel:
         await self._request("DELETE", f"/content/{page_id}/label/{label}")
         return True
     
-    def reinit(self):
-        """Reinitialize ConfluenceChannel (called when config changes)."""
-        logger.info("Reinitializing ConfluenceChannel...")
-        self.base_url = config.confluence.get("url", "").rstrip("/")
-        self.username = config.confluence.get("username", "")
-        self.api_token = config.confluence.get("api_token", "")
-        self.space = config.confluence.get("space", "")
-        self.enabled = config.confluence.get("enabled", False)
-        self._auth_header = self._get_auth_header()
-        logger.info("ConfluenceChannel reinitialized")
-    
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()
