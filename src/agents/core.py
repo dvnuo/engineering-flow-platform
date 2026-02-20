@@ -464,6 +464,17 @@ You have access to the following tools. When a user asks you to do something tha
                 reasoning_replay=enable_reasoning,
             )
             
+            # Check for LLM configuration error
+            if llm_result.get("error"):
+                error_info = llm_result["error"]
+                error_msg = error_info.get("message", "Unknown LLM error")
+                logger.error(f"LLM error: {error_msg}")
+                return {
+                    "error": error_msg,
+                    "error_type": error_info.get("type", "llm_error"),
+                    "code": error_info.get("code", "")
+                }
+            
             # Debug logging for LLM response
             if _is_debug_enabled():
                 logger.debug(f"=== [AGENT] LLM RESPONSE (iter {iteration}) ===")
