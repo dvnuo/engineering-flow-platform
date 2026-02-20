@@ -86,6 +86,31 @@ class JiraChannel:
         
         logger.info(f"JiraChannel initialized: version={self.api_version}, timeout={self.timeout}s, auth={self._auth_type}")
     
+    def reinit(self):
+        """Reinitialize JiraChannel (called when config changes)."""
+        logger.info("Reinitializing JiraChannel...")
+        self.base_url = config.jira.get("url", "").rstrip("/")
+        self.username = config.jira.get("username", "")
+        self.api_token = config.jira.get("api_token", "")
+        self.password = config.jira.get("password", "")
+        self.bearer_token = config.jira.get("bearer_token", "")
+        self.project = config.jira.get("project", "")
+        self.enabled = config.jira.get("enabled", False)
+        
+        api_version = config.jira.get("api_version", "2")
+        if api_version not in self.VALID_API_VERSIONS:
+            api_version = "2"
+        self.api_version = api_version
+        
+        timeout = config.jira.get("timeout", 30.0)
+        self.timeout = float(timeout)
+        
+        self.client = httpx.AsyncClient(timeout=self.timeout)
+        self._auth_header = self._get_auth_header()
+        self._auth_type = self._get_auth_type()
+        
+        logger.info("JiraChannel reinitialized")
+    
     def _get_auth_type(self) -> str:
         """Determine authentication type based on configuration."""
         if self.bearer_token:
@@ -583,6 +608,10 @@ class JiraChannel:
 
 # Global channel instance
 jira_channel = JiraChannel()
+
+# Register for config reload
+from src.config import service_reload_manager
+service_reload_manager.register('jira', jira_channel.reinit)
 
 
 # ========== Tool Functions for Agent ==========

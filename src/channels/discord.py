@@ -137,6 +137,34 @@ class DiscordChannel:
                 self.bot.message_callback = callback
         else:
             logger.warning("Message callback only works in Bot API mode")
+    
+    def reinit(self):
+        """Reinitialize DiscordChannel (called when config changes).
+        
+        Note: For bot token changes, a full restart is required.
+        This method updates runtime configuration for channel_id and webhook_url.
+        """
+        logger.info("Reinitializing DiscordChannel...")
+        
+        old_mode = self.mode
+        old_channel_id = self.channel_id
+        
+        # Update config values
+        self.mode = config.discord.get("mode", "bot")
+        self.channel_id = config.discord.get("channel_id", "")
+        self.webhook_url = config.discord.get("webhook_url", "")
+        self.headers = {
+            "Authorization": f"Bot {config.discord.get('bot_token', '')}",
+            "Content-Type": "application/json",
+        }
+        
+        # Log changes
+        if old_mode != self.mode:
+            logger.warning(f"Discord mode changed from {old_mode} to {self.mode} - restart required")
+        if old_channel_id != self.channel_id:
+            logger.info(f"Discord channel_id updated to {self.channel_id}")
+        
+        logger.info("DiscordChannel reinitialized (note: bot token changes require restart)")
 
     async def start(self, message_callback: Optional[Callable] = None) -> None:
         """Start the Discord channel adapter."""
@@ -229,6 +257,10 @@ class DiscordChannel:
 
 # Global Discord channel instance
 discord_channel = DiscordChannel()
+
+# Register for config reload
+from src.config import service_reload_manager
+service_reload_manager.register('discord', discord_channel.reinit)
 
 
 async def run_bot(message_callback: Optional[Callable] = None):

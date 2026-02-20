@@ -883,6 +883,14 @@ class LLMClient:
         
         logger.info(f"LLMClient initialized with providers: {list(self.providers.keys())}")
     
+    def reinit(self):
+        """Reinitialize LLM providers (called when config changes)."""
+        logger.info("Reinitializing LLM providers...")
+        self.providers = {}
+        self.default_provider = None
+        self._init_providers()
+        logger.info("LLM providers reinitialized")
+    
     # Backward compatibility methods
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for API requests (backward compatibility)."""
@@ -967,3 +975,7 @@ class LLMClient:
 
 # Global client instance
 llm_client = LLMClient()
+
+# Register for config reload
+from src.config import service_reload_manager
+service_reload_manager.register('llm', llm_client.reinit)

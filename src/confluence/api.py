@@ -44,6 +44,17 @@ class ConfluenceChannel:
         """Check if Confluence is properly configured."""
         return bool(self.base_url and self.username and self.api_token and self.enabled)
     
+    def reinit(self):
+        """Reinitialize ConfluenceChannel (called when config changes)."""
+        logger.info("Reinitializing ConfluenceChannel...")
+        self.base_url = config.confluence.get("url", "").rstrip("/")
+        self.username = config.confluence.get("username", "")
+        self.api_token = config.confluence.get("api_token", "")
+        self.space = config.confluence.get("space", "")
+        self.enabled = config.confluence.get("enabled", False)
+        self._auth_header = self._get_auth_header()
+        logger.info("ConfluenceChannel reinitialized")
+    
     async def _request(
         self,
         method: str,
@@ -346,6 +357,17 @@ class ConfluenceChannel:
         await self._request("DELETE", f"/content/{page_id}/label/{label}")
         return True
     
+    def reinit(self):
+        """Reinitialize ConfluenceChannel (called when config changes)."""
+        logger.info("Reinitializing ConfluenceChannel...")
+        self.base_url = config.confluence.get("url", "").rstrip("/")
+        self.username = config.confluence.get("username", "")
+        self.api_token = config.confluence.get("api_token", "")
+        self.space = config.confluence.get("space", "")
+        self.enabled = config.confluence.get("enabled", False)
+        self._auth_header = self._get_auth_header()
+        logger.info("ConfluenceChannel reinitialized")
+    
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()
@@ -353,6 +375,10 @@ class ConfluenceChannel:
 
 # Global channel instance
 confluence_channel = ConfluenceChannel()
+
+# Register for config reload
+from src.config import service_reload_manager
+service_reload_manager.register('confluence', confluence_channel.reinit)
 
 
 # ========== Tool Functions for Agent ==========

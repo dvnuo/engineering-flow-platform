@@ -88,6 +88,23 @@ class GitHubChannel:
         """Check if GitHub is properly configured."""
         return bool(self.token and self.enabled)
     
+    def reinit(self):
+        """Reinitialize GitHubChannel (called when config changes)."""
+        logger.info("Reinitializing GitHubChannel...")
+        self.base_url = config.get("github.base_url", "https://api.github.com")
+        self.token = config.get("github.api_token", "")
+        self.enabled = config.get("github.enabled", False)
+        self.hostname = config.get("github.hostname", "")
+        
+        self._headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "Engineering Flow Platform-Mini",
+        }
+        if self.token:
+            self._headers["Authorization"] = f"Bearer {self.token}"
+        
+        logger.info("GitHubChannel reinitialized")
+    
     async def _request(
         self,
         method: str,
@@ -470,6 +487,23 @@ class GitHubChannel:
             params=params
         )
     
+    def reinit(self):
+        """Reinitialize GitHubChannel (called when config changes)."""
+        logger.info("Reinitializing GitHubChannel...")
+        self.base_url = config.get("github.base_url", "https://api.github.com")
+        self.token = config.get("github.api_token", "")
+        self.enabled = config.get("github.enabled", False)
+        self.hostname = config.get("github.hostname", "")
+        
+        self._headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "Engineering Flow Platform-Mini",
+        }
+        if self.token:
+            self._headers["Authorization"] = f"Bearer {self.token}"
+        
+        logger.info("GitHubChannel reinitialized")
+    
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()
@@ -477,6 +511,10 @@ class GitHubChannel:
 
 # Global instance
 github_channel = GitHubChannel()
+
+# Register for config reload
+from src.config import service_reload_manager
+service_reload_manager.register('github', github_channel.reinit)
 
 
 # ========== Tool Functions ==========
