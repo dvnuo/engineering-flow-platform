@@ -138,7 +138,9 @@ class Config:
         
         try:
             current_mtime = self.config_path.stat().st_mtime
-            if current_mtime > self._last_modified:
+            # Force reload if changed_sections is provided (user explicitly saved config)
+            # Otherwise only reload if file was modified
+            if changed_sections or current_mtime > self._last_modified:
                 self.load()
                 # Notify registered services if sections are specified
                 if changed_sections:
