@@ -1,6 +1,5 @@
 """Channel package for Engineering Flow Platform."""
 
-from .discord import discord_channel, DiscordChannel
 from .jira import (
     jira_channel,
     JiraChannel,
@@ -14,8 +13,6 @@ from .jira import (
 )
 
 __all__ = [
-    "discord_channel",
-    "DiscordChannel",
     "jira_channel",
     "JiraChannel",
     "jira_get_issue",

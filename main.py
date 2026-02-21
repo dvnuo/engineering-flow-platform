@@ -58,13 +58,6 @@ def check_config() -> tuple[bool, list[str]]:
     warnings = []
     can_start = True
     
-    # Check Discord configuration
-    discord_enabled = config.discord.get("enabled", False)
-    discord_token = config.discord.get("bot_token", "")
-    
-    if discord_enabled and not discord_token:
-        warnings.append("Discord enabled but bot_token not configured")
-    
     # Check LLM configuration
     llm_api_key = config.llm.get("api_key")
     if not llm_api_key:
