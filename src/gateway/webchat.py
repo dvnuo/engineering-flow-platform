@@ -134,6 +134,15 @@ async def api_chat(request: web.Request) -> web.Response:
         if not message:
             return web.json_response({'error': 'Empty message'}, status=400)
         
+        # Check if LLM is configured before processing
+        api_key = config.llm.get('api_key')
+        if not api_key:
+            return web.json_response({
+                'error': 'LLM not configured',
+                'message': 'Please configure LLM API key in Settings to use the chat feature.',
+                'code': 'llm_not_configured'
+            }, status=503)
+        
         logger.info(f"[api_chat] Processing message for session: {session_id}")
         
         # Initialize session manager if needed
