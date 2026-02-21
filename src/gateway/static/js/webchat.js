@@ -1788,7 +1788,7 @@
             const provider = llmProvider.value;
             let apiBase = '';
             if (provider === 'github_copilot') {
-                apiBase = 'https://api.github.com/copilot';
+                apiBase = 'https://api.githubcopilot.com/chat';
             } else if (provider === 'anthropic') {
                 apiBase = 'https://api.anthropic.com/v1';
             } else if (provider === 'ollama') {
