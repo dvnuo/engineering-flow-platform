@@ -86,7 +86,7 @@ class Config:
     """
     
     DEFAULT_PATHS = [
-        Path(__file__).parent / "config.yaml",  # Project directory
+        Path(__file__).parent.parent / "config.yaml",  # Project directory (same as webchat.py)
         Path.home() / ".efp" / "config.yaml",  # User config directory
     ]
 
