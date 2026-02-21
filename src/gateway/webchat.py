@@ -668,6 +668,8 @@ async def api_save_config(request: web.Request) -> web.Response:
         # Determine which sections changed and reload services
         updated_sections = [s for s in sections if s in data]
         from src.config import config
+        if not config.config_path.exists():
+            config.config_path = config_path
         config.reload(changed_sections=updated_sections)
         
         return web.json_response({
