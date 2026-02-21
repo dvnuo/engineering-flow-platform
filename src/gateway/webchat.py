@@ -174,9 +174,11 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Record usage if available
         if usage:
+            provider = config.llm.get('provider', 'openai')
+            model = config.llm.get('model', 'gpt-4o')
             usage_tracker.record_usage(
-                provider="openai",
-                model=config.llm.get('model', 'unknown'),
+                provider=provider,
+                model=model,
                 input_tokens=usage.get("prompt_tokens", 0),
                 output_tokens=usage.get("completion_tokens", 0),
                 session_id=session_id,
@@ -309,9 +311,11 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         
         # Record usage
         if usage:
+            provider = config.llm.get('provider', 'openai')
+            model = config.llm.get('model', 'gpt-4o')
             usage_tracker.record_usage(
-                provider="openai",
-                model=config.llm.get('model', 'unknown'),
+                provider=provider,
+                model=model,
                 input_tokens=usage.get("prompt_tokens", 0),
                 output_tokens=usage.get("completion_tokens", 0),
                 session_id=session_id,
