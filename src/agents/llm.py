@@ -407,10 +407,10 @@ class GitHubCopilotProvider(BaseProvider):
     def __init__(self):
         super().__init__(
             name="github_copilot",
-            api_base="https://api.github.com/copilot",
+            api_base=config.llm.get('api_base', 'https://api.githubcopilot.com'),
             api_key_env='GITHUB_COPILOT_TOKEN'
         )
-        self.default_model = config.llm.get('model', 'gpt-4')
+        self.default_model = config.llm.get('model', 'gpt-5-mini')
     
     async def chat(
         self,
@@ -551,7 +551,7 @@ class ClaudeProvider(BaseProvider):
     def __init__(self):
         super().__init__(
             name="claude",
-            api_base="https://api.anthropic.com",
+            api_base=config.llm.get('api_base', 'https://api.anthropic.com'),
             api_key_env='ANTHROPIC_API_KEY'
         )
         self.default_model = "claude-sonnet-4-20250514"
@@ -726,7 +726,7 @@ class OllamaProvider(BaseProvider):
     def __init__(self):
         super().__init__(
             name="ollama",
-            api_base="http://127.0.0.1:11434",
+            api_base=config.llm.get('api_base', 'http://127.0.0.1:11434'),
             api_key_env=''
         )
         self.default_model = "llama3"
