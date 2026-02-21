@@ -407,7 +407,7 @@ class GitHubCopilotProvider(BaseProvider):
     def __init__(self):
         super().__init__(
             name="github_copilot",
-            api_base=config.llm.get('api_base', 'https://api.github.com/copilot'),
+            api_base=config.llm.get('api_base', 'https://api.githubcopilot.com'),
             api_key_env='GITHUB_COPILOT_TOKEN'
         )
         self.default_model = config.llm.get('model', 'gpt-5-mini')
