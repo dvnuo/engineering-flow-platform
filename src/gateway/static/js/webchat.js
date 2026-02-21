@@ -1788,7 +1788,7 @@
             const provider = llmProvider.value;
             let apiBase = '';
             if (provider === 'github_copilot') {
-                apiBase = 'https://api.githubcopilot.com/chat';
+                apiBase = 'https://api.githubcopilot.com';
             } else if (provider === 'anthropic') {
                 apiBase = 'https://api.anthropic.com/v1';
             } else if (provider === 'ollama') {
@@ -1845,7 +1845,6 @@
                 
                 const data = await response.json();
                 if (data.success) {
-                    alert('Configuration saved! Please restart the server for changes to take effect.');
                     settingsPanel.classList.remove('show');
                 } else {
                     alert('Error saving configuration: ' + (data.error || 'Unknown error'));
