@@ -175,7 +175,7 @@ async def api_chat(request: web.Request) -> web.Response:
         # Record usage if available
         if usage:
             provider = config.llm.get('provider', 'openai')
-            model = config.llm.get('model', 'gpt-4o')
+            model = config.llm.get('model', 'gpt-5-mini')
             usage_tracker.record_usage(
                 provider=provider,
                 model=model,
@@ -312,7 +312,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         # Record usage
         if usage:
             provider = config.llm.get('provider', 'openai')
-            model = config.llm.get('model', 'gpt-4o')
+            model = config.llm.get('model', 'gpt-5-mini')
             usage_tracker.record_usage(
                 provider=provider,
                 model=model,
