@@ -15,7 +15,7 @@ llm:
   
   # Or GitHub Copilot Configuration
   # provider: "github_copilot"
-  # api_base: "https://api.githubcopilot.com/chat"
+  # api_base: "https://api.githubcopilot.com"
   # api_key: "ghp_YOUR_GITHUB_TOKEN"
   # model: "gpt-5-mini"
   
