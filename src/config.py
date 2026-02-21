@@ -27,7 +27,7 @@ class ServiceReloadManager:
         """Register a service for reinitialization on config change.
         
         Args:
-            name: Service name (e.g., 'llm', 'jira', 'discord')
+            name: Service name (e.g., 'llm', 'jira', 'confluence')
             reinit_func: Function to call to reinitialize the service
         """
         self._services[name] = reinit_func
@@ -55,7 +55,6 @@ class ServiceReloadManager:
             'jira': ['jira'],
             'confluence': ['confluence'],
             'github': ['github'],
-            'discord': ['discord'],
             'session': ['session'],
         }
         
@@ -172,11 +171,6 @@ class Config:
             if value is None:
                 return default
         return value
-
-    @property
-    def discord(self) -> Dict[str, Any]:
-        """Get Discord configuration."""
-        return self._config.get("discord", {})
 
     @property
     def llm(self) -> Dict[str, Any]:

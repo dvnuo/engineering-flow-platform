@@ -1,8 +1,6 @@
 """Gateway server for Engineering Flow Platform."""
 
 import asyncio
-import hashlib
-import hmac
 import json
 import logging
 import sys
@@ -13,10 +11,9 @@ from aiohttp import web
 from aiohttp.web import Request
 
 from src.agents.core import agent
-from src.channels.discord import discord_channel
 from src.channels.jira import jira_channel
 from src.config import config
-from src.sessions.manager import DISCORD_SESSION_PREFIX, JIRA_SESSION_PREFIX
+from src.sessions.manager import JIRA_SESSION_PREFIX
 
 
 # Lazy import webchat to avoid circular dependency
@@ -34,38 +31,6 @@ def get_traceback_str() -> str:
     if exc_info[0]:
         return "".join(traceback.format_exception(*exc_info))
     return "N/A"
-
-
-def verify_discord_signature(payload: bytes, signature: str, secret: str) -> bool:
-    """Verify Discord webhook signature."""
-    if not signature or not secret:
-        return True  # Skip verification if secret not configured
-    
-    expected = hmac.new(
-        secret.encode("utf-8"),
-        payload,
-        hashlib.sha256,
-    ).hexdigest()
-    
-    return hmac.compare_digest(signature, f"sha256={expected}")
-
-
-async def handle_discord_message(message: str, session_id: str, user_name: str) -> str:
-    """Handle a Discord message and return response."""
-    try:
-        logger.info(f"Processing Discord message | session_id={session_id} | user={user_name}")
-        result = await agent.process(
-            message=message,
-            session_id=session_id,
-            user_name=user_name,
-        )
-        response = result["response"]
-        logger.info(f"Message processed successfully | session_id={session_id}")
-        return response
-    except Exception as e:
-        tb_str = get_traceback_str()
-        logger.error(f"Error processing Discord message | session_id={session_id} | error={e}", exc_info=True)
-        return f"Sorry, I encountered an error: {str(e)}"
 
 
 async def handle_jira_message(
@@ -114,9 +79,7 @@ class Gateway:
     """Simple HTTP/WebSocket gateway for Engineering Flow Platform."""
 
     def __init__(self):
-        self.mode = config.discord.get("mode", "bot")  # 'bot' or 'webhook'
         self.jira_enabled = config.jira.get("enabled", False)
-        self.discord_enabled = config.discord.get("enabled", False)  # Discord is optional by default
         self.host = config.server.get("host", "0.0.0.0")
         self.port = config.server.get("port", 8000)
         self.app = web.Application()
@@ -138,10 +101,7 @@ class Gateway:
         self.app.router.add_get("/api/settings/ollama/models", self.handle_ollama_models)
         self.app.router.add_post("/api/settings/ollama/pull", self.handle_ollama_pull)
 
-        # Webhook routes (only if Discord is enabled)
-        if self.discord_enabled and self.mode == "webhook":
-            self.app.router.add_post("/webhook/discord", self.handle_discord_webhook)
-        
+        # Webhook routes
         if self.jira_enabled:
             self.app.router.add_post("/webhook/jira", self.handle_jira_webhook)
 
@@ -161,75 +121,8 @@ class Gateway:
         """Health check endpoint."""
         return web.json_response({
             "status": "ok", 
-            "service": "engineering-flow-platform",
-            "mode": self.mode
+            "service": "engineering-flow-platform"
         })
-
-    async def handle_discord_webhook(self, request: Request) -> web.Response:
-        """Handle Discord webhook events."""
-        try:
-            # Read raw body for signature verification
-            body = await request.read()
-            
-            # Verify Discord signature
-            signature = request.headers.get("X-Signature-SHA256", "")
-            webhook_secret = config.discord.get("webhook_secret", "")
-            
-            if not verify_discord_signature(body, signature, webhook_secret):
-                logger.warning("Invalid Discord webhook signature")
-                return web.json_response({"status": "error", "message": "Invalid signature"}, status=401)
-
-            payload = json.loads(body)
-
-            # Handle different event types
-            event_type = payload.get("type", 0)
-
-            if event_type == 1:
-                # Discord PING event - respond immediately
-                return web.json_response({"type": 1})
-
-            # Handle message events
-            if event_type == 0:
-                data = payload.get("d", {})
-
-                # Skip bot messages
-                if data.get("author", {}).get("bot", False):
-                    return web.json_response({"status": "ignored", "reason": "bot_message"})
-
-                # Extract message content
-                content = data.get("content", "").strip()
-                channel_id = data.get("channel_id")
-                message_id = data.get("id")
-                guild_id = data.get("guild_id", "")
-
-                if not content:
-                    return web.json_response({"status": "ignored", "reason": "empty_message"})
-
-                # Create session ID with consistent prefix
-                session_id = f"{DISCORD_SESSION_PREFIX}{guild_id}:{channel_id}"
-
-                # Get username
-                username = data.get("author", {}).get("username", "unknown")
-
-                # Process message through agent
-                response = await handle_discord_message(content, session_id, username)
-
-                # Send response to Discord
-                await discord_channel.send_message(response, channel_id)
-
-                logger.info(f"Processed message {message_id} from {username}")
-
-                return web.json_response({
-                    "status": "processed",
-                    "message_id": message_id,
-                })
-
-            return web.json_response({"status": "ok"})
-
-        except Exception as e:
-            tb_str = get_traceback_str()
-            logger.error(f"Discord webhook error | error={e} | traceback={tb_str[:200]}", exc_info=True)
-            return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def handle_list_sessions(self, request: Request) -> web.Response:
         """List all active sessions with details.
@@ -342,9 +235,6 @@ class Gateway:
                 "api_base": config.llm.get("api_base"),
                 "temperature": config.llm.get("temperature"),
                 "max_tokens": config.llm.get("max_tokens"),
-            },
-            "discord": {
-                "enabled": bool(config.discord.get("bot_token")),
             },
             "jira": {
                 "enabled": bool(config.jira.get("webhook_url")),
@@ -533,69 +423,20 @@ class Gateway:
 
     async def start(self) -> None:
         """Start the gateway server."""
-        # Check if Discord is configured
-        discord_token = config.discord.get("bot_token", "")
-        discord_webhook_url = config.discord.get("webhook_url", "")
-        discord_configured = bool(discord_token) or bool(discord_webhook_url)
-        
-        if self.mode == "bot" and discord_configured:
-            # Bot API mode - start Discord bot and HTTP server in parallel
-            # Use create_task because discord_channel.start() blocks
-            bot_task = asyncio.create_task(discord_channel.start(message_callback=handle_discord_message))
-            
-            # Small delay to let bot start
-            await asyncio.sleep(2)
-            
-            # Start HTTP server for API endpoints (including test endpoint)
-            self.runner = web.AppRunner(self.app)
-            await self.runner.setup()
-            self.site = web.TCPSite(self.runner, self.host, self.port)
-            await self.site.start()
-            
-            logger.info(f"Gateway started in Bot API mode on http://{self.host}:{self.port}")
-        elif self.mode == "webhook" and discord_configured:
-            # Webhook mode - start HTTP server and Discord session
-            await discord_channel.start()
-            
-            # Start HTTP server
-            self.runner = web.AppRunner(self.app)
-            await self.runner.setup()
-            self.site = web.TCPSite(self.runner, self.host, self.port)
-            await self.site.start()
+        # Start HTTP server
+        self.runner = web.AppRunner(self.app)
+        await self.runner.setup()
+        self.site = web.TCPSite(self.runner, self.host, self.port)
+        await self.site.start()
 
-            logger.info(f"Gateway started on http://{self.host}:{self.port} (Webhook mode)")
-        else:
-            # Discord not configured - start HTTP server only
-            self.runner = web.AppRunner(self.app)
-            await self.runner.setup()
-            self.site = web.TCPSite(self.runner, self.host, self.port)
-            await self.site.start()
-
-            logger.info(f"Gateway started on http://{self.host}:{self.port} (Discord disabled - no token configured)")
+        logger.info(f"Gateway started on http://{self.host}:{self.port}")
 
         # Jira channel is initialized in __init__ with HTTP client ready
-        # No explicit start_session needed since client is created on import
         if self.jira_enabled and jira_channel.is_configured():
             logger.info("Jira channel enabled and ready")
 
-        # Log Discord status
-        if not discord_configured:
-            logger.info("Discord channel is disabled (no bot_token or webhook_url configured)")
-
     async def stop(self) -> None:
         """Stop the gateway server."""
-        # Stop Discord if it was started
-        discord_token = config.discord.get("bot_token", "")
-        discord_webhook_url = config.discord.get("webhook_url", "")
-        discord_configured = bool(discord_token) or bool(discord_webhook_url)
-        
-        if discord_configured:
-            try:
-                await discord_channel.stop()
-                logger.info("Discord channel stopped")
-            except Exception as e:
-                logger.warning(f"Error stopping Discord channel: {e}")
-        
         # Close Jira client if it was initialized
         if self.jira_enabled:
             try:

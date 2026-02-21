@@ -12,9 +12,6 @@ from src.sessions.persistence import session_persistence
 
 logger = logging.getLogger(__name__)
 
-# Session ID prefix for Discord channels
-DISCORD_SESSION_PREFIX = "discord:"
-
 # Session ID prefix for Jira issues
 JIRA_SESSION_PREFIX = "jira:"
 
