@@ -1784,11 +1784,25 @@
     
     if (saveSettingsBtn) {
         saveSettingsBtn.addEventListener('click', async function() {
+            // Determine api_base based on selected provider
+            const provider = llmProvider.value;
+            let apiBase = '';
+            if (provider === 'github_copilot') {
+                apiBase = 'https://api.github.com/copilot';
+            } else if (provider === 'anthropic') {
+                apiBase = 'https://api.anthropic.com/v1';
+            } else if (provider === 'ollama') {
+                apiBase = 'http://127.0.0.1:11434';
+            } else {
+                apiBase = 'https://api.openai.com/v1';
+            }
+            
             const config = {
                 llm: {
-                    provider: llmProvider.value,
+                    provider: provider,
                     model: llmModel.value,
                     api_key: llmApiKey.value,
+                    api_base: apiBase,
                 },
                 jira: {
                     enabled: jiraEnabled.checked,
