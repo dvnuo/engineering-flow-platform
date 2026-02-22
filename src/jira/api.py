@@ -1008,4 +1008,301 @@ def get_tools_schemas() -> list:
                 }
             }
         },
+        # NOTE: jira_create_issue, jira_transition, jira_get_transitions, jira_get_comments
+        # functions exist but schemas need to be added - adding below
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_create_issue",
+                "description": "Create a new Jira issue.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "project_key": {"type": "string", "description": "Project key (e.g., PROJ)"},
+                        "issue_type": {"type": "string", "description": "Issue type (e.g., Bug, Task, Story)", "default": "Task"},
+                        "summary": {"type": "string", "description": "Issue summary/title"},
+                        "description": {"type": "string", "description": "Issue description"}
+                    },
+                    "required": ["project_key", "summary"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_transition",
+                "description": "Transition a Jira issue to a new status (e.g., Done, In Progress).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"},
+                        "to_status": {"type": "string", "description": "Target status name (e.g., 'Done', 'In Progress')"}
+                    },
+                    "required": ["issue_key", "to_status"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_get_transitions",
+                "description": "Get available transitions for a Jira issue.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"}
+                    },
+                    "required": ["issue_key"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_get_comments",
+                "description": "Get all comments on a Jira issue.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"}
+                    },
+                    "required": ["issue_key"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_update_issue",
+                "description": "Update a Jira issue's summary and/or description.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"},
+                        "summary": {"type": "string", "description": "New summary (optional)"},
+                        "description": {"type": "string", "description": "New description (optional)"}
+                    },
+                    "required": ["issue_key"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_assign_issue",
+                "description": "Assign a Jira issue to a user.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"},
+                        "assignee": {"type": "string", "description": "Username or email to assign to"}
+                    },
+                    "required": ["issue_key", "assignee"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_get_projects",
+                "description": "Get all accessible Jira projects.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_get_components",
+                "description": "Get all components for a Jira project.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "project_key": {"type": "string", "description": "Project key (e.g., PROJ)"}
+                    },
+                    "required": ["project_key"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_get_versions",
+                "description": "Get all versions for a Jira project.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "project_key": {"type": "string", "description": "Project key (e.g., PROJ)"}
+                    },
+                    "required": ["project_key"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_get_worklog",
+                "description": "Get work logs for a Jira issue.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"}
+                    },
+                    "required": ["issue_key"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_add_worklog",
+                "description": "Add work log to a Jira issue.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"},
+                        "time_spent": {"type": "string", "description": "Time spent (e.g., '2h 30m', '1w')"},
+                        "comment": {"type": "string", "description": "Work log comment (optional)"}
+                    },
+                    "required": ["issue_key", "time_spent"]
+                }
+            }
+        },
     ]
+
+
+# ========== Additional Jira Tools ==========
+
+async def jira_update_issue(issue_key: str, summary: str = None, description: str = None) -> str:
+    """Update a Jira issue's summary and/or description."""
+    try:
+        data = {}
+        if summary:
+            data["fields"] = {"summary": summary}
+        if description:
+            if "fields" not in data:
+                data["fields"] = {}
+            data["fields"]["description"] = {
+                "type": "doc",
+                "version": 1,
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": description}]}]
+            }
+        
+        if not data:
+            return "Error: No fields to update"
+        
+        result = await jira_channel._request("PUT", f"/rest/api/3/issue/{issue_key}", data=data)
+        return f"Issue {issue_key} updated successfully"
+    except Exception as e:
+        return f"Error updating issue {issue_key}: {str(e)}"
+
+
+async def jira_assign_issue(issue_key: str, assignee: str = None) -> str:
+    """Assign a Jira issue to a user. Use empty string to unassign."""
+    try:
+        if assignee is None:
+            return "Error: assignee parameter is required"
+        
+        # Get accountId from username if needed
+        account_id = assignee
+        if "@" not in assignee:
+            # Search for user
+            user_search = await jira_channel._request(
+                "GET", 
+                f"/rest/api/3/user/search?query={assignee}"
+            )
+            if user_search and len(user_search) > 0:
+                account_id = user_search[0].get("accountId", assignee)
+        
+        data = {"accountId": account_id} if account_id else None
+        result = await jira_channel._request("PUT", f"/rest/api/3/issue/{issue_key}/assignee", data=data)
+        return f"Issue {issue_key} assigned to {assignee}"
+    except Exception as e:
+        return f"Error assigning issue {issue_key}: {str(e)}"
+
+
+async def jira_get_projects() -> str:
+    """Get all accessible Jira projects."""
+    try:
+        result = await jira_channel._request("GET", "/rest/api/3/project")
+        if not result:
+            return "No projects found or not authorized"
+        
+        projects = []
+        for p in result:
+            projects.append(f"- {p.get('key')}: {p.get('name')} (id: {p.get('id')})")
+        
+        return "Available Projects:\n" + "\n".join(projects)
+    except Exception as e:
+        return f"Error fetching projects: {str(e)}"
+
+
+async def jira_get_components(project_key: str) -> str:
+    """Get all components for a Jira project."""
+    try:
+        result = await jira_channel._request("GET", f"/rest/api/3/project/{project_key}/components")
+        if not result:
+            return f"No components found for project {project_key}"
+        
+        components = []
+        for c in result:
+            components.append(f"- {c.get('name')} (id: {c.get('id')})")
+        
+        return f"Components for {project_key}:\n" + "\n".join(components)
+    except Exception as e:
+        return f"Error fetching components: {str(e)}"
+
+
+async def jira_get_versions(project_key: str) -> str:
+    """Get all versions for a Jira project."""
+    try:
+        result = await jira_channel._request("GET", f"/rest/api/3/project/{project_key}/versions")
+        if not result:
+            return f"No versions found for project {project_key}"
+        
+        versions = []
+        for v in result:
+            released = "released" if v.get("released") else "unreleased"
+            versions.append(f"- {v.get('name')} ({released})")
+        
+        return f"Versions for {project_key}:\n" + "\n".join(versions)
+    except Exception as e:
+        return f"Error fetching versions: {str(e)}"
+
+
+async def jira_get_worklog(issue_key: str) -> str:
+    """Get work logs for a Jira issue."""
+    try:
+        result = await jira_channel._request("GET", f"/rest/api/3/issue/{issue_key}/worklog")
+        if not result or not result.get("worklogs"):
+            return f"No work logs found for {issue_key}"
+        
+        logs = []
+        for w in result["worklogs"]:
+            author = w.get("author", {}).get("displayName", "Unknown")
+            time_spent = w.get("timeSpent", 0)
+            started = w.get("started", "")[:10]
+            logs.append(f"- {author}: {time_spent}s on {started}")
+        
+        return f"Work logs for {issue_key}:\n" + "\n".join(logs)
+    except Exception as e:
+        return f"Error fetching worklog: {str(e)}"
+
+
+async def jira_add_worklog(issue_key: str, time_spent: str, comment: str = None) -> str:
+    """Add work log to a Jira issue. time_spent format: '2h 30m' or '2w' etc."""
+    try:
+        data = {"timeSpent": time_spent}
+        if comment:
+            data["comment"] = {
+                "type": "doc",
+                "version": 1,
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}]
+            }
+        
+        result = await jira_channel._request("POST", f"/rest/api/3/issue/{issue_key}/worklog", data=data)
+        return f"Work log added to {issue_key}: {time_spent}"
+    except Exception as e:
+        return f"Error adding worklog: {str(e)}"
