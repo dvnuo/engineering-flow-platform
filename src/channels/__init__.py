@@ -3,6 +3,15 @@
 from .jira import (
     jira_channel,
     JiraChannel,
+)
+
+from .confluence import (
+    confluence_channel,
+    ConfluenceChannel,
+)
+
+# Import tool functions from src.jira.api and src.confluence.api
+from src.jira.api import (
     jira_get_issue,
     jira_search,
     jira_add_comment,
@@ -19,9 +28,7 @@ from .jira import (
     jira_add_worklog,
 )
 
-from .confluence import (
-    confluence_channel,
-    ConfluenceChannel,
+from src.confluence.api import (
     confluence_get_page,
     confluence_search,
     confluence_create_page,
