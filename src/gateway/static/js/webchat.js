@@ -1704,6 +1704,31 @@
     let jiraInstancesData = [];
     let confluenceInstancesData = [];
     
+    // Expose functions globally for onclick handlers
+    window.addJiraInstance = function() {
+        jiraInstancesData = collectJiraInstances();
+        jiraInstancesData.push({ name: '', url: '', username: '', api_token: '', project: '' });
+        renderJiraInstances(jiraInstancesData);
+    };
+    
+    window.removeJiraInstance = function(index) {
+        jiraInstancesData = collectJiraInstances();
+        jiraInstancesData.splice(index, 1);
+        renderJiraInstances(jiraInstancesData);
+    };
+    
+    window.addConfluenceInstance = function() {
+        confluenceInstancesData = collectConfluenceInstances();
+        confluenceInstancesData.push({ name: '', url: '', username: '', api_token: '', space: '' });
+        renderConfluenceInstances(confluenceInstancesData);
+    };
+    
+    window.removeConfluenceInstance = function(index) {
+        confluenceInstancesData = collectConfluenceInstances();
+        confluenceInstancesData.splice(index, 1);
+        renderConfluenceInstances(confluenceInstancesData);
+    };
+    
     function renderJiraInstances(instances) {
         jiraInstancesData = instances || [];
         const container = document.getElementById('jiraInstancesContainer');
@@ -1726,16 +1751,6 @@
         `).join('') + `
             <button type="button" class="btn-add-instance" onclick="addJiraInstance()">+ Add Jira Instance</button>
         `;
-    }
-    
-    function addJiraInstance() {
-        jiraInstancesData.push({ name: '', url: '', username: '', api_token: '', project: '' });
-        renderJiraInstances(jiraInstancesData);
-    }
-    
-    function removeJiraInstance(index) {
-        jiraInstancesData.splice(index, 1);
-        renderJiraInstances(jiraInstancesData);
     }
     
     function collectJiraInstances() {
@@ -1778,16 +1793,6 @@
         `).join('') + `
             <button type="button" class="btn-add-instance" onclick="addConfluenceInstance()">+ Add Confluence Instance</button>
         `;
-    }
-    
-    function addConfluenceInstance() {
-        confluenceInstancesData.push({ name: '', url: '', username: '', api_token: '', space: '' });
-        renderConfluenceInstances(confluenceInstancesData);
-    }
-    
-    function removeConfluenceInstance(index) {
-        confluenceInstancesData.splice(index, 1);
-        renderConfluenceInstances(confluenceInstancesData);
     }
     
     function collectConfluenceInstances() {
