@@ -1910,11 +1910,11 @@
                 },
                 jira: {
                     enabled: jiraEnabled.checked,
-                    instances: jiraInstances,
+                    instances: collectJiraInstances(),
                 },
                 confluence: {
                     enabled: confluenceEnabled.checked,
-                    instances: confluenceInstances,
+                    instances: collectConfluenceInstances(),
                 },
                 github: {
                     enabled: githubEnabled.checked,
@@ -1935,10 +1935,6 @@
                     enabled: debugEnabled.checked,
                 },
             };
-            
-            // Collect Jira instances from UI
-            const jiraInstances = collectJiraInstances();
-            const confluenceInstances = collectConfluenceInstances();
             
             try {
                 const response = await fetch('/api/config/save', {
