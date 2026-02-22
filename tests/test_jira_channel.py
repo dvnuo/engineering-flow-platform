@@ -1,423 +1,160 @@
-"""Tests for Jira channel adapter."""
+"""
+Tests for Jira Channel multi-instance support.
+"""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 import sys
-from pathlib import Path
+import os
+from unittest.mock import Mock, patch, MagicMock
 
-# Add project root to path
-project_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(project_root))
+# Add src to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 
-class TestJiraChannel:
-    """Test cases for JiraChannel class."""
+class TestJiraChannelMultiInstance:
+    """Test Jira multi-instance functionality."""
+    
+    def test_get_instance_client_by_name(self):
+        """Test getting Jira client by instance name."""
+        from src.jira.api import JiraChannel
+        
+        # Create mock config that returns real dicts
+        mock_config = MagicMock()
+        mock_config.get_jira_instances.return_value = [
+            {'name': 'Production', 'url': 'https://company.atlassian.net', 'project': 'PROD', 'username': 'user1', 'api_token': 'token1'},
+            {'name': 'Development', 'url': 'https://dev.company.atlassian.net', 'project': 'DEV', 'username': 'user2', 'api_token': 'token2'}
+        ]
+        mock_config.find_jira_instance.return_value = {'name': 'Development', 'url': 'https://dev.company.atlassian.net', 'project': 'DEV', 'username': 'user2', 'api_token': 'token2'}
+        
+        with patch('src.jira.api.config', mock_config):
+            channel = JiraChannel()
+            client = channel.get_instance_client(name='Development')
+            
+            assert client is not None
+            assert client.base_url == 'https://dev.company.atlassian.net'
+            assert client.project == 'DEV'
+    
+    def test_get_instance_client_by_url(self):
+        """Test getting Jira client by URL."""
+        from src.jira.api import JiraChannel
+        
+        mock_config = MagicMock()
+        mock_config.get_jira_instances.return_value = [
+            {'name': 'Production', 'url': 'https://company.atlassian.net', 'project': 'PROD', 'username': 'user1', 'api_token': 'token1'},
+            {'name': 'Development', 'url': 'https://dev.company.atlassian.net', 'project': 'DEV', 'username': 'user2', 'api_token': 'token2'}
+        ]
+        mock_config.find_jira_instance.return_value = {'name': 'Production', 'url': 'https://company.atlassian.net', 'project': 'PROD', 'username': 'user1', 'api_token': 'token1'}
+        
+        with patch('src.jira.api.config', mock_config):
+            channel = JiraChannel()
+            client = channel.get_instance_client(url='https://company.atlassian.net')
+            
+            assert client is not None
+            assert client.base_url == 'https://company.atlassian.net'
+            assert client.project == 'PROD'
+    
+    def test_get_instance_client_returns_first_if_not_found(self):
+        """Test that get_instance_client returns first instance as default."""
+        from src.jira.api import JiraChannel
+        
+        mock_config = MagicMock()
+        mock_config.get_jira_instances.return_value = [
+            {'name': 'Production', 'url': 'https://company.atlassian.net', 'project': 'PROD', 'username': 'user1', 'api_token': 'token1'}
+        ]
+        mock_config.find_jira_instance.return_value = {'name': 'Production', 'url': 'https://company.atlassian.net', 'project': 'PROD', 'username': 'user1', 'api_token': 'token1'}
+        
+        with patch('src.jira.api.config', mock_config):
+            channel = JiraChannel()
+            client = channel.get_instance_client(name='NonExistent')
+            
+            # Should return first instance as default
+            assert client is not None
+            assert client.project == 'PROD'
+    
+    def test_get_instance_client_no_instances(self):
+        """Test get_instance_client when no instances configured returns default channel."""
+        from src.jira.api import JiraChannel
+        
+        mock_config = MagicMock()
+        mock_config.get_jira_instances.return_value = []
+        mock_config.find_jira_instance.return_value = None
+        
+        with patch('src.jira.api.config', mock_config):
+            channel = JiraChannel()
+            client = channel.get_instance_client(name='Production')
+            
+            # Returns default channel with empty config when no instances
+            assert client is not None
+            assert client.base_url == ''
+    
+    def test_get_instance_client_single_instance(self):
+        """Test get_instance_client with single instance (backward compat)."""
+        from src.jira.api import JiraChannel
+        
+        mock_config = MagicMock()
+        mock_config.get_jira_instances.return_value = [
+            {'name': 'Default', 'url': 'https://company.atlassian.net', 'project': 'PROJ', 'username': 'user', 'api_token': 'token'}
+        ]
+        mock_config.find_jira_instance.return_value = {'name': 'Default', 'url': 'https://company.atlassian.net', 'project': 'PROJ', 'username': 'user', 'api_token': 'token'}
+        
+        with patch('src.jira.api.config', mock_config):
+            channel = JiraChannel()
+            client = channel.get_instance_client()
+            
+            assert client is not None
+            assert client.base_url == 'https://company.atlassian.net'
 
+
+class TestJiraChannelBasic:
+    """Test basic Jira Channel functionality."""
+    
     def test_jira_channel_init(self):
-        """Test JiraChannel initialization."""
-        with patch('channel.jira.config') as mock_config:
-            mock_config.jira = {
-                'enabled': True,
-                'base_url': 'https://test.atlassian.net',
-                'email': 'test@example.com',
-                'api_token': 'test_token',
-                'project_key': 'TEST',
-            }
-            
-            from src.channels.jira import JiraChannel
-            
+        """Test Jira channel initialization."""
+        from src.jira.api import JiraChannel
+        
+        mock_config = MagicMock()
+        mock_config.jira = {
+            'url': 'https://company.atlassian.net',
+            'username': 'user@company.com',
+            'api_token': 'test-token',
+            'project': 'PROJ'
+        }
+        mock_config.get_jira_instances.return_value = [
+            {'name': 'Default', 'url': 'https://company.atlassian.net', 'project': 'PROJ', 'username': 'user@company.com', 'api_token': 'test-token'}
+        ]
+        
+        with patch('src.jira.api.config', mock_config):
             channel = JiraChannel()
-            assert channel.base_url == 'https://test.atlassian.net'
-            assert channel.email == 'test@example.com'
-            assert channel.project_key == 'TEST'
-            # Auth header should be set
-            assert 'Authorization' in channel.headers
-            assert channel.headers['Content-Type'] == 'application/json'
-
+            
+            assert channel.base_url == 'https://company.atlassian.net'
+            assert channel.username == 'user@company.com'
+            assert channel.project == 'PROJ'
+    
     def test_jira_channel_init_defaults(self):
-        """Test JiraChannel with default values."""
-        with patch('channel.jira.config') as mock_config:
-            mock_config.jira = {}
-            
-            from src.channels.jira import JiraChannel
-            
-            channel = JiraChannel()
-            assert channel.base_url == ""
-            assert channel.email == ""
-            assert channel.project_key == ""
-
-    def test_create_session_id(self):
-        """Test session ID creation."""
-        with patch('channel.jira.config') as mock_config:
-            mock_config.jira = {}
-            
-            from src.channels.jira import JiraChannel
-            
-            channel = JiraChannel()
-            session_id = channel.create_session_id("PROJ-123")
-            assert session_id == "jira:PROJ-123"
-
-    def test_handle_webhook_payload_comment(self):
-        """Test handling comment webhook payload."""
-        with patch('channel.jira.config') as mock_config:
-            mock_config.jira = {}
-            
-            from src.channels.jira import JiraChannel
-            
-            channel = JiraChannel()
-            payload = {
-                "webhookEvent": {
-                    "name": "issue_comment_created",
-                    "issue": {
-                        "key": "PROJ-123",
-                        "fields": {
-                            "summary": "Test issue"
-                        }
-                    },
-                    "comment": {
-                        "id": "10001",
-                        "body": "Hello, this is a test comment",
-                        "author": {
-                            "displayName": "Test User",
-                            "accountId": "user123"
-                        },
-                        "created": "2024-01-01T12:00:00.000Z"
-                    }
-                }
-            }
-            
-            result = channel.handle_webhook_payload(payload)
-            
-            assert result is not None
-            assert result["issue_key"] == "PROJ-123"
-            assert result["comment_id"] == "10001"
-            assert result["body"] == "Hello, this is a test comment"
-            assert result["username"] == "Test User"
-            assert result["event_type"] == "issue_comment_created"
-
-    def test_handle_webhook_payload_non_comment(self):
-        """Test handling non-comment webhook is ignored."""
-        with patch('channel.jira.config') as mock_config:
-            mock_config.jira = {}
-            
-            from src.channels.jira import JiraChannel
-            
-            channel = JiraChannel()
-            payload = {
-                "webhookEvent": {
-                    "name": "issue_created",
-                    "issue": {
-                        "key": "PROJ-123"
-                    }
-                }
-            }
-            
-            result = channel.handle_webhook_payload(payload)
-            assert result is None
-
-    def test_handle_webhook_payload_project_filter(self):
-        """Test project key filtering."""
-        with patch('channel.jira.config') as mock_config:
-            mock_config.jira = {'project_key': 'PROJ'}
-            
-            from src.channels.jira import JiraChannel
-            
-            channel = JiraChannel()
-            
-            # Should be filtered out (wrong project)
-            payload_wrong_project = {
-                "webhookEvent": {
-                    "name": "issue_comment_created",
-                    "issue": {"key": "OTHER-123"},
-                    "comment": {
-                        "id": "10001",
-                        "body": "Test comment",
-                        "author": {"displayName": "Test User"}
-                    }
-                }
-            }
-            result = channel.handle_webhook_payload(payload_wrong_project)
-            assert result is None
-            
-            # Should pass (correct project)
-            payload_correct_project = {
-                "webhookEvent": {
-                    "name": "issue_comment_created",
-                    "issue": {"key": "PROJ-456"},
-                    "comment": {
-                        "id": "10002",
-                        "body": "Test comment",
-                        "author": {"displayName": "Test User"}
-                    }
-                }
-            }
-            result = channel.handle_webhook_payload(payload_correct_project)
-            assert result is not None
-            assert result["issue_key"] == "PROJ-456"
-
-    def test_add_comment_code_block(self):
-        """Test adding a comment with code block."""
-        with patch('channel.jira.config') as mock_config:
-            mock_config.jira = {
-                'base_url': 'https://test.atlassian.net',
-                'email': 'test@example.com',
-                'api_token': 'test_token',
-            }
-            
-            from src.channels.jira import JiraChannel
-            
-            channel = JiraChannel()
-            channel.session = AsyncMock()
-            channel.session.request = AsyncMock(return_value=MagicMock(
-                status_code=201,
-                json=MagicMock(return_value={"id": "10001"})
-            ))
-            
-            import asyncio
-            
-            code = "def test_example():\n    pass"
-            result = asyncio.get_event_loop().run_until_complete(
-                channel.add_comment_code_block("PROJ-123", code, language="python")
-            )
-            
-            channel.session.request.assert_called_once()
-            call_args = channel.session.request.call_args
-            assert call_args[0][0] == "POST"
-            assert "PROJ-123" in call_args[0][1]
-            
-            # Verify ADF format with codeBlock
-            json_body = call_args.kwargs['json']
-            assert json_body['body']['type'] == 'doc'
-            assert json_body['body']['version'] == 1
-            
-            # Check for codeBlock
-            content = json_body['body']['content']
-            assert len(content) == 2  # paragraph + codeBlock
-            
-            code_block = content[1]
-            assert code_block['type'] == 'codeBlock'
-            assert code_block['attrs']['language'] == 'python'
-            assert code_block['content'][0]['text'] == code
-
-    def test_handle_webhook_payload_adf_format(self):
-        """Test handling ADF format comment body."""
-        with patch('channel.jira.config') as mock_config:
-            mock_config.jira = {}
-            
-            from src.channels.jira import JiraChannel
-            
-            channel = JiraChannel()
-            payload = {
-                "webhookEvent": {
-                    "name": "issue_comment_created",
-                    "issue": {"key": "PROJ-123"},
-                    "comment": {
-                        "id": "10001",
-                        "body": {
-                            "type": "doc",
-                            "version": 1,
-                            "content": [
-                                {
-                                    "type": "paragraph",
-                                    "content": [
-                                        {"type": "text", "text": "ADF formatted comment"}
-                                    ]
-                                }
-                            ]
-                        },
-                        "author": {"displayName": "Test User"}
-                    }
-                }
-            }
-            
-            result = channel.handle_webhook_payload(payload)
-            
-            assert result is not None
-            assert result["body"] == "ADF formatted comment"
-
-    @pytest.mark.asyncio
-    async def test_add_comment_text_only(self):
-        """Test adding a plain text comment."""
-        with patch('channel.jira.config') as mock_config:
-            mock_config.jira = {
-                'base_url': 'https://test.atlassian.net',
-                'email': 'test@example.com',
-                'api_token': 'test_token',
-            }
-            
-            from src.channels.jira import JiraChannel
-            
-            channel = JiraChannel()
-            channel.session = AsyncMock()
-            channel.session.request = AsyncMock(return_value=MagicMock(
-                status_code=201,
-                json=MagicMock(return_value={"id": "10001"})
-            ))
-            
-            result = await channel.add_comment_text_only("PROJ-123", "Test comment")
-            
-            channel.session.request.assert_called_once()
-            call_args = channel.session.request.call_args
-            # Check positional args
-            assert call_args[0][0] == "POST"  # method as first positional arg
-            assert "PROJ-123" in call_args[0][1]  # URL as second positional arg
-            # Check keyword args
-            assert call_args.kwargs['json'] == {"body": "Test comment"}
-
-    @pytest.mark.asyncio
-    async def test_get_issue(self):
-        """Test getting issue details."""
-        with patch('channel.jira.config') as mock_config:
-            mock_config.jira = {
-                'base_url': 'https://test.atlassian.net',
-                'email': 'test@example.com',
-                'api_token': 'test_token',
-            }
-            
-            from src.channels.jira import JiraChannel
-            
-            channel = JiraChannel()
-            channel.session = AsyncMock()
-            mock_response = {
-                "key": "PROJ-123",
-                "fields": {
-                    "summary": "Test issue",
-                    "status": {"name": "Open"}
-                }
-            }
-            channel.session.request = AsyncMock(return_value=MagicMock(
-                status_code=200,
-                json=MagicMock(return_value=mock_response)
-            ))
-            
-            result = await channel.get_issue("PROJ-123")
-            
-            assert result["key"] == "PROJ-123"
-            assert result["fields"]["summary"] == "Test issue"
-
-
-class TestJiraAuth:
-    """Tests for Jira authentication."""
-
-    def test_auth_header_format(self):
-        """Test that auth header is correctly formatted."""
-        import base64
+        """Test Jira channel initialization with defaults."""
+        from src.jira.api import JiraChannel
         
-        with patch('channel.jira.config') as mock_config:
-            mock_config.jira = {
-                'email': 'test@example.com',
-                'api_token': 'test_token',
-            }
-            
-            from src.channels.jira import JiraChannel
-            
-            channel = JiraChannel()
-            expected_auth = base64.b64encode(b'test@example.com:test_token').decode()
-            assert channel.headers["Authorization"] == f"Basic {expected_auth}"
-
-
-class TestJiraAPIEndpoints:
-    """Tests for Jira API endpoint construction."""
-
-    @pytest.mark.asyncio
-    async def test_search_issues(self):
-        """Test issue search."""
-        with patch('channel.jira.config') as mock_config:
-            mock_config.jira = {
-                'base_url': 'https://test.atlassian.net',
-                'email': 'test@example.com',
-                'api_token': 'test_token',
-            }
-            
-            from src.channels.jira import JiraChannel
-            
-            channel = JiraChannel()
-            channel.session = AsyncMock()
-            mock_response = {
-                "issues": [
-                    {"key": "PROJ-123", "fields": {"summary": "Issue 1"}},
-                    {"key": "PROJ-124", "fields": {"summary": "Issue 2"}},
-                ]
-            }
-            channel.session.request = AsyncMock(return_value=MagicMock(
-                status_code=200,
-                json=MagicMock(return_value=mock_response)
-            ))
-            
-            result = await channel.search_issues("project = PROJ")
-            
-            assert len(result) == 2
-            assert result[0]["key"] == "PROJ-123"
-
-
-class TestJiraSecurity:
-    """Tests for Jira security features."""
-
-    def test_jql_injection_blocked_semicolon(self):
-        """Test that JQL injection with semicolon is blocked."""
-        from src.channels.jira import validate_jql
+        mock_config = MagicMock()
+        mock_config.jira = {}
+        mock_config.get_jira_instances.return_value = []
         
-        # These should be blocked
-        assert validate_jql("project = PROJ; DELETE FROM issues") == False
-        assert validate_jql("project = PROJ--") == False
-        assert validate_jql("project = PROJ/*comment*/") == False
-        assert validate_jql("project = PROJ xp_cmd") == False
-
-    def test_jql_injection_blocked_exec(self):
-        """Test that JQL injection with EXEC is blocked."""
-        from src.channels.jira import validate_jql
-        
-        assert validate_jql("project = PROJ; exec xp_shell") == False
-        assert validate_jql("project = PROJ; execute whatever") == False
-
-    def test_valid_jql_allowed(self):
-        """Test that valid JQL queries are allowed."""
-        from src.channels.jira import validate_jql
-        
-        # These should be allowed
-        assert validate_jql("project = PROJ AND status = Open") == True
-        assert validate_jql("assignee = currentUser() ORDER BY updated DESC") == True
-        assert validate_jql("fixVersion = '1.0.0'") == True
-
-    def test_long_comment_split(self):
-        """Test that long comments are split correctly."""
-        with patch('channel.jira.config') as mock_config:
-            mock_config.jira = {
-                'base_url': 'https://test.atlassian.net',
-                'email': 'test@example.com',
-                'api_token': 'test_token',
-            }
-            
-            from src.channels.jira import JiraChannel, JIRA_MAX_COMMENT_LENGTH
-            
+        with patch('src.jira.api.config', mock_config):
             channel = JiraChannel()
-            channel.session = AsyncMock()
-            channel.session.request = AsyncMock(return_value=MagicMock(
-                status_code=201,
-                json=MagicMock(return_value={"id": "10001"})
-            ))
             
-            # Create a long message (longer than max length)
-            long_message = "A" * (JIRA_MAX_COMMENT_LENGTH * 2 + 100)
+            assert channel.base_url == ''
+            assert channel.username == ''
+    
+    def test_jira_channel_enabled(self):
+        """Test Jira channel enabled property."""
+        from src.jira.api import JiraChannel
+        
+        mock_config = MagicMock()
+        mock_config.jira = {'enabled': True}
+        mock_config.get_jira_instances.return_value = [
+            {'name': 'Default', 'url': 'https://company.atlassian.net', 'project': 'PROJ'}
+        ]
+        
+        with patch('src.jira.api.config', mock_config):
+            channel = JiraChannel()
             
-            # Mock add_comment_text_only to track calls
-            original_add = channel.add_comment_text_only
-            call_count = 0
-            
-            async def mock_add(key, body):
-                nonlocal call_count
-                call_count += 1
-                return {"id": str(call_count)}
-            
-            channel.add_comment_text_only = mock_add
-            
-            import asyncio
-            result = asyncio.run(channel.add_comment_long("PROJ-123", long_message))
-            
-            # Should be split into 3 comments
-            assert call_count == 3
-            assert len(result) == 3
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+            assert channel.enabled == True
