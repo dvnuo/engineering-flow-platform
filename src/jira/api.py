@@ -61,55 +61,91 @@ class JiraChannel:
     VALID_API_VERSIONS = ("2", "3")
     
     def __init__(self):
-        self.base_url = config.jira.get("url", "").rstrip("/")
-        self.username = config.jira.get("username", "")
-        self.api_token = config.jira.get("api_token", "")
-        self.password = config.jira.get("password", "")  # Alternative to api_token for Basic Auth
-        self.bearer_token = config.jira.get("bearer_token", "")  # Bearer Token authentication
-        self.project = config.jira.get("project", "")
         self.enabled = config.jira.get("enabled", False)
+        self.instances = config.get_jira_instances()
+        
+        # Initialize default client with first instance
+        if self.instances:
+            first = self.instances[0]
+            self._init_client(first)
+        else:
+            self.base_url = ""
+            self.username = ""
+            self.api_token = ""
+            self.password = ""
+            self.bearer_token = ""
+            self.project = ""
+            self.api_version = "3"
+            self.timeout = 30.0
+            self.client = httpx.AsyncClient(timeout=self.timeout)
+            self._auth_header = {}
+            self._auth_type = "None"
+        
+        logger.info(f"JiraChannel initialized with {len(self.instances)} instance(s)")
+    
+    def _init_client(self, instance: Dict[str, Any]):
+        """Initialize client for a specific instance."""
+        self.base_url = instance.get("url", "").rstrip("/")
+        self.username = instance.get("username", "")
+        self.api_token = instance.get("api_token", "")
+        self.password = instance.get("password", "")
+        self.bearer_token = instance.get("bearer_token", "")
+        self.project = instance.get("project", "")
         
         # API version with validation
-        api_version = config.jira.get("api_version", "2")
+        api_version = instance.get("api_version", "3")
         if api_version not in self.VALID_API_VERSIONS:
-            logger.warning(f"Invalid api_version '{api_version}', defaulting to '2'. Valid: {self.VALID_API_VERSIONS}")
-            api_version = "2"
+            logger.warning(f"Invalid api_version '{api_version}', defaulting to '3'")
+            api_version = "3"
         self.api_version = api_version
         
-        # Configurable timeout (default: 30s)
-        timeout = config.jira.get("timeout", 30.0)
-        self.timeout = float(timeout)
+        # Timeout
+        self.timeout = float(instance.get("timeout", 30.0))
         
         self.client = httpx.AsyncClient(timeout=self.timeout)
         self._auth_header = self._get_auth_header()
         self._auth_type = self._get_auth_type()
+    
+    def get_instance_client(self, url: str = None, name: str = None) -> 'JiraChannel':
+        """Get a JiraChannel client for a specific instance.
         
-        logger.info(f"JiraChannel initialized: version={self.api_version}, timeout={self.timeout}s, auth={self._auth_type}")
+        Args:
+            url: URL to match (e.g., from issue key like PROJ-123 from https://company.atlassian.net...)
+            name: Instance name to match
+            
+        Returns:
+            JiraChannel configured for the matched instance
+        """
+        instance = config.find_jira_instance(url=url, name=name)
+        
+        if not instance:
+            logger.warning(f"No Jira instance found for url={url}, name={name}, using default")
+            return self
+        
+        # Create new channel for this instance
+        new_channel = JiraChannel()
+        new_channel.enabled = self.enabled
+        new_channel.instances = self.instances
+        new_channel._init_client(instance)
+        
+        logger.info(f"Using Jira instance: {instance.get('name')} - {instance.get('url')}")
+        return new_channel
     
     def reinit(self):
         """Reinitialize JiraChannel (called when config changes)."""
         logger.info("Reinitializing JiraChannel...")
-        self.base_url = config.jira.get("url", "").rstrip("/")
-        self.username = config.jira.get("username", "")
-        self.api_token = config.jira.get("api_token", "")
-        self.password = config.jira.get("password", "")
-        self.bearer_token = config.jira.get("bearer_token", "")
-        self.project = config.jira.get("project", "")
         self.enabled = config.jira.get("enabled", False)
+        self.instances = config.get_jira_instances()
         
-        api_version = config.jira.get("api_version", "2")
-        if api_version not in self.VALID_API_VERSIONS:
-            api_version = "2"
-        self.api_version = api_version
+        if self.instances:
+            self._init_client(self.instances[0])
+        else:
+            self.base_url = ""
+            self.client = httpx.AsyncClient(timeout=30.0)
+            self._auth_header = {}
+            self._auth_type = "None"
         
-        timeout = config.jira.get("timeout", 30.0)
-        self.timeout = float(timeout)
-        
-        self.client = httpx.AsyncClient(timeout=self.timeout)
-        self._auth_header = self._get_auth_header()
-        self._auth_type = self._get_auth_type()
-        
-        logger.info("JiraChannel reinitialized")
+        logger.info(f"JiraChannel reinitialized with {len(self.instances)} instance(s)")
     
     def _get_auth_type(self) -> str:
         """Determine authentication type based on configuration."""

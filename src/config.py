@@ -193,11 +193,94 @@ class Config:
     def jira(self) -> Dict[str, Any]:
         """Get Jira configuration."""
         return self._config.get("jira", {})
+    
+    def get_jira_instances(self) -> List[Dict[str, Any]]:
+        """Get Jira instances as a list (supports both old and new format)."""
+        jira_config = self.jira
+        instances = jira_config.get("instances", [])
+        
+        # Backward compatibility: if instances is empty but url exists, convert old format
+        if not instances and jira_config.get("url"):
+            instances = [{
+                "name": "Default",
+                "url": jira_config.get("url", ""),
+                "project": jira_config.get("project", ""),
+                "username": jira_config.get("username", ""),
+                "api_token": jira_config.get("api_token", ""),
+                "bearer_token": jira_config.get("bearer_token", ""),
+                "api_version": jira_config.get("api_version", "3"),
+                "timeout": jira_config.get("timeout", 30.0),
+            }]
+        
+        return instances
+    
+    def find_jira_instance(self, url: str = None, name: str = None) -> Optional[Dict[str, Any]]:
+        """Find Jira instance by URL or name."""
+        instances = self.get_jira_instances()
+        
+        if not instances:
+            return None
+        
+        # Match by name first
+        if name:
+            for inst in instances:
+                if inst.get("name", "").lower() == name.lower():
+                    return inst
+        
+        # Match by URL
+        if url:
+            for inst in instances:
+                inst_url = inst.get("url", "")
+                if inst_url and url.startswith(inst_url):
+                    return inst
+        
+        # Return first instance as default
+        return instances[0] if instances else None
 
     @property
     def confluence(self) -> Dict[str, Any]:
         """Get Confluence configuration."""
         return self._config.get("confluence", {})
+    
+    def get_confluence_instances(self) -> List[Dict[str, Any]]:
+        """Get Confluence instances as a list (supports both old and new format)."""
+        confluence_config = self.confluence
+        instances = confluence_config.get("instances", [])
+        
+        # Backward compatibility: if instances is empty but url exists, convert old format
+        if not instances and confluence_config.get("url"):
+            instances = [{
+                "name": "Default",
+                "url": confluence_config.get("url", ""),
+                "username": confluence_config.get("username", ""),
+                "api_token": confluence_config.get("api_token", ""),
+                "space": confluence_config.get("space", ""),
+            }]
+        
+        return instances
+    
+    def find_confluence_instance(self, url: str = None, name: str = None) -> Optional[Dict[str, Any]]:
+        """Find Confluence instance by URL or name."""
+        instances = self.get_confluence_instances()
+        
+        if not instances:
+            return None
+        
+        # Match by name first
+        if name:
+            for inst in instances:
+                if inst.get("name", "").lower() == name.lower():
+                    return inst
+        
+        # Match by URL
+        if url:
+            for inst in instances:
+                inst_url = inst.get("url", "")
+                if inst_url and url.startswith(inst_url):
+                    return inst
+        
+        # Return first instance as default
+        return instances[0] if instances else None
     
     @property
     def debug(self) -> Dict[str, Any]:

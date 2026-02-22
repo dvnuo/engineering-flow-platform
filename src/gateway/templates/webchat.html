@@ -338,25 +338,8 @@
                     </label>
                     <span>Enabled</span>
                 </div>
-                <div class="setting-row">
-                    <label>URL</label>
-                    <input type="text" id="jiraUrl" class="settings-input" placeholder="https://your-domain.atlassian.net">
-                </div>
-                <div class="setting-row">
-                    <label>Username</label>
-                    <input type="text" id="jiraUsername" class="settings-input" placeholder="admin@company.com">
-                </div>
-                <div class="setting-row">
-                    <label>API Token</label>
-                    <div class="password-input-wrapper">
-                        <input type="password" id="jiraApiToken" class="settings-input" placeholder="API Token">
-                        <button type="button" class="toggle-password" data-target="jiraApiToken">
-                            <svg class="eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                                <circle cx="12" cy="12" r="3"/>
-                            </svg>
-                        </button>
-                    </div>
+                <div id="jiraInstancesContainer" class="instances-container">
+                    <!-- Dynamic instances will be rendered here -->
                 </div>
             </div>
             
@@ -376,25 +359,8 @@
                     </label>
                     <span>Enabled</span>
                 </div>
-                <div class="setting-row">
-                    <label>URL</label>
-                    <input type="text" id="confluenceUrl" class="settings-input" placeholder="https://your-domain.atlassian.net/wiki">
-                </div>
-                <div class="setting-row">
-                    <label>Username</label>
-                    <input type="text" id="confluenceUsername" class="settings-input" placeholder="your-email@company.com">
-                </div>
-                <div class="setting-row">
-                    <label>API Token</label>
-                    <div class="password-input-wrapper">
-                        <input type="password" id="confluenceApiToken" class="settings-input" placeholder="API Token">
-                        <button type="button" class="toggle-password" data-target="confluenceApiToken">
-                            <svg class="eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                                <circle cx="12" cy="12" r="3"/>
-                            </svg>
-                        </button>
-                    </div>
+                <div id="confluenceInstancesContainer" class="instances-container">
+                    <!-- Dynamic instances will be rendered here -->
                 </div>
             </div>
             

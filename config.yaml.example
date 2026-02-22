@@ -161,41 +161,42 @@ server:
 # 2. Basic Auth with API Token (recommended for Jira Server/DC)
 # 3. Basic Auth with Password (legacy, not recommended)
 
+# ============================================
+# Jira Configuration (OPTIONAL) - Supports Multiple Instances
+# ============================================
+# Configure as array to support multiple Jira instances
 jira:
   enabled: false  # Set to true to enable Jira integration
-  url: "https://your-domain.atlassian.net"
-  project: "PROJECT"  # Default project key
-  
-  # --- Authentication Method 1: Bearer Token (Cloud) ---
-  # Use this for Jira Cloud with API Token or OAuth
-  # bearer_token: "${JIRA_BEARER_TOKEN}"
-  
-  # --- Authentication Method 2: Basic Auth with API Token (Server/DC) ---
-  # API Token from: Jira Settings → Security → API tokens
-  # username: "admin@company.com"
-  # api_token: "${JIRA_API_TOKEN}"
-  
-  # --- Authentication Method 3: Basic Auth with Password (Legacy) ---
-  # Not recommended, use API Token instead
-  # username: "admin@company.com"
-  # password: "${JIRA_PASSWORD}"
-  
-  # --- Advanced Options ---
-  # API version: "2" (Server/DC) or "3" (Cloud, default)
-  # api_version: "2"
-  
-  # Request timeout in seconds (default: 30)
-  # timeout: 30.0
+  # Multiple Jira instances - use array format
+  instances:
+    - name: "Default"  # Display name for this instance
+      url: "https://your-domain.atlassian.net"
+      project: "PROJECT"  # Default project key
+      
+      # --- Authentication Method 1: Bearer Token (Cloud) ---
+      # bearer_token: "${JIRA_BEARER_TOKEN}"
+      
+      # --- Authentication Method 2: Basic Auth with API Token ---
+      # username: "admin@company.com"
+      # api_token: "${JIRA_API_TOKEN}"
+      
+      # --- Advanced Options ---
+      # api_version: "2" or "3" (default: 3 for Cloud)
+      # timeout: 30.0
 
 # ============================================
-# Confluence Configuration (OPTIONAL)
+# Confluence Configuration (OPTIONAL) - Supports Multiple Instances
 # ============================================
+# Configure as array to support multiple Confluence instances
 confluence:
   enabled: false  # Set to true to enable Confluence integration
-  url: "https://your-domain.atlassian.net/wiki"
-  username: "your-email@company.com"
-  api_token: "${CONFLUENCE_API_TOKEN}"  # Use env var for security
-  space: "DEV"  # Default space key
+  # Multiple Confluence instances - use array format
+  instances:
+    - name: "Default"  # Display name for this instance
+      url: "https://your-domain.atlassian.net/wiki"
+      username: "your-email@company.com"
+      api_token: "${CONFLUENCE_API_TOKEN}"  # Use env var for security
+      space: "DEV"  # Default space key
 
 # ============================================
 # GitHub Configuration (OPTIONAL)
