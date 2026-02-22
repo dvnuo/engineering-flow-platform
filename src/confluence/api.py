@@ -692,13 +692,9 @@ async def confluence_get_user(user_id: str = None, username: str = None) -> str:
         return f"Error fetching user: {str(e)}"
 
 
-async def confluence_watch_page(page_id: str, user_id: str = None) -> str:
-    """Watch/unwatch a Confluence page."""
+async def confluence_watch_page(page_id: str) -> str:
+    """Watch a Confluence page (for current user)."""
     try:
-        # Get current user if not provided
-        if not user_id:
-            user_id = "current"
-        
         await confluence_channel._request(
             "POST", 
             f"/rest/api/content/{page_id}/watch"

@@ -1008,6 +1008,8 @@ def get_tools_schemas() -> list:
                 }
             }
         },
+        # NOTE: jira_create_issue, jira_transition, jira_get_transitions, jira_get_comments
+        # functions exist but schemas need to be added - adding below
         {
             "type": "function",
             "function": {
@@ -1034,9 +1036,9 @@ def get_tools_schemas() -> list:
                     "type": "object",
                     "properties": {
                         "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"},
-                        "transition_id": {"type": "string", "description": "Transition ID (get from jira_get_transitions)"}
+                        "to_status": {"type": "string", "description": "Target status name (e.g., 'Done', 'In Progress')"}
                     },
-                    "required": ["issue_key", "transition_id"]
+                    "required": ["issue_key", "to_status"]
                 }
             }
         },
