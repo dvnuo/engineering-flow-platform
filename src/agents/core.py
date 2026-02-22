@@ -218,6 +218,20 @@ You have access to the following tools. When a user asks you to do something tha
 
         # Get conversation history
         messages = await session_manager.get_history(session_id)
+        
+        # Transform history messages to ensure proper format for LLM
+        # This handles tool messages that were saved with tool_call_id
+        transformed_messages = []
+        for msg in messages:
+            transformed = {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+            # Preserve tool_calls for assistant messages
+            if msg.get("tool_calls"):
+                transformed["tool_calls"] = msg["tool_calls"]
+            # Preserve tool_call_id for tool messages
+            if msg.get("tool_call_id"):
+                transformed["tool_call_id"] = msg["tool_call_id"]
+            transformed_messages.append(transformed)
+        messages = transformed_messages
 
         # ===== FAST LANE COMMANDS =====
         from src.agents.fastlane import process_fastlane_command
@@ -538,6 +552,16 @@ You have access to the following tools. When a user asks you to do something tha
             
             messages.append(assistant_msg)
             
+            # Save assistant message with tool_calls to history BEFORE executing tools
+            # This ensures tool messages can reference the correct tool_call_id
+            if iteration == 1:  # Only save on first tool call to avoid duplicates
+                # Save tool_calls in the message for restoration
+                await session_manager.add_message(
+                    session_id, "assistant", 
+                    content or "[Tool call]",
+                    extra={"tool_calls": tool_calls} if tool_calls else None
+                )
+            
             # Execute each tool call
             for tool_call in tool_calls:
                 tool_call_id = tool_call.get("id", "unknown")
@@ -597,6 +621,12 @@ You have access to the following tools. When a user asks you to do something tha
                     "tool_call_id": tool_call_id,
                     "content": str(tool_result),
                 })
+                
+                # Save tool result to history so it can be restored properly
+                await session_manager.add_message(
+                    session_id, "tool", str(tool_result),
+                    extra={"tool_call_id": tool_call_id}
+                )
                 
                 logger.info(f"Tool result: {str(tool_result)[:200]}")
             

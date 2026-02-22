@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 JIRA_SESSION_PREFIX = "jira:"
 
 # Default settings
-DEFAULT_MAX_HISTORY = 5
+DEFAULT_MAX_HISTORY = 999999  # Effectively unlimited
 DEFAULT_TTL_SECONDS = 86400  # 24 hours
 DEFAULT_AUTO_SAVE = True
 
@@ -201,14 +201,15 @@ class SessionManager:
         
         return self.sessions[session_id]
     
-    async def add_message(self, session_id: str, role: str, content: str, wait_for_save: bool = False) -> None:
+    async def add_message(self, session_id: str, role: str, content: str, wait_for_save: bool = False, extra: dict = None) -> None:
         """Add a message to the session history.
         
         Args:
             session_id: The session ID
-            role: Message role ('user', 'assistant', 'system')
+            role: Message role ('user', 'assistant', 'system', 'tool')
             content: Message content
             wait_for_save: If True, wait for persistence save to complete
+            extra: Optional extra fields like tool_call_id for tool messages
         """
         session = await self.get_session(session_id)
         message = {
@@ -216,6 +217,9 @@ class SessionManager:
             "content": content,
             "timestamp": datetime.now().isoformat(),
         }
+        # Add extra fields (e.g., tool_call_id for tool messages)
+        if extra:
+            message.update(extra)
         session["history"].append(message)
         session["updated_at"] = datetime.now().isoformat()
         
