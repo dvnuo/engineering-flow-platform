@@ -1853,13 +1853,45 @@
                 // Jira settings - support multiple instances
                 if (config.jira) {
                     jiraEnabled.checked = config.jira.enabled || false;
-                    renderJiraInstances(config.jira.instances || []);
+                    // Support both old format (url, username) and new format (instances)
+                    let jiraInstances = config.jira.instances;
+                    if (!jiraInstances || jiraInstances.length === 0) {
+                        // Convert old format to new format for backward compatibility
+                        if (config.jira.url) {
+                            jiraInstances = [{
+                                name: 'Default',
+                                url: config.jira.url || '',
+                                username: config.jira.username || '',
+                                api_token: config.jira.api_token || '',
+                                project: config.jira.project || ''
+                            }];
+                        } else {
+                            jiraInstances = [];
+                        }
+                    }
+                    renderJiraInstances(jiraInstances);
                 }
                 
                 // Confluence settings - support multiple instances
                 if (config.confluence) {
                     confluenceEnabled.checked = config.confluence.enabled || false;
-                    renderConfluenceInstances(config.confluence.instances || []);
+                    // Support both old format (url, username) and new format (instances)
+                    let confluenceInstances = config.confluence.instances;
+                    if (!confluenceInstances || confluenceInstances.length === 0) {
+                        // Convert old format to new format for backward compatibility
+                        if (config.confluence.url) {
+                            confluenceInstances = [{
+                                name: 'Default',
+                                url: config.confluence.url || '',
+                                username: config.confluence.username || '',
+                                api_token: config.confluence.api_token || '',
+                                space: config.confluence.space || ''
+                            }];
+                        } else {
+                            confluenceInstances = [];
+                        }
+                    }
+                    renderConfluenceInstances(confluenceInstances);
                 }
                 
                 // GitHub settings
