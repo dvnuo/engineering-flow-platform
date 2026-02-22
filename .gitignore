@@ -147,3 +147,5 @@ config.yaml
 # memory/*.md - personal daily notes (if any)
 node_modules/
 logs/
+test-results/
+package-lock.json
