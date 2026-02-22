@@ -1729,11 +1729,17 @@
     }
     
     function addJiraInstance() {
+        // First collect current values from DOM to preserve them
+        jiraInstancesData = collectJiraInstances();
+        // Then add new empty instance
         jiraInstancesData.push({ name: '', url: '', username: '', api_token: '', project: '' });
         renderJiraInstances(jiraInstancesData);
     }
     
     function removeJiraInstance(index) {
+        // First collect current values from DOM to preserve them (in case user edited but didn't save)
+        jiraInstancesData = collectJiraInstances();
+        // Then remove the instance
         jiraInstancesData.splice(index, 1);
         renderJiraInstances(jiraInstancesData);
     }
@@ -1781,11 +1787,17 @@
     }
     
     function addConfluenceInstance() {
+        // First collect current values from DOM to preserve them
+        confluenceInstancesData = collectConfluenceInstances();
+        // Then add new empty instance
         confluenceInstancesData.push({ name: '', url: '', username: '', api_token: '', space: '' });
         renderConfluenceInstances(confluenceInstancesData);
     }
     
     function removeConfluenceInstance(index) {
+        // First collect current values from DOM to preserve them (in case user edited but didn't save)
+        confluenceInstancesData = collectConfluenceInstances();
+        // Then remove the instance
         confluenceInstancesData.splice(index, 1);
         renderConfluenceInstances(confluenceInstancesData);
     }
