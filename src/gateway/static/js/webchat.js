@@ -1700,6 +1700,114 @@
         });
     });
     
+    // ========== Multi-instance Support ==========
+    let jiraInstancesData = [];
+    let confluenceInstancesData = [];
+    
+    function renderJiraInstances(instances) {
+        jiraInstancesData = instances || [];
+        const container = document.getElementById('jiraInstancesContainer');
+        if (!container) return;
+        
+        container.innerHTML = jiraInstancesData.map((inst, idx) => `
+            <div class="instance-item" data-index="${idx}">
+                <div class="instance-header">
+                    <span class="instance-name">${inst.name || 'Instance ' + (idx + 1)}</span>
+                    <button type="button" class="btn-remove-instance" onclick="removeJiraInstance(${idx})">Remove</button>
+                </div>
+                <div class="instance-fields">
+                    <input type="text" placeholder="Name" value="${inst.name || ''}" data-field="name">
+                    <input type="text" placeholder="URL" value="${inst.url || ''}" data-field="url">
+                    <input type="text" placeholder="Username" value="${inst.username || ''}" data-field="username">
+                    <input type="password" placeholder="API Token" value="${inst.api_token || ''}" data-field="api_token">
+                    <input type="text" placeholder="Project" value="${inst.project || ''}" data-field="project">
+                </div>
+            </div>
+        `).join('') + `
+            <button type="button" class="btn-add-instance" onclick="addJiraInstance()">+ Add Jira Instance</button>
+        `;
+    }
+    
+    function addJiraInstance() {
+        jiraInstancesData.push({ name: '', url: '', username: '', api_token: '', project: '' });
+        renderJiraInstances(jiraInstancesData);
+    }
+    
+    function removeJiraInstance(index) {
+        jiraInstancesData.splice(index, 1);
+        renderJiraInstances(jiraInstancesData);
+    }
+    
+    function collectJiraInstances() {
+        const container = document.getElementById('jiraInstancesContainer');
+        if (!container) return [];
+        
+        const items = container.querySelectorAll('.instance-item');
+        const instances = [];
+        items.forEach(item => {
+            const fields = {};
+            item.querySelectorAll('input').forEach(input => {
+                fields[input.dataset.field] = input.value;
+            });
+            if (fields.name || fields.url) {
+                instances.push(fields);
+            }
+        });
+        return instances;
+    }
+    
+    function renderConfluenceInstances(instances) {
+        confluenceInstancesData = instances || [];
+        const container = document.getElementById('confluenceInstancesContainer');
+        if (!container) return;
+        
+        container.innerHTML = confluenceInstancesData.map((inst, idx) => `
+            <div class="instance-item" data-index="${idx}">
+                <div class="instance-header">
+                    <span class="instance-name">${inst.name || 'Instance ' + (idx + 1)}</span>
+                    <button type="button" class="btn-remove-instance" onclick="removeConfluenceInstance(${idx})">Remove</button>
+                </div>
+                <div class="instance-fields">
+                    <input type="text" placeholder="Name" value="${inst.name || ''}" data-field="name">
+                    <input type="text" placeholder="URL" value="${inst.url || ''}" data-field="url">
+                    <input type="text" placeholder="Username" value="${inst.username || ''}" data-field="username">
+                    <input type="password" placeholder="API Token" value="${inst.api_token || ''}" data-field="api_token">
+                    <input type="text" placeholder="Space" value="${inst.space || ''}" data-field="space">
+                </div>
+            </div>
+        `).join('') + `
+            <button type="button" class="btn-add-instance" onclick="addConfluenceInstance()">+ Add Confluence Instance</button>
+        `;
+    }
+    
+    function addConfluenceInstance() {
+        confluenceInstancesData.push({ name: '', url: '', username: '', api_token: '', space: '' });
+        renderConfluenceInstances(confluenceInstancesData);
+    }
+    
+    function removeConfluenceInstance(index) {
+        confluenceInstancesData.splice(index, 1);
+        renderConfluenceInstances(confluenceInstancesData);
+    }
+    
+    function collectConfluenceInstances() {
+        const container = document.getElementById('confluenceInstancesContainer');
+        if (!container) return [];
+        
+        const items = container.querySelectorAll('.instance-item');
+        const instances = [];
+        items.forEach(item => {
+            const fields = {};
+            item.querySelectorAll('input').forEach(input => {
+                fields[input.dataset.field] = input.value;
+            });
+            if (fields.name || fields.url) {
+                instances.push(fields);
+            }
+        });
+        return instances;
+    }
+    
     async function showSettings() {
         settingsPanel.classList.add('show');
         
@@ -1737,20 +1845,16 @@
                     if (copilotAuthSection) copilotAuthSection.style.display = 'block';
                 }
                 
-                // Jira settings
+                // Jira settings - support multiple instances
                 if (config.jira) {
                     jiraEnabled.checked = config.jira.enabled || false;
-                    jiraUrl.value = config.jira.url || '';
-                    jiraUsername.value = config.jira.username || '';
-                    jiraApiToken.value = config.jira.api_token || '';
+                    renderJiraInstances(config.jira.instances || []);
                 }
                 
-                // Confluence settings
+                // Confluence settings - support multiple instances
                 if (config.confluence) {
                     confluenceEnabled.checked = config.confluence.enabled || false;
-                    confluenceUrl.value = config.confluence.url || '';
-                    confluenceUsername.value = config.confluence.username || '';
-                    confluenceApiToken.value = config.confluence.api_token || '';
+                    renderConfluenceInstances(config.confluence.instances || []);
                 }
                 
                 // GitHub settings
@@ -1806,15 +1910,11 @@
                 },
                 jira: {
                     enabled: jiraEnabled.checked,
-                    url: jiraUrl.value,
-                    username: jiraUsername.value,
-                    api_token: jiraApiToken.value,
+                    instances: jiraInstances,
                 },
                 confluence: {
                     enabled: confluenceEnabled.checked,
-                    url: confluenceUrl.value,
-                    username: confluenceUsername.value,
-                    api_token: confluenceApiToken.value,
+                    instances: confluenceInstances,
                 },
                 github: {
                     enabled: githubEnabled.checked,
@@ -1835,6 +1935,10 @@
                     enabled: debugEnabled.checked,
                 },
             };
+            
+            // Collect Jira instances from UI
+            const jiraInstances = collectJiraInstances();
+            const confluenceInstances = collectConfluenceInstances();
             
             try {
                 const response = await fetch('/api/config/save', {
