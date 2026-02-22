@@ -2,25 +2,16 @@
 
 *Learn about the person you're helping. Update this as you go.*
 
-- **Name:** Lucas
+- **Name:** 
 - **What to call them:** 
-- **Pronouns:** 
+- **Pronouns:** *(optional)*
 - **Timezone:** Asia/Hong_Kong
-- **Notes:** Discord user: lucaslai
+- **Notes:** 
 
 ## Context
 
-**Current Project:** Engineering Flow Platform
-- Web-based AI assistant with Discord integration
-- Features: LLM configuration, Jira/Confluence integration, GitHub tools
-- VM: 192.168.8.235:8000
-- Working directory: /root/engineering-flow-platform
-
-**Recent Work:**
-- Multi-instance support for Jira and Confluence
-- Settings UI improvements
-- Bug fixes for instance management
+*(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)*
 
 ---
 
-The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
+*The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.*
