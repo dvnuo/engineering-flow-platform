@@ -1,16 +1,10 @@
 """Channel package for Engineering Flow Platform."""
 
-from .jira import (
-    jira_channel,
-    JiraChannel,
-)
+# Import channel classes
+from .jira import jira_channel, JiraChannel
+from .confluence import confluence_channel, ConfluenceChannel
 
-from .confluence import (
-    confluence_channel,
-    ConfluenceChannel,
-)
-
-# Import tool functions from src.jira.api and src.confluence.api
+# Import tool functions from src.jira.api
 from src.jira.api import (
     jira_get_issue,
     jira_search,
@@ -28,6 +22,7 @@ from src.jira.api import (
     jira_add_worklog,
 )
 
+# Import tool functions from src.confluence.api
 from src.confluence.api import (
     confluence_get_page,
     confluence_search,
