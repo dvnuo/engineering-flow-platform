@@ -585,3 +585,160 @@ def _extract_comment_body(comment: Dict) -> str:
     body = comment.get("body", {})
     storage = body.get("storage", {})
     return storage.get("value", "").replace("<p>", "").replace("</p>", "").strip()
+
+
+# ========== Additional Confluence Tools ==========
+
+async def confluence_delete_page(page_id: str) -> str:
+    """Delete a Confluence page."""
+    try:
+        await confluence_channel._request("DELETE", f"/rest/api/content/{page_id}")
+        return f"Page {page_id} deleted successfully"
+    except Exception as e:
+        return f"Error deleting page: {str(e)}"
+
+
+async def confluence_get_page_history(page_id: str) -> str:
+    """Get page history/version history."""
+    try:
+        result = await confluence_channel._request("GET", f"/rest/api/content/{page_id}/history")
+        if not result:
+            return "No history found"
+        
+        versions = []
+        if result.get("versions"):
+            for v in result["versions"][:10]:  # Last 10 versions
+                author = v.get("authors", [{}])[0].get("displayName", "Unknown") if v.get("authors") else "Unknown"
+                created = v.get("createdAt", "")[:10]
+                versions.append(f"- v{v.get('number')}: {created} by {author}")
+        
+        return "Page History:\n" + "\n".join(versions) if versions else "No versions found"
+    except Exception as e:
+        return f"Error fetching history: {str(e)}"
+
+
+async def confluence_get_page_children(page_id: str, limit: int = 10) -> str:
+    """Get child pages of a Confluence page."""
+    try:
+        result = await confluence_channel._request(
+            "GET", 
+            f"/rest/api/content/{page_id}/child/page?limit={limit}"
+        )
+        if not result or not result.get("results"):
+            return "No child pages found"
+        
+        children = []
+        for p in result["results"]:
+            children.append(f"- {p.get('title')} (id: {p.get('id')})")
+        
+        return "Child Pages:\n" + "\n".join(children)
+    except Exception as e:
+        return f"Error fetching children: {str(e)}"
+
+
+async def confluence_get_space(space_key: str) -> str:
+    """Get Confluence space details."""
+    try:
+        result = await confluence_channel._request("GET", f"/rest/api/space/{space_key}")
+        if not result:
+            return f"Space {space_key} not found"
+        
+        return f"Space: {result.get('key')}\n" \
+               f"Name: {result.get('name')}\n" \
+               f"Type: {result.get('type')}\n" \
+               f"Status: {result.get('status')}"
+    except Exception as e:
+        return f"Error fetching space: {str(e)}"
+
+
+async def confluence_list_pages(space_key: str, limit: int = 20) -> str:
+    """List all pages in a Confluence space."""
+    try:
+        result = await confluence_channel._request(
+            "GET", 
+            f"/rest/api/space/{space_key}/content?limit={limit}"
+        )
+        if not result or not result.get("results"):
+            return f"No pages found in space {space_key}"
+        
+        pages = []
+        for p in result["results"]:
+            title = p.get("title", "Untitled")
+            page_id = p.get("id")
+            pages.append(f"- {title} (id: {page_id})")
+        
+        return f"Pages in {space_key}:\n" + "\n".join(pages)
+    except Exception as e:
+        return f"Error listing pages: {str(e)}"
+
+
+async def confluence_get_user(user_id: str = None, username: str = None) -> str:
+    """Get Confluence user information."""
+    try:
+        if user_id:
+            result = await confluence_channel._request("GET", f"/rest/api/user?accountId={user_id}")
+        elif username:
+            result = await confluence_channel._request("GET", f"/rest/api/user?username={username}")
+        else:
+            return "Error: user_id or username required"
+        
+        if not result:
+            return "User not found"
+        
+        return f"User: {result.get('displayName')}\n" \
+               f"Email: {result.get('publicEmail') or 'Private'}\n" \
+               f"Account ID: {result.get('accountId')}"
+    except Exception as e:
+        return f"Error fetching user: {str(e)}"
+
+
+async def confluence_watch_page(page_id: str, user_id: str = None) -> str:
+    """Watch/unwatch a Confluence page."""
+    try:
+        # Get current user if not provided
+        if not user_id:
+            user_id = "current"
+        
+        await confluence_channel._request(
+            "POST", 
+            f"/rest/api/content/{page_id}/watch"
+        )
+        return f"Page {page_id} is now being watched"
+    except Exception as e:
+        return f"Error watching page: {str(e)}"
+
+
+async def confluence_unwatch_page(page_id: str) -> str:
+    """Unwatch a Confluence page."""
+    try:
+        await confluence_channel._request(
+            "DELETE", 
+            f"/rest/api/content/{page_id}/watch"
+        )
+        return f"Unwatched page {page_id}"
+    except Exception as e:
+        return f"Error unwatching page: {str(e)}"
+
+
+async def confluence_search_by_title(title: str, space_key: str = None) -> str:
+    """Search for Confluence pages by title."""
+    try:
+        cql = f"title ~ \"{title}\""
+        if space_key:
+            cql += f" and space.key = \"{space_key}\""
+        
+        result = await confluence_channel._request(
+            "GET", 
+            f"/rest/api/search?cql={cql}&limit=10"
+        )
+        if not result or not result.get("results"):
+            return f"No pages found with title '{title}'"
+        
+        pages = []
+        for p in result["results"]:
+            space = p.get("spaceKey", "Unknown")
+            pages.append(f"- {p.get('title')} (space: {space})")
+        
+        return "Found Pages:\n" + "\n".join(pages)
+    except Exception as e:
+        return f"Error searching: {str(e)}"
