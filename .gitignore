@@ -145,3 +145,5 @@ config.yaml
 # Agent memory files - personal workspace data
 # Note: memory/ directory is now a module (memory/), not personal data
 # memory/*.md - personal daily notes (if any)
+node_modules/
+logs/
