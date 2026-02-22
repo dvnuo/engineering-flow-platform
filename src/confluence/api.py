@@ -23,14 +23,57 @@ class ConfluenceChannel:
     """Confluence channel adapter with full REST API support."""
     
     def __init__(self):
-        self.base_url = config.confluence.get("url", "").rstrip("/")
-        self.username = config.confluence.get("username", "")
-        self.api_token = config.confluence.get("api_token", "")
-        self.space = config.confluence.get("space", "")
         self.enabled = config.confluence.get("enabled", False)
+        self.instances = config.get_confluence_instances()
+        
+        # Initialize default client with first instance
+        if self.instances:
+            first = self.instances[0]
+            self._init_client(first)
+        else:
+            self.base_url = ""
+            self.username = ""
+            self.api_token = ""
+            self.space = ""
+            self.client = httpx.AsyncClient(timeout=30.0)
+            self._auth_header = {}
+        
+        logger.info(f"ConfluenceChannel initialized with {len(self.instances)} instance(s)")
+    
+    def _init_client(self, instance: Dict[str, Any]):
+        """Initialize client for a specific instance."""
+        self.base_url = instance.get("url", "").rstrip("/")
+        self.username = instance.get("username", "")
+        self.api_token = instance.get("api_token", "")
+        self.space = instance.get("space", "")
         
         self.client = httpx.AsyncClient(timeout=30.0)
         self._auth_header = self._get_auth_header()
+    
+    def get_instance_client(self, url: str = None, name: str = None) -> 'ConfluenceChannel':
+        """Get a ConfluenceChannel client for a specific instance.
+        
+        Args:
+            url: URL to match
+            name: Instance name to match
+            
+        Returns:
+            ConfluenceChannel configured for the matched instance
+        """
+        instance = config.find_confluence_instance(url=url, name=name)
+        
+        if not instance:
+            logger.warning(f"No Confluence instance found for url={url}, name={name}, using default")
+            return self
+        
+        # Create new channel for this instance
+        new_channel = ConfluenceChannel()
+        new_channel.enabled = self.enabled
+        new_channel.instances = self.instances
+        new_channel._init_client(instance)
+        
+        logger.info(f"Using Confluence instance: {instance.get('name')} - {instance.get('url')}")
+        return new_channel
     
     def _get_auth_header(self) -> Dict[str, str]:
         """Get authorization header."""
@@ -47,13 +90,17 @@ class ConfluenceChannel:
     def reinit(self):
         """Reinitialize ConfluenceChannel (called when config changes)."""
         logger.info("Reinitializing ConfluenceChannel...")
-        self.base_url = config.confluence.get("url", "").rstrip("/")
-        self.username = config.confluence.get("username", "")
-        self.api_token = config.confluence.get("api_token", "")
-        self.space = config.confluence.get("space", "")
         self.enabled = config.confluence.get("enabled", False)
-        self._auth_header = self._get_auth_header()
-        logger.info("ConfluenceChannel reinitialized")
+        self.instances = config.get_confluence_instances()
+        
+        if self.instances:
+            self._init_client(self.instances[0])
+        else:
+            self.base_url = ""
+            self.client = httpx.AsyncClient(timeout=30.0)
+            self._auth_header = {}
+        
+        logger.info(f"ConfluenceChannel reinitialized with {len(self.instances)} instance(s)")
     
     async def _request(
         self,
