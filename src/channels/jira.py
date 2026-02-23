@@ -30,9 +30,8 @@ class JiraChannel(_JiraChannel):
         # Support both 'url' and 'base_url' for backward compatibility
         self.base_url = jira_cfg.get('url', jira_cfg.get('base_url', '')).rstrip('/')
         self.username = jira_cfg.get('username', jira_cfg.get('email', ''))
-        self.api_token = jira_cfg.get('api_token', '')
         self.password = jira_cfg.get('password', '')
-        self.bearer_token = jira_cfg.get('bearer_token', '')
+        self.token = jira_cfg.get('token', '')  # Bearer token (renamed from bearer_token)
         self.project = jira_cfg.get('project', jira_cfg.get('project_key', ''))
         self.enabled = jira_cfg.get('enabled', False)
         
