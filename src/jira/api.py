@@ -74,7 +74,7 @@ class JiraChannel:
             self.password = ""
             self.token = ""  # Bearer token
             self.project = ""
-            self.api_version = "3"
+            self.api_version = "2"
             self.timeout = 30.0
             self.client = httpx.AsyncClient(timeout=self.timeout)
             self._auth_header = {}
