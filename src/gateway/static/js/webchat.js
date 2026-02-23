@@ -1707,7 +1707,7 @@
     // Expose functions globally for onclick handlers
     window.addJiraInstance = function() {
         jiraInstancesData = collectJiraInstances();
-        jiraInstancesData.push({ name: '', url: '', username: '', api_token: '', password: '', project: '' });
+        jiraInstancesData.push({ name: '', url: '', username: '', password: '', token: '', project: '' });
         renderJiraInstances(jiraInstancesData);
     };
     
@@ -1719,7 +1719,7 @@
     
     window.addConfluenceInstance = function() {
         confluenceInstancesData = collectConfluenceInstances();
-        confluenceInstancesData.push({ name: '', url: '', username: '', api_token: '', password: '', space: '' });
+        confluenceInstancesData.push({ name: '', url: '', username: '', password: '', token: '', space: '' });
         renderConfluenceInstances(confluenceInstancesData);
     };
     
@@ -1744,8 +1744,8 @@
                     <input type="text" placeholder="Name" value="${inst.name || ''}" data-field="name">
                     <input type="text" placeholder="URL" value="${inst.url || ''}" data-field="url">
                     <input type="text" placeholder="Username" value="${inst.username || ''}" data-field="username">
-                    <input type="password" placeholder="API Token or Password" value="${inst.api_token || ''}" data-field="api_token">
-                    <input type="password" placeholder="Password (alternative)" value="${inst.password || ''}" data-field="password">
+                    <input type="password" placeholder="Password (Basic Auth)" value="${inst.password || ''}" data-field="password">
+                    <input type="password" placeholder="Token (Bearer Auth)" value="${inst.token || ''}" data-field="token">
                     <input type="text" placeholder="Project" value="${inst.project || ''}" data-field="project">
                 </div>
             </div>
@@ -1787,8 +1787,8 @@
                     <input type="text" placeholder="Name" value="${inst.name || ''}" data-field="name">
                     <input type="text" placeholder="URL" value="${inst.url || ''}" data-field="url">
                     <input type="text" placeholder="Username" value="${inst.username || ''}" data-field="username">
-                    <input type="password" placeholder="API Token or Password" value="${inst.api_token || ''}" data-field="api_token">
-                    <input type="password" placeholder="Password (alternative)" value="${inst.password || ''}" data-field="password">
+                    <input type="password" placeholder="Password (Basic Auth)" value="${inst.password || ''}" data-field="password">
+                    <input type="password" placeholder="Token (Bearer Auth)" value="${inst.token || ''}" data-field="token">
                     <input type="text" placeholder="Space" value="${inst.space || ''}" data-field="space">
                 </div>
             </div>
@@ -1864,8 +1864,8 @@
                                 name: 'Default',
                                 url: config.jira.url || '',
                                 username: config.jira.username || '',
-                                api_token: config.jira.api_token || '',
                                 password: config.jira.password || '',
+                                token: config.jira.token || '',
                                 project: config.jira.project || ''
                             }];
                         } else {
@@ -1887,8 +1887,8 @@
                                 name: 'Default',
                                 url: config.confluence.url || '',
                                 username: config.confluence.username || '',
-                                api_token: config.confluence.api_token || '',
                                 password: config.confluence.password || '',
+                                token: config.confluence.token || '',
                                 space: config.confluence.space || ''
                             }];
                         } else {

@@ -33,9 +33,8 @@ class ConfluenceChannel:
         else:
             self.base_url = ""
             self.username = ""
-            self.api_token = ""
             self.password = ""
-            self.bearer_token = ""  # Support Bearer token auth
+            self.token = ""  # Bearer token
             self.space = ""
             self.client = httpx.AsyncClient(timeout=30.0)
             self._auth_header = {}
@@ -46,9 +45,8 @@ class ConfluenceChannel:
         """Initialize client for a specific instance."""
         self.base_url = instance.get("url", "").rstrip("/")
         self.username = instance.get("username", "")
-        self.api_token = instance.get("api_token", "")
         self.password = instance.get("password", "")
-        self.bearer_token = instance.get("bearer_token", "")  # Support Bearer token auth
+        self.token = instance.get("token", "")  # Bearer token
         self.space = instance.get("space", "")
         
         self.client = httpx.AsyncClient(timeout=30.0)
@@ -84,16 +82,16 @@ class ConfluenceChannel:
         
         Supports:
         - Bearer token: Authorization: Bearer {token}
-        - Basic auth (username+password or username+api_token): Authorization: Basic {base64(username:password)}
+        - Basic auth (username+password): Authorization: Basic {base64(username:password)}
         """
         # Bearer Token authentication
-        if self.bearer_token:
+        if self.token:
             logger.debug("Using Bearer Token authentication")
-            return {"Authorization": f"Bearer {self.bearer_token}"}
+            return {"Authorization": f"Bearer {self.token}"}
         
-        # Basic Auth (username:api_token or username:password)
-        if self.username and (self.api_token or self.password):
-            creds = f"{self.username}:{self.api_token or self.password}"
+        # Basic Auth (username:password)
+        if self.username and self.password:
+            creds = f"{self.username}:{self.password}"
             token = base64.b64encode(creds.encode()).decode()
             logger.debug("Using Basic Auth authentication")
             return {"Authorization": f"Basic {token}"}
@@ -104,12 +102,14 @@ class ConfluenceChannel:
     def is_configured(self) -> bool:
         """Check if Confluence is properly configured with required credentials.
         
-        Supports both username+api_token and username+password authentication.
+        Supports:
+        - Bearer token: Authorization: Bearer {token}
+        - Basic auth (username+password): Authorization: Basic {base64(username:password)}
         
         Note: This only checks if credentials are present, not if enabled.
         Use is_enabled() to check if the channel should be active.
         """
-        return bool(self.base_url and self.username and (self.api_token or self.password))
+        return bool(self.base_url and self.username and self.password)
     
     def is_enabled(self) -> bool:
         """Check if Confluence channel is enabled."""
