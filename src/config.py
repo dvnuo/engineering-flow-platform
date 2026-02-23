@@ -254,9 +254,9 @@ class Config:
                 "name": "Default",
                 "url": confluence_config.get("url", ""),
                 "username": confluence_config.get("username", ""),
-                # Support old api_token -> new password (Basic Auth) or token (Bearer)
+                # Support old api_token -> new password (Basic Auth)
                 "password": confluence_config.get("password") or confluence_config.get("api_token", ""),
-                "token": confluence_config.get("token") or confluence_config.get("api_token", ""),
+                "token": confluence_config.get("token", ""),
                 "space": confluence_config.get("space", ""),
             }]
         
