@@ -84,8 +84,16 @@ class ConfluenceChannel:
         return {}
     
     def is_configured(self) -> bool:
-        """Check if Confluence is properly configured."""
-        return bool(self.base_url and self.username and self.api_token and self.enabled)
+        """Check if Confluence is properly configured with required credentials.
+        
+        Note: This only checks if credentials are present, not if enabled.
+        Use is_enabled() to check if the channel should be active.
+        """
+        return bool(self.base_url and self.username and self.api_token)
+    
+    def is_enabled(self) -> bool:
+        """Check if Confluence channel is enabled."""
+        return bool(self.enabled)
     
     def reinit(self):
         """Reinitialize ConfluenceChannel (called when config changes)."""
