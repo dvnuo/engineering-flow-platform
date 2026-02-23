@@ -50,7 +50,8 @@ async def confluence_get_page(page_id: str) -> str:
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        page = await api_get_page(page_id)
+        # Use channel method to get raw page dict, not the tool function which returns formatted string
+        page = await confluence_channel.get_page(page_id)
         
         # Handle case where page might not be a dict
         if not isinstance(page, dict):
@@ -127,7 +128,8 @@ async def confluence_get_page_by_url(url: str) -> str:
         if not page_id:
             return f"Could not extract page ID from URL: {url}"
         
-        page = await api_get_page(page_id)
+        # Use channel method to get raw page dict, not the tool function which returns formatted string
+        page = await confluence_channel.get_page(page_id)
         
         # Handle case where page might not be a dict
         if not isinstance(page, dict):
