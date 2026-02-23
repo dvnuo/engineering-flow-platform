@@ -1719,7 +1719,7 @@
     
     window.addConfluenceInstance = function() {
         confluenceInstancesData = collectConfluenceInstances();
-        confluenceInstancesData.push({ name: '', url: '', username: '', api_token: '', space: '' });
+        confluenceInstancesData.push({ name: '', url: '', username: '', api_token: '', password: '', space: '' });
         renderConfluenceInstances(confluenceInstancesData);
     };
     
@@ -1786,7 +1786,8 @@
                     <input type="text" placeholder="Name" value="${inst.name || ''}" data-field="name">
                     <input type="text" placeholder="URL" value="${inst.url || ''}" data-field="url">
                     <input type="text" placeholder="Username" value="${inst.username || ''}" data-field="username">
-                    <input type="password" placeholder="API Token" value="${inst.api_token || ''}" data-field="api_token">
+                    <input type="password" placeholder="API Token or Password" value="${inst.api_token || ''}" data-field="api_token">
+                    <input type="password" placeholder="Password (alternative)" value="${inst.password || ''}" data-field="password">
                     <input type="text" placeholder="Space" value="${inst.space || ''}" data-field="space">
                 </div>
             </div>
@@ -1885,6 +1886,7 @@
                                 url: config.confluence.url || '',
                                 username: config.confluence.username || '',
                                 api_token: config.confluence.api_token || '',
+                                password: config.confluence.password || '',
                                 space: config.confluence.space || ''
                             }];
                         } else {
