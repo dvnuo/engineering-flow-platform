@@ -46,10 +46,19 @@ issue = jira.create_issue(
 ```yaml
 # In config.yaml
 jira:
-  base_url: "https://your-domain.atlassian.net"
-  email: "your-email@example.com"
-  api_token: "your-api-token"
-  default_project: "PROJ"
+  enabled: true
+  instances:
+    - name: "Default"
+      url: "https://your-domain.atlassian.net"
+      project: "PROJ"
+      
+      # Authentication (choose one):
+      # Method 1: Bearer Token
+      # token: "your-bearer-token"
+      
+      # Method 2: Basic Auth (username + password)
+      # username: "your-email@example.com"
+      # password: "your-password"
 ```
 
 ## Dependencies
