@@ -10,7 +10,8 @@ __all__ = ["GitClient", "setup_ssh_key", "setup_git_user", "setup_gh_config"]
 async def git_status(workspace: str = ".") -> str:
     """Get git status of a repository."""
     try:
-        result = await git_client.status(workspace)
+        client = GitClient(workspace)
+        result = await client.status()
         return result
     except Exception as e:
         return f"Error: {e}"
@@ -19,7 +20,8 @@ async def git_status(workspace: str = ".") -> str:
 async def git_commit(message: str, workspace: str = ".") -> str:
     """Create a git commit."""
     try:
-        result = await git_client.commit(message, workspace)
+        client = GitClient(workspace)
+        result = await client.commit(message)
         return result
     except Exception as e:
         return f"Error: {e}"
@@ -28,7 +30,8 @@ async def git_commit(message: str, workspace: str = ".") -> str:
 async def git_push(workspace: str = ".") -> str:
     """Push to remote."""
     try:
-        result = await git_client.push(workspace)
+        client = GitClient(workspace)
+        result = await client.push()
         return result
     except Exception as e:
         return f"Error: {e}"
