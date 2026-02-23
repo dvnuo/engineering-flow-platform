@@ -219,6 +219,9 @@ You have access to the following tools. When a user asks you to do something tha
         # Get conversation history
         messages = await session_manager.get_history(session_id)
         
+        # DEBUG: Log raw history
+        logger.debug(f"[{session_id}] Raw history count: {len(messages)}")
+        
         # Transform history messages to ensure proper format for LLM
         # This handles tool messages that were saved with tool_call_id
         transformed_messages = []
@@ -227,11 +230,15 @@ You have access to the following tools. When a user asks you to do something tha
             # Preserve tool_calls for assistant messages
             if msg.get("tool_calls"):
                 transformed["tool_calls"] = msg["tool_calls"]
+                logger.debug(f"[{session_id}] Found tool_calls in message: {msg.get('tool_calls')[0].get('id') if msg.get('tool_calls') else 'none'}")
             # Preserve tool_call_id for tool messages
             if msg.get("tool_call_id"):
                 transformed["tool_call_id"] = msg["tool_call_id"]
+                logger.debug(f"[{session_id}] Found tool_call_id in message: {msg.get('tool_call_id')}")
             transformed_messages.append(transformed)
         messages = transformed_messages
+        
+        logger.debug(f"[{session_id}] Transformed messages count: {len(messages)}")
 
         # ===== FAST LANE COMMANDS =====
         from src.agents.fastlane import process_fastlane_command
@@ -307,6 +314,8 @@ You have access to the following tools. When a user asks you to do something tha
                 role=msg.get("role", "user"),
                 content=msg.get("content", ""),
                 timestamp=msg.get("timestamp"),
+                tool_calls=msg.get("tool_calls"),
+                tool_use_id=msg.get("tool_call_id"),
             )
             for msg in messages
         ]
@@ -471,6 +480,18 @@ You have access to the following tools. When a user asks you to do something tha
             logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM")
             send_event("llm_thinking", {"message": "LLM is thinking..."})
             
+            # DEBUG: Log messages being sent to LLM
+            logger.debug(f"[Tool Loop] Messages to LLM: {len(messages)}")
+            for i, msg in enumerate(messages):
+                if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                    tc_ids = [tc.get("id") for tc in msg["tool_calls"]]
+                    logger.debug(f"  Msg {i}: assistant with tool_calls: {tc_ids}")
+                elif msg.get("role") == "tool":
+                    logger.debug(f"  Msg {i}: tool (tool_call_id={msg.get('tool_call_id')})")
+                else:
+                    content = msg.get("content", "")[:50]
+                    logger.debug(f"  Msg {i}: {msg.get('role')}: {content}...")
+            
             llm_result = await llm_client.chat(
                 messages=messages,
                 system_prompt=effective_system_prompt,
@@ -554,12 +575,12 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Save assistant message with tool_calls to history BEFORE executing tools
             # This ensures tool messages can reference the correct tool_call_id
-            if iteration == 1:  # Only save on first tool call to avoid duplicates
-                # Save tool_calls in the message for restoration
+            # Save for ALL iterations (not just iteration 1) so history is complete
+            if tool_calls:
                 await session_manager.add_message(
                     session_id, "assistant", 
                     content or "[Tool call]",
-                    extra={"tool_calls": tool_calls} if tool_calls else None
+                    extra={"tool_calls": tool_calls}
                 )
             
             # Execute each tool call
