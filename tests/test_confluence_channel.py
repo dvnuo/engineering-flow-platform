@@ -21,10 +21,10 @@ class TestConfluenceChannelMultiInstance:
         # Create mock config that returns real dicts
         mock_config = MagicMock()
         mock_config.get_confluence_instances.return_value = [
-            {'name': 'Company Wiki', 'url': 'https://company.atlassian.net/wiki', 'space': 'TEAM', 'username': 'user1', 'api_token': 'token1'},
-            {'name': 'Dev Wiki', 'url': 'https://dev.company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user2', 'api_token': 'token2'}
+            {'name': 'Company Wiki', 'url': 'https://company.atlassian.net/wiki', 'space': 'TEAM', 'username': 'user1', 'password': 'pass1'},
+            {'name': 'Dev Wiki', 'url': 'https://dev.company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user2', 'password': 'pass2'}
         ]
-        mock_config.find_confluence_instance.return_value = {'name': 'Dev Wiki', 'url': 'https://dev.company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user2', 'api_token': 'token2'}
+        mock_config.find_confluence_instance.return_value = {'name': 'Dev Wiki', 'url': 'https://dev.company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user2', 'password': 'pass2'}
         
         with patch('src.confluence.api.config', mock_config):
             channel = ConfluenceChannel()
@@ -40,10 +40,10 @@ class TestConfluenceChannelMultiInstance:
         
         mock_config = MagicMock()
         mock_config.get_confluence_instances.return_value = [
-            {'name': 'Company Wiki', 'url': 'https://company.atlassian.net/wiki', 'space': 'TEAM', 'username': 'user1', 'api_token': 'token1'},
-            {'name': 'Dev Wiki', 'url': 'https://dev.company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user2', 'api_token': 'token2'}
+            {'name': 'Company Wiki', 'url': 'https://company.atlassian.net/wiki', 'space': 'TEAM', 'username': 'user1', 'password': 'pass1'},
+            {'name': 'Dev Wiki', 'url': 'https://dev.company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user2', 'password': 'pass2'}
         ]
-        mock_config.find_confluence_instance.return_value = {'name': 'Company Wiki', 'url': 'https://company.atlassian.net/wiki', 'space': 'TEAM', 'username': 'user1', 'api_token': 'token1'}
+        mock_config.find_confluence_instance.return_value = {'name': 'Company Wiki', 'url': 'https://company.atlassian.net/wiki', 'space': 'TEAM', 'username': 'user1', 'password': 'pass1'}
         
         with patch('src.confluence.api.config', mock_config):
             channel = ConfluenceChannel()
@@ -59,9 +59,9 @@ class TestConfluenceChannelMultiInstance:
         
         mock_config = MagicMock()
         mock_config.get_confluence_instances.return_value = [
-            {'name': 'Company Wiki', 'url': 'https://company.atlassian.net/wiki', 'space': 'TEAM', 'username': 'user1', 'api_token': 'token1'}
+            {'name': 'Company Wiki', 'url': 'https://company.atlassian.net/wiki', 'space': 'TEAM', 'username': 'user1', 'password': 'pass1'}
         ]
-        mock_config.find_confluence_instance.return_value = {'name': 'Company Wiki', 'url': 'https://company.atlassian.net/wiki', 'space': 'TEAM', 'username': 'user1', 'api_token': 'token1'}
+        mock_config.find_confluence_instance.return_value = {'name': 'Company Wiki', 'url': 'https://company.atlassian.net/wiki', 'space': 'TEAM', 'username': 'user1', 'password': 'pass1'}
         
         with patch('src.confluence.api.config', mock_config):
             channel = ConfluenceChannel()
@@ -93,9 +93,9 @@ class TestConfluenceChannelMultiInstance:
         
         mock_config = MagicMock()
         mock_config.get_confluence_instances.return_value = [
-            {'name': 'Default', 'url': 'https://company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user', 'api_token': 'token'}
+            {'name': 'Default', 'url': 'https://company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user', 'password': 'pass'}
         ]
-        mock_config.find_confluence_instance.return_value = {'name': 'Default', 'url': 'https://company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user', 'api_token': 'token'}
+        mock_config.find_confluence_instance.return_value = {'name': 'Default', 'url': 'https://company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user', 'password': 'pass'}
         
         with patch('src.confluence.api.config', mock_config):
             channel = ConfluenceChannel()
@@ -116,11 +116,11 @@ class TestConfluenceChannelBasic:
         mock_config.confluence = {
             'url': 'https://company.atlassian.net/wiki',
             'username': 'user@company.com',
-            'api_token': 'test-token',
+            'password': 'test-password',
             'space': 'DEV'
         }
         mock_config.get_confluence_instances.return_value = [
-            {'name': 'Default', 'url': 'https://company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user@company.com', 'api_token': 'test-token'}
+            {'name': 'Default', 'url': 'https://company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user@company.com', 'password': 'test-password'}
         ]
         
         with patch('src.confluence.api.config', mock_config):
@@ -143,3 +143,132 @@ class TestConfluenceChannelBasic:
             
             assert channel.base_url == ''
             assert channel.username == ''
+            assert channel.password == ''
+            assert channel.token == ''
+
+
+class TestConfluenceChannelAuth:
+    """Test Confluence authentication methods."""
+    
+    def test_bearer_token_auth(self):
+        """Test Bearer token authentication."""
+        from src.confluence.api import ConfluenceChannel
+        
+        mock_config = MagicMock()
+        mock_config.get_confluence_instances.return_value = [
+            {'name': 'Default', 'url': 'https://company.atlassian.net/wiki', 'space': 'DEV', 'token': 'my-bearer-token'}
+        ]
+        
+        with patch('src.confluence.api.config', mock_config):
+            channel = ConfluenceChannel()
+            
+            assert channel.token == 'my-bearer-token'
+            header = channel._get_auth_header()
+            assert header == {'Authorization': 'Bearer my-bearer-token'}
+    
+    def test_basic_auth_with_password(self):
+        """Test Basic auth with username and password."""
+        from src.confluence.api import ConfluenceChannel
+        
+        mock_config = MagicMock()
+        mock_config.get_confluence_instances.return_value = [
+            {'name': 'Default', 'url': 'https://company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user@company.com', 'password': 'secret'}
+        ]
+        
+        with patch('src.confluence.api.config', mock_config):
+            channel = ConfluenceChannel()
+            
+            assert channel.username == 'user@company.com'
+            assert channel.password == 'secret'
+            header = channel._get_auth_header()
+            assert 'Authorization' in header
+            assert header['Authorization'].startswith('Basic ')
+    
+    def test_is_configured_with_bearer_token(self):
+        """Test is_configured returns True with Bearer token."""
+        from src.confluence.api import ConfluenceChannel
+        
+        mock_config = MagicMock()
+        mock_config.get_confluence_instances.return_value = [
+            {'name': 'Default', 'url': 'https://company.atlassian.net/wiki', 'space': 'DEV', 'token': 'my-token'}
+        ]
+        
+        with patch('src.confluence.api.config', mock_config):
+            channel = ConfluenceChannel()
+            
+            assert channel.is_configured() == True
+    
+    def test_is_configured_with_basic_auth(self):
+        """Test is_configured returns True with username+password."""
+        from src.confluence.api import ConfluenceChannel
+        
+        mock_config = MagicMock()
+        mock_config.get_confluence_instances.return_value = [
+            {'name': 'Default', 'url': 'https://company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user', 'password': 'pass'}
+        ]
+        
+        with patch('src.confluence.api.config', mock_config):
+            channel = ConfluenceChannel()
+            
+            assert channel.is_configured() == True
+    
+    def test_is_configured_returns_false_when_not_configured(self):
+        """Test is_configured returns False when not configured."""
+        from src.confluence.api import ConfluenceChannel
+        
+        mock_config = MagicMock()
+        mock_config.get_confluence_instances.return_value = []
+        
+        with patch('src.confluence.api.config', mock_config):
+            channel = ConfluenceChannel()
+            
+            assert channel.is_configured() == False
+
+
+class TestConfluenceChannelReinit:
+    """Test ConfluenceChannel reinit method."""
+    
+    def test_reinit_with_instances(self):
+        """Test reinit with new instances."""
+        from src.confluence.api import ConfluenceChannel
+        
+        mock_config = MagicMock()
+        mock_config.confluence = {'enabled': True}
+        
+        # Initial instances
+        mock_config.get_confluence_instances.return_value = [
+            {'name': 'Old', 'url': 'https://old.atlassian.net/wiki', 'space': 'OLD'}
+        ]
+        
+        with patch('src.confluence.api.config', mock_config):
+            channel = ConfluenceChannel()
+            assert channel.base_url == 'https://old.atlassian.net/wiki'
+            
+            # Reinit with new instances
+            mock_config.get_confluence_instances.return_value = [
+                {'name': 'New', 'url': 'https://new.atlassian.net/wiki', 'space': 'NEW', 'username': 'user', 'password': 'pass'}
+            ]
+            channel.reinit()
+            
+            assert channel.base_url == 'https://new.atlassian.net/wiki'
+            assert channel.username == 'user'
+            assert channel.password == 'pass'
+    
+    def test_reinit_without_instances(self):
+        """Test reinit with no instances - should initialize all auth fields."""
+        from src.confluence.api import ConfluenceChannel
+        
+        mock_config = MagicMock()
+        mock_config.confluence = {'enabled': True}
+        mock_config.get_confluence_instances.return_value = []
+        
+        with patch('src.confluence.api.config', mock_config):
+            channel = ConfluenceChannel()
+            channel.reinit()
+            
+            # Should have all auth fields initialized
+            assert channel.base_url == ''
+            assert channel.username == ''
+            assert channel.password == ''
+            assert channel.token == ''
+            assert channel.space == ''

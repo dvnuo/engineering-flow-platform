@@ -109,7 +109,7 @@ class ConfluenceChannel:
         Note: This only checks if credentials are present, not if enabled.
         Use is_enabled() to check if the channel should be active.
         """
-        return bool(self.base_url and self.username and self.password)
+        return bool(self.base_url and (self.token or (self.username and self.password)))
     
     def is_enabled(self) -> bool:
         """Check if Confluence channel is enabled."""
@@ -125,6 +125,10 @@ class ConfluenceChannel:
             self._init_client(self.instances[0])
         else:
             self.base_url = ""
+            self.username = ""
+            self.password = ""
+            self.token = ""
+            self.space = ""
             self.client = httpx.AsyncClient(timeout=30.0)
             self._auth_header = {}
         
