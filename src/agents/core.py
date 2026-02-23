@@ -314,6 +314,8 @@ You have access to the following tools. When a user asks you to do something tha
                 role=msg.get("role", "user"),
                 content=msg.get("content", ""),
                 timestamp=msg.get("timestamp"),
+                tool_calls=msg.get("tool_calls"),
+                tool_use_id=msg.get("tool_call_id"),
             )
             for msg in messages
         ]
