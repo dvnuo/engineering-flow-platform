@@ -34,6 +34,7 @@ class ConfluenceChannel:
             self.base_url = ""
             self.username = ""
             self.api_token = ""
+            self.password = ""  # Support password as alternative to api_token
             self.space = ""
             self.client = httpx.AsyncClient(timeout=30.0)
             self._auth_header = {}
@@ -45,6 +46,7 @@ class ConfluenceChannel:
         self.base_url = instance.get("url", "").rstrip("/")
         self.username = instance.get("username", "")
         self.api_token = instance.get("api_token", "")
+        self.password = instance.get("password", "")  # Support password as alternative to api_token
         self.space = instance.get("space", "")
         
         self.client = httpx.AsyncClient(timeout=30.0)
@@ -76,9 +78,9 @@ class ConfluenceChannel:
         return new_channel
     
     def _get_auth_header(self) -> Dict[str, str]:
-        """Get authorization header."""
-        if self.username and self.api_token:
-            creds = f"{self.username}:{self.api_token}"
+        """Get authorization header. Supports both username+api_token and username+password."""
+        if self.username and (self.api_token or self.password):
+            creds = f"{self.username}:{self.api_token or self.password}"
             token = base64.b64encode(creds.encode()).decode()
             return {"Authorization": f"Basic {token}"}
         return {}
@@ -86,10 +88,12 @@ class ConfluenceChannel:
     def is_configured(self) -> bool:
         """Check if Confluence is properly configured with required credentials.
         
+        Supports both username+api_token and username+password authentication.
+        
         Note: This only checks if credentials are present, not if enabled.
         Use is_enabled() to check if the channel should be active.
         """
-        return bool(self.base_url and self.username and self.api_token)
+        return bool(self.base_url and self.username and (self.api_token or self.password))
     
     def is_enabled(self) -> bool:
         """Check if Confluence channel is enabled."""
