@@ -51,10 +51,9 @@ class Tool:
 TOOLS: Dict[str, Tool] = {}
 
 
-from .github import get_tools_schemas as get_github_tools
+# Git/GitHub tools removed - available via bash exec (gh CLI, git command)
 from .jira import get_tools_schemas as get_jira_tools
 from .confluence import get_tools_schemas as get_confluence_tools
-from .git import get_tools_schemas as get_git_tools
 from .bash_tools import get_tools_schemas as get_bash_tools
 
 # Also export raw functions for backward compatibility
@@ -69,10 +68,9 @@ def get_all_tools() -> list:
     """Get all tool schemas."""
     tools = []
     tools.extend(get_bash_tools())   # Bash/Shell tools: exec only (simplified)
-    tools.extend(get_github_tools())
+    # Git/GitHub tools removed - available via bash exec (gh CLI, git command)
     tools.extend(get_jira_tools())
     tools.extend(get_confluence_tools())
-    tools.extend(get_git_tools())
     return tools
 
 
@@ -97,10 +95,9 @@ def get_tools_schema() -> List[Dict]:
 async def execute_tool(name: str, **kwargs) -> ToolResult:
     """Execute a tool by name."""
     from . import bash_tools as bash_tools_module
-    from . import git as git_module
     from . import jira as jira_module
-    from . import github as github_module
     from . import confluence as confluence_module
+    # Git/GitHub tools removed - available via bash exec (gh CLI, git command)
     
     # Bash/Shell tools
     if name == "read":
@@ -136,28 +133,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         is_success = "Error" not in result and "blocked" not in result.lower() and "requires approval" not in result.lower()
         return ToolResult(success=is_success, content=result)
     
-    # Git tools
-    elif name == "git_status":
-        workspace = kwargs.get("workspace", ".")
-        result = await git_module.git_status(workspace)
-        return ToolResult(success="Error" not in result, content=result)
-    
-    elif name == "git_commit":
-        message = kwargs.get("message", "")
-        workspace = kwargs.get("workspace", ".")
-        result = await git_module.git_commit(message, workspace)
-        return ToolResult(success="Error" not in result, content=result)
-    
-    elif name == "git_push":
-        workspace = kwargs.get("workspace", ".")
-        result = await git_module.git_push(workspace)
-        return ToolResult(success="Error" not in result, content=result)
-    
-    elif name == "git_clone":
-        repo_url = kwargs.get("repo_url", "")
-        workspace = kwargs.get("workspace", ".")
-        result = await git_module.git_clone(repo_url, workspace)
-        return ToolResult(success="Error" not in result, content=result)
+    # Git tools removed - available via bash exec (git command)
     
     # Jira tools
     elif name == "jira_get_issue":
@@ -182,27 +158,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await jira_module.jira_get_issue_by_url(url)
         return ToolResult(success="Error" not in result, content=result)
     
-    # GitHub tools
-    elif name == "github_get_issue":
-        owner = kwargs.get("owner", "")
-        repo = kwargs.get("repo", "")
-        issue_number = kwargs.get("issue_number", 0)
-        result = await github_module.github_get_issue(owner, repo, issue_number)
-        return ToolResult(success="Error" not in result, content=result)
-    
-    elif name == "github_search_issues":
-        query = kwargs.get("query", "")
-        max_results = kwargs.get("max_results", 10)
-        result = await github_module.github_search_issues(query, max_results)
-        return ToolResult(success="Error" not in result, content=result)
-    
-    elif name == "github_add_comment":
-        owner = kwargs.get("owner", "")
-        repo = kwargs.get("repo", "")
-        issue_number = kwargs.get("issue_number", 0)
-        comment = kwargs.get("comment", "")
-        result = await github_module.github_add_comment(owner, repo, issue_number, comment)
-        return ToolResult(success="Error" not in result, content=result)
+    # GitHub tools removed - available via bash exec (gh CLI)
     
     # Confluence tools
     elif name == "confluence_get_page":
@@ -310,15 +266,12 @@ __all__ = [
     "get_tool",
     "get_tools_schema",
     "execute_tool",
-    "get_github_tools",
+    # Git/GitHub tools removed - available via bash exec
     "get_jira_tools",
     "get_confluence_tools",
-    "get_git_tools",
     "get_bash_tools",
-    "github_api",
     "jira",
     "confluence",
-    "git_api",
     "bash_tools",
     "ToolResult",
     "Tool",
