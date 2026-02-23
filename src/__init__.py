@@ -57,10 +57,8 @@ from .confluence import get_tools_schemas as get_confluence_tools
 from .bash_tools import get_tools_schemas as get_bash_tools
 
 # Also export raw functions for backward compatibility
-from . import github
 from . import jira
 from . import confluence
-from . import git
 from . import bash_tools
 
 
