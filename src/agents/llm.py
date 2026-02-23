@@ -463,6 +463,17 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"=== [{self.name.upper()}] REQUEST ===")
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(all_messages)}")
+            # Log message structure for debugging tool_calls
+            for i, msg in enumerate(all_messages):
+                msg_summary = {"role": msg.get("role")}
+                if msg.get("tool_calls"):
+                    msg_summary["tool_calls"] = [{"id": tc.get("id"), "function": tc.get("function", {}).get("name")} for tc in msg["tool_calls"]]
+                if msg.get("tool_call_id"):
+                    msg_summary["tool_call_id"] = msg.get("tool_call_id")
+                if msg.get("content"):
+                    content = msg.get("content", "")
+                    msg_summary["content"] = content[:100] + "..." if len(content) > 100 else content
+                logger.debug(f"  Message {i}: {msg_summary}")
         
         # Make API call with proper error handling
         endpoint = "/chat/completions"
