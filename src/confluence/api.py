@@ -34,7 +34,8 @@ class ConfluenceChannel:
             self.base_url = ""
             self.username = ""
             self.api_token = ""
-            self.password = ""  # Support password as alternative to api_token
+            self.password = ""
+            self.bearer_token = ""  # Support Bearer token auth
             self.space = ""
             self.client = httpx.AsyncClient(timeout=30.0)
             self._auth_header = {}
@@ -46,7 +47,8 @@ class ConfluenceChannel:
         self.base_url = instance.get("url", "").rstrip("/")
         self.username = instance.get("username", "")
         self.api_token = instance.get("api_token", "")
-        self.password = instance.get("password", "")  # Support password as alternative to api_token
+        self.password = instance.get("password", "")
+        self.bearer_token = instance.get("bearer_token", "")  # Support Bearer token auth
         self.space = instance.get("space", "")
         
         self.client = httpx.AsyncClient(timeout=30.0)
@@ -78,11 +80,25 @@ class ConfluenceChannel:
         return new_channel
     
     def _get_auth_header(self) -> Dict[str, str]:
-        """Get authorization header. Supports both username+api_token and username+password."""
+        """Get authorization header based on authentication type.
+        
+        Supports:
+        - Bearer token: Authorization: Bearer {token}
+        - Basic auth (username+password or username+api_token): Authorization: Basic {base64(username:password)}
+        """
+        # Bearer Token authentication
+        if self.bearer_token:
+            logger.debug("Using Bearer Token authentication")
+            return {"Authorization": f"Bearer {self.bearer_token}"}
+        
+        # Basic Auth (username:api_token or username:password)
         if self.username and (self.api_token or self.password):
             creds = f"{self.username}:{self.api_token or self.password}"
             token = base64.b64encode(creds.encode()).decode()
+            logger.debug("Using Basic Auth authentication")
             return {"Authorization": f"Basic {token}"}
+        
+        logger.warning("No authentication credentials configured")
         return {}
     
     def is_configured(self) -> bool:
