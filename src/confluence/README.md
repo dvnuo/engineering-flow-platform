@@ -49,10 +49,19 @@ cf.update_page(page_id=123456, title="Updated Title", content="New content")
 ```yaml
 # In config.yaml
 confluence:
-  base_url: "https://your-domain.atlassian.net/wiki"
-  email: "your-email@example.com"
-  api_token: "your-api-token"
-  default_space: "SPACE"
+  enabled: true
+  instances:
+    - name: "Default"
+      url: "https://your-domain.atlassian.net/wiki"
+      space: "SPACE"
+      
+      # Authentication (choose one):
+      # Method 1: Bearer Token
+      # token: "your-bearer-token"
+      
+      # Method 2: Basic Auth (username + password)
+      # username: "your-email@example.com"
+      # password: "your-password"
 ```
 
 ## Dependencies
