@@ -71,9 +71,8 @@ class JiraChannel:
         else:
             self.base_url = ""
             self.username = ""
-            self.api_token = ""
             self.password = ""
-            self.bearer_token = ""
+            self.token = ""  # Bearer token
             self.project = ""
             self.api_version = "3"
             self.timeout = 30.0
@@ -87,9 +86,8 @@ class JiraChannel:
         """Initialize client for a specific instance."""
         self.base_url = instance.get("url", "").rstrip("/")
         self.username = instance.get("username", "")
-        self.api_token = instance.get("api_token", "")
         self.password = instance.get("password", "")
-        self.bearer_token = instance.get("bearer_token", "")
+        self.token = instance.get("token", "")  # Bearer token
         self.project = instance.get("project", "")
         
         # API version with validation
@@ -149,22 +147,22 @@ class JiraChannel:
     
     def _get_auth_type(self) -> str:
         """Determine authentication type based on configuration."""
-        if self.bearer_token:
+        if self.token:
             return "Bearer"
-        elif self.username and (self.api_token or self.password):
+        elif self.username and self.password:
             return "Basic"
         return "None"
     
     def _get_auth_header(self) -> Dict[str, str]:
         """Get authorization header based on authentication type."""
         # Bearer Token authentication
-        if self.bearer_token:
+        if self.token:
             logger.debug("Using Bearer Token authentication")
-            return {"Authorization": f"Bearer {self.bearer_token}"}
+            return {"Authorization": f"Bearer {self.token}"}
         
-        # Basic Auth (username:api_token or username:password)
-        if self.username and (self.api_token or self.password):
-            creds = f"{self.username}:{self.api_token or self.password}"
+        # Basic Auth (username:password)
+        if self.username and self.password:
+            creds = f"{self.username}:{self.password}"
             token = base64.b64encode(creds.encode()).decode()
             logger.debug("Using Basic Auth authentication")
             return {"Authorization": f"Basic {token}"}
@@ -175,12 +173,16 @@ class JiraChannel:
     def is_configured(self) -> bool:
         """Check if Jira is properly configured with required credentials.
         
+        Supports:
+        - Bearer token: Authorization: Bearer {token}
+        - Basic auth (username+password): Authorization: Basic {base64(username:password)}
+        
         Note: This only checks if credentials are present, not if enabled.
         Use is_enabled() to check if the channel should be active.
         """
         has_auth = bool(
             (self.base_url) and
-            (self.bearer_token or (self.username and (self.api_token or self.password)))
+            (self.token or (self.username and self.password))
         )
         return has_auth
     

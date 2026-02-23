@@ -173,12 +173,12 @@ jira:
       url: "https://your-domain.atlassian.net"
       project: "PROJECT"  # Default project key
       
-      # --- Authentication Method 1: Bearer Token (Cloud) ---
-      # bearer_token: "${JIRA_BEARER_TOKEN}"
+      # --- Authentication Method 1: Bearer Token ---
+      # token: "${JIRA_TOKEN}"
       
-      # --- Authentication Method 2: Basic Auth with API Token ---
+      # --- Authentication Method 2: Basic Auth (username + password) ---
       # username: "admin@company.com"
-      # api_token: "${JIRA_API_TOKEN}"
+      # password: "${JIRA_PASSWORD}"
       
       # --- Advanced Options ---
       # api_version: "2" or "3" (default: 3 for Cloud)
@@ -195,7 +195,8 @@ confluence:
     - name: "Default"  # Display name for this instance
       url: "https://your-domain.atlassian.net/wiki"
       username: "your-email@company.com"
-      api_token: "${CONFLUENCE_API_TOKEN}"  # Use env var for security
+      password: "${CONFLUENCE_PASSWORD}"  # Use env var for security
+      # token: "${CONFLUENCE_TOKEN}"  # Alternative: Bearer Token
       space: "DEV"  # Default space key
 
 # ============================================
