@@ -1707,7 +1707,7 @@
     // Expose functions globally for onclick handlers
     window.addJiraInstance = function() {
         jiraInstancesData = collectJiraInstances();
-        jiraInstancesData.push({ name: '', url: '', username: '', api_token: '', project: '' });
+        jiraInstancesData.push({ name: '', url: '', username: '', api_token: '', password: '', project: '' });
         renderJiraInstances(jiraInstancesData);
     };
     
@@ -1744,7 +1744,8 @@
                     <input type="text" placeholder="Name" value="${inst.name || ''}" data-field="name">
                     <input type="text" placeholder="URL" value="${inst.url || ''}" data-field="url">
                     <input type="text" placeholder="Username" value="${inst.username || ''}" data-field="username">
-                    <input type="password" placeholder="API Token" value="${inst.api_token || ''}" data-field="api_token">
+                    <input type="password" placeholder="API Token or Password" value="${inst.api_token || ''}" data-field="api_token">
+                    <input type="password" placeholder="Password (alternative)" value="${inst.password || ''}" data-field="password">
                     <input type="text" placeholder="Project" value="${inst.project || ''}" data-field="project">
                 </div>
             </div>
@@ -1864,6 +1865,7 @@
                                 url: config.jira.url || '',
                                 username: config.jira.username || '',
                                 api_token: config.jira.api_token || '',
+                                password: config.jira.password || '',
                                 project: config.jira.project || ''
                             }];
                         } else {
