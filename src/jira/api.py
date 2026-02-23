@@ -139,6 +139,10 @@ class JiraChannel:
             self._init_client(self.instances[0])
         else:
             self.base_url = ""
+            self.username = ""
+            self.password = ""
+            self.token = ""
+            self.project = ""
             self.client = httpx.AsyncClient(timeout=30.0)
             self._auth_header = {}
             self._auth_type = "None"

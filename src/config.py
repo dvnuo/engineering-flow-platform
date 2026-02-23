@@ -206,8 +206,8 @@ class Config:
                 "url": jira_config.get("url", ""),
                 "project": jira_config.get("project", ""),
                 "username": jira_config.get("username", ""),
-                "api_token": jira_config.get("api_token", ""),
-                "bearer_token": jira_config.get("bearer_token", ""),
+                "password": jira_config.get("password", ""),
+                "token": jira_config.get("token", ""),
                 "api_version": jira_config.get("api_version", "3"),
                 "timeout": jira_config.get("timeout", 30.0),
             }]
@@ -253,7 +253,8 @@ class Config:
                 "name": "Default",
                 "url": confluence_config.get("url", ""),
                 "username": confluence_config.get("username", ""),
-                "api_token": confluence_config.get("api_token", ""),
+                "password": confluence_config.get("password", ""),
+                "token": confluence_config.get("token", ""),
                 "space": confluence_config.get("space", ""),
             }]
         
