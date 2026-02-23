@@ -177,6 +177,11 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await jira_module.jira_add_comment(issue_key, comment)
         return ToolResult(success="Error" not in result, content=result)
     
+    elif name == "jira_get_issue_by_url":
+        url = kwargs.get("url", "")
+        result = await jira_module.jira_get_issue_by_url(url)
+        return ToolResult(success="Error" not in result, content=result)
+    
     # GitHub tools
     elif name == "github_get_issue":
         owner = kwargs.get("owner", "")
@@ -209,6 +214,91 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         query = kwargs.get("query", "")
         max_results = kwargs.get("max_results", 10)
         result = await confluence_module.confluence_search(query, max_results)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_get_page_by_url":
+        url = kwargs.get("url", "")
+        result = await confluence_module.confluence_get_page_by_url(url)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_create_page":
+        space_key = kwargs.get("space_key", "")
+        title = kwargs.get("title", "")
+        body = kwargs.get("body", "")
+        parent_id = kwargs.get("parent_id")
+        result = await confluence_module.confluence_create_page(space_key, title, body, parent_id)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_update_page":
+        page_id = kwargs.get("page_id", "")
+        title = kwargs.get("title")
+        body = kwargs.get("body")
+        result = await confluence_module.confluence_update_page(page_id, title, body)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_delete_page":
+        page_id = kwargs.get("page_id", "")
+        result = await confluence_module.confluence_delete_page(page_id)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_get_comments":
+        page_id = kwargs.get("page_id", "")
+        result = await confluence_module.confluence_get_comments(page_id)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_add_comment":
+        page_id = kwargs.get("page_id", "")
+        comment = kwargs.get("comment", "")
+        result = await confluence_module.confluence_add_comment(page_id, comment)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_list_spaces":
+        limit = kwargs.get("limit", 20)
+        result = await confluence_module.confluence_list_spaces(limit)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_get_space":
+        space_key = kwargs.get("space_key", "")
+        result = await confluence_module.confluence_get_space(space_key)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_list_pages":
+        space_key = kwargs.get("space_key", "")
+        limit = kwargs.get("limit", 20)
+        result = await confluence_module.confluence_list_pages(space_key, limit)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_get_page_children":
+        page_id = kwargs.get("page_id", "")
+        limit = kwargs.get("limit", 10)
+        result = await confluence_module.confluence_get_page_children(page_id, limit)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_get_page_history":
+        page_id = kwargs.get("page_id", "")
+        result = await confluence_module.confluence_get_page_history(page_id)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_get_user":
+        user_id = kwargs.get("user_id")
+        username = kwargs.get("username")
+        result = await confluence_module.confluence_get_user(user_id, username)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_watch_page":
+        page_id = kwargs.get("page_id", "")
+        result = await confluence_module.confluence_watch_page(page_id)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_unwatch_page":
+        page_id = kwargs.get("page_id", "")
+        result = await confluence_module.confluence_unwatch_page(page_id)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "confluence_search_by_title":
+        title = kwargs.get("title", "")
+        space_key = kwargs.get("space_key")
+        result = await confluence_module.confluence_search_by_title(title, space_key)
         return ToolResult(success="Error" not in result, content=result)
     
     return ToolResult(success=False, error=f"Tool {name} not implemented")
