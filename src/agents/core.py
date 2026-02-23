@@ -554,12 +554,12 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Save assistant message with tool_calls to history BEFORE executing tools
             # This ensures tool messages can reference the correct tool_call_id
-            if iteration == 1:  # Only save on first tool call to avoid duplicates
-                # Save tool_calls in the message for restoration
+            # Save for ALL iterations (not just iteration 1) so history is complete
+            if tool_calls:
                 await session_manager.add_message(
                     session_id, "assistant", 
                     content or "[Tool call]",
-                    extra={"tool_calls": tool_calls} if tool_calls else None
+                    extra={"tool_calls": tool_calls}
                 )
             
             # Execute each tool call
