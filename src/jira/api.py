@@ -689,7 +689,7 @@ async def jira_get_issue(issue_key: str) -> str:
 **Updated:** {fields.get("updated", "")[:10]}
 
 **Description:**
-{description[:500]}{'...' if len(description) > 500 else ''}"""
+{description}"""
     except httpx.HTTPStatusError as e:
         logger.error(f"jira_get_issue: HTTP error {e.response.status_code} for {issue_key}")
         return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"

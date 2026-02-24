@@ -547,7 +547,7 @@ async def confluence_get_comments(page_id: str) -> str:
             author = comment.get("by", {}).get("displayName", "Unknown")
             created = comment.get("created", "")[:10]
             body = _extract_comment_body(comment)
-            lines.append(f"\n**{author}** ({created}):\n{body[:200]}")
+            lines.append(f"\n**{author}** ({created}):\n{body}")
         
         return "\n".join(lines)
     except Exception as e:
@@ -618,13 +618,13 @@ def _format_page_info(page: Dict) -> str:
     # Get body content - handle case where body might be a string or None
     body = page.get("body", {})
     if isinstance(body, str):
-        content = body[:1000]
+        content = body
     elif isinstance(body, dict):
         storage_body = body.get("storage", {})
         if isinstance(storage_body, dict):
-            content = storage_body.get("value", "")[:1000]
+            content = storage_body.get("value", "")
         else:
-            content = str(storage_body)[:1000] if storage_body else ""
+            content = str(storage_body) if storage_body else ""
     else:
         content = ""
     

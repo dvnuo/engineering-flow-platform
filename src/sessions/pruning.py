@@ -171,9 +171,7 @@ class SessionCompactor:
             role = msg.get("role", "unknown")
             content = msg.get("content", "")
             
-            # Truncate long content
-            if len(content) > 1000:
-                content = content[:1000] + "..."
+            # Keep full content (no truncation to preserve data)
             
             lines.append(f"{role.upper()}: {content}")
         

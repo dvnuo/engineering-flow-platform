@@ -13,6 +13,7 @@ from src.agents.llm import llm_client
 from src.agents.memory import memory_system
 from src.agents.thinking import ThinkLevel, normalize_think_level, format_runtime_info
 from src.config import config
+from src.utils.truncate import truncate, truncate_with_count
 from src.sessions.manager import session_manager
 from src.agents.executor import (
     skills_executor,
@@ -546,7 +547,7 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 # Send completion event
                 send_event("complete", {
-                    "response": content[:500] if content else "",
+                    "response": truncate_with_count(content, 500),
                     "total_iterations": iteration
                 })
                 
@@ -629,7 +630,7 @@ You have access to the following tools. When a user asks you to do something tha
                 )
                 
                 # Send tool result event
-                result_preview = str(tool_result)[:200]
+                result_preview = truncate_with_count(str(tool_result), 200)
                 send_event("tool_result", {
                     "tool": tool_name,
                     "result": result_preview,
@@ -649,7 +650,7 @@ You have access to the following tools. When a user asks you to do something tha
                     extra={"tool_call_id": tool_call_id}
                 )
                 
-                logger.info(f"Tool result: {str(tool_result)[:200]}")
+                logger.info(f"Tool result: {truncate_with_count(str(tool_result), 200)}")
             
             # Send iteration complete event
             send_event("iteration_end", {"iteration": iteration})
