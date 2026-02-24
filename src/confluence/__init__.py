@@ -3,22 +3,6 @@
 from .api import (
     ConfluenceChannel, 
     confluence_channel,
-    confluence_get_page as api_get_page,
-    confluence_search as api_search,
-    confluence_create_page,
-    confluence_update_page,
-    confluence_get_comments,
-    confluence_add_comment,
-    confluence_list_spaces,
-    confluence_delete_page,
-    confluence_get_page_history,
-    confluence_get_page_children,
-    confluence_get_space,
-    confluence_list_pages,
-    confluence_get_user,
-    confluence_watch_page,
-    confluence_unwatch_page,
-    confluence_search_by_title,
 )
 
 __all__ = [
@@ -26,6 +10,7 @@ __all__ = [
     "confluence_channel",
     "confluence_get_page",
     "confluence_search",
+    "confluence_get_page_by_url",
     "confluence_create_page",
     "confluence_update_page",
     "confluence_get_comments",
@@ -50,7 +35,7 @@ async def confluence_get_page(page_id: str) -> str:
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        # Use channel method to get raw page dict, not the tool function which returns formatted string
+        # Use channel method to get raw page dict
         page = await confluence_channel.get_page(page_id)
         
         # Handle case where page might not be a dict
@@ -78,11 +63,16 @@ async def confluence_search(query: str, max_results: int = 10) -> str:
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        results = await api_search(query, max_results)
-        if not results:
+        result = await confluence_channel.search_pages(query, max_results)
+        pages = result.get("results", []) if isinstance(result, dict) else []
+        
+        if not pages:
             return "No pages found."
-        lines = [f"**Search Results** ({len(results)}):\n"]
-        for r in results:
+        
+        lines = [f"**Search Results** ({len(pages)}):\n"]
+        for r in pages:
+            if not isinstance(r, dict):
+                continue
             title = r.get("title", "Untitled")
             url = r.get("url", "")
             lines.append(f"- **{title}**: {url}")
@@ -102,10 +92,8 @@ async def confluence_get_page_by_url(url: str) -> str:
             return "Confluence is not configured. Please check your settings."
         
         # Extract page ID from URL
-        # URL format: https://domain/wiki/spaces/KEY/pages/ID/title or /pages/viewpage.action?pageId=ID
         import re
         
-        # Try to extract page ID from various URL formats
         page_id = None
         
         # Format 1: /spaces/KEY/pages/ID/title
@@ -128,7 +116,7 @@ async def confluence_get_page_by_url(url: str) -> str:
         if not page_id:
             return f"Could not extract page ID from URL: {url}"
         
-        # Use channel method to get raw page dict, not the tool function which returns formatted string
+        # Use channel method to get raw page dict
         page = await confluence_channel.get_page(page_id)
         
         # Handle case where page might not be a dict
@@ -156,8 +144,13 @@ async def confluence_create_page(space_key: str, title: str, body: str = "", par
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await api_create_page(space_key, title, body, parent_id)
-        return result
+        result = await confluence_channel.create_page(space_key, title, body, parent_id)
+        
+        if isinstance(result, dict):
+            page_id = result.get("id", "unknown")
+            url = f"{confluence_channel.base_url}/pages/viewpage.action?pageId={page_id}"
+            return f"Page created: **{title}**\nID: {page_id}\nURL: {url}"
+        return str(result)
     except Exception as e:
         return f"Error creating page: {e}"
 
@@ -167,8 +160,8 @@ async def confluence_update_page(page_id: str, title: str = None, body: str = No
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await api_update_page(page_id, title, body)
-        return result
+        result = await confluence_channel.update_page(page_id, title, body)
+        return f"Page {page_id} updated successfully"
     except Exception as e:
         return f"Error updating page: {e}"
 
@@ -179,7 +172,22 @@ async def confluence_get_comments(page_id: str) -> str:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
         result = await confluence_channel.get_comments(page_id)
-        return result
+        
+        if isinstance(result, dict):
+            comments = result.get("results", [])
+            if not comments:
+                return "No comments found."
+            
+            lines = [f"**Comments** ({len(comments)}):\n"]
+            for c in comments:
+                if not isinstance(c, dict):
+                    continue
+                body = c.get("body", {})
+                if isinstance(body, dict):
+                    body = body.get("storage", {}).get("value", "")
+                lines.append(f"- {body[:200]}")
+            return "\n".join(lines)
+        return str(result)
     except Exception as e:
         return f"Error getting comments: {e}"
 
@@ -189,8 +197,8 @@ async def confluence_add_comment(page_id: str, comment: str) -> str:
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await api_add_comment(page_id, comment)
-        return result
+        await confluence_channel.add_comment(page_id, comment)
+        return f"Comment added to page {page_id}"
     except Exception as e:
         return f"Error adding comment: {e}"
 
@@ -200,8 +208,22 @@ async def confluence_list_spaces(limit: int = 20) -> str:
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await api_list_spaces(limit)
-        return result
+        result = await confluence_channel.list_spaces(limit)
+        
+        if isinstance(result, dict):
+            spaces = result.get("results", [])
+            if not spaces:
+                return "No spaces found."
+            
+            lines = [f"**Spaces** ({len(spaces)}):\n"]
+            for s in spaces:
+                if not isinstance(s, dict):
+                    continue
+                name = s.get("name", "Untitled")
+                key = s.get("key", "?")
+                lines.append(f"- **{name}** ({key})")
+            return "\n".join(lines)
+        return str(result)
     except Exception as e:
         return f"Error listing spaces: {e}"
 
@@ -211,8 +233,8 @@ async def confluence_delete_page(page_id: str) -> str:
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await api_delete_page(page_id)
-        return result
+        await confluence_channel.delete_page(page_id)
+        return f"Page {page_id} deleted successfully"
     except Exception as e:
         return f"Error deleting page: {e}"
 
@@ -223,7 +245,22 @@ async def confluence_get_page_history(page_id: str) -> str:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
         result = await confluence_channel.get_page_history(page_id)
-        return result
+        
+        if isinstance(result, dict):
+            versions = result.get("results", [])
+            if not versions:
+                return "No history found."
+            
+            lines = [f"**Version History** ({len(versions)} versions):\n"]
+            for v in versions:
+                if not isinstance(v, dict):
+                    continue
+                number = v.get("number", "?")
+                when = v.get("createdAt", "")[:10]
+                author = v.get("author", {}).get("displayName", "Unknown") if isinstance(v.get("author"), dict) else "Unknown"
+                lines.append(f"- v{number} by {author} on {when}")
+            return "\n".join(lines)
+        return str(result)
     except Exception as e:
         return f"Error getting page history: {e}"
 
@@ -234,7 +271,20 @@ async def confluence_get_page_children(page_id: str, limit: int = 10) -> str:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
         result = await confluence_channel.get_page_children(page_id, limit)
-        return result
+        
+        if isinstance(result, list):
+            if not result:
+                return "No child pages found."
+            
+            lines = [f"**Child Pages** ({len(result)}):\n"]
+            for p in result:
+                if not isinstance(p, dict):
+                    continue
+                title = p.get("title", "Untitled")
+                child_id = p.get("id", "?")
+                lines.append(f"- **{title}** ({child_id})")
+            return "\n".join(lines)
+        return str(result)
     except Exception as e:
         return f"Error getting page children: {e}"
 
@@ -244,8 +294,13 @@ async def confluence_get_space(space_key: str) -> str:
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await api_get_space(space_key)
-        return result
+        result = await confluence_channel.get_space(space_key)
+        
+        if isinstance(result, dict):
+            name = result.get("name", "Untitled")
+            description = result.get("description", {}).get("plain", {}).get("value", "No description")
+            return f"**Space: {name}** ({space_key})\n\n{description[:500]}"
+        return str(result)
     except Exception as e:
         return f"Error getting space: {e}"
 
@@ -255,8 +310,22 @@ async def confluence_list_pages(space_key: str, limit: int = 20) -> str:
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await api_list_pages(space_key, limit)
-        return result
+        result = await confluence_channel.list_pages(space_key, limit)
+        
+        if isinstance(result, dict):
+            pages = result.get("results", [])
+            if not pages:
+                return "No pages found in this space."
+            
+            lines = [f"**Pages in {space_key}** ({len(pages)}):\n"]
+            for p in pages:
+                if not isinstance(p, dict):
+                    continue
+                title = p.get("title", "Untitled")
+                page_id = p.get("id", "?")
+                lines.append(f"- **{title}** ({page_id})")
+            return "\n".join(lines)
+        return str(result)
     except Exception as e:
         return f"Error listing pages: {e}"
 
@@ -266,8 +335,13 @@ async def confluence_get_user(user_id: str = None, username: str = None) -> str:
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await api_get_user(user_id, username)
-        return result
+        result = await confluence_channel.get_user(user_id, username)
+        
+        if isinstance(result, dict):
+            display_name = result.get("displayName", "Unknown")
+            email = result.get("publicName", "No email")
+            return f"**User: {display_name}**\nEmail: {email}"
+        return str(result)
     except Exception as e:
         return f"Error getting user: {e}"
 
@@ -277,8 +351,8 @@ async def confluence_watch_page(page_id: str) -> str:
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await api_watch_page(page_id)
-        return result
+        await confluence_channel.watch_page(page_id)
+        return f"Now watching page {page_id}"
     except Exception as e:
         return f"Error watching page: {e}"
 
@@ -288,8 +362,8 @@ async def confluence_unwatch_page(page_id: str) -> str:
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await api_unwatch_page(page_id)
-        return result
+        await confluence_channel.unwatch_page(page_id)
+        return f"Stopped watching page {page_id}"
     except Exception as e:
         return f"Error unwatching page: {e}"
 
@@ -299,8 +373,14 @@ async def confluence_search_by_title(title: str, space_key: str = None) -> str:
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await api_search_by_title(title, space_key)
-        return result
+        result = await confluence_channel.get_page_by_title(space_key, title)
+        
+        if result and isinstance(result, dict):
+            page_id = result.get("id", "?")
+            page_title = result.get("title", title)
+            url = result.get("url", "")
+            return f"**{page_title}**\nID: {page_id}\nURL: {url}"
+        return f"No page found with title: {title}"
     except Exception as e:
         return f"Error searching by title: {e}"
 
