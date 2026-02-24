@@ -60,11 +60,13 @@ def get_security_config() -> ExecSecurityConfig:
 
 # ============ Shell Execution ============
 
-async def exec(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
+async def exec(command: str, args: list = None, timeout: int = DEFAULT_TIMEOUT) -> str:
     """Execute a shell command.
     
     Args:
-        command: Shell command to execute
+        command: Shell command to execute (or command name if args provided)
+        args: Optional list of arguments for safe execution (recommended)
+              Example: command="gh", args=["pr", "edit", "235", "--body", "new description"]
         timeout: Timeout in seconds (default: 60)
     
     Returns:
@@ -74,9 +76,6 @@ async def exec(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
         return "Error: Empty command"
     
     config = get_security_config()
-    
-    # Validate environment
-    # (env is not exposed to LLM, only internal use)
     
     # Get working directory - prefer skill workdir if set (async-safe via contextvars)
     actual_cwd = str(Path.cwd())
@@ -91,13 +90,61 @@ async def exec(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
             else:
                 logger.debug(f"[exec] Skill dir not found: {skill_workdir}")
     
-    # Evaluate command
+    # Use args array if provided (safer)
+    if args and isinstance(args, list):
+        # Build command from command + args
+        full_command = [command] + args
+        command_str = " ".join(f'"{arg}"' if " " in arg else arg for arg in full_command)
+        
+        allowed, reason = evaluate_command(command_str, config, actual_cwd)
+        if not allowed:
+            return f"Blocked: {reason}\n\nTo allow: security=full"
+        
+        merged_env = os.environ.copy()
+        
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *full_command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=actual_cwd,
+                env=merged_env
+            )
+        except FileNotFoundError:
+            return f"Error: Command not found: {command}"
+        except Exception as e:
+            return f"Error: {e}"
+        
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            return f"Error: Timeout after {timeout}s"
+        
+        output = []
+        if stdout:
+            output.append(stdout.decode('utf-8', errors='replace').strip())
+        if stderr:
+            stderr_text = stderr.decode('utf-8', errors='replace').strip()
+            if stderr_text and "Warning:" not in stderr_text:
+                output.append(f"STDERR:\n{stderr_text}")
+        
+        result = '\n'.join(output)
+        
+        if process.returncode != 0:
+            result = f"Exit: {process.returncode}\n\n{result}"
+        
+        return result if result else "(no output)"
+    
+    # Fallback: use shell command string
     allowed, reason = evaluate_command(command, config, actual_cwd)
     
     if not allowed:
         return f"Blocked: {reason}\n\nTo allow: security=full"
     
-    # Execute command
     merged_env = os.environ.copy()
     
     try:
@@ -137,8 +184,14 @@ async def exec(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
         return f"Error: {e}"
 
 
-def exec_sync(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
-    """Synchronous exec wrapper."""
+def exec_sync(command: str, args: list = None, timeout: int = DEFAULT_TIMEOUT) -> str:
+    """Synchronous exec wrapper.
+    
+    Args:
+        command: Shell command to execute (or command name if args provided)
+        args: Optional list of arguments for safe execution (recommended)
+        timeout: Timeout in seconds
+    """
     import subprocess
     
     if not command or not command.strip():
@@ -147,6 +200,46 @@ def exec_sync(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
     config = get_security_config()
     actual_cwd = str(Path.cwd())
     
+    # Use args array if provided (safer)
+    if args and isinstance(args, list):
+        # Build command from command + args
+        full_command = [command] + args
+        command_str = " ".join(f'"{arg}"' if " " in arg else arg for arg in full_command)
+        
+        allowed, reason = evaluate_command(command_str, config, actual_cwd)
+        if not allowed:
+            return f"Blocked: {reason}"
+        
+        merged_env = os.environ.copy()
+        
+        try:
+            result = subprocess.run(
+                full_command,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=actual_cwd,
+                env=merged_env
+            )
+        except FileNotFoundError:
+            return f"Error: Command not found: {command}"
+        except subprocess.TimeoutExpired:
+            return f"Error: Timeout after {timeout}s"
+        except Exception as e:
+            return f"Error: {e}"
+        
+        output = []
+        if result.stdout:
+            output.append(result.stdout.strip())
+        if result.stderr:
+            output.append(f"STDERR:\n{result.stderr.strip()}")
+        
+        if result.returncode != 0:
+            output.insert(0, f"Exit: {result.returncode}")
+        
+        return '\n'.join(output) if output else "(no output)"
+    
+    # Fallback: use shell command string
     allowed, reason = evaluate_command(command, config, actual_cwd)
     
     if not allowed:
@@ -188,13 +281,24 @@ def get_tools_schemas() -> list:
     """Return tool schema for LLM.
     
     Only one tool: exec - Agent uses Linux CLI directly.
+    
+    Use 'args' array for safe execution (recommended):
+      exec(command="gh", args=["pr", "edit", "235", "--body", "new description"])
     """
     return [
         {
             "type": "function",
             "function": {
                 "name": "exec",
-                "description": """Execute a Linux shell command:
+                "description": """Execute a Linux shell command.
+
+**Safe Execution (Recommended):** Use command + args array
+- exec(command="gh", args=["pr", "edit", "235", "--body", "new description"])
+- exec(command="git", args=["commit", "-m", "fix: bug fix"])
+- exec(command="python", args=["-m", "http.server", "8080"])
+
+**Legacy (shell string):**
+- exec(command="gh pr edit 235 --body 'new description'")
 
 **File:**
 - cat file, head -n 20 file, tail -n 10 file
@@ -222,7 +326,12 @@ def get_tools_schemas() -> list:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "command": {"type": "string", "description": "Shell command to execute"},
+                        "command": {"type": "string", "description": "Command to execute (e.g., gh, git, python)"},
+                        "args": {
+                            "type": "array", 
+                            "items": {"type": "string"},
+                            "description": "Command arguments as array (recommended for safety)"
+                        },
                         "timeout": {"type": "integer", "description": "Timeout in seconds (default: 60)"}
                     },
                     "required": ["command"]
