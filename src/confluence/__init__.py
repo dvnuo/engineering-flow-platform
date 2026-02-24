@@ -50,8 +50,25 @@ async def confluence_get_page(page_id: str) -> str:
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        page = await api_get_page(page_id)
-        return f"**{page.get('title', 'Untitled')}**\n\n{page.get('body', {}).get('storage', {}).get('value', 'No content')[:500]}..."
+        # Use channel method to get raw page dict, not the tool function which returns formatted string
+        page = await confluence_channel.get_page(page_id)
+        
+        # Handle case where page might not be a dict
+        if not isinstance(page, dict):
+            return f"Error: Invalid page response - expected dict, got {type(page)}"
+        
+        title = page.get('title', 'Untitled')
+        
+        # Handle body - could be string or dict
+        body_obj = page.get('body', {})
+        if isinstance(body_obj, dict):
+            body = body_obj.get('storage', {}).get('value', 'No content')
+        elif isinstance(body_obj, str):
+            body = body_obj
+        else:
+            body = 'No content'
+        
+        return f"**{title}**\n\n{body[:500]}..."
     except Exception as e:
         return f"Error getting page: {e}"
 
@@ -111,9 +128,23 @@ async def confluence_get_page_by_url(url: str) -> str:
         if not page_id:
             return f"Could not extract page ID from URL: {url}"
         
-        page = await api_get_page(page_id)
+        # Use channel method to get raw page dict, not the tool function which returns formatted string
+        page = await confluence_channel.get_page(page_id)
+        
+        # Handle case where page might not be a dict
+        if not isinstance(page, dict):
+            return f"Error: Invalid page response - expected dict, got {type(page)}"
+        
         title = page.get('title', 'Untitled')
-        body = page.get('body', {}).get('storage', {}).get('value', 'No content')
+        
+        # Handle body - could be string or dict
+        body_obj = page.get('body', {})
+        if isinstance(body_obj, dict):
+            body = body_obj.get('storage', {}).get('value', 'No content')
+        elif isinstance(body_obj, str):
+            body = body_obj
+        else:
+            body = 'No content'
         
         return f"**{title}**\n\nURL: {url}\n\n{body[:2000]}..."
     except Exception as e:

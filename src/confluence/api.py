@@ -478,9 +478,15 @@ async def confluence_search(cql: str, limit: int = 10) -> str:
         
         lines = [f"**Search Results** ({total} total, showing {len(pages)}):\n"]
         for page in pages:
+            if not isinstance(page, dict):
+                continue
             title = page.get("title", "Untitled")
             page_id = page.get("id")
-            space = page.get("space", {}).get("key", "?")
+            space_obj = page.get("space", {})
+            if isinstance(space_obj, dict):
+                space = space_obj.get("key", "?")
+            else:
+                space = str(space_obj) if space_obj else "?"
             lines.append(f"- **{title}** ({space}-{page_id})")
         
         return "\n".join(lines)
@@ -587,16 +593,40 @@ async def confluence_list_spaces(limit: int = 20) -> str:
 
 def _format_page_info(page: Dict) -> str:
     """Format page information for display."""
+    if not isinstance(page, dict):
+        return f"Error: Invalid page data - expected dict, got {type(page)}"
+    
     title = page.get("title", "Untitled")
     page_id = page.get("id", "?")
-    space = page.get("space", {}).get("key", "?")
-    version = page.get("version", {}).get("number", "?")
-    last_modified = page.get("version", {}).get("when", "")[:10]
     
-    # Get body content
+    # Handle space - could be dict, string, or None
+    space = page.get("space", {})
+    if isinstance(space, dict):
+        space = space.get("key", "?")
+    else:
+        space = str(space) if space else "?"
+    
+    # Handle version - could be dict, string, or None
+    version_info = page.get("version", {})
+    if isinstance(version_info, dict):
+        version = version_info.get("number", "?")
+        last_modified = version_info.get("when", "")[:10] if version_info.get("when") else "?"
+    else:
+        version = str(version_info) if version_info else "?"
+        last_modified = "?"
+    
+    # Get body content - handle case where body might be a string or None
     body = page.get("body", {})
-    storage_body = body.get("storage", {})
-    content = storage_body.get("value", "")[:1000]
+    if isinstance(body, str):
+        content = body[:1000]
+    elif isinstance(body, dict):
+        storage_body = body.get("storage", {})
+        if isinstance(storage_body, dict):
+            content = storage_body.get("value", "")[:1000]
+        else:
+            content = str(storage_body)[:1000] if storage_body else ""
+    else:
+        content = ""
     
     url = f"https://confluence.atlassian.com/pages/viewpage.action?pageId={page_id}"
     
@@ -609,7 +639,7 @@ def _format_page_info(page: Dict) -> str:
 **URL:** {url}
 
 **Content Preview:**
-{content}{'...' if len(storage_body.get('value', '')) > 1000 else ''}"""
+{content}{'...' if len(content) >= 1000 else ''}"""
 
 
 def _extract_comment_body(comment: Dict) -> str:
