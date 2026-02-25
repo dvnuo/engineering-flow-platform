@@ -86,9 +86,11 @@ class Config:
     """
     
     DEFAULT_PATHS = [
-        Path(__file__).parent / "config.yaml",  # Project directory
         Path.home() / ".efp" / "config.yaml",  # User config directory
+        Path(__file__).parent / "config.yaml",  # Project directory
     ]
+
+    PROJECT_EXAMPLE = Path(__file__).parent.parent / 'config.yaml.example'
 
     def __init__(self, config_path: Optional[str] = None):
         if config_path is None:
@@ -107,6 +109,8 @@ class Config:
             if path.exists():
                 return path
         # Return the primary path even if it doesn't exist
+        import shutil
+        shutil.copy(self.PROJECT_EXAMPLE, self.DEFAULT_PATHS[0])
         return self.DEFAULT_PATHS[0]
 
     def load(self) -> None:
