@@ -22,7 +22,7 @@ import httpx
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from src.utils.truncate import truncate
+from src.utils.truncate import truncate, truncate_json
 
 from src.config import config
 
@@ -38,11 +38,8 @@ def _is_debug_enabled() -> bool:
 
 
 def _truncate_json(data: Any, max_length: int = 500) -> str:
-    """Truncate JSON for logging."""
-    text = json.dumps(data, indent=2, default=str)
-    if len(text) <= max_length:
-        return text
-    return text[:max_length] + f"... [{len(text) - max_length} chars truncated]"
+    """Truncate JSON for logging (wrapper for truncate_json)."""
+    return truncate_json(data, max_length)
 
 
 # Security: JQL injection patterns to block

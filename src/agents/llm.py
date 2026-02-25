@@ -138,12 +138,8 @@ def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
 
 
 def _truncate_text(text: str, max_length: int = 200) -> str:
-    """Truncate text for logging preview."""
-    if not text:
-        return "(empty)"
-    if len(text) > max_length:
-        return f"{text[:max_length]}... [{len(text) - max_length} chars truncated]"
-    return text
+    """Truncate text for logging preview (wrapper for truncate_with_count)."""
+    return truncate_with_count(text, max_length)
 
 
 class BaseProvider:
