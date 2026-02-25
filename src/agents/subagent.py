@@ -185,7 +185,7 @@ def sessions_history(
     for msg in messages:
         entry = {
             "role": msg.get("role", "unknown"),
-            "content": msg.get("content", "")[:1000],  # Truncate long content
+            "content": msg.get("content", ""),  # Keep full content
         }
         if include_tools and msg.get("tool_calls"):
             entry["tool_calls"] = msg.get("tool_calls")
