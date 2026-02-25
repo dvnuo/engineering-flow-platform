@@ -181,7 +181,7 @@ jira:
       # password: "${JIRA_PASSWORD}"
       
       # --- Advanced Options ---
-      # api_version: "2" or "3" (default: 3 for Cloud)
+      # api_version: "2" or "3" (default: 2)
       # timeout: 30.0
 
 # ============================================
