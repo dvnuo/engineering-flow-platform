@@ -6,8 +6,11 @@ import logging
 import sys
 import traceback
 from typing import Any, Callable, Dict
+from pathlib import Path
 
-from aiohttp import web
+import os, hashlib
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.utils.truncate import truncate
 from aiohttp.web import Request
 
 from src.agents.core import agent
@@ -167,7 +170,7 @@ class Gateway:
                 
                 # Get first user message as session name
                 first_user_msg = user_messages[0]
-                session_name = (first_user_msg.get('content', '') or 'New Chat')[:30]
+                session_name = truncate(first_user_msg.get('content', '') or 'New Chat', 30)
                 if not session_name.strip():
                     session_name = 'New Chat'
                 
@@ -175,7 +178,7 @@ class Gateway:
                 last_message = ''
                 for msg in reversed(history):
                     if msg.get('role') in ('user', 'assistant'):
-                        last_message = (msg.get('content', '') or '')[:50]
+                        last_message = truncate(msg.get('content', '') or '', 50)
                         break
                 
                 updated_at = session.get('updated_at', datetime.utcnow().isoformat())

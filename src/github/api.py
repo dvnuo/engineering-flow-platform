@@ -531,7 +531,7 @@ async def github_search_issues(query: str, max_results: int = 10) -> str:
         lines = [f"**Search Results** ({len(items)}):\n"]
         for item in items:
             num = item.get("number")
-            title = item.get("title", "")[:40]
+            title = item.get("title", "")
             state = item.get("state")
             lines.append(f"- **{item.get('repository_url', '').split('/')[-1]}#{num}** [{state}] {title}")
         

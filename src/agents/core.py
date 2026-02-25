@@ -490,8 +490,8 @@ You have access to the following tools. When a user asks you to do something tha
                 elif msg.get("role") == "tool":
                     logger.debug(f"  Msg {i}: tool (tool_call_id={msg.get('tool_call_id')})")
                 else:
-                    content = msg.get("content", "")[:50]
-                    logger.debug(f"  Msg {i}: {msg.get('role')}: {content}...")
+                    content = truncate(msg.get("content", ""), 50)
+                    logger.debug(f"  Msg {i}: {msg.get('role')}: {content}")
             
             llm_result = await llm_client.chat(
                 messages=messages,

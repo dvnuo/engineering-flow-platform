@@ -8,6 +8,10 @@ import datetime
 import json
 import logging
 from typing import Any, Dict, Optional
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.utils.truncate import truncate
 
 import httpx
 
@@ -59,7 +63,7 @@ class HTTPError(LLMError):
             error_type=self._get_error_type(status_code),
             details={
                 "status_code": status_code,
-                "response_body": response_body[:1000] if response_body else "",
+                "response_body": truncate(response_body, 1000),
                 "endpoint": endpoint,
                 "provider": provider,
             },
@@ -88,7 +92,7 @@ class HTTPError(LLMError):
             pass
         
         # Return first 200 chars of body
-        return body[:200] if len(body) > 200 else body
+        return truncate(body, 200)
     
     def _get_default_message(self, status_code: int) -> str:
         """Get default message for HTTP status code."""

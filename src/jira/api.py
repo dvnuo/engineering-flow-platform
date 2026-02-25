@@ -723,7 +723,7 @@ async def jira_search(jql: str, max_results: int = 10) -> str:
             key = issue.get("key")
             fields = issue.get("fields", {})
             status = fields.get("status", {}).get("name", "?")
-            summary = fields.get("summary", "")[:50]
+            summary = fields.get("summary", "")
             lines.append(f"- **{key}** [{status}] {summary}")
         
         return "\n".join(lines)
@@ -786,7 +786,7 @@ async def jira_create_issue(
         )
         issue_key = result.get("key", "unknown")
         logger.info(f"Issue created: {issue_key}")
-        return f"Issue created: **{issue_key}**\nSummary: {summary[:50]}"
+        return f"Issue created: **{issue_key}**\nSummary: {summary}"
     except httpx.HTTPStatusError as e:
         logger.error(f"jira_create_issue: HTTP error {e.response.status_code}")
         return f"Error: HTTP {e.response.status_code} - {e.response.reason_phrase}"
