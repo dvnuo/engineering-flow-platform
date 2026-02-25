@@ -7,6 +7,7 @@ import sys
 import traceback
 from typing import Any, Callable, Dict
 from pathlib import Path
+from aiohttp import web
 
 import os, hashlib
 sys.path.insert(0, str(Path(__file__).parent.parent))
