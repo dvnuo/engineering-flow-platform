@@ -10,6 +10,12 @@ Responsibilities:
 import logging
 import uuid
 import json
+import sys
+from pathlib import Path
+
+# Add src to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.utils.truncate import truncate
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field, asdict
@@ -99,7 +105,7 @@ class ExecutionTracer:
         
         if self.enabled:
             logger.info(f"[Tracer] Execution started: {execution_id}")
-            logger.info(f"[Tracer]  User message: {user_message[:100]}...")
+            logger.info(f"[Tracer]  User message: {truncate(user_message, 100)}")
             logger.info(f"[Tracer]  Matched skill: {matched_skill}")
         
         return execution_id
@@ -120,7 +126,7 @@ class ExecutionTracer:
         tool_call = ToolCall(
             tool_name=tool_name,
             arguments=arguments,
-            result=result[:500] if result else "",  # Truncate for logging
+            result=truncate(result, 500),
             duration_ms=duration_ms,
             success=success,
             error=error,
@@ -143,12 +149,12 @@ class ExecutionTracer:
         
         thinking_event = {
             "timestamp": datetime.utcnow().isoformat(),
-            "thinking": thinking[:500] if thinking else "",
+            "thinking": truncate(thinking, 500),
         }
         self.current_execution.thinking_events.append(thinking_event)
         
         if self.enabled:
-            logger.debug(f"[Tracer] Thinking: {thinking[:100]}...")
+            logger.debug(f"[Tracer] Thinking: {truncate(thinking, 100)}")
     
     def complete_execution(self, final_response: str):
         """Mark execution as complete."""
@@ -237,12 +243,12 @@ class ExecutionTracer:
                 for thinking in execution.thinking_events:
                     events.append({
                         "type": "llm_thinking",
-                        "data": {"thinking": thinking.get('thinking', '')[:500]},
+                        "data": {"thinking": truncate(thinking.get('thinking', ''), 500)},
                         "timestamp": thinking.get('timestamp', ''),
                         "display": {
                             "icon": icons.get('llm_thinking', '🤔'),
                             "name": "LLM Thinking",
-                            "message": thinking.get('thinking', '')[:100] + '...' if len(thinking.get('thinking', '')) > 100 else thinking.get('thinking', '')
+                            "message": truncate(thinking.get('thinking', ''), 100)
                         }
                     })
             
@@ -264,7 +270,7 @@ class ExecutionTracer:
                 if 'tool_result' in event_types:
                     events.append({
                         "type": "tool_result",
-                        "data": {"tool": tool_call.tool_name, "result": tool_call.result[:300], "success": tool_call.success},
+                        "data": {"tool": tool_call.tool_name, "result": truncate(tool_call.result, 300), "success": tool_call.success},
                         "timestamp": tool_call.timestamp,
                         "display": {
                             "icon": "✅" if tool_call.success else "❌",
