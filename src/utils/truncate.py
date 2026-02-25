@@ -1,5 +1,6 @@
 """String truncation utilities."""
 import json
+from typing import Any
 
 def truncate(text: str, max_length: int = 500, suffix: str = "...") -> str:
     """Safely truncate string, never raises error.
