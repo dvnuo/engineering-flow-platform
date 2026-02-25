@@ -13,8 +13,8 @@ async def github_get_issue(owner: str, repo: str, issue_number: int) -> str:
         issue = await github_channel.get_issue(owner, repo, issue_number)
         state = issue.get("state", "unknown")
         title = issue.get("title", "Untitled")
-        body = issue.get("body", "")[:200]
-        return f"**{owner}/{repo}#{issue_number}: {title}**\n\n**State:** {state}\n\n{body}..."
+        body = issue.get("body", "")
+        return f"**{owner}/{repo}#{issue_number}: {title}**\n\n**State:** {state}\n\n{body}"
     except Exception as e:
         return f"Error getting issue: {e}"
 

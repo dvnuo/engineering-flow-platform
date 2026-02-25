@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from src.config import config
+from src.utils.truncate import truncate, truncate_with_count
 from src.sessions.usage import usage_tracker, estimate_cost
 from .errors import (
     handle_httpx_error,
@@ -314,11 +315,11 @@ class OpenAIProvider(BaseProvider):
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(all_messages)}")
             if system_prompt:
-                logger.debug(f"System prompt: {system_prompt[:200]}...")
+                logger.debug(f"System prompt: {truncate(system_prompt, 200)}")
             logger.debug(f"Messages preview:")
             for i, msg in enumerate(all_messages[:5]):
                 role = msg.get("role", "unknown")
-                content = (msg.get("content") or "")[:100]
+                content = truncate(msg.get("content") or "", 100)
                 logger.debug(f"  [{i}] {role}: {content}")
             if len(all_messages) > 5:
                 logger.debug(f"  ... [{len(all_messages) - 5} more messages]")
@@ -341,7 +342,7 @@ class OpenAIProvider(BaseProvider):
             content = message.get("content") or ""
             logger.debug(f"Content length: {len(content)} chars")
             if content:
-                logger.debug(f"Content preview: {content[:200]}...")
+                logger.debug(f"Content preview: {truncate(content, 200)}")
             else:
                 logger.debug("Content: (empty - tool call response)")
             
@@ -349,7 +350,7 @@ class OpenAIProvider(BaseProvider):
             reasoning = message.get("reasoning")
             if reasoning:
                 logger.debug(f"Reasoning length: {len(reasoning)} chars")
-                logger.debug(f"Reasoning preview: {reasoning[:200]}...")
+                logger.debug(f"Reasoning preview: {truncate(reasoning, 200)}")
             
             tool_calls = message.get("tool_calls", [])
             logger.debug(f"Tool calls: {len(tool_calls)}")
@@ -472,7 +473,7 @@ class GitHubCopilotProvider(BaseProvider):
                     msg_summary["tool_call_id"] = msg.get("tool_call_id")
                 if msg.get("content"):
                     content = msg.get("content", "")
-                    msg_summary["content"] = content[:100] + "..." if len(content) > 100 else content
+                    msg_summary["content"] = truncate(content, 100)
                 logger.debug(f"  Message {i}: {msg_summary}")
         
         # Make API call with proper error handling

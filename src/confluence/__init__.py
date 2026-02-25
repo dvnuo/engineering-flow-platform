@@ -53,7 +53,7 @@ async def confluence_get_page(page_id: str) -> str:
         else:
             body = 'No content'
         
-        return f"**{title}**\n\n{body[:500]}..."
+        return f"**{title}**\n\n{body}"
     except Exception as e:
         return f"Error getting page: {e}"
 
@@ -134,7 +134,7 @@ async def confluence_get_page_by_url(url: str) -> str:
         else:
             body = 'No content'
         
-        return f"**{title}**\n\nURL: {url}\n\n{body[:2000]}..."
+        return f"**{title}**\n\nURL: {url}\n\n{body}"
     except Exception as e:
         return f"Error getting page by URL: {e}"
 
@@ -185,7 +185,7 @@ async def confluence_get_comments(page_id: str) -> str:
                 body = c.get("body", {})
                 if isinstance(body, dict):
                     body = body.get("storage", {}).get("value", "")
-                lines.append(f"- {body[:200]}")
+                lines.append(f"- {body}")
             return "\n".join(lines)
         return str(result)
     except Exception as e:
@@ -299,7 +299,7 @@ async def confluence_get_space(space_key: str) -> str:
         if isinstance(result, dict):
             name = result.get("name", "Untitled")
             description = result.get("description", {}).get("plain", {}).get("value", "No description")
-            return f"**Space: {name}** ({space_key})\n\n{description[:500]}"
+            return f"**Space: {name}** ({space_key})\n\n{description}"
         return str(result)
     except Exception as e:
         return f"Error getting space: {e}"

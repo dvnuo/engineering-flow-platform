@@ -101,7 +101,7 @@ class GitHubCLI:
                 f"**State:** {data.get('state')}",
                 f"**Author:** {data.get('author', {}).get('login', 'unknown')}",
                 "",
-                data.get('body', 'No description')[:500]
+                data.get('body', 'No description')
             ]
             return "\n".join(lines)
         except json.JSONDecodeError:
@@ -188,7 +188,7 @@ class GitHubCLI:
                 f"**Author:** {data.get('author', {}).get('login', 'unknown')}",
                 f"**Changes:** +{data.get('additions', 0)} -{data.get('deletions', 0)}",
                 "",
-                data.get('body', 'No description')[:500]
+                data.get('body', 'No description')
             ]
             return "\n".join(lines)
         except json.JSONDecodeError:

@@ -512,9 +512,9 @@ async def github_get_issue(owner: str, repo: str, issue_number: int) -> str:
         
         state = issue.get("state", "unknown")
         title = issue.get("title", "Untitled")
-        body = issue.get("body", "")[:200]
+        body = issue.get("body", "")
         
-        return f"**{owner}/{repo}#{issue_number}: {title}**\n\n**State:** {state}\n\n{body}..."
+        return f"**{owner}/{repo}#{issue_number}: {title}**\n\n**State:** {state}\n\n{body}"
     except Exception as e:
         return f"Error getting issue: {e}"
 
