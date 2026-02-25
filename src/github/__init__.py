@@ -8,7 +8,11 @@ __all__ = ["GitHubClient", "github_channel", "github_get_issue", "github_search_
 # ========== Tool Functions ==========
 
 async def github_get_issue(owner: str, repo: str, issue_number: int) -> str:
-    """Get GitHub issue or PR details."""
+    """Get GitHub issue or PR details.
+    
+    Only supports GitHub Enterprise (internal).
+    Uses base_url from config (defaults to api.github.com for public).
+    """
     try:
         issue = await github_channel.get_issue(owner, repo, issue_number)
         state = issue.get("state", "unknown")
@@ -20,7 +24,10 @@ async def github_get_issue(owner: str, repo: str, issue_number: int) -> str:
 
 
 async def github_search_issues(query: str, max_results: int = 10) -> str:
-    """Search GitHub issues and PRs."""
+    """Search GitHub issues and PRs.
+    
+    Only supports GitHub Enterprise (internal).
+    """
     try:
         result = await github_channel.search_issues(query, max_results)
         items = result.get("items", [])
@@ -40,7 +47,10 @@ async def github_search_issues(query: str, max_results: int = 10) -> str:
 
 
 async def github_add_comment(owner: str, repo: str, issue_number: int, comment: str) -> str:
-    """Add a comment to a GitHub issue or PR."""
+    """Add a comment to a GitHub issue or PR.
+    
+    Only supports GitHub Enterprise (internal).
+    """
     try:
         result = await github_channel.add_comment(owner, repo, issue_number, comment)
         comment_id = result.get("id", "unknown")
@@ -50,17 +60,21 @@ async def github_add_comment(owner: str, repo: str, issue_number: int, comment: 
 
 
 def get_tools_schemas() -> list:
-    """Return GitHub tool schemas for OpenAI."""
+    """Return GitHub tool schemas for OpenAI.
+    
+    Only supports GitHub Enterprise (internal).
+    For internal GitHub Enterprise, use gh CLI (exec tool) or configure base_url in config.
+    """
     return [
         {
             "type": "function",
             "function": {
                 "name": "github_get_issue",
-                "description": "Get GitHub issue or PR details",
+                "description": "Get GitHub issue or PR details. Only supports GitHub Enterprise (internal).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "owner": {"type": "string", "description": "Repository owner"},
+                        "owner": {"type": "string", "description": "Repository owner (e.g., 'myorg' for internal)"},
                         "repo": {"type": "string", "description": "Repository name"},
                         "issue_number": {"type": "integer", "description": "Issue or PR number"}
                     },
@@ -72,7 +86,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "github_search_issues",
-                "description": "Search GitHub issues and PRs",
+                "description": "Search GitHub issues and PRs. Only supports GitHub Enterprise (internal).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -87,7 +101,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "github_add_comment",
-                "description": "Add a comment to a GitHub issue or PR",
+                "description": "Add a comment to a GitHub issue or PR. Only supports GitHub Enterprise (internal).",
                 "parameters": {
                     "type": "object",
                     "properties": {
