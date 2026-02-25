@@ -17,10 +17,16 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.utils.truncate import truncate
 
 from src.config import config
 
@@ -347,7 +353,7 @@ class GitHubChannel:
         Returns:
             Created issue data
         """
-        logger.info(f"Creating issue in {owner}/{repo}: {title[:50]}")
+        logger.info(f"Creating issue in {owner}/{repo}: {truncate(title, 50)}")
         
         data = {"title": title, "body": body}
         if labels:

@@ -10,9 +10,15 @@ Features:
 
 import base64
 import logging
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.utils.truncate import truncate
 
 from src.config import config
 
@@ -305,7 +311,7 @@ class ConfluenceChannel:
         Returns:
             Search results with pages list
         """
-        logger.info(f"Searching pages with CQL: {cql[:100]}...")
+        logger.info(f"Searching pages with CQL: {truncate(cql, 100)}")
         
         params = {
             "cql": cql,

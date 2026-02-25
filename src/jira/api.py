@@ -14,9 +14,15 @@ import json
 import logging
 import os
 import re
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
+
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.utils.truncate import truncate
 
 from src.config import config
 
@@ -286,7 +292,7 @@ class JiraChannel:
         if not self._validate_jql(jql):
             raise ValueError(f"Invalid JQL query: potentially unsafe pattern detected")
         
-        logger.info(f"Searching issues with JQL: {jql[:100]}...")
+        logger.info(f"Searching issues with JQL: {truncate(jql, 100)}")
         
         params = {
             "jql": jql,
@@ -324,7 +330,7 @@ class JiraChannel:
         Returns:
             Created issue key and details
         """
-        logger.info(f"Creating issue in {project}: {summary[:50]}...")
+        logger.info(f"Creating issue in {project}: {truncate(summary, 50)}")
         
         if self.api_version == "3":
             # v3: Use Atlassian Document Format (ADF)
@@ -700,14 +706,14 @@ async def jira_get_issue(issue_key: str) -> str:
 
 async def jira_search(jql: str, max_results: int = 10) -> str:
     """Search Jira issues using JQL."""
-    logger.debug(f"jira_search called: jql={jql[:50]}..., max_results={max_results}")
+    logger.debug(f"jira_search called: jql={truncate(jql, 50)}, max_results={max_results}")
     
     if not jira_channel.is_configured():
         logger.warning("jira_search: Jira not configured")
         return "Error: Jira not configured"
     
     try:
-        logger.info(f"Searching issues with JQL: {jql[:80]}...")
+        logger.info(f"Searching issues with JQL: {truncate(jql, 80)}")
         result = await jira_channel.search_issues(jql, max_results=max_results)
         issues = result.get("issues", [])
         total = result.get("total", 0)
@@ -768,7 +774,7 @@ async def jira_create_issue(
     priority: str = None
 ) -> str:
     """Create a new Jira issue."""
-    logger.debug(f"jira_create_issue: project={project}, summary={summary[:30]}...")
+    logger.debug(f"jira_create_issue: project={project}, summary={truncate(summary, 30)}")
     
     if not jira_channel.is_configured():
         logger.warning("jira_create_issue: Jira not configured")
@@ -776,7 +782,7 @@ async def jira_create_issue(
     
     try:
         proj = project or jira_channel.project
-        logger.info(f"Creating issue in {proj}: {summary[:50]}...")
+        logger.info(f"Creating issue in {proj}: {truncate(summary, 50)}")
         result = await jira_channel.create_issue(
             project=proj,
             summary=summary,

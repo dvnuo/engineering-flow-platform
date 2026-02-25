@@ -6,11 +6,16 @@ Integrates with LightweightMemory for TF-IDF search.
 
 import logging
 import os
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Add parent to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.utils.truncate import truncate
 
 # Default workspace paths
 DEFAULT_WORKSPACE = Path.home() / ".efp" / "workspace"
@@ -317,7 +322,7 @@ class MemorySystem:
             context_parts = []
             for i, result in enumerate(search_results, 1):
                 source = result.get('metadata', {}).get('source', 'Unknown')
-                content = result.get('content', '')[:500]  # Truncate long content
+                content = truncate(result.get('content', ''), 500)
                 score = result.get('score', 0)
                 context_parts.append(f"[{i}] {source} (relevance: {score:.2f})\n{content}")
             
