@@ -316,6 +316,7 @@ def get_tools_schemas() -> list:
 **GitHub (gh):**
 - gh repo view, gh issue list, gh pr list
 - gh pr view 123, gh pr checkout 123
+- **Supports GitHub Enterprise** - uses config from ~/gh/hosts.yml
 
 **Search:**
 - grep -r "pattern" ., rg "pattern" --type py
