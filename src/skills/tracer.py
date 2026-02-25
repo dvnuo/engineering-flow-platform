@@ -196,13 +196,14 @@ class ExecutionTracer:
             for e in self.execution_history[-limit:]
         ]
     
-    def get_events_for_ui(self, limit: int = 10, event_types: List[str] = None) -> List[Dict]:
+    def get_events_for_ui(self, limit: int = 10, event_types: List[str] = None, session_id: str = None) -> List[Dict]:
         """Get events formatted for UI display.
         
         Args:
             limit: Maximum number of executions to include
             event_types: Optional list of event types to include (e.g., ['skill_matched', 'tool_call', 'tool_result', 'llm_thinking', 'complete'])
                        If None, all event types are included
+            session_id: Optional session ID to filter events (for session isolation)
         
         Returns:
             List of events with type, data, and display info
@@ -222,7 +223,14 @@ class ExecutionTracer:
         
         events = []
         
-        for execution in self.execution_history[-limit:]:
+        # Filter executions by session_id if provided (for session isolation)
+        filtered_executions = self.execution_history
+        if session_id:
+            filtered_executions = [e for e in self.execution_history if e.session_id == session_id]
+            # Take only the last 'limit' executions for this session
+            filtered_executions = filtered_executions[-limit:]
+        
+        for execution in filtered_executions:
             # Skill matched
             if 'skill_matched' in event_types and execution.matched_skill:
                 events.append({

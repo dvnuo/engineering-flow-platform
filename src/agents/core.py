@@ -557,7 +557,7 @@ You have access to the following tools. When a user asks you to do something tha
                 # Get events for UI
                 from src.skills import get_tracer
                 tracer_instance = get_tracer()
-                events = tracer_instance.get_events_for_ui(limit=10)
+                events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
                 result["events"] = events
                 
                 return result
@@ -674,7 +674,7 @@ You have access to the following tools. When a user asks you to do something tha
         # Get events for UI
         from src.skills import get_tracer
         tracer_instance = get_tracer()
-        events = tracer_instance.get_events_for_ui(limit=10)
+        events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
         
         return {"response": "Task completed (max iterations reached)", "usage": usage_data or {}, "events": events}
 
