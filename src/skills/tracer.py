@@ -1,7 +1,5 @@
 """Skill Execution Tracer - Audit and replay capability.
 
-Reference: https://github.com/dvnuo/engineering-flow-platform/issues/169
-
 Responsibilities:
 - FR-7: Execution Trace - Log matched skill, tool calls, input/output
 - FR-8: Replay Capability - Support replaying tool sequence for debugging

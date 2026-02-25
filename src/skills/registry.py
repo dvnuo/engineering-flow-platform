@@ -1,7 +1,5 @@
 """Skill Registry - Central storage and discovery of all available skills.
 
-Reference: https://github.com/dvnuo/engineering-flow-platform/issues/169
-
 Responsibilities:
 - Load skills at startup
 - Index trigger keywords
