@@ -10,7 +10,7 @@ __all__ = ["GitHubClient", "github_channel", "github_get_issue", "github_search_
 async def github_get_issue(owner: str, repo: str, issue_number: int) -> str:
     """Get GitHub issue or PR details.
     
-    Supports both public GitHub (github.com) and GitHub Enterprise.
+    Only supports GitHub Enterprise (internal).
     Uses base_url from config (defaults to api.github.com for public).
     """
     try:
@@ -26,7 +26,7 @@ async def github_get_issue(owner: str, repo: str, issue_number: int) -> str:
 async def github_search_issues(query: str, max_results: int = 10) -> str:
     """Search GitHub issues and PRs.
     
-    Supports both public GitHub (github.com) and GitHub Enterprise.
+    Only supports GitHub Enterprise (internal).
     """
     try:
         result = await github_channel.search_issues(query, max_results)
@@ -49,7 +49,7 @@ async def github_search_issues(query: str, max_results: int = 10) -> str:
 async def github_add_comment(owner: str, repo: str, issue_number: int, comment: str) -> str:
     """Add a comment to a GitHub issue or PR.
     
-    Supports both public GitHub (github.com) and GitHub Enterprise.
+    Only supports GitHub Enterprise (internal).
     """
     try:
         result = await github_channel.add_comment(owner, repo, issue_number, comment)
@@ -62,7 +62,7 @@ async def github_add_comment(owner: str, repo: str, issue_number: int, comment: 
 def get_tools_schemas() -> list:
     """Return GitHub tool schemas for OpenAI.
     
-    Supports both public GitHub (github.com) and GitHub Enterprise.
+    Only supports GitHub Enterprise (internal).
     For internal GitHub Enterprise, use gh CLI (exec tool) or configure base_url in config.
     """
     return [
@@ -70,7 +70,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "github_get_issue",
-                "description": "Get GitHub issue or PR details. Supports both public GitHub and GitHub Enterprise.",
+                "description": "Get GitHub issue or PR details. Only supports GitHub Enterprise (internal).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -86,7 +86,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "github_search_issues",
-                "description": "Search GitHub issues and PRs. Supports both public GitHub and GitHub Enterprise.",
+                "description": "Search GitHub issues and PRs. Only supports GitHub Enterprise (internal).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -101,7 +101,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "github_add_comment",
-                "description": "Add a comment to a GitHub issue or PR. Supports both public GitHub and GitHub Enterprise.",
+                "description": "Add a comment to a GitHub issue or PR. Only supports GitHub Enterprise (internal).",
                 "parameters": {
                     "type": "object",
                     "properties": {

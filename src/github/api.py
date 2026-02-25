@@ -69,12 +69,12 @@ class GitHubChannel:
     Configuration:
         github.api_token: API token for authentication
         github.enabled: Whether GitHub integration is enabled
-        github.base_url: Base URL for API (default: https://api.github.com)
+        github.base_url: Base URL for API (default: (enterprise only - must configure base_url))
         github.hostname: Hostname for gh CLI (defaults to base_url hostname)
     """
     
     def __init__(self):
-        self.base_url = config.get("github.base_url", "https://api.github.com")
+        self.base_url = config.get("github.base_url", "(enterprise only)")
         self.token = config.get("github.api_token", "")
         self.enabled = config.get("github.enabled", False)
         self.hostname = config.get("github.hostname", "")
@@ -95,7 +95,7 @@ class GitHubChannel:
         """Reinitialize GitHubChannel (called when config changes)."""
         logger.info("Reinitializing GitHubChannel...")
         github_config = config.github or {}
-        self.base_url = github_config.get("base_url", "https://api.github.com")
+        self.base_url = github_config.get("base_url", "(enterprise only)")
         self.token = github_config.get("api_token", "")
         self.enabled = github_config.get("enabled", False)
         self.hostname = github_config.get("hostname", "")

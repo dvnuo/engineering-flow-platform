@@ -313,10 +313,9 @@ def get_tools_schemas() -> list:
 - git status, git add ., git commit -m "msg", git push
 - git log --oneline -10, git diff, git checkout -b branch
 
-**GitHub (gh):**
+**GitHub (gh):** (Enterprise only - uses config from ~/gh/hosts.yml)
 - gh repo view, gh issue list, gh pr list
 - gh pr view 123, gh pr checkout 123
-- **Supports GitHub Enterprise** - uses config from ~/gh/hosts.yml
 
 **Search:**
 - grep -r "pattern" ., rg "pattern" --type py
