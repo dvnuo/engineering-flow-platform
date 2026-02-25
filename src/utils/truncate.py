@@ -1,4 +1,5 @@
 """String truncation utilities."""
+import json
 
 def truncate(text: str, max_length: int = 500, suffix: str = "...") -> str:
     """Safely truncate string, never raises error.
@@ -37,4 +38,18 @@ def truncate_with_count(text: str, max_length: int = 500) -> str:
     return f"{text[:max_length]}... [{len(text) - max_length} chars hidden]"
 
 
-__all__ = ["truncate", "truncate_with_count"]
+def truncate_json(data: Any, max_length: int = 500) -> str:
+    """Truncate JSON/string for logging.
+    
+    Args:
+        data: Data to truncate (dict, list, or string)
+        max_length: Maximum length before truncation
+        
+    Returns:
+        Truncated JSON string with count info if needed
+    """
+    text = json.dumps(data, indent=2, default=str)
+    return truncate_with_count(text, max_length)
+
+
+__all__ = ["truncate", "truncate_with_count", "truncate_json"]
