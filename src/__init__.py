@@ -130,8 +130,9 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     
     elif name == "exec":
         command = kwargs.get("command", "")
+        args = kwargs.get("args")  # Array args for safe execution
         timeout = kwargs.get("timeout", 60)
-        result = await bash_tools_module.exec(command, timeout)
+        result = await bash_tools_module.exec(command, args, timeout)
         # Check for success (not blocked, no error)
         is_success = "Error" not in result and "blocked" not in result.lower() and "requires approval" not in result.lower()
         return ToolResult(success=is_success, content=result)
