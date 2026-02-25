@@ -11,6 +11,10 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from aiohttp import web
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.utils.truncate import truncate
 
 from aiohttp import web
 
@@ -398,7 +402,7 @@ async def api_sessions(request: web.Request) -> web.Response:
             
             # Get first user message as session name
             first_user_msg = user_messages[0]
-            session_name = (first_user_msg.get('content', '') or 'New Chat')[:30]
+            session_name = truncate(first_user_msg.get('content', '') or 'New Chat', 30)
             if not session_name.strip():
                 session_name = 'New Chat'
             
@@ -406,7 +410,7 @@ async def api_sessions(request: web.Request) -> web.Response:
             last_message = ''
             for msg in reversed(history):
                 if msg.get('role') in ('user', 'assistant'):
-                    last_message = (msg.get('content', '') or '')[:50]
+                    last_message = truncate(msg.get('content', '') or '', 50)
                     break
             
             detailed_sessions.append({
@@ -453,7 +457,7 @@ async def api_load_session(request: web.Request) -> web.Response:
         for msg in history:
             if msg.get('role') == 'user':
                 content = msg.get('content', '') or 'New Chat'
-                session_name = content[:30]
+                session_name = truncate(content, 30)
                 break
         
         return web.json_response({

@@ -74,7 +74,7 @@ class GitHubCLI:
             lines = [f"**Issues** ({len(issues)}):\n"]
             for issue in issues:
                 num = issue.get("number", "")
-                title = issue.get("title", "")[:40]
+                title = issue.get("title", "")
                 state_emoji = "🔴" if issue.get("state") == "open" else "🟢"
                 author = issue.get("author", {}).get("login", "unknown") if isinstance(issue.get("author"), dict) else issue.get("author", "unknown")
                 lines.append(f"- {state_emoji} **#{num}** {title} (@{author})")
@@ -160,7 +160,7 @@ class GitHubCLI:
             lines = [f"**Pull Requests** ({len(prs)}):\n"]
             for pr in prs:
                 num = pr.get("number", "")
-                title = pr.get("title", "")[:40]
+                title = pr.get("title", "")
                 state_emoji = "🟢" if pr.get("state") == "OPEN" else "🔴"
                 author = pr.get("author", {}).get("login", "unknown") if isinstance(pr.get("author"), dict) else pr.get("author", "unknown")
                 lines.append(f"- {state_emoji} **#{num}** {title} (@{author})")
@@ -280,7 +280,7 @@ class GitHubCLI:
                 return "No runs found."
             lines = [f"**Workflow Runs** ({len(runs)}):\n"]
             for run in runs:
-                name = run.get("name", "")[:25]
+                name = run.get("name", "")
                 status = run.get("status", "")
                 conclusion = run.get("conclusion", "")
                 num = run.get("databaseId", "")

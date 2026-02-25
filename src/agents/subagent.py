@@ -10,6 +10,11 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.utils.truncate import truncate
+
 # Import Agent lazily to avoid circular imports
 _subagent_sessions: Dict[str, Dict[str, Any]] = {}
 
@@ -82,7 +87,7 @@ class SubAgent:
         """Convert to dictionary."""
         return {
             "session_key": self.session_key,
-            "task_preview": self.task[:100] + "..." if len(self.task) > 100 else self.task,
+            "task_preview": truncate(self.task, 100),
             "model": self.model,
             "thinking": self.thinking,
             "disable_tools": self.disable_tools,
@@ -289,7 +294,7 @@ def sessions_spawn(
     return json.dumps({
         "session_key": session_key,
         "status": "started",
-        "task_preview": task[:100] + "..." if len(task) > 100 else task,
+        "task_preview": truncate(task, 100),
         "model": model,
         "thinking": thinking,
         "disable_tools": disable_tools,
