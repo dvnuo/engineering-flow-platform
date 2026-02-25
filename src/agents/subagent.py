@@ -67,7 +67,7 @@ class SubAgent:
         """Run the sub-agent task."""
         try:
             logger.info(f"Sub-agent {self.session_key} started - think_level={self.thinking}, model={self.model}")
-            logger.debug(f"Task: {self.task[:200]}...")
+            logger.debug(f"Task: {truncate(self.task, 200)}")
             
             result = await self.agent.process(
                 message=self.task,

@@ -364,7 +364,7 @@ You have access to the following tools. When a user asks you to do something tha
                 f"[{session_id}] Compaction complete: "
                 f"kept_tokens={compaction_stats.kept_tokens}, "
                 f"dropped_messages={compaction_stats.dropped_messages}, "
-                f"summary={compaction_stats.summary[:100] if compaction_stats.summary else 'N/A'}..."
+                f"summary={truncate(compaction_stats.summary, 100) if compaction_stats.summary else 'N/A'}"
             )
         # ===== END MESSAGE COMPACTION =====
 

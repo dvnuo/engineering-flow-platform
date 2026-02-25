@@ -9,9 +9,14 @@ Uses long-term memory (SQLite) to track processed issues.
 import asyncio
 import logging
 import re
+import sys
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set
 from dataclasses import dataclass, field
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.utils.truncate import truncate
 
 from src.config import config
 from src.channels.github import github_channel
@@ -335,7 +340,7 @@ class MentionPoller:
                 if resource_id:
                     await self._mark_as_processed(
                         platform, resource_id, comment_id,
-                        f"{cmd.tool_name}: {result[:100]}"
+                        f"{cmd.tool_name}: {truncate(result, 100)}"
                     )
                 
                 logger.info(f"Processed: {platform}:{resource_id}: {cmd.tool_name}")
@@ -348,7 +353,7 @@ class MentionPoller:
                 if resource_id:
                     await self._mark_as_processed(
                         platform, resource_id, comment_id,
-                        f"ERROR: {str(e)[:100]}"
+                        f"ERROR: {truncate(str(e), 100)}"
                     )
     
     def parse_command(self, text: str, platform: str) -> Command:

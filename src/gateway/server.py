@@ -422,7 +422,7 @@ class Gateway:
 
         except Exception as e:
             tb_str = get_traceback_str()
-            logger.error(f"Jira webhook error | error={e} | traceback={tb_str[:200]}", exc_info=True)
+            logger.error(f"Jira webhook error | error={e} | traceback={truncate(tb_str, 200)}", exc_info=True)
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def start(self) -> None:

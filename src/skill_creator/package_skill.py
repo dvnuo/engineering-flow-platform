@@ -20,6 +20,9 @@ import zipfile
 from pathlib import Path
 from datetime import datetime
 
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.utils.truncate import truncate
+
 from ruamel.yaml import YAML
 
 # Module-level YAML instance
@@ -98,7 +101,7 @@ def validate_skill(skill_path: Path) -> tuple[bool, list]:
     description = frontmatter.get("description", "")
     if description:
         if len(description) < 10:
-            warnings.append(f"Description seems short ({len(description)} chars): {description[:50]}...")
+            warnings.append(f"Description seems short ({len(description)} chars): {truncate(description, 50)}")
     
     # Check optional directories
     for dir_name in ["scripts", "references", "assets"]:

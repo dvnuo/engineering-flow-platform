@@ -21,7 +21,12 @@
 
 import asyncio
 import logging
+import sys
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.utils.truncate import truncate
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +79,7 @@ class AgentMessage:
         )
     
     def __repr__(self) -> str:
-        return f"AgentMessage(role={self.role}, content={self.content[:50]}...)"
+        return f"AgentMessage(role={self.role}, content={truncate(self.content, 50)}...)"
 
 
 class CompactionStats:
