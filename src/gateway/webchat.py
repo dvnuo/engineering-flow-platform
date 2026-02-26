@@ -28,6 +28,7 @@ _yaml.indent(mapping=2, sequence=4, offset=2)
 _yaml.width = 4096
 
 from src.agents.core import Agent as AgentCore
+from src.hooks.session_memory import save_and_clear_session
 from src.agents.errors import extract_error_details, LLMError
 from src.config import config
 from src.sessions.manager import session_manager
@@ -584,14 +585,63 @@ async def api_usage(request: web.Request) -> web.Response:
 
 
 async def api_clear(request: web.Request) -> web.Response:
-    """Clear chat history."""
+    """Clear chat history and save to memory.
+    
+    POST /api/clear
+    Body: {"session_id": "optional", "save_to_memory": true/false (default: true)}
+    """
     try:
         data = await request.json()
         session_id = data.get('session_id', 'webchat')
+        save_to_memory = data.get('save_to_memory', True)
         
-        await session_manager.clear_history(session_id)
+        if save_to_memory:
+            # Save session to memory before clearing
+            result = await save_and_clear_session(session_id)
+            return web.json_response({
+                'success': True,
+                'saved': True,
+                'file_path': result.get('file_path'),
+                'message': result.get('message', 'Session saved and cleared')
+            })
+        else:
+            # Just clear without saving
+            await session_manager.clear_history(session_id)
+            return web.json_response({'success': True, 'saved': False})
+            
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_save_memory(request: web.Request) -> web.Response:
+    """Save session to memory file without clearing.
+    
+    POST /api/memory/save
+    Body: {"session_id": "optional", "messages_limit": 15 (optional)}
+    """
+    try:
+        data = await request.json()
+        session_id = data.get('session_id', 'webchat')
+        messages_limit = data.get('messages_limit', 15)
         
-        return web.json_response({'success': True})
+        from src.hooks.session_memory import save_session_to_memory
+        file_path = await save_session_to_memory(
+            session_id=session_id,
+            messages_limit=messages_limit,
+        )
+        
+        if file_path:
+            return web.json_response({
+                'success': True,
+                'file_path': str(file_path),
+                'message': f'Saved to {file_path.name}'
+            })
+        else:
+            return web.json_response({
+                'success': False,
+                'error': 'No content to save or error occurred'
+            })
+            
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
 
@@ -1046,6 +1096,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/files/read', api_read_file)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
+    app.router.add_post('/api/memory/save', api_save_memory)
     app.router.add_get('/api/config', api_get_config)
     app.router.add_post('/api/config/save', api_save_config)
     app.router.add_get('/api/skills', api_skills)
