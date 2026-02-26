@@ -1,7 +1,6 @@
 """Session Memory Hook - Save session context to memory files.
 
-This module provides functionality to save conversation history to daily memory files,
-similar to OpenClaw's session-memory hook.
+This module provides functionality to save conversation history to daily memory files.
 
 Trigger: Called when user starts a new session or explicitly saves.
 """
