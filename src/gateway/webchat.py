@@ -589,20 +589,10 @@ async def api_clear(request: web.Request) -> web.Response:
     
     POST /api/clear
     Body: {"session_id": "optional"}
-    
-    Note: Session is automatically summarized and saved to memory before clearing.
     """
     try:
         data = await request.json()
         session_id = data.get('session_id', 'webchat')
-        
-        # Auto-save session summary before clearing (transparent to user)
-        try:
-            from src.hooks.session_memory import save_session_summary
-            # Run in background to not block the response
-            asyncio.create_task(save_session_summary(session_id))
-        except Exception as e:
-            logger.debug(f"Auto-save failed for {session_id}: {e}")
         
         await session_manager.clear_history(session_id)
         
