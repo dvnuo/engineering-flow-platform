@@ -1,5 +1,7 @@
 """Confluence Integration - Single source of truth for Confluence operations."""
 
+import logging
+
 from .api import (
     ConfluenceChannel, 
     confluence_channel,
@@ -84,11 +86,16 @@ async def confluence_search(query: str, max_results: int = 10) -> str:
 async def confluence_get_page_by_url(url: str) -> str:
     """Get a Confluence page by its URL.
     
+    Uses the URL to find the correct Confluence instance automatically.
+    
     Args:
         url: Full Confluence page URL (e.g., https://company.atlassian.net/wiki/spaces/SPACE/pages/123456789/Page-Title)
     """
+    # Get the correct instance client based on URL
+    instance_channel = confluence_channel.get_instance_client(url=url)
+    
     try:
-        if not confluence_channel.is_configured():
+        if not instance_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
         
         # Extract page ID from URL
@@ -116,8 +123,8 @@ async def confluence_get_page_by_url(url: str) -> str:
         if not page_id:
             return f"Could not extract page ID from URL: {url}"
         
-        # Use channel method to get raw page dict
-        page = await confluence_channel.get_page(page_id)
+        # Use instance channel to get page
+        page = await instance_channel.get_page(page_id)
         
         # Handle case where page might not be a dict
         if not isinstance(page, dict):
