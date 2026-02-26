@@ -144,16 +144,30 @@ class SessionManager:
             self._session_timestamps[session_id] = datetime.now()
     
     def _evict_oldest_session(self):
-        """Evict the oldest session from memory cache."""
+        """Evict the oldest session from memory cache.
+        
+        Before eviction, the session is automatically summarized and saved
+        to daily memory files for future context.
+        """
         if not self.cache_enabled or len(self.sessions) <= self.cache_max_sessions:
             return
         
-        # Find and remove the oldest session
+        # Find the oldest session
         oldest_key = min(
             self._session_timestamps.keys(),
             key=lambda k: self._session_timestamps[k]
         )
         
+        # Auto-save session summary before eviction
+        try:
+            from src.hooks.session_memory import save_session_summary
+            # Run synchronously to avoid blocking
+            asyncio.create_task(save_session_summary(oldest_key))
+            logger.debug(f"Scheduled auto-save for session {oldest_key}")
+        except Exception as e:
+            logger.warning(f"Failed to auto-save session {oldest_key}: {e}")
+        
+        # Remove the session
         if oldest_key in self.sessions:
             del self.sessions[oldest_key]
         if oldest_key in self._session_timestamps:
