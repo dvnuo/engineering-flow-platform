@@ -585,60 +585,28 @@ async def api_usage(request: web.Request) -> web.Response:
 
 
 async def api_clear(request: web.Request) -> web.Response:
-    """Clear chat history and save to memory.
+    """Clear chat history.
     
     POST /api/clear
-    Body: {"session_id": "optional", "save_to_memory": true/false (default: true)}
-    """
-    try:
-        data = await request.json()
-        session_id = data.get('session_id', 'webchat')
-        save_to_memory = data.get('save_to_memory', True)
-        
-        if save_to_memory:
-            # Save session summary to memory before clearing (auto-summarized by LLM)
-            from src.hooks.session_memory import save_session_summary
-            file_path = await save_session_summary(session_id)
-            await session_manager.clear_history(session_id)
-            return web.json_response({
-                'success': True,
-                'saved': True,
-                'file_path': str(file_path) if file_path else None,
-                'message': 'Session summarized and cleared'
-            })
-        else:
-            # Just clear without saving
-            await session_manager.clear_history(session_id)
-            return web.json_response({'success': True, 'saved': False})
-            
-    except Exception as e:
-        return web.json_response({'error': str(e)}, status=500)
-
-
-async def api_save_memory(request: web.Request) -> web.Response:
-    """Save session summary to memory file (LLM summarized).
-    
-    POST /api/memory/save
     Body: {"session_id": "optional"}
+    
+    Note: Session is automatically summarized and saved to memory before clearing.
     """
     try:
         data = await request.json()
         session_id = data.get('session_id', 'webchat')
         
-        from src.hooks.session_memory import save_session_summary
-        file_path = await save_session_summary(session_id)
+        # Auto-save session summary before clearing (transparent to user)
+        try:
+            from src.hooks.session_memory import save_session_summary
+            # Run in background to not block the response
+            asyncio.create_task(save_session_summary(session_id))
+        except Exception as e:
+            logger.debug(f"Auto-save failed for {session_id}: {e}")
         
-        if file_path:
-            return web.json_response({
-                'success': True,
-                'file_path': str(file_path),
-                'message': f'Saved to {file_path.name}'
-            })
-        else:
-            return web.json_response({
-                'success': False,
-                'error': 'No content to save or error occurred'
-            })
+        await session_manager.clear_history(session_id)
+        
+        return web.json_response({'success': True})
             
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
@@ -1094,7 +1062,6 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/files/read', api_read_file)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
-    app.router.add_post('/api/memory/save', api_save_memory)
     app.router.add_get('/api/config', api_get_config)
     app.router.add_post('/api/config/save', api_save_config)
     app.router.add_get('/api/skills', api_skills)
