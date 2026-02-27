@@ -142,9 +142,9 @@ def get_long_term_memory_path() -> Path:
     return DEFAULT_WORKSPACE / "MEMORY.md"
 
 
-# Global memory store instance
-memory_store: Optional[MemoryStore] = None
-_memory_auto_init = False
+# Global memory store instance (kept for backward compatibility)
+# memory_store: Optional[MemoryStore] = None  # Disabled - using LightweightMemory
+# _memory_auto_init = False  # Disabled
 
 
 def init_memory_store(config: Optional[MemoryConfig] = None, auto_init: bool = False) -> None:
