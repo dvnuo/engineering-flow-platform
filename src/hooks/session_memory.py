@@ -50,11 +50,7 @@ async def summarize_session(
     if not conversation:
         return ""
     
-    conversation_text = "\n".join(conversation)
-    
-    # Simple prompt for summarization (without external LLM for now)
-    # In production, this would call the LLM
-    # For now, we'll use a simple extraction approach
+    # conversation_text = "\n".join(conversation)  # TODO: use for LLM prompt when implemented
     
     # Extract key information
     summary_parts = []

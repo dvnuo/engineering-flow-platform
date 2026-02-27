@@ -1,17 +1,17 @@
-"""Tests for session memory (LLM summarization)"""
+"""Tests for session memory (summarization)"""
 
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 
 
-class TestSessionMemoryLLM:
-    """Tests for LLM-based session summarization"""
+class TestSessionMemory:
+    """Tests for session summarization"""
     
     @pytest.mark.asyncio
-    async def test_summarize_session_with_llm(self):
+    async def test_summarize_session(self):
         """Test session summarization"""
-        from src.hooks.session_memory import summarize_session_with_llm
+        from src.hooks.session_memory import summarize_session
         
         messages = [
             {"role": "user", "content": "Help me fix the login bug"},
@@ -20,28 +20,28 @@ class TestSessionMemoryLLM:
             {"role": "assistant", "content": "Fixed the bug!"},
         ]
         
-        summary = await summarize_session_with_llm("test-session", messages)
+        summary = await summarize_session("test-session", messages)
         
         assert "User Request" in summary or "Login" in summary or "bug" in summary.lower()
     
     @pytest.mark.asyncio
     async def test_summarize_empty_session(self):
         """Test summarizing empty session"""
-        from src.hooks.session_memory import summarize_session_with_llm
+        from src.hooks.session_memory import summarize_session
         
-        summary = await summarize_session_with_llm("test-session", [])
+        summary = await summarize_session("test-session", [])
         assert summary == ""
     
     @pytest.mark.asyncio
     async def test_summarize_short_session(self):
         """Test summarizing short session (too short to summarize)"""
-        from src.hooks.session_memory import summarize_session_with_llm
+        from src.hooks.session_memory import summarize_session
         
         messages = [
             {"role": "user", "content": "Hello"},
         ]
         
-        summary = await summarize_session_with_llm("test-session", messages)
+        summary = await summarize_session("test-session", messages)
         # Short sessions still get summarized with this approach
         assert summary is not None
 
