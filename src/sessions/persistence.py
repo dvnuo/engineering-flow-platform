@@ -124,12 +124,12 @@ class SessionPersistence:
                     "expires_at": expires_at,
                 }
                 
-                # Atomic write: write to temp file then rename
+                # Atomic write: write to temp file then atomically replace destination
                 temp_file = session_file.with_suffix('.tmp')
                 try:
                     with open(temp_file, 'w', encoding='utf-8') as f:
                         f.write(json.dumps(record, ensure_ascii=False) + '\n')
-                    temp_file.rename(session_file)
+                    temp_file.replace(session_file)
                 except Exception:
                     # Clean up temp file on failure
                     if temp_file.exists():
@@ -269,7 +269,14 @@ class SessionPersistence:
                                     # File was removed between check and rename; safe to ignore
                                     logger.debug("Session file disappeared before archiving: %s", session_file)
                     except json.JSONDecodeError as e:
+                        # Archive unreadable files to prevent repeated warnings
                         logger.warning("Failed to parse session file %s: %s", session_file, e)
+                        try:
+                            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                            archive_file = self.archive_dir / f"malformed_{session_file.name.rsplit('.', 1)[0]}_{timestamp}.jsonl"
+                            session_file.rename(archive_file)
+                        except Exception:
+                            pass  # Best effort
                     except OSError as e:
                         logger.warning("Filesystem error processing session file %s: %s", session_file, e)
                     except Exception:
@@ -288,24 +295,28 @@ class SessionPersistence:
             return 0
         
         async with self._lock:
-            # Materialize glob results to avoid unsafe iteration
-            session_files = list(self.storage_dir.glob("*.jsonl"))
-            count = 0
-            for session_file in session_files:
-                # Archive instead of delete for consistency
-                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
-                archive_file = self.archive_dir / f"{session_file.name.rsplit('.', 1)[0]}_{timestamp}.jsonl"
-                try:
-                    session_file.rename(archive_file)
-                    count += 1
-                except FileNotFoundError:
-                    # File was removed between glob and rename; safe to ignore
-                    logger.debug("Session file disappeared before clearing: %s", session_file)
-                except OSError as e:
-                    logger.warning("Filesystem error clearing session file %s: %s", session_file, e)
-            
-            logger.info(f"Cleared {count} sessions")
-            return count
+            try:
+                # Materialize glob results to avoid unsafe iteration
+                session_files = list(self.storage_dir.glob("*.jsonl"))
+                count = 0
+                for session_file in session_files:
+                    # Archive instead of delete for consistency
+                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                    archive_file = self.archive_dir / f"{session_file.name.rsplit('.', 1)[0]}_{timestamp}.jsonl"
+                    try:
+                        session_file.rename(archive_file)
+                        count += 1
+                    except FileNotFoundError:
+                        # File was removed between glob and rename; safe to ignore
+                        logger.debug("Session file disappeared before clearing: %s", session_file)
+                    except OSError as e:
+                        logger.warning("Filesystem error clearing session file %s: %s", session_file, e)
+                
+                logger.info(f"Cleared {count} sessions")
+                return count
+            except Exception as e:
+                logger.error(f"Failed to clear all sessions: {e}")
+                return 0
 
 
 # Global session store instance
