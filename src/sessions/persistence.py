@@ -151,15 +151,19 @@ class SessionPersistence:
             if not session_file.exists():
                 return None
             
-            with open(session_file, 'r', encoding='utf-8') as f:
-                line = f.readline()
-                if not line.strip():
-                    return None
-                record = json.loads(line)
-                
-                if self._is_expired(record):
-                    return None
-                return record
+            try:
+                with open(session_file, 'r', encoding='utf-8') as f:
+                    line = f.readline()
+                    if not line.strip():
+                        return None
+                    record = json.loads(line)
+                    
+                    if self._is_expired(record):
+                        return None
+                    return record
+            except FileNotFoundError:
+                # File may have been removed between existence check and open
+                return None
         except Exception as e:
             logger.error(f"Failed to load session {session_id}: {e}")
             return None
