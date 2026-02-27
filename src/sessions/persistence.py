@@ -4,8 +4,10 @@ Manages individual session files with TTL support.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -49,12 +51,17 @@ class SessionPersistence:
         """Get the file path for a session.
         
         Sanitizes session_id to prevent path traversal attacks.
+        Uses hash to ensure uniqueness after sanitization.
         """
         # Sanitize session ID to prevent path traversal
         sanitized = "".join(c for c in session_id if c.isalnum() or c in "-_").strip()
         if not sanitized or sanitized.startswith("-"):
             sanitized = f"session_{sanitized}" if sanitized else "invalid_session"
-        return self.storage_dir / f"{sanitized}.jsonl"
+        
+        # Add hash suffix to ensure uniqueness (e.g., "my-session" vs "my_session")
+        short_hash = hashlib.md5(session_id.encode()).hexdigest()[:6]
+        
+        return self.storage_dir / f"{sanitized}_{short_hash}.jsonl"
     
     def _is_expired(self, record: Dict) -> bool:
         """Check if a session record is expired."""
@@ -182,16 +189,25 @@ class SessionPersistence:
                 if not session_file.exists():
                     return False
                 
+                # Get sanitized name for archive
+                sanitized = "".join(c for c in session_id if c.isalnum() or c in "-_").strip()
+                if not sanitized or sanitized.startswith("-"):
+                    sanitized = f"session_{sanitized}" if sanitized else "invalid_session"
+                
                 # Move to archive with timestamp (include microseconds to avoid collision)
                 timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
-                archive_file = self.archive_dir / f"{session_id}_{timestamp}.jsonl"
+                archive_file = self.archive_dir / f"{sanitized}_{timestamp}.jsonl"
                 
                 # Handle filename collision (retry with new timestamp)
                 retry = 0
                 while archive_file.exists() and retry < 3:
                     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
-                    archive_file = self.archive_dir / f"{session_id}_{timestamp}_{retry}.jsonl"
+                    archive_file = self.archive_dir / f"{sanitized}_{timestamp}_{retry}.jsonl"
                     retry += 1
+                
+                # If still exists after retries, use UUID to guarantee uniqueness
+                if archive_file.exists():
+                    archive_file = self.archive_dir / f"{sanitized}_{uuid.uuid4().hex}.jsonl"
                 
                 session_file.rename(archive_file)
                 
@@ -201,7 +217,7 @@ class SessionPersistence:
                 return False
     
     async def cleanup_expired(self) -> int:
-        """Remove all expired session files."""
+        """Archive all expired session files (for consistency with delete_session)."""
         if not self.enabled:
             return 0
         
@@ -209,7 +225,7 @@ class SessionPersistence:
             try:
                 # Materialize glob results to avoid unsafe iteration
                 session_files = list(self.storage_dir.glob("*.jsonl"))
-                removed = 0
+                archived = 0
                 
                 for session_file in session_files:
                     try:
@@ -220,14 +236,17 @@ class SessionPersistence:
                             record = json.loads(line)
                             
                             if self._is_expired(record):
-                                session_file.unlink()
-                                removed += 1
+                                # Archive instead of delete (for consistency)
+                                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                                archive_file = self.archive_dir / f"expired_{session_file.name.rsplit('.', 1)[0]}_{timestamp}.jsonl"
+                                session_file.rename(archive_file)
+                                archived += 1
                     except Exception:
                         continue
                 
-                if removed > 0:
-                    logger.info(f"Cleaned up {removed} expired sessions")
-                return removed
+                if archived > 0:
+                    logger.info(f"Archived {archived} expired sessions")
+                return archived
             except Exception as e:
                 logger.error(f"Failed to cleanup expired sessions: {e}")
                 return 0
