@@ -57,7 +57,7 @@ class SessionPersistence:
         sanitized = "".join(c for c in session_id if c.isalnum() or c in "-_").strip()
         
         # Add hash suffix to ensure uniqueness (e.g., "my-session" vs "my_session")
-        short_hash = hashlib.md5(session_id.encode()).hexdigest()[:6]
+        short_hash = hashlib.md5(session_id.encode()).hexdigest()[:12]
         
         # Ensure filename doesn't start with special characters
         filename_base = f"{sanitized}_{short_hash}"
@@ -243,7 +243,7 @@ class SessionPersistence:
                             if self._is_expired(record):
                                 # Archive instead of delete (for consistency)
                                 timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
-                                archive_file = self.archive_dir / f"expired_{session_file.name.rsplit('.', 1)[0]}_{timestamp}.jsonl"
+                                archive_file = self.archive_dir / f"{session_file.name.rsplit('.', 1)[0]}_{timestamp}.jsonl"
                                 session_file.rename(archive_file)
                                 archived += 1
                     except Exception:
@@ -257,7 +257,7 @@ class SessionPersistence:
                 return 0
     
     async def clear_all(self) -> int:
-        """Clear all sessions. Returns count of cleared sessions."""
+        """Clear all sessions by archiving them. Returns count of cleared sessions."""
         if not self.enabled:
             return 0
         
@@ -267,7 +267,10 @@ class SessionPersistence:
                 session_files = list(self.storage_dir.glob("*.jsonl"))
                 count = 0
                 for session_file in session_files:
-                    session_file.unlink()
+                    # Archive instead of delete for consistency
+                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                    archive_file = self.archive_dir / f"{session_file.name.rsplit('.', 1)[0]}_{timestamp}.jsonl"
+                    session_file.rename(archive_file)
                     count += 1
                 
                 logger.info(f"Cleared {count} sessions")
