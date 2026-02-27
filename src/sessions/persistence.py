@@ -1,89 +1,75 @@
 """Session persistence layer for Engineering Flow Platform.
 
-Manages JSONL transcript files and sessions.json store with TTL support.
+Manages individual session files with TTL support.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
-import os
-import time
-from dataclasses import dataclass, asdict
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-import os
-import time
-from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional
-
-
-@dataclass
-class SessionRecord:
-    """Session record stored in JSONL format."""
-    session_id: str
-    user_id: str
-    channel: str
-    messages: List[Dict[str, Any]]
-    metadata: Dict[str, Any]
-    created_at: str
-    updated_at: str
-    expires_at: Optional[str] = None
-    
-    def to_json(self) -> str:
-        """Convert to JSON string for storage."""
-        return json.dumps(asdict(self), ensure_ascii=False)
-    
-    @classmethod
-    def from_json(cls, line: str) -> "SessionRecord":
-        """Create from JSON string."""
-        return cls(**json.loads(line))
+logger = logging.getLogger(__name__)
 
 
 class SessionPersistence:
-    """Manages session persistence in JSONL format with TTL support.
+    """Manages session persistence with individual files per session.
     
     Directory structure:
         sessions/
-        ├── sessions.json          # Store: sessionKey -> metadata
-        ├── sessions.active.jsonl  # Active sessions (append-only)
-        └── archive/
-            └── sessions_YYYYMMDD_HHMMSS.jsonl  # Rotated files
+        ├── {sanitized_session_id}_{hash}.jsonl    # Individual session files
+        └── archive/                                # Archive for deleted sessions
+    
+    Filename format: {sanitized_session_id}_{12char_hash}.jsonl
+    Session IDs are sanitized to safe characters and a hash suffix ensures uniqueness.
     
     Features:
-    - JSONL format for append-only logging
+    - One file per session
     - TTL (Time-To-Live) for automatic expiration
-    - File rotation when size limit is reached
     - Background cleanup of expired sessions
     """
     
     def __init__(
         self,
         storage_dir: str = "~/.efp/workspace/sessions",
-        ttl_seconds: int = 86400,  # 24 hours default
-        max_file_size_mb: int = 100,
+        ttl_seconds: int = 2592000,  # 30 days default
         enabled: bool = True,
     ):
         self.storage_dir = Path(storage_dir).expanduser()
         self.ttl_seconds = ttl_seconds
-        self.max_file_size = max_file_size_mb * 1024 * 1024
         self.enabled = enabled
-        self._lock = None  # Created lazily in ensure_dir
+        self._lock = asyncio.Lock()
         self._ensure_dir()
     
     def _ensure_dir(self):
         """Ensure base directory exists."""
         self.storage_dir.mkdir(parents=True, exist_ok=True)
-        self.active_file = self.storage_dir / "sessions.active.jsonl"
         self.archive_dir = self.storage_dir / "archive"
         self.archive_dir.mkdir(exist_ok=True)
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        # Create active file if it doesn't exist
-        self.active_file.touch(exist_ok=True)
+    
+    def _session_file(self, session_id: str) -> Path:
+        """Get the file path for a session.
+        
+        Sanitizes session_id to prevent path traversal attacks.
+        Uses hash to ensure uniqueness after sanitization.
+        """
+        # Sanitize session ID to prevent path traversal
+        sanitized = "".join(c for c in session_id if c.isalnum() or c in "-_").strip()
+        # Bound length to avoid filesystem limits (keep hash suffix)
+        sanitized = sanitized[:100]
+        
+        # Add hash suffix to ensure uniqueness (e.g., "my-session" vs "my_session")
+        short_hash = hashlib.md5(session_id.encode()).hexdigest()[:12]
+        
+        # Ensure filename doesn't start with special characters
+        filename_base = f"{sanitized}_{short_hash}"
+        if filename_base.startswith("-") or not sanitized:
+            filename_base = f"session_{short_hash}"
+        
+        return self.storage_dir / f"{filename_base}.jsonl"
     
     def _is_expired(self, record: Dict) -> bool:
         """Check if a session record is expired."""
@@ -101,22 +87,6 @@ class SessionPersistence:
         expires = datetime.utcnow() + timedelta(seconds=self.ttl_seconds)
         return expires.isoformat()
     
-    def _rotate_file(self):
-        """Rotate active file to archive when size limit is reached."""
-        if not self.enabled:
-            return
-        if self.active_file.stat().st_size < self.max_file_size:
-            return
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        archive_file = self.archive_dir / f"sessions_{timestamp}.jsonl"
-        
-        self.active_file.rename(archive_file)
-        self.active_file.touch(exist_ok=True)
-        
-        logger = logging.getLogger(__name__)
-        logger.info(f"Rotated session file to {archive_file}")
-    
     async def save_session(
         self,
         session_id: str,
@@ -124,187 +94,233 @@ class SessionPersistence:
         messages: List[Dict[str, Any]],
         metadata: Optional[Dict] = None,
     ) -> bool:
-        """Save or update a session to the active JSONL file."""
+        """Save or update a session to its individual file."""
         if not self.enabled:
             return False
         
         async with self._lock:
             try:
-                # Check file size and rotate if needed
-                if self.active_file.stat().st_size > self.max_file_size:
-                    self._rotate_file()
-                
                 now = datetime.utcnow().isoformat()
                 expires_at = self._calculate_expires_at()
+                
+                # Preserve created_at for existing sessions
+                created_at = now
+                session_file = self._session_file(session_id)
+                if session_file.exists():
+                    try:
+                        with open(session_file, 'r', encoding='utf-8') as f:
+                            existing = json.loads(f.readline())
+                            created_at = existing.get("created_at", now)
+                    except Exception:
+                        pass  # Use current time if unable to read
                 
                 record = {
                     "session_id": session_id,
                     "channel": channel,
                     "messages": messages,
                     "metadata": metadata or {},
-                    "created_at": now,
+                    "created_at": created_at,
                     "updated_at": now,
                     "expires_at": expires_at,
                 }
                 
-                with open(self.active_file, 'a', encoding='utf-8') as f:
-                    f.write(json.dumps(record, ensure_ascii=False) + '\n')
+                # Atomic write: write to temp file then atomically replace destination
+                temp_file = session_file.with_name(f"{session_file.stem}.{uuid.uuid4().hex}.tmp")
+                try:
+                    with open(temp_file, 'w', encoding='utf-8') as f:
+                        f.write(json.dumps(record, ensure_ascii=False) + '\n')
+                    temp_file.replace(session_file)
+                except Exception:
+                    # Clean up temp file on failure
+                    if temp_file.exists():
+                        temp_file.unlink()
+                    raise
                 
                 return True
             except Exception as e:
-                logger = logging.getLogger(__name__)
-                logger.error(f"Failed to save session: {e}")
+                logger.error(f"Failed to save session {session_id}: {e}")
                 return False
     
     async def load_session(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Load a session by ID from the active file."""
+        """Load a session by ID from its file."""
         if not self.enabled:
             return None
         
         try:
-            with open(self.active_file, 'r', encoding='utf-8') as f:
-                for line in f:
+            session_file = self._session_file(session_id)
+            if not session_file.exists():
+                return None
+            
+            try:
+                with open(session_file, 'r', encoding='utf-8') as f:
+                    line = f.readline()
                     if not line.strip():
-                        continue
+                        return None
                     record = json.loads(line)
-                    if record.get("session_id") == session_id:
-                        if self._is_expired(record):
-                            return None
-                        return record
-            return None
+                    
+                    if self._is_expired(record):
+                        return None
+                    return record
+            except FileNotFoundError:
+                # File may have been removed between existence check and open
+                return None
         except Exception as e:
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to load session: {e}")
+            logger.error(f"Failed to load session {session_id}: {e}")
             return None
     
     async def list_sessions(
         self,
         include_expired: bool = False,
     ) -> List[Dict[str, Any]]:
-        """List all sessions, optionally including expired ones."""
+        """List all sessions from individual files."""
         if not self.enabled:
             return []
         
         sessions = []
-        now = datetime.utcnow()
         
         try:
-            with open(self.active_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    record = json.loads(line)
-                    
-                    if not include_expired:
-                        expires_at = record.get("expires_at")
-                        if expires_at:
-                            try:
-                                expires = datetime.fromisoformat(expires_at)
-                                if now > expires:
-                                    continue
-                            except (ValueError, TypeError):
-                                continue
-                    
-                    sessions.append(record)
+            for session_file in self.storage_dir.glob("*.jsonl"):
+                try:
+                    with open(session_file, 'r', encoding='utf-8') as f:
+                        line = f.readline()
+                        if not line.strip():
+                            continue
+                        record = json.loads(line)
+                        
+                        if not include_expired and self._is_expired(record):
+                            continue
+                        
+                        sessions.append(record)
+                except Exception:
+                    continue
             
             return sessions
         except Exception as e:
-            logger = logging.getLogger(__name__)
             logger.error(f"Failed to list sessions: {e}")
             return []
     
     async def delete_session(self, session_id: str) -> bool:
-        """Delete a session by ID."""
+        """Delete a session by moving its file to archive."""
         if not self.enabled:
             return False
         
         async with self._lock:
             try:
-                sessions = []
-                deleted = False
+                session_file = self._session_file(session_id)
+                if not session_file.exists():
+                    return False
                 
-                with open(self.active_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if not line.strip():
-                            continue
-                        record = json.loads(line)
-                        if record.get("session_id") != session_id:
-                            sessions.append(line)
-                        else:
-                            deleted = True
+                # Get sanitized name for archive (use consistent logic with _session_file)
+                sanitized = "".join(c for c in session_id if c.isalnum() or c in "-_").strip()
+                short_hash = hashlib.md5(session_id.encode()).hexdigest()[:6]
+                archive_base = f"{sanitized}_{short_hash}"
+                if archive_base.startswith("-") or not sanitized:
+                    archive_base = f"session_{short_hash}"
                 
-                with open(self.active_file, 'w', encoding='utf-8') as f:
-                    f.writelines(sessions)
+                # Move to archive with timestamp (include microseconds to avoid collision)
+                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                archive_file = self.archive_dir / f"{archive_base}_{timestamp}.jsonl"
                 
-                return deleted
+                # Handle filename collision (retry with new timestamp)
+                # Collisions should be rare with microsecond timestamps, but handle edge cases
+                retry = 0
+                while archive_file.exists() and retry < 3:
+                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                    archive_file = self.archive_dir / f"{archive_base}_{timestamp}_{retry}.jsonl"
+                    retry += 1
+                
+                # If still exists after retries (extremely unlikely), use UUID to guarantee uniqueness
+                if archive_file.exists():
+                    archive_file = self.archive_dir / f"{archive_base}_{uuid.uuid4().hex}.jsonl"
+                
+                session_file.rename(archive_file)
+                
+                return True
             except Exception as e:
-                logger = logging.getLogger(__name__)
-                logger.error(f"Failed to delete session: {e}")
+                logger.error(f"Failed to delete session {session_id}: {e}")
                 return False
     
     async def cleanup_expired(self) -> int:
-        """Remove all expired sessions from the active file."""
+        """Archive all expired session files (for consistency with delete_session)."""
         if not self.enabled:
             return 0
         
         async with self._lock:
             try:
-                sessions = []
-                removed = 0
-                now = datetime.utcnow()
+                # Materialize glob results to avoid unsafe iteration
+                session_files = list(self.storage_dir.glob("*.jsonl"))
+                archived = 0
                 
-                with open(self.active_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if not line.strip():
+                for session_file in session_files:
+                    try:
+                        # Check if file still exists (may have been deleted by another process)
+                        if not session_file.exists():
                             continue
-                        record = json.loads(line)
                         
-                        expires_at = record.get("expires_at")
-                        is_expired = False
-                        
-                        if expires_at:
-                            try:
-                                expires = datetime.fromisoformat(expires_at)
-                                is_expired = now > expires
-                            except (ValueError, TypeError):
-                                is_expired = True  # Remove malformed records
-                        
-                        if is_expired:
-                            removed += 1
-                        else:
-                            sessions.append(line)
+                        with open(session_file, 'r', encoding='utf-8') as f:
+                            line = f.readline()
+                            if not line.strip():
+                                continue
+                            record = json.loads(line)
+                            
+                            if self._is_expired(record):
+                                # Archive instead of delete (for consistency)
+                                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                                archive_file = self.archive_dir / f"{session_file.name.rsplit('.', 1)[0]}_{timestamp}.jsonl"
+                                try:
+                                    session_file.rename(archive_file)
+                                    archived += 1
+                                except FileNotFoundError:
+                                    # File was removed between check and rename; safe to ignore
+                                    logger.debug("Session file disappeared before archiving: %s", session_file)
+                    except json.JSONDecodeError as e:
+                        # Archive unreadable files to prevent repeated warnings
+                        logger.warning("Failed to parse session file %s: %s", session_file, e)
+                        try:
+                            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                            archive_file = self.archive_dir / f"malformed_{session_file.name.rsplit('.', 1)[0]}_{timestamp}.jsonl"
+                            session_file.rename(archive_file)
+                        except Exception:
+                            pass  # Best effort
+                    except OSError as e:
+                        logger.warning("Filesystem error processing session file %s: %s", session_file, e)
+                    except Exception:
+                        continue
                 
-                with open(self.active_file, 'w', encoding='utf-8') as f:
-                    f.writelines(sessions)
-                
-                logger = logging.getLogger(__name__)
-                logger.info(f"Cleaned up {removed} expired sessions")
-                return removed
+                if archived > 0:
+                    logger.info(f"Archived {archived} expired sessions")
+                return archived
             except Exception as e:
-                logger = logging.getLogger(__name__)
                 logger.error(f"Failed to cleanup expired sessions: {e}")
                 return 0
     
     async def clear_all(self) -> int:
-        """Clear all sessions. Returns count of cleared sessions."""
+        """Clear all sessions by archiving them. Returns count of cleared sessions."""
         if not self.enabled:
             return 0
         
         async with self._lock:
             try:
+                # Materialize glob results to avoid unsafe iteration
+                session_files = list(self.storage_dir.glob("*.jsonl"))
                 count = 0
-                with open(self.active_file, 'r', encoding='utf-8') as f:
-                    count = sum(1 for line in f if line.strip())
+                for session_file in session_files:
+                    # Archive instead of delete for consistency
+                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                    archive_file = self.archive_dir / f"{session_file.name.rsplit('.', 1)[0]}_{timestamp}.jsonl"
+                    try:
+                        session_file.rename(archive_file)
+                        count += 1
+                    except FileNotFoundError:
+                        # File was removed between glob and rename; safe to ignore
+                        logger.debug("Session file disappeared before clearing: %s", session_file)
+                    except OSError as e:
+                        logger.warning("Filesystem error clearing session file %s: %s", session_file, e)
                 
-                self.active_file.unlink()
-                self.active_file.touch(exist_ok=True)
-                
-                logger = logging.getLogger(__name__)
                 logger.info(f"Cleared {count} sessions")
                 return count
             except Exception as e:
-                logger = logging.getLogger(__name__)
-                logger.error(f"Failed to clear sessions: {e}")
+                logger.error(f"Failed to clear all sessions: {e}")
                 return 0
 
 

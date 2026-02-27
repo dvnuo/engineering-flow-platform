@@ -43,12 +43,11 @@ session:
   # Prevents infinite loops when LLM keeps requesting tools
   max_iterations: 30
 
-  # Persistence layer settings (JSONL format)
+  # Persistence layer settings (per-session files)
   persistence:
     enabled: true  # Enable session persistence
     storage_dir: "~/.efp/workspace/sessions"  # Where to store session files
     ttl_seconds: 2592000  # Session TTL in seconds (30 days = 30 * 24 * 3600)
-    max_file_size_mb: 100  # Max size before file rotation
 
   # Cache settings (for in-memory session cache)
   cache:
@@ -137,9 +136,9 @@ workspace:
 #   ~/.efp/
 #   ├── config.yaml
 #   └── workspace/
-#       ├── sessions/              ← Session JSONL files
-#       │   ├── sessions.active.jsonl  (active sessions)
-#       │   └── archive/               (rotated files)
+#       ├── sessions/              ← Individual session files
+#       │   ├── {sanitized_id}_{hash}.jsonl  (one file per session)
+#       │   └── archive/             (archived sessions)
 #       └── memory/                ← Memory (SQLite + daily notes)
 #           ├── memories.sqlite
 #           └── YYYY-MM-DD.md
