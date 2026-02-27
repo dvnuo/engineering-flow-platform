@@ -20,8 +20,11 @@ class SessionPersistence:
     
     Directory structure:
         sessions/
-        ├── {session_id}.jsonl    # Individual session files
-        └── archive/              # Archive for deleted sessions
+        ├── {sanitized_session_id}_{hash}.jsonl    # Individual session files
+        └── archive/                                # Archive for deleted sessions
+    
+    Filename format: {sanitized_session_id}_{12char_hash}.jsonl
+    Session IDs are sanitized to safe characters and a hash suffix ensures uniqueness.
     
     Features:
     - One file per session
@@ -55,6 +58,8 @@ class SessionPersistence:
         """
         # Sanitize session ID to prevent path traversal
         sanitized = "".join(c for c in session_id if c.isalnum() or c in "-_").strip()
+        # Bound length to avoid filesystem limits (keep hash suffix)
+        sanitized = sanitized[:100]
         
         # Add hash suffix to ensure uniqueness (e.g., "my-session" vs "my_session")
         short_hash = hashlib.md5(session_id.encode()).hexdigest()[:12]
@@ -119,8 +124,17 @@ class SessionPersistence:
                     "expires_at": expires_at,
                 }
                 
-                with open(session_file, 'w', encoding='utf-8') as f:
-                    f.write(json.dumps(record, ensure_ascii=False) + '\n')
+                # Atomic write: write to temp file then rename
+                temp_file = session_file.with_suffix('.tmp')
+                try:
+                    with open(temp_file, 'w', encoding='utf-8') as f:
+                        f.write(json.dumps(record, ensure_ascii=False) + '\n')
+                    temp_file.rename(session_file)
+                except Exception:
+                    # Clean up temp file on failure
+                    if temp_file.exists():
+                        temp_file.unlink()
+                    raise
                 
                 return True
             except Exception as e:
@@ -274,22 +288,24 @@ class SessionPersistence:
             return 0
         
         async with self._lock:
-            try:
-                # Materialize glob results to avoid unsafe iteration
-                session_files = list(self.storage_dir.glob("*.jsonl"))
-                count = 0
-                for session_file in session_files:
-                    # Archive instead of delete for consistency
-                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
-                    archive_file = self.archive_dir / f"{session_file.name.rsplit('.', 1)[0]}_{timestamp}.jsonl"
+            # Materialize glob results to avoid unsafe iteration
+            session_files = list(self.storage_dir.glob("*.jsonl"))
+            count = 0
+            for session_file in session_files:
+                # Archive instead of delete for consistency
+                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                archive_file = self.archive_dir / f"{session_file.name.rsplit('.', 1)[0]}_{timestamp}.jsonl"
+                try:
                     session_file.rename(archive_file)
                     count += 1
-                
-                logger.info(f"Cleared {count} sessions")
-                return count
-            except Exception as e:
-                logger.error(f"Failed to clear sessions: {e}")
-                return 0
+                except FileNotFoundError:
+                    # File was removed between glob and rename; safe to ignore
+                    logger.debug("Session file disappeared before clearing: %s", session_file)
+                except OSError as e:
+                    logger.warning("Filesystem error clearing session file %s: %s", session_file, e)
+            
+            logger.info(f"Cleared {count} sessions")
+            return count
 
 
 # Global session store instance

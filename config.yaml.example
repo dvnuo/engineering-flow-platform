@@ -137,8 +137,8 @@ workspace:
 #   ├── config.yaml
 #   └── workspace/
 #       ├── sessions/              ← Individual session files
-#       │   ├── {session_id}.jsonl  (one file per session)
-#       │   └── archive/             (deleted sessions)
+#       │   ├── {sanitized_id}_{hash}.jsonl  (one file per session)
+#       │   └── archive/             (archived sessions)
 #       └── memory/                ← Memory (SQLite + daily notes)
 #           ├── memories.sqlite
 #           └── YYYY-MM-DD.md
