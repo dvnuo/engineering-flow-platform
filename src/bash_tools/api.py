@@ -28,6 +28,21 @@ DEFAULT_TIMEOUT = 60
 _skill_workdir_getter = None
 
 
+def get_workspace_dir() -> str:
+    """Get the workspace directory, ensuring it exists.
+    
+    Returns:
+        Path to the workspace directory (~/.efp/workspace)
+    """
+    workspace_path = Path.home() / ".efp" / "workspace"
+    try:
+        workspace_path.mkdir(parents=True, exist_ok=True)
+        return str(workspace_path)
+    except Exception as e:
+        logger.warning(f"Failed to create workspace directory {workspace_path}: {e}; falling back to current directory")
+        return os.getcwd()
+
+
 def _get_skill_workdir_getter():
     """Get the skill workdir getter function (lazy import to avoid circular imports)."""
     global _skill_workdir_getter
@@ -77,8 +92,8 @@ async def exec(command: str, args: list = None, timeout: int = DEFAULT_TIMEOUT) 
     
     config = get_security_config()
     
-    # Default working directory: ~/.efp/workspace
-    default_cwd = str(Path.home() / ".efp" / "workspace")
+    # Default working directory: ~/.efp/workspace (with auto-creation)
+    default_cwd = get_workspace_dir()
     
     # Get working directory - prefer skill workdir if set (async-safe via contextvars)
     actual_cwd = default_cwd
@@ -201,7 +216,7 @@ def exec_sync(command: str, args: list = None, timeout: int = DEFAULT_TIMEOUT) -
         return "Error: Empty command"
     
     config = get_security_config()
-    default_cwd = str(Path.home() / ".efp" / "workspace")
+    default_cwd = get_workspace_dir()
     actual_cwd = default_cwd
     
     # Use args array if provided (safer)
