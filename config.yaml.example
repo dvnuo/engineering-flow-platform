@@ -62,13 +62,6 @@ session:
 
 memory:
   enabled: true  # Enable memory storage
-  provider: "openai"  # Embedding provider (openai, azure, local)
-  model: "text-embedding-3-small"  # Embedding model
-
-  # Cache settings
-  cache:
-    enabled: true  # Enable embedding cache
-    max_entries: 50000  # Maximum cached embeddings
 
 # ============================================
 # Cost Tracking Configuration (OPTIONAL)
