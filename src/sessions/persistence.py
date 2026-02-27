@@ -55,13 +55,16 @@ class SessionPersistence:
         """
         # Sanitize session ID to prevent path traversal
         sanitized = "".join(c for c in session_id if c.isalnum() or c in "-_").strip()
-        if not sanitized or sanitized.startswith("-"):
-            sanitized = f"session_{sanitized}" if sanitized else "invalid_session"
         
         # Add hash suffix to ensure uniqueness (e.g., "my-session" vs "my_session")
         short_hash = hashlib.md5(session_id.encode()).hexdigest()[:6]
         
-        return self.storage_dir / f"{sanitized}_{short_hash}.jsonl"
+        # Ensure filename doesn't start with special characters
+        filename_base = f"{sanitized}_{short_hash}"
+        if filename_base.startswith("-") or not sanitized:
+            filename_base = f"session_{short_hash}"
+        
+        return self.storage_dir / f"{filename_base}.jsonl"
     
     def _is_expired(self, record: Dict) -> bool:
         """Check if a session record is expired."""
@@ -189,25 +192,27 @@ class SessionPersistence:
                 if not session_file.exists():
                     return False
                 
-                # Get sanitized name for archive
+                # Get sanitized name for archive (use consistent logic with _session_file)
                 sanitized = "".join(c for c in session_id if c.isalnum() or c in "-_").strip()
-                if not sanitized or sanitized.startswith("-"):
-                    sanitized = f"session_{sanitized}" if sanitized else "invalid_session"
+                short_hash = hashlib.md5(session_id.encode()).hexdigest()[:6]
+                archive_base = f"{sanitized}_{short_hash}"
+                if archive_base.startswith("-") or not sanitized:
+                    archive_base = f"session_{short_hash}"
                 
                 # Move to archive with timestamp (include microseconds to avoid collision)
                 timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
-                archive_file = self.archive_dir / f"{sanitized}_{timestamp}.jsonl"
+                archive_file = self.archive_dir / f"{archive_base}_{timestamp}.jsonl"
                 
                 # Handle filename collision (retry with new timestamp)
                 retry = 0
                 while archive_file.exists() and retry < 3:
                     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
-                    archive_file = self.archive_dir / f"{sanitized}_{timestamp}_{retry}.jsonl"
+                    archive_file = self.archive_dir / f"{archive_base}_{timestamp}_{retry}.jsonl"
                     retry += 1
                 
                 # If still exists after retries, use UUID to guarantee uniqueness
                 if archive_file.exists():
-                    archive_file = self.archive_dir / f"{sanitized}_{uuid.uuid4().hex}.jsonl"
+                    archive_file = self.archive_dir / f"{archive_base}_{uuid.uuid4().hex}.jsonl"
                 
                 session_file.rename(archive_file)
                 
