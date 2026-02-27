@@ -5,8 +5,7 @@
 ```
 memory/
 ├── __init__.py       # MemoryStore interface and exports
-├── lightweight.py    # Lightweight TF-IDF based memory
-└── vector.py        # Vector-based memory (optional)
+└── lightweight.py    # Lightweight TF-IDF based memory
 ```
 
 ## Components
