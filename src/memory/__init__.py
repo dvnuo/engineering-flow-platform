@@ -142,64 +142,38 @@ def get_long_term_memory_path() -> Path:
     return DEFAULT_WORKSPACE / "MEMORY.md"
 
 
-# Global memory store instance
-memory_store: Optional[MemoryStore] = None
-_memory_auto_init = False
+# Global memory store instance (kept for backward compatibility)
+# memory_store: Optional[MemoryStore] = None  # Disabled - using LightweightMemory
+# _memory_auto_init = False  # Disabled
 
 
-def init_memory_store(config: Optional[MemoryConfig] = None, auto_init: bool = False) -> MemoryStore:
+def init_memory_store(config: Optional[MemoryConfig] = None, auto_init: bool = False) -> None:
     """Initialize the global memory store.
     
+    Note: Memory store is disabled. Using LightweightMemory in agents instead.
+    This function is kept for API compatibility.
+    
     Args:
-        config: Optional memory configuration. If not provided, reads from global config.
-        auto_init: If True, automatically initialize on first use.
+        config: Optional memory configuration (ignored)
+        auto_init: If True, automatically initialize on first use (ignored)
         
     Returns:
-        Initialized memory store.
+        None
     """
-    global memory_store, _memory_auto_init
-    from src.memory.sqlite_store import SqliteMemoryStore
-    from src.config import config as global_config
-    
-    # If no config provided, read from global config
-    if config is None:
-        # Build memory config from global config
-        global_memory_config = getattr(global_config, 'memory', {})
-        global_workspace_config = getattr(global_config, 'workspace', {})
-        
-        merged_config = {
-            'enabled': global_memory_config.get('enabled', True),
-            'provider': global_memory_config.get('provider', 'openai'),
-            'model': global_memory_config.get('model', 'text-embedding-3-small'),
-            'path': global_memory_config.get('path', str(DEFAULT_MEMORY_DIR)),
-            'workspace': global_workspace_config,
-        }
-        config = merged_config
-    
-    memory_store = SqliteMemoryStore(MemoryConfig(config))
-    _memory_auto_init = auto_init
-    logger.info(f"Memory store initialized: {config}")
-    return memory_store
+    logger.info("Memory store disabled (using LightweightMemory)")
+    return None
 
 
 def get_memory_store() -> Optional[MemoryStore]:
     """Get the global memory store.
     
-    If not initialized and auto_init is True, initializes automatically.
+    Note: Memory store is disabled. Using LightweightMemory in agents instead.
     
     Returns:
-        Current memory store or None if not initialized.
+        None
     """
-    global memory_store, _memory_auto_init
-    
-    if memory_store is None and _memory_auto_init:
-        try:
-            memory_store = SqliteMemoryStore()
-            logger.info("Memory store auto-initialized")
-        except Exception as e:
-            logger.warning(f"Failed to auto-initialize memory store: {e}")
-    
-    return memory_store
+    # Memory store disabled - using LightweightMemory instead
+    return None
 
 
 async def write_daily_memory(content: str, date_str: str = None) -> Path:

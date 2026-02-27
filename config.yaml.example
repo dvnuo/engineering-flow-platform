@@ -58,34 +58,10 @@ session:
 # ============================================
 # Memory Configuration (OPTIONAL)
 # ============================================
-# Long-term memory storage using SQLite with FTS5 full-text search
+# Memory storage using LightweightMemory (TF-IDF based)
 
 memory:
   enabled: true  # Enable memory storage
-  provider: "openai"  # Embedding provider (openai, azure, local)
-  model: "text-embedding-3-small"  # Embedding model
-
-  # Hybrid search settings (vector + text)
-  hybrid:
-    enabled: true  # Enable hybrid search (vector + keyword)
-    vector_weight: 0.7  # Weight for vector similarity (0.0-1.0)
-    text_weight: 0.3  # Weight for keyword matching (0.0-1.0)
-
-  # Cache settings
-  cache:
-    enabled: true  # Enable embedding cache
-    max_entries: 50000  # Maximum cached embeddings
-
-  # SQLite database location
-  path: "~/.efp/memory"  # SQLite database location
-
-  # Vector memory for semantic search (Qdrant-based)
-  vector:
-    enabled: true  # Enable vector memory for semantic search
-    storage_dir: "~/.efp/workspace/vector_memory"  # Vector storage directory
-    model: "all-MiniLM-L6-v2"  # Sentence transformer model
-    dimension: 384  # Embedding dimension
-    score_threshold: 0.5  # Minimum similarity score (0.0-1.0)
 
 # ============================================
 # Cost Tracking Configuration (OPTIONAL)
@@ -139,9 +115,8 @@ workspace:
 #       ├── sessions/              ← Individual session files
 #       │   ├── {sanitized_id}_{hash}.jsonl  (one file per session)
 #       │   └── archive/             (archived sessions)
-#       └── memory/                ← Memory (SQLite + daily notes)
-#           ├── memories.sqlite
-#           └── YYYY-MM-DD.md
+#   └── memory/                ← Daily notes
+#       └── YYYY-MM-DD.md
 #
 # All data is under ~/.efp/workspace/ for easy backup and management
 # ============================================
