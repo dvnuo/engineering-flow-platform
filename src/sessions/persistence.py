@@ -46,8 +46,15 @@ class SessionPersistence:
         self.archive_dir.mkdir(exist_ok=True)
     
     def _session_file(self, session_id: str) -> Path:
-        """Get the file path for a session."""
-        return self.storage_dir / f"{session_id}.jsonl"
+        """Get the file path for a session.
+        
+        Sanitizes session_id to prevent path traversal attacks.
+        """
+        # Sanitize session ID to prevent path traversal
+        sanitized = "".join(c for c in session_id if c.isalnum() or c in "-_").strip()
+        if not sanitized or sanitized.startswith("-"):
+            sanitized = f"session_{sanitized}" if sanitized else "invalid_session"
+        return self.storage_dir / f"{sanitized}.jsonl"
     
     def _is_expired(self, record: Dict) -> bool:
         """Check if a session record is expired."""
@@ -142,14 +149,9 @@ class SessionPersistence:
             return []
         
         sessions = []
-        now = datetime.utcnow()
         
         try:
             for session_file in self.storage_dir.glob("*.jsonl"):
-                # Skip archive directory
-                if session_file.parent != self.storage_dir:
-                    continue
-                
                 try:
                     with open(session_file, 'r', encoding='utf-8') as f:
                         line = f.readline()
@@ -180,9 +182,17 @@ class SessionPersistence:
                 if not session_file.exists():
                     return False
                 
-                # Move to archive with timestamp
-                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                # Move to archive with timestamp (include microseconds to avoid collision)
+                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
                 archive_file = self.archive_dir / f"{session_id}_{timestamp}.jsonl"
+                
+                # Handle filename collision (retry with new timestamp)
+                retry = 0
+                while archive_file.exists() and retry < 3:
+                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                    archive_file = self.archive_dir / f"{session_id}_{timestamp}_{retry}.jsonl"
+                    retry += 1
+                
                 session_file.rename(archive_file)
                 
                 return True
@@ -197,13 +207,11 @@ class SessionPersistence:
         
         async with self._lock:
             try:
+                # Materialize glob results to avoid unsafe iteration
+                session_files = list(self.storage_dir.glob("*.jsonl"))
                 removed = 0
-                now = datetime.utcnow()
                 
-                for session_file in self.storage_dir.glob("*.jsonl"):
-                    if session_file.parent != self.storage_dir:
-                        continue
-                    
+                for session_file in session_files:
                     try:
                         with open(session_file, 'r', encoding='utf-8') as f:
                             line = f.readline()
@@ -231,10 +239,10 @@ class SessionPersistence:
         
         async with self._lock:
             try:
+                # Materialize glob results to avoid unsafe iteration
+                session_files = list(self.storage_dir.glob("*.jsonl"))
                 count = 0
-                for session_file in self.storage_dir.glob("*.jsonl"):
-                    if session_file.parent != self.storage_dir:
-                        continue
+                for session_file in session_files:
                     session_file.unlink()
                     count += 1
                 
