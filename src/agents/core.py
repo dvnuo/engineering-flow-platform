@@ -356,14 +356,20 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Update messages for LLM call
             # Convert back to dict format for LLM
-            messages = [
-                {
+            messages = []
+            for msg in compacted_messages:
+                msg_dict = {
                     "role": msg.role,
                     "content": msg.content,
                     "timestamp": msg.timestamp,
                 }
-                for msg in compacted_messages
-            ]
+                # Preserve tool_calls for assistant messages
+                if msg.tool_calls:
+                    msg_dict["tool_calls"] = msg.tool_calls
+                # Preserve tool_call_id for tool messages
+                if msg.tool_use_id:
+                    msg_dict["tool_call_id"] = msg.tool_use_id
+                messages.append(msg_dict)
             
             logger.info(
                 f"[{session_id}] Compaction complete: "
