@@ -140,9 +140,8 @@ workspace:
 #       ├── sessions/              ← Session JSONL files
 #       │   ├── sessions.active.jsonl  (active sessions)
 #       │   └── archive/               (rotated files)
-#       ├── memory/                ← Memory SQLite DB
-#       │   └── memories.sqlite
-#       └── memory/                ← Daily notes
+#       └── memory/                ← Memory (SQLite + daily notes)
+#           ├── memories.sqlite
 #           └── YYYY-MM-DD.md
 #
 # All data is under ~/.efp/workspace/ for easy backup and management
