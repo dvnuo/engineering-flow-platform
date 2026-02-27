@@ -158,14 +158,22 @@ class SessionManager:
             key=lambda k: self._session_timestamps[k]
         )
         
-        # Auto-save session summary before eviction
-        try:
-            from src.hooks.session_memory import save_session_summary
-            # Run synchronously to avoid blocking
-            asyncio.create_task(save_session_summary(oldest_key))
-            logger.debug(f"Scheduled auto-save for session {oldest_key}")
-        except Exception as e:
-            logger.warning(f"Failed to auto-save session {oldest_key}: {e}")
+        # Get session data before deletion (to avoid race condition)
+        session_data = self.sessions.get(oldest_key)
+        
+        # Auto-save session summary with pre-fetched data
+        if session_data and session_data.get("history"):
+            try:
+                from src.hooks.session_memory import save_session_summary
+                # Pass session data directly to avoid race condition
+                asyncio.create_task(save_session_summary(
+                    oldest_key, 
+                    workspace_dir=None,
+                    session_data=session_data
+                ))
+                logger.debug(f"Scheduled auto-save for session {oldest_key}")
+            except Exception as e:
+                logger.warning(f"Failed to auto-save session {oldest_key}: {e}")
         
         # Remove the session
         if oldest_key in self.sessions:

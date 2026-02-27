@@ -98,6 +98,7 @@ async def summarize_session(
 async def save_session_summary(
     session_id: str,
     workspace_dir: Optional[Path] = None,
+    session_data: Optional[Dict[str, Any]] = None,
 ) -> Optional[Path]:
     """Save session summary to daily memory file.
     
@@ -107,6 +108,7 @@ async def save_session_summary(
     Args:
         session_id: The session ID to summarize
         workspace_dir: Workspace directory (defaults to ~/.efp/workspace)
+        session_data: Optional pre-fetched session data to avoid race conditions
         
     Returns:
         Path to the created memory file, or None if failed
@@ -118,8 +120,12 @@ async def save_session_summary(
     memory_dir.mkdir(parents=True, exist_ok=True)
     
     try:
-        # Get session history
-        session = await session_manager.get_session(session_id)
+        # Use provided session data or fetch from manager
+        if session_data is not None:
+            session = session_data
+        else:
+            session = await session_manager.get_session(session_id)
+        
         history = session.get("history", [])
         
         if not history:
