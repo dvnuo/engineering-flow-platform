@@ -131,21 +131,21 @@ workspace:
 # ============================================
 # Session Storage Structure
 # ============================================
-# Session data is stored in ~/.efp/sessions/
+# Session data is stored in ~/.efp/workspace/sessions/
 #
 # Structure:
 #   ~/.efp/
-#   ├── sessions/              ← Session JSONL files
-#   │   ├── sessions.active.jsonl  (active sessions)
-#   │   └── archive/               (rotated files)
-#   ├── memory/                ← Memory SQLite DB
-#   │   └── memories.sqlite
-#   └── workspace/             ← Project-specific files
-#       ├── MEMORY.md
-#       └── memory/
+#   ├── config.yaml
+#   └── workspace/
+#       ├── sessions/              ← Session JSONL files
+#       │   ├── sessions.active.jsonl  (active sessions)
+#       │   └── archive/               (rotated files)
+#       ├── memory/                ← Memory SQLite DB
+#       │   └── memories.sqlite
+#       └── memory/                ← Daily notes
 #           └── YYYY-MM-DD.md
 #
-# All data is under ~/.efp/ for easy backup and management
+# All data is under ~/.efp/workspace/ for easy backup and management
 # ============================================
 # Server Configuration (OPTIONAL)
 # ============================================
