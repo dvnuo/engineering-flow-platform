@@ -1144,7 +1144,7 @@ body {
 /* Recent Sessions Sidebar */
 #recentSessionsSection {
     flex: 0 0 auto;
-    min-height: 70%;
+    min-height: 50%;
     max-height: 100%;
     overflow-y: auto;
 }
