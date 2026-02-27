@@ -77,8 +77,11 @@ async def exec(command: str, args: list = None, timeout: int = DEFAULT_TIMEOUT) 
     
     config = get_security_config()
     
+    # Default working directory: ~/.efp/workspace
+    default_cwd = str(Path.home() / ".efp" / "workspace")
+    
     # Get working directory - prefer skill workdir if set (async-safe via contextvars)
-    actual_cwd = str(Path.cwd())
+    actual_cwd = default_cwd
     skill_workdir_getter = _get_skill_workdir_getter()
     if skill_workdir_getter:
         skill_workdir = skill_workdir_getter()
@@ -198,7 +201,8 @@ def exec_sync(command: str, args: list = None, timeout: int = DEFAULT_TIMEOUT) -
         return "Error: Empty command"
     
     config = get_security_config()
-    actual_cwd = str(Path.cwd())
+    default_cwd = str(Path.home() / ".efp" / "workspace")
+    actual_cwd = default_cwd
     
     # Use args array if provided (safer)
     if args and isinstance(args, list):

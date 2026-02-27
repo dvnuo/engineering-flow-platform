@@ -46,7 +46,7 @@ session:
   # Persistence layer settings (JSONL format)
   persistence:
     enabled: true  # Enable session persistence
-    storage_dir: "~/.efp/sessions"  # Where to store session files
+    storage_dir: "~/.efp/workspace/sessions"  # Where to store session files
     ttl_seconds: 2592000  # Session TTL in seconds (30 days = 30 * 24 * 3600)
     max_file_size_mb: 100  # Max size before file rotation
 
@@ -126,7 +126,7 @@ workspace:
   memory_dir: "~/.efp/workspace/memory"
 
   # Session storage (can be overridden in session config)
-  sessions_dir: "~/.efp/sessions"
+  sessions_dir: "~/.efp/workspace/sessions"
 
 # ============================================
 # Session Storage Structure
