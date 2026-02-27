@@ -28,6 +28,7 @@ _yaml.indent(mapping=2, sequence=4, offset=2)
 _yaml.width = 4096
 
 from src.agents.core import Agent as AgentCore
+from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.config import config
 from src.sessions.manager import session_manager
@@ -584,7 +585,11 @@ async def api_usage(request: web.Request) -> web.Response:
 
 
 async def api_clear(request: web.Request) -> web.Response:
-    """Clear chat history."""
+    """Clear chat history.
+    
+    POST /api/clear
+    Body: {"session_id": "optional"}
+    """
     try:
         data = await request.json()
         session_id = data.get('session_id', 'webchat')
@@ -592,6 +597,7 @@ async def api_clear(request: web.Request) -> web.Response:
         await session_manager.clear_history(session_id)
         
         return web.json_response({'success': True})
+            
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
 
