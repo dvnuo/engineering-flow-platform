@@ -303,8 +303,13 @@ You have access to the following tools. When a user asks you to do something tha
             CompactionStats,
         )
         
-        # Get max tokens from config or use default
-        max_tokens = config.llm.get("max_tokens", 4000)
+        # Get context window for the model (not max_tokens which is for responses)
+        model = config.llm.get("model", "gpt-3.5-turbo")
+        context_window = resolve_context_window_tokens(model)
+        
+        # Use context window minus response budget as the limit for compaction
+        # Leave room for response (default 4000 tokens) and system prompt (estimate ~5000)
+        max_tokens = context_window - 10000  # Reserve 10K for response + system prompt
         
         # Estimate current token count
         # Convert session messages to AgentMessage format
