@@ -62,7 +62,7 @@ class SessionPersistence:
     
     def __init__(
         self,
-        storage_dir: str = "~/.efp/sessions",
+        storage_dir: str = "~/.efp/workspace/sessions",
         ttl_seconds: int = 86400,  # 24 hours default
         max_file_size_mb: int = 100,
         enabled: bool = True,

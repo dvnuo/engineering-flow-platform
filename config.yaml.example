@@ -46,7 +46,7 @@ session:
   # Persistence layer settings (JSONL format)
   persistence:
     enabled: true  # Enable session persistence
-    storage_dir: "~/.efp/sessions"  # Where to store session files
+    storage_dir: "~/.efp/workspace/sessions"  # Where to store session files
     ttl_seconds: 2592000  # Session TTL in seconds (30 days = 30 * 24 * 3600)
     max_file_size_mb: 100  # Max size before file rotation
 
@@ -126,26 +126,25 @@ workspace:
   memory_dir: "~/.efp/workspace/memory"
 
   # Session storage (can be overridden in session config)
-  sessions_dir: "~/.efp/sessions"
+  sessions_dir: "~/.efp/workspace/sessions"
 
 # ============================================
 # Session Storage Structure
 # ============================================
-# Session data is stored in ~/.efp/sessions/
+# Session data is stored in ~/.efp/workspace/sessions/
 #
 # Structure:
 #   ~/.efp/
-#   ├── sessions/              ← Session JSONL files
-#   │   ├── sessions.active.jsonl  (active sessions)
-#   │   └── archive/               (rotated files)
-#   ├── memory/                ← Memory SQLite DB
-#   │   └── memories.sqlite
-#   └── workspace/             ← Project-specific files
-#       ├── MEMORY.md
-#       └── memory/
+#   ├── config.yaml
+#   └── workspace/
+#       ├── sessions/              ← Session JSONL files
+#       │   ├── sessions.active.jsonl  (active sessions)
+#       │   └── archive/               (rotated files)
+#       └── memory/                ← Memory (SQLite + daily notes)
+#           ├── memories.sqlite
 #           └── YYYY-MM-DD.md
 #
-# All data is under ~/.efp/ for easy backup and management
+# All data is under ~/.efp/workspace/ for easy backup and management
 # ============================================
 # Server Configuration (OPTIONAL)
 # ============================================
