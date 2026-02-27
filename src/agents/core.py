@@ -307,9 +307,9 @@ You have access to the following tools. When a user asks you to do something tha
         model = config.llm.get("model", "gpt-3.5-turbo")
         context_window = resolve_context_window_tokens(model)
         
-        # Use context window minus response budget as the limit for compaction
-        # Leave room for response (default 4000 tokens) and system prompt (estimate ~5000)
-        max_tokens = context_window - 10000  # Reserve 10K for response + system prompt
+        # Use 50% of context window as the limit for prompt history
+        # This leaves room for response and system prompt
+        max_tokens = max(1000, int(context_window * 0.5))
         
         # Estimate current token count
         # Convert session messages to AgentMessage format
