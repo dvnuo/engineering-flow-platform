@@ -222,13 +222,14 @@ class SessionPersistence:
                 archive_file = self.archive_dir / f"{archive_base}_{timestamp}.jsonl"
                 
                 # Handle filename collision (retry with new timestamp)
+                # Collisions should be rare with microsecond timestamps, but handle edge cases
                 retry = 0
                 while archive_file.exists() and retry < 3:
                     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
                     archive_file = self.archive_dir / f"{archive_base}_{timestamp}_{retry}.jsonl"
                     retry += 1
                 
-                # If still exists after retries, use UUID to guarantee uniqueness
+                # If still exists after retries (extremely unlikely), use UUID to guarantee uniqueness
                 if archive_file.exists():
                     archive_file = self.archive_dir / f"{archive_base}_{uuid.uuid4().hex}.jsonl"
                 
