@@ -125,7 +125,7 @@ class SessionPersistence:
                 }
                 
                 # Atomic write: write to temp file then atomically replace destination
-                temp_file = session_file.with_suffix('.tmp')
+                temp_file = session_file.with_name(f"{session_file.stem}.{uuid.uuid4().hex}.tmp")
                 try:
                     with open(temp_file, 'w', encoding='utf-8') as f:
                         f.write(json.dumps(record, ensure_ascii=False) + '\n')
