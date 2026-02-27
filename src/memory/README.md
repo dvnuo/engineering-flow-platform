@@ -4,25 +4,25 @@
 
 ```
 memory/
-├── __init__.py       # MemoryStore interface
-└── sqlite_store.py   # SQLite implementation
+├── __init__.py       # MemoryStore interface and exports
+├── lightweight.py    # Lightweight TF-IDF based memory
+└── vector.py        # Vector-based memory (optional)
 ```
 
 ## Components
 
-### MemoryStore
-Interface for persistent memory storage with FTS5 full-text search.
+### LightweightMemory
+TF-IDF based in-memory search for session context.
 
-### SqliteMemoryStore
-SQLite-based implementation with:
-- FTS5 full-text search (BM25 ranking)
-- Session transcript indexing
-- Hybrid search ready for vector integration
+Used by `agents/memory.py` for semantic search over memory files.
+
+### MemoryStore
+Legacy interface - currently disabled (using LightweightMemory instead).
 
 ## Usage
 
 ```python
-from src.memory import MemoryStore, get_memory_store
+from src.agents.memory import MemorySystem
 
-store = get_memory_store()
+memory = MemorySystem(workspace_path)
 ```

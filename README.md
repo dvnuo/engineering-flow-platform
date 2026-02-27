@@ -180,9 +180,9 @@ engineering-flow/
     │   ├── server.py
     │   └── webchat.py
     │
-    ├── memory/               # Memory storage
+    ├── memory/               # Memory storage (LightweightMemory)
     │   ├── __init__.py
-    │   └── sqlite_store.py
+    │   └── lightweight.py
     │
     ├── sessions/             # Session management
     │   └── manager.py

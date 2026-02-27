@@ -158,7 +158,6 @@ def init_memory_store(config: Optional[MemoryConfig] = None, auto_init: bool = F
         Initialized memory store.
     """
     global memory_store, _memory_auto_init
-    from src.memory.sqlite_store import SqliteMemoryStore
     from src.config import config as global_config
     
     # If no config provided, read from global config
@@ -176,10 +175,11 @@ def init_memory_store(config: Optional[MemoryConfig] = None, auto_init: bool = F
         }
         config = merged_config
     
-    memory_store = SqliteMemoryStore(MemoryConfig(config))
+    # Memory store initialization disabled (using LightweightMemory in agents instead)
+    memory_store = None
     _memory_auto_init = auto_init
-    logger.info(f"Memory store initialized: {config}")
-    return memory_store
+    logger.info(f"Memory store disabled (using LightweightMemory)")
+    return None
 
 
 def get_memory_store() -> Optional[MemoryStore]:
@@ -192,14 +192,8 @@ def get_memory_store() -> Optional[MemoryStore]:
     """
     global memory_store, _memory_auto_init
     
-    if memory_store is None and _memory_auto_init:
-        try:
-            memory_store = SqliteMemoryStore()
-            logger.info("Memory store auto-initialized")
-        except Exception as e:
-            logger.warning(f"Failed to auto-initialize memory store: {e}")
-    
-    return memory_store
+    # Memory store disabled - using LightweightMemory instead
+    return None
 
 
 async def write_daily_memory(content: str, date_str: str = None) -> Path:
