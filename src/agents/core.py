@@ -304,7 +304,7 @@ You have access to the following tools. When a user asks you to do something tha
         )
         
         # Get context window for the model (not max_tokens which is for responses)
-        model = config.llm.get("model", "gpt-3.5-turbo")
+        model = config.llm.get("model", "gpt-5-mini")
         context_window = resolve_context_window_tokens(model)
         
         # Use 50% of context window as the limit for prompt history
