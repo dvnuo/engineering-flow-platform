@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 JIRA_SESSION_PREFIX = "jira:"
 
 # Default settings
-DEFAULT_MAX_HISTORY = 999999  # Effectively unlimited
+DEFAULT_MAX_HISTORY = 50  # Keep last 50 messages (reasonable for most models)
 DEFAULT_TTL_SECONDS = 86400  # 24 hours
 DEFAULT_AUTO_SAVE = True
 
