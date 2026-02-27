@@ -234,6 +234,10 @@ class SessionPersistence:
                 
                 for session_file in session_files:
                     try:
+                        # Check if file still exists (may have been deleted by another process)
+                        if not session_file.exists():
+                            continue
+                        
                         with open(session_file, 'r', encoding='utf-8') as f:
                             line = f.readline()
                             if not line.strip():
@@ -244,8 +248,16 @@ class SessionPersistence:
                                 # Archive instead of delete (for consistency)
                                 timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
                                 archive_file = self.archive_dir / f"{session_file.name.rsplit('.', 1)[0]}_{timestamp}.jsonl"
-                                session_file.rename(archive_file)
-                                archived += 1
+                                try:
+                                    session_file.rename(archive_file)
+                                    archived += 1
+                                except FileNotFoundError:
+                                    # File was removed between check and rename; safe to ignore
+                                    logger.debug("Session file disappeared before archiving: %s", session_file)
+                    except json.JSONDecodeError as e:
+                        logger.warning("Failed to parse session file %s: %s", session_file, e)
+                    except OSError as e:
+                        logger.warning("Filesystem error processing session file %s: %s", session_file, e)
                     except Exception:
                         continue
                 
