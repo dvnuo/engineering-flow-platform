@@ -6,7 +6,6 @@ Manages individual session files with TTL support.
 import asyncio
 import json
 import logging
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -82,17 +81,27 @@ class SessionPersistence:
                 now = datetime.utcnow().isoformat()
                 expires_at = self._calculate_expires_at()
                 
+                # Preserve created_at for existing sessions
+                created_at = now
+                session_file = self._session_file(session_id)
+                if session_file.exists():
+                    try:
+                        with open(session_file, 'r', encoding='utf-8') as f:
+                            existing = json.loads(f.readline())
+                            created_at = existing.get("created_at", now)
+                    except Exception:
+                        pass  # Use current time if unable to read
+                
                 record = {
                     "session_id": session_id,
                     "channel": channel,
                     "messages": messages,
                     "metadata": metadata or {},
-                    "created_at": now,
+                    "created_at": created_at,
                     "updated_at": now,
                     "expires_at": expires_at,
                 }
                 
-                session_file = self._session_file(session_id)
                 with open(session_file, 'w', encoding='utf-8') as f:
                     f.write(json.dumps(record, ensure_ascii=False) + '\n')
                 
@@ -172,7 +181,7 @@ class SessionPersistence:
                     return False
                 
                 # Move to archive with timestamp
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
                 archive_file = self.archive_dir / f"{session_id}_{timestamp}.jsonl"
                 session_file.rename(archive_file)
                 
