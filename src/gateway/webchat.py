@@ -158,8 +158,11 @@ async def api_chat(request: web.Request) -> web.Response:
         # Tools are registered via src/__init__.py and available to LLM via tool_calls
         # This is the Claude Code style - no separate skill matching/execution needed
         
+        # Get model from config
+        model = config.llm.get('model', 'gpt-5-mini')
+        
         # Run agent (history is managed internally by session_manager)
-        agent = AgentCore()
+        agent = AgentCore(model=model)
         result = await agent.process(
             message=message,
             session_id=session_id,
@@ -297,8 +300,11 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         import asyncio
         event_queue = asyncio.Queue()
         
+        # Get model from config
+        model = config.llm.get('model', 'gpt-5-mini')
+        
         # Run agent and stream response
-        agent = AgentCore()
+        agent = AgentCore(model=model)
         
         # Pass the queue to the agent for real-time events
         result = await agent.process(
