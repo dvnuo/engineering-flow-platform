@@ -20,7 +20,7 @@ ALLOWED_MIME_TYPES = {
 }
 
 # Filename pattern: alphanumeric, dot, underscore, hyphen, 1-200 chars
-FILENAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,200}$')
+FILENAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$')
 
 # Allowed image extensions
 IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff"}

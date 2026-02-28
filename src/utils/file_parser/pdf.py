@@ -183,8 +183,10 @@ async def extract_text_with_pymupdf(file_path: str, options: Dict, file_id: str)
                     # Determine if it's a heading
                     level = None
                     if para.startswith("#"):
-                        # Markdown heading
-                        pass
+                        # Markdown heading: count leading # and strip marker
+                        hash_count = len(para) - len(para.lstrip("#"))
+                        level = min(hash_count, 6)
+                        para = para[hash_count:].lstrip()
                     elif len(para) < 100 and para.isupper():
                         level = 1
                     elif len(para) < 50 and not("\n" in para):

@@ -1146,11 +1146,13 @@ async def api_files_parse(request: web.Request) -> web.Response:
         session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
         try:
             metadata = get_metadata(file_id)
-            if session_id and metadata.session_id and metadata.session_id != session_id:
-                return web.json_response({
-                    'success': False,
-                    'error': 'File not found'
-                }, status=404)
+            # If the file is bound to a session, require a matching session_id
+            if metadata.session_id:
+                if not session_id or metadata.session_id != session_id:
+                    return web.json_response({
+                        'success': False,
+                        'error': 'File not found'
+                    }, status=404)
         except FileNotFoundError:
             pass  # Will be caught below
         
@@ -1214,11 +1216,13 @@ async def api_files_preview(request: web.Request) -> web.Response:
         session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
         try:
             metadata = get_metadata(file_id)
-            if session_id and metadata.session_id and metadata.session_id != session_id:
-                return web.json_response({
-                    'success': False,
-                    'error': 'File not found'
-                }, status=404)
+            # If the file is bound to a session, require a matching session_id
+            if metadata.session_id:
+                if not session_id or metadata.session_id != session_id:
+                    return web.json_response({
+                        'success': False,
+                        'error': 'File not found'
+                    }, status=404)
         except FileNotFoundError:
             pass
         
@@ -1309,11 +1313,13 @@ async def api_files_delete(request: web.Request) -> web.Response:
         session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
         try:
             metadata = get_metadata(file_id)
-            if session_id and metadata.session_id and metadata.session_id != session_id:
-                return web.json_response({
-                    'success': False,
-                    'error': 'File not found'
-                }, status=404)
+            # If the file is bound to a session, require a matching session_id
+            if metadata.session_id:
+                if not session_id or metadata.session_id != session_id:
+                    return web.json_response({
+                        'success': False,
+                        'error': 'File not found'
+                    }, status=404)
         except FileNotFoundError:
             pass
         

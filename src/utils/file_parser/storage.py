@@ -165,8 +165,11 @@ async def save_uploaded_file(
     # Generate unique ID
     file_id = _generate_file_id()
     
-    # Detect MIME type first
-    content_type = _detect_mime_type(content, original_filename)
+    # Get safe extension from original filename first
+    ext = get_safe_extension(original_filename)
+    
+    # Detect MIME type based on extension
+    content_type = _detect_mime_type(content, ext)
     
     # Get safe extension from MIME type (not user input)
     ext = _mime_to_extension(content_type)
