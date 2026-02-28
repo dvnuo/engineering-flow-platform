@@ -2,7 +2,7 @@
 
 ## 背景
 
-用户需要上传多种格式的文件（图片、PDF、Word、Excel、PPT、CSV等），并让 LLM 能够分析和处理这些文件内容。
+用户需要上传多种格式的文件（图片、PDF、Word、Excel、CSV等），并让 LLM 能够分析和处理这些文件内容。
 
 ## 当前状态
 
@@ -43,7 +43,7 @@ Content-Type: multipart/form-data
 | Word (docx) | 提取文本 | python-docx |
 | Excel (xlsx) | 转为 Markdown 表格 | pandas |
 | CSV | 转为 Markdown 表格 | pandas |
-| PPT (pptx) | 提取文本 + 图片 | python-pptx |
+| PPT (pptx) | ❌ 暂不支持 | - |
 | 纯文本 (txt, md, json) | 直接读取 | - |
 
 ### 3. 用户交互流程
@@ -159,7 +159,6 @@ src/
 │   ├── parse_docx()        # 解析 Word → 文本
 │   ├── parse_excel()       # 解析 Excel → Markdown
 │   ├── parse_csv()          # 解析 CSV → Markdown
-│   └── parse_pptx()         # 解析 PPT → 文本
 └── static/
     └── uploads/            # 上传文件存储目录
 ```
@@ -203,7 +202,6 @@ files:
 - [ ] Excel/CSV 解析
 
 ### Phase 3: 高级功能
-- [ ] PPT 解析
 - [ ] WebSocket 流式上传
 - [ ] 解析进度回调
 
@@ -215,7 +213,6 @@ Pillow             # 图片处理
 PyPDF2             # PDF 解析
 python-docx        # Word 解析
 pandas             # Excel/CSV 解析
-python-pptx        # PPT 解析
 ```
 
 ## 待讨论
