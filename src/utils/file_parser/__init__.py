@@ -61,6 +61,22 @@ def _get_pdf_module():
     return _async_modules['pdf']
 
 
+def _get_docx_module():
+    """Lazy load DOCX module."""
+    if 'docx' not in _async_modules:
+        from . import docx as _docx
+        _async_modules['docx'] = _docx
+    return _async_modules['docx']
+
+
+def _get_excel_module():
+    """Lazy load Excel/CSV module."""
+    if 'excel' not in _async_modules:
+        from . import excel as _excel
+        _async_modules['excel'] = _excel
+    return _async_modules['excel']
+
+
 async def upload_file(
     content: bytes,
     filename: str,
@@ -119,6 +135,18 @@ async def parse_file(file_id: str, options: dict = None) -> ParseResult:
     if content_type == "application/pdf":
         pdf_mod = _get_pdf_module()
         return await pdf_mod.parse_pdf(str(path), options)
+    
+    if content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        docx_mod = _get_docx_module()
+        return await docx_mod.parse_docx(str(path), options)
+    
+    if content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+        excel_mod = _get_excel_module()
+        return await excel_mod.parse_excel(str(path), options)
+    
+    if content_type == "text/csv":
+        excel_mod = _get_excel_module()
+        return await excel_mod.parse_csv(str(path), options)
     
     # TODO: Word, Excel parsers
     return ParseResult(
