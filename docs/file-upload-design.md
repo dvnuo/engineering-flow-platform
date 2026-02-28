@@ -471,6 +471,187 @@ async def parse_image_with_ocr(file_path: str, options: Dict) -> ParseResult:
     )
 ```
 
+## 6.4 PDF Parser Implementation
+
+### 6.4.1 PDF 类型检测
+
+**自动判别文本型 vs 扫描型 PDF**:
+
+```python
+def detect_pdf_type(file_path: str) -> str:
+    """Detect if PDF is text-rich or scanned.
+    
+    Returns:
+        "text": Text-based PDF
+        "scanned": Scanned/image-based PDF
+        "mixed": Contains both
+    """
+    import PyMuPDF as fitz
+    
+    with fitz.open(file_path) as doc:
+        text_pages = 0
+        image_pages = 0
+        
+        for page_num, page in enumerate(doc):
+            text = page.get_text()
+            images = page.get_images()
+            
+            if text.strip():
+                text_pages += 1
+            if images:
+                image_pages += 1
+        
+        if text_pages == 0 and image_pages > 0:
+            return "scanned"
+        elif image_pages > 0 and text_pages > 0:
+            return "mixed"
+        else:
+            return "text"
+```
+
+### 6.4.2 PDF 提取流程图
+
+```
+                    ┌─────────────────┐
+                    │   收到 PDF     │
+                    └────────┬────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │ 检测 PDF 类型   │
+                    │ (text/scanned) │
+                    └────────┬────────┘
+                             │
+              ┌───────────────┴───────────────┐
+              │                               │
+              ▼                               ▼
+     ┌─────────────────┐            ┌─────────────────┐
+     │   文本型 PDF    │            │   扫描型 PDF    │
+     │ (text/mixed)   │            │   (scanned)    │
+     └────────┬────────┘            └────────┬────────┘
+              │                               │
+              ▼                               ▼
+     ┌─────────────────┐            ┌─────────────────┐
+     │ PyMuPDF 提取文本│            │  OCR 提取文本   │
+     │ + pdfplumber   │            │  (PaddleOCR)    │
+     │   提取表格     │            └────────┬────────┘
+     └────────┬────────┘                     │
+              │                              ▼
+              │                    ┌─────────────────┐
+              │                    │ Vision LLM     │
+              │                    │ 提取表格        │
+              │                    │ (可选)         │
+              └──────────────┬─────┴─────────────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │   转换 Blocks  │
+                    │  + Markdown    │
+                    └─────────────────┘
+```
+
+### 6.4.3 表格提取策略
+
+| 场景 | 方案 | 说明 |
+|------|------|------|
+| 文本表格 | pdfplumber | 规则提取，精度高 |
+| 视觉表格 | Vision LLM | 端到端表格重建 |
+| 扫描表格 | OCR + 规则 | PaddleOCR + 后处理 |
+
+```python
+async def extract_tables_from_pdf(page, strategy: str = "auto") -> List[Block]:
+    """Extract tables from PDF page.
+    
+    Args:
+        page: PyMuPDF page object
+        strategy: "auto" | "text" | "vision"
+    
+    Returns:
+        List of table blocks
+    """
+    # 策略1: pdfplumber 规则提取
+    try:
+        tables = pdfplumber.extract_tables(page)
+        if tables:
+            return [convert_table_to_block(table, page.number) for table in tables]
+    except Exception as e:
+        logger.warning(f"pdfplumber failed: {e}")
+    
+    # 策略2: Vision LLM (如果启用)
+    if strategy == "auto" or strategy == "vision":
+        # 将页面渲染为图片，调用 Vision LLM
+        return await extract_tables_with_vision(page)
+    
+    return []
+```
+
+### 6.4.4 Fallback 链路
+
+```python
+async def parse_pdf(file_path: str, options: Dict) -> ParseResult:
+    """Parse PDF with fallback chain.
+    
+    Fallback 顺序:
+    1. PyMuPDF (文本) + pdfplumber (表格)
+    2. OCR (PaddleOCR) 文本 + Vision LLM 表格
+    3. 返回部分结果 + error 标记
+    """
+    start = time.time()
+    pdf_type = detect_pdf_type(file_path)
+    
+    blocks = []
+    errors = []
+    
+    try:
+        if pdf_type in ("text", "mixed"):
+            # 优先: 文本提取
+            text_blocks = await extract_text_with_pymupdf(file_path, options)
+            blocks.extend(text_blocks)
+            
+            # 表格提取
+            table_blocks = await extract_tables_with_pdfplumber(file_path, options)
+            blocks.extend(table_blocks)
+        
+        if pdf_type in ("scanned", "mixed") or not blocks:
+            # 回退: OCR
+            ocr_blocks = await extract_text_with_ocr(file_path, options)
+            if ocr_blocks:
+                blocks.extend(ocr_blocks)
+            else:
+                # 最后尝试: Vision LLM
+                vision_blocks = await extract_with_vision_llm(file_path, options)
+                blocks.extend(vision_blocks)
+    
+    except Exception as e:
+        errors.append(str(e))
+        logger.error(f"PDF parsing failed: {e}")
+    
+    # 按页码排序
+    blocks.sort(key=lambda b: b.page or 0)
+    
+    return ParseResult(
+        success=len(blocks) > 0,
+        content_type="application/pdf",
+        markdown="\n\n".join(b.content for b in blocks),
+        blocks=blocks,
+        parse_time_ms=int((time.time() - start) * 1000),
+        error="; ".join(errors) if errors else None
+    )
+```
+
+### 6.4.5 配置项
+
+```yaml
+files:
+  parse:
+    # PDF 设置
+    pdf_strategy: "auto"     # auto | text | vision
+    max_pages: 100           # 最大解析页数
+    
+    # 表格提取
+    table_extractor: "auto"  # auto | pdfplumber | vision
+```
+
 ## 7. LLM Image Integration
 
 ### 7.1 Image Preprocessing (Compression)
