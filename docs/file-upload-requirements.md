@@ -81,6 +81,11 @@
 
 ### A. 图片 (png/jpg/gif/webp)
 
+**LLM 发送限制**:
+- 每次只能发送 1 张图片
+- 支持格式: jpg, png, webp, gif
+- 文件大小上限: 3MB
+
 **策略选择**:
 | 场景 | 方案 |
 |------|------|
@@ -246,6 +251,17 @@ files:
     # 图片
     vision_enabled: true          # 优先使用多模态 LLM
     ocr_engine: "paddleocr"     # paddleocr | tesseract
+    
+    # 图片 LLM 发送限制 (configurable)
+    llm_image:
+      max_count: 1                # 每次只能发送 1 张
+      max_size_mb: 3              # 最大 3MB
+      allowed_formats:             # 支持格式
+        - jpg
+        - jpeg
+        - png
+        - webp
+        - gif
     
     # PDF
     pdf_strategy: "auto"         # auto | text | ocr
