@@ -1131,7 +1131,7 @@ async def api_files_parse(request: web.Request) -> web.Response:
         400: {"success": false, "error": "..."}
     """
     try:
-        from src.utils.file_parser import parse_file, FileNotFoundError
+        from src.utils.file_parser import parse_file, FileNotFoundError, get_metadata
         
         data = await request.json()
         file_id = data.get('file_id')
@@ -1141,6 +1141,18 @@ async def api_files_parse(request: web.Request) -> web.Response:
                 'success': False,
                 'error': 'file_id is required'
             }, status=400)
+        
+        # Validate session ownership
+        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
+        try:
+            metadata = get_metadata(file_id)
+            if session_id and metadata.session_id and metadata.session_id != session_id:
+                return web.json_response({
+                    'success': False,
+                    'error': 'File not found'
+                }, status=404)
+        except FileNotFoundError:
+            pass  # Will be caught below
         
         options = data.get('options', {})
         
@@ -1187,7 +1199,7 @@ async def api_files_preview(request: web.Request) -> web.Response:
         200: {"success": true, "preview": "...", "truncated": true, ...}
     """
     try:
-        from src.utils.file_parser import preview_file, FileNotFoundError
+        from src.utils.file_parser import preview_file, FileNotFoundError, get_metadata
         
         file_id = request.match_info.get('file_id')
         max_chars = int(request.query.get('max_chars', 5000))
@@ -1197,6 +1209,18 @@ async def api_files_preview(request: web.Request) -> web.Response:
                 'success': False,
                 'error': 'file_id is required'
             }, status=400)
+        
+        # Validate session ownership
+        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
+        try:
+            metadata = get_metadata(file_id)
+            if session_id and metadata.session_id and metadata.session_id != session_id:
+                return web.json_response({
+                    'success': False,
+                    'error': 'File not found'
+                }, status=404)
+        except FileNotFoundError:
+            pass
         
         result = await preview_file(file_id, max_chars)
         
@@ -1264,7 +1288,7 @@ async def api_files_delete(request: web.Request) -> web.Response:
         200: {"success": true}
     """
     try:
-        from src.utils.file_parser import delete_file
+        from src.utils.file_parser import delete_file, get_metadata
         
         file_id = request.match_info.get('file_id')
         
@@ -1273,6 +1297,18 @@ async def api_files_delete(request: web.Request) -> web.Response:
                 'success': False,
                 'error': 'file_id is required'
             }, status=400)
+        
+        # Validate session ownership
+        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
+        try:
+            metadata = get_metadata(file_id)
+            if session_id and metadata.session_id and metadata.session_id != session_id:
+                return web.json_response({
+                    'success': False,
+                    'error': 'File not found'
+                }, status=404)
+        except FileNotFoundError:
+            pass
         
         deleted = delete_file(file_id)
         

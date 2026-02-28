@@ -175,7 +175,7 @@ async def _parse_with_paddleocr(file_path: str) -> List[Block]:
         for line_idx, line in enumerate(page):
             box, (text, confidence) = line
             blocks.append(Block(
-                chunk_id=f"img_{page_idx + 1}_{line_idx + 1}",
+                chunk_id=f"{file_id}_img_{page_idx + 1}_{line_idx + 1}",
                 type="paragraph",
                 content=text,
                 method="paddleocr",
@@ -231,7 +231,7 @@ async def _parse_with_tesseract(file_path: str) -> List[Block]:
             ]
         
         blocks.append(Block(
-            chunk_id=f"img_1_{idx + 1}",
+            chunk_id=f"{file_id}_img_1_{idx + 1}",
             type="paragraph",
             content=text,
             method="tesseract",

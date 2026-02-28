@@ -165,8 +165,11 @@ async def save_uploaded_file(
     # Generate unique ID
     file_id = _generate_file_id()
     
-    # Get safe extension
-    ext = get_safe_extension(original_filename)
+    # Detect MIME type first
+    content_type = _detect_mime_type(content, original_filename)
+    
+    # Get safe extension from MIME type (not user input)
+    ext = _mime_to_extension(content_type)
     
     # Server-side canonical name
     stored_filename = f"{file_id}{ext}"
@@ -218,3 +221,26 @@ def _detect_mime_type(content: bytes, ext: str) -> str:
             ".txt": "text/plain",
         }
         return mime_map.get(ext.lower(), "application/octet-stream")
+
+
+def _mime_to_extension(mime_type: str) -> str:
+    """Get safe extension from MIME type.
+    
+    Args:
+        mime_type: Detected MIME type
+        
+    Returns:
+        Safe extension with dot
+    """
+    mime_to_ext = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "application/pdf": ".pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+        "text/csv": ".csv",
+        "text/plain": ".txt",
+    }
+    return mime_to_ext.get(mime_type, "")

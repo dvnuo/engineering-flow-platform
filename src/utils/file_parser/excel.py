@@ -64,7 +64,7 @@ async def parse_excel(file_path: str, options: Dict = None) -> ParseResult:
                 for row_idx, row in enumerate(rows):
                     text = " | ".join(row)
                     blocks.append(Block(
-                        chunk_id=f"xlsx_{sheet_idx + 1}_{row_idx + 1}",
+                        chunk_id=f"{file_id}_xlsx_{sheet_idx + 1}_{row_idx + 1}",
                         type="paragraph",
                         content=text,
                         sheet=sheet_name,
@@ -154,7 +154,7 @@ async def parse_csv(file_path: str, options: Dict = None) -> ParseResult:
         for idx, row in df.head(5).iterrows():
             text = " | ".join(str(v) for v in row.values)
             blocks.append(Block(
-                chunk_id=f"csv_{idx + 2}",
+                chunk_id=f"{file_id}_csv_{idx + 2}",
                 type="paragraph",
                 content=text,
                 row_range=f"{idx + 2}-{idx + 2}",
@@ -238,7 +238,7 @@ def _rows_to_table_block(rows: List[List[str]], sheet_idx: int, sheet_name: str)
     """Convert rows to a table block."""
     if not rows:
         return Block(
-            chunk_id=f"xlsx_{sheet_idx}_1",
+            chunk_id=f"{file_id}_xlsx_{sheet_idx}_1",
             type="table",
             content="",
             sheet=sheet_name,
@@ -252,7 +252,7 @@ def _rows_to_table_block(rows: List[List[str]], sheet_idx: int, sheet_name: str)
     row_range = f"1-{len(rows)}"
     
     return Block(
-        chunk_id=f"xlsx_{sheet_idx}_1",
+        chunk_id=f"{file_id}_xlsx_{sheet_idx}_1",
         type="table",
         content="",
         markdown=markdown,

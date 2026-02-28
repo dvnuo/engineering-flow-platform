@@ -57,7 +57,7 @@ async def parse_docx(file_path: str, options: Dict = None) -> ParseResult:
             block_type = "heading" if level else "paragraph"
             
             blocks.append(Block(
-                chunk_id=f"docx_{para_idx + 1}",
+                chunk_id=f"{file_id}_docx_{para_idx + 1}",
                 type=block_type,
                 content=text,
                 level=level,
@@ -121,7 +121,7 @@ def _extract_table_blocks(table, table_idx: int, page: int) -> List[Block]:
     json_table = _table_to_json(rows)
     
     blocks.append(Block(
-        chunk_id=f"docx_table_{table_idx + 1}",
+        chunk_id=f"{file_id}_docx_table_{table_idx + 1}",
         type="table",
         content="",
         markdown=markdown,

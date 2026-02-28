@@ -117,16 +117,12 @@ def detect_pdf_type(file_path: str) -> str:
     Returns:
         "text", "scanned", or "mixed"
     """
-    try:
-        import fitz
-    except ImportError:
-        try:
-            import fitz
-        except ImportError:
-            return "scanned"  # Default to OCR if no PyMuPDF
+    fitz_module = _get_fitz()
+    if fitz_module is None:
+        return "scanned"  # Default to OCR if no PyMuPDF
     
     try:
-        with fitz.open(file_path) as doc:
+        with fitz_module.open(file_path) as doc:
             text_pages = 0
             image_pages = 0
             
@@ -197,7 +193,7 @@ async def extract_text_with_pymupdf(file_path: str, options: Dict) -> List[Block
                     block_type = "heading" if level else "paragraph"
                     
                     blocks.append(Block(
-                        chunk_id=f"pdf_{page_num + 1}_{para_idx + 1}",
+                        chunk_id=f"{file_id}_pdf_{page_num + 1}_{para_idx + 1}",
                         type=block_type,
                         content=para,
                         level=level,
@@ -229,10 +225,13 @@ async def extract_tables_with_pdfplumber(file_path: str, options: Dict) -> List[
         return []
     
     blocks = []
+    max_pages = options.get("max_pages", 100) if options else 100
     
     try:
         with pdfplumber.open(file_path) as pdf:
             for page_num, page in enumerate(pdf.pages):
+                if page_num + 1 > max_pages:
+                    break
                 tables = page.extract_tables()
                 
                 for table_idx, table in enumerate(tables):
@@ -244,7 +243,7 @@ async def extract_tables_with_pdfplumber(file_path: str, options: Dict) -> List[
                     json_table = _table_to_json(table)
                     
                     blocks.append(Block(
-                        chunk_id=f"pdf_{page_num + 1}_table_{table_idx + 1}",
+                        chunk_id=f"{file_id}_pdf_{page_num + 1}_table_{table_idx + 1}",
                         type="table",
                         content="",
                         markdown=markdown_table,
@@ -278,11 +277,18 @@ async def extract_with_ocr(file_path: str, options: Dict) -> List[Block]:
         return []
     
     blocks = []
+    max_pages = options.get("max_pages", 100) if options else 100
     
     try:
         # Open PDF and convert each page to image
-        with fitz.open(file_path) as doc:
+        fitz_module = _get_fitz()
+        if fitz_module is None:
+            return []
+        
+        with fitz_module.open(file_path) as doc:
             for page_num, page in enumerate(doc):
+                if page_num + 1 > max_pages:
+                    break
                 # Render page to image
                 pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x scale
                 
@@ -335,7 +341,7 @@ async def _ocr_image_buffer(buffer: io.BytesIO, page_num: int) -> List[Block]:
                     continue
                 
                 blocks.append(Block(
-                    chunk_id=f"pdf_{page_num}_ocr_{line_idx + 1}",
+                    chunk_id=f"{file_id}_pdf_{page_num}_ocr_{line_idx + 1}",
                     type="paragraph",
                     content=text,
                     page=page_num,
@@ -370,7 +376,7 @@ async def _ocr_image_buffer(buffer: io.BytesIO, page_num: int) -> List[Block]:
         
         return [
             Block(
-                chunk_id=f"pdf_{page_num}_ocr_{idx + 1}",
+                chunk_id=f"{file_id}_pdf_{page_num}_ocr_{idx + 1}",
                 type="paragraph",
                 content=line,
                 page=page_num,
