@@ -18,7 +18,7 @@ from .models import (
     FileValidationError,
     FileTooLargeError,
     UnsupportedFileTypeError,
-    FileNotFoundError,
+    StoredFileNotFoundError,
     ParseError,
 )
 
@@ -240,7 +240,7 @@ __all__ = [
     "FileValidationError",
     "FileTooLargeError",
     "UnsupportedFileTypeError",
-    "FileNotFoundError",
+    "StoredFileNotFoundError",
     "ParseError",
     # Validators
     "validate_file_size",

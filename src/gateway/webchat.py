@@ -61,7 +61,7 @@ async def serve_webchat(request: web.Request) -> web.Response:
                 'Cache-Control': 'no-cache, no-store, must-revalidate',
             }
         )
-    except FileNotFoundError:
+    except StoredFileNotFoundError:
         logger.error(f"WebChat template not found: {TEMPLATE_DIR / 'webchat.html'}")
         return web.Response(
             text="<html><body><h1>WebChat template not found</h1></body></html>",
@@ -1082,6 +1082,13 @@ async def api_files_upload(request: web.Request) -> web.Response:
         content = b"".join(content_chunks)
         filename = file_field.filename
         
+        # Validate filename
+        if not filename:
+            return web.json_response({
+                'success': False,
+                'error': 'Filename is required'
+            }, status=400)
+        
         # Upload
         metadata = await upload_file(
             content=content,
@@ -1131,9 +1138,16 @@ async def api_files_parse(request: web.Request) -> web.Response:
         400: {"success": false, "error": "..."}
     """
     try:
-        from src.utils.file_parser import parse_file, FileNotFoundError, get_metadata
+        from src.utils.file_parser import parse_file, StoredFileNotFoundError, get_metadata
         
-        data = await request.json()
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({
+                'success': False,
+                'error': 'Invalid JSON body'
+            }, status=400)
+        
         file_id = data.get('file_id')
         
         if not file_id:
@@ -1153,7 +1167,7 @@ async def api_files_parse(request: web.Request) -> web.Response:
                         'success': False,
                         'error': 'File not found'
                     }, status=404)
-        except FileNotFoundError:
+        except StoredFileNotFoundError:
             pass  # Will be caught below
         
         options = data.get('options', {})
@@ -1178,7 +1192,7 @@ async def api_files_parse(request: web.Request) -> web.Response:
             'parse_time_ms': result.parse_time_ms
         })
         
-    except FileNotFoundError as e:
+    except StoredFileNotFoundError as e:
         return web.json_response({
             'success': False,
             'error': str(e)
@@ -1201,10 +1215,19 @@ async def api_files_preview(request: web.Request) -> web.Response:
         200: {"success": true, "preview": "...", "truncated": true, ...}
     """
     try:
-        from src.utils.file_parser import preview_file, FileNotFoundError, get_metadata
+        from src.utils.file_parser import preview_file, StoredFileNotFoundError, get_metadata
         
         file_id = request.match_info.get('file_id')
-        max_chars = int(request.query.get('max_chars', 5000))
+        
+        # Validate max_chars
+        max_chars_raw = request.query.get('max_chars', '5000')
+        try:
+            max_chars = int(max_chars_raw)
+        except (TypeError, ValueError):
+            return web.json_response({
+                'success': False,
+                'error': 'max_chars must be an integer'
+            }, status=400)
         
         if not file_id:
             return web.json_response({
@@ -1223,7 +1246,7 @@ async def api_files_preview(request: web.Request) -> web.Response:
                         'success': False,
                         'error': 'File not found'
                     }, status=404)
-        except FileNotFoundError:
+        except StoredFileNotFoundError:
             pass
         
         result = await preview_file(file_id, max_chars)
@@ -1233,7 +1256,7 @@ async def api_files_preview(request: web.Request) -> web.Response:
         
         return web.json_response(result)
         
-    except FileNotFoundError:
+    except StoredFileNotFoundError:
         return web.json_response({
             'success': False,
             'error': 'File not found'
@@ -1299,7 +1322,7 @@ async def api_files_delete(request: web.Request) -> web.Response:
         200: {"success": true}
     """
     try:
-        from src.utils.file_parser import delete_file, get_metadata, FileNotFoundError
+        from src.utils.file_parser import delete_file, get_metadata, StoredFileNotFoundError
         
         file_id = request.match_info.get('file_id')
         
@@ -1320,7 +1343,7 @@ async def api_files_delete(request: web.Request) -> web.Response:
                         'success': False,
                         'error': 'File not found'
                     }, status=404)
-        except FileNotFoundError:
+        except StoredFileNotFoundError:
             pass
         
         deleted = delete_file(file_id)

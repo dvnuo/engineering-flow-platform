@@ -6,7 +6,7 @@ from typing import Dict, Optional
 import uuid
 from datetime import datetime
 
-from .models import FileMetadata, FileNotFoundError
+from .models import FileMetadata, StoredFileNotFoundError
 from .validators import get_safe_extension
 
 
@@ -76,13 +76,13 @@ def get_file_path(file_id: str) -> Path:
         FileNotFoundError: If file not found
     """
     if file_id not in _file_metadata:
-        raise FileNotFoundError(f"File not found: {file_id}")
+        raise StoredFileNotFoundError(f"File not found: {file_id}")
     
     stored_name = _file_metadata[file_id].stored_filename
     path = UPLOAD_DIR / stored_name
     
     if not path.exists():
-        raise FileNotFoundError(f"File not found: {file_id}")
+        raise StoredFileNotFoundError(f"File not found: {file_id}")
     
     return path
 
@@ -100,7 +100,7 @@ def get_metadata(file_id: str) -> FileMetadata:
         FileNotFoundError: If not found
     """
     if file_id not in _file_metadata:
-        raise FileNotFoundError(f"File not found: {file_id}")
+        raise StoredFileNotFoundError(f"File not found: {file_id}")
     return _file_metadata[file_id]
 
 
@@ -210,24 +210,33 @@ def _detect_mime_type(content: bytes, ext: str) -> str:
     Returns:
         MIME type
     """
+    # Extension-based fallback map
+    mime_map = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".csv": "text/csv",
+        ".txt": "text/plain",
+    }
+    
+    # Try content-based detection first
+    detected = None
     try:
         import magic
-        return magic.from_buffer(content[:1024], mime=True)
+        detected = magic.from_buffer(content[:1024], mime=True)
     except Exception:
-        # Fallback to extension
-        mime_map = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".gif": "image/gif",
-            ".webp": "image/webp",
-            ".pdf": "application/pdf",
-            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ".csv": "text/csv",
-            ".txt": "text/plain",
-        }
+        pass
+    
+    # Fall back to extension if magic is unavailable or returns generic type
+    if not detected or detected == "application/octet-stream":
         return mime_map.get(ext.lower(), "application/octet-stream")
+    
+    return detected
 
 
 def _mime_to_extension(mime_type: str) -> str:

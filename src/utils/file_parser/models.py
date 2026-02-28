@@ -105,8 +105,8 @@ class UnsupportedFileTypeError(FileValidationError):
         super().__init__(message, "unsupported_file_type")
 
 
-class FileNotFoundError(FileValidationError):
-    """File not found."""
+class StoredFileNotFoundError(FileValidationError):
+    """File not found in storage."""
     def __init__(self, message: str):
         super().__init__(message, "file_not_found")
 
