@@ -94,6 +94,24 @@ class ImageConstraints(BaseModel):
     allowed_formats: List[str] = ["jpg", "jpeg", "png", "webp", "gif"]
 ```
 
+### 3.4 Schema Contract (Field Constraints)
+
+**chunk_id 生成规则**:
+- 格式: `{file_id}_{page}_{row}` 或 `{file_id}_{index}`
+- 全局唯一: 使用 UUID 作为 file_id 保证唯一性
+- 可复现: 相同文件 + 相同解析器 = 相同 chunk_id
+
+**page 字段**:
+- 1-based (PDF, Word 第一页 page=1)
+
+**row_range 字段** (Excel/CSV):
+- 1-based, 闭区间
+- 示例: "1-10" 表示第1行到第10行
+
+**confidence 字段**:
+- 范围: 0.0 - 1.0
+- OCR 默认 0.8，Vision 默认 0.9
+
 ## 4. API Endpoints
 
 ### 4.1 Upload File
@@ -223,6 +241,53 @@ def validate_image_for_llm(file_path: str, constraints: ImageConstraints) -> Tup
     return True, ""
 ```
 
+### 5.4 Filename Security
+
+**⚠️ 禁止将用户传入的 filename 直接拼接到路径**
+
+```python
+import re
+
+# 只允许安全字符
+FILENAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,200}$')
+
+def sanitize_filename(filename: str) -> str:
+    """Sanitize user-provided filename.
+    
+    Rules:
+    - 只允许字母、数字、点、下划线、连字符
+    - 必须以字母或数字开头
+    - 最大 200 字符
+    - 去除控制字符
+    """
+    # 提取文件名（去除路径）
+    name = Path(filename).name
+    
+    # 去除控制字符
+    name = ''.join(c for c in name if ord(c) >= 32)
+    
+    # 检查是否合法
+    if not FILENAME_PATTERN.match(name):
+        # 不合法则使用随机名
+        import uuid
+        return f"file_{uuid.uuid4().hex[:8]}"
+    
+    return name
+
+def get_safe_path(file_id: str, original_filename: str) -> Path:
+    """Generate safe storage path.
+    
+    存盘名: {file_id}{ext}
+    原始文件名: 只存入 metadata
+    """
+    ext = Path(original_filename).suffix.lower()
+    # 验证扩展名
+    if not re.match(r'^\.[a-z0-9]+$', ext):
+        ext = ""
+    
+    return UPLOAD_DIR / f"{file_id}{ext}"
+```
+
 ## 6. Image Parser Implementation
 
 ### 6.1 Strategy Selection
@@ -290,37 +355,110 @@ async def parse_image_with_vision(file_path: str) -> ParseResult:
 
 ### 6.3 OCR Parsing
 
+**⚠️ 不同 OCR 引擎返回结构不同，必须分别处理**
+
+#### PaddleOCR 返回结构
+
 ```python
-async def parse_image_with_ocr(file_path: str) -> ParseResult:
+# ocr.ocr() 返回: [ [ [box, (text, confidence)], ... ], ... ]
+# 外层列表每元素为一页，内层列表每元素为一行
+
+# 示例:
+results = ocr.ocr(file_path, cls=True)
+# [
+#   [  # Page 1
+#     [ [[10,20],[50,20],[50,40],[10,40]], ("Hello", 0.95), ... ],
+#     [ [[10,50],[80,50],[80,70],[10,70]], ("World", 0.92), ... ]
+#   ]
+# ]
+
+def paddle_to_blocks(results: list) -> List[Block]:
+    """Convert PaddleOCR results to blocks."""
+    blocks = []
+    for page_idx, page in enumerate(results):
+        for line_idx, line in enumerate(page):
+            box, (text, confidence) = line
+            blocks.append(Block(
+                chunk_id=f"image_{page_idx + 1}_{line_idx + 1}",
+                type="paragraph",
+                content=text,
+                method="paddleocr",
+                confidence=confidence,
+                bbox=box,  # [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+                extracted_at=datetime.now().isoformat()
+            ))
+    return blocks
+```
+
+#### Tesseract 返回结构
+
+```python
+# pytesseract.image_to_data() 返回: Dict[str, List]
+# keys: 'text', 'conf', 'left', 'top', 'width', 'height', ...
+
+# 示例:
+results = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+# {
+#   'text': ['Hello', 'World', ''],
+#   'conf': [95, 92, -1],
+#   'left': [10, 10],
+#   'top': [20, 50],
+#   ...
+# }
+
+def tesseract_to_blocks(results: dict) -> List[Block]:
+    """Convert Tesseract results to blocks."""
+    blocks = []
+    texts = results.get('text', [])
+    confs = results.get('conf', [])
+    lefts = results.get('left', [])
+    tops = results.get('top', [])
+    widths = results.get('width', [])
+    heights = results.get('height', [])
+    
+    for idx, (text, conf) in enumerate(zip(texts, confs)):
+        if not text.strip() or conf < 0:
+            continue  # 跳过空文本
+        
+        blocks.append(Block(
+            chunk_id=f"image_1_{idx + 1}",
+            type="paragraph",
+            content=text,
+            method="tesseract",
+            confidence=conf / 100,
+            bbox=[
+                [lefts[idx], tops[idx]],
+                [lefts[idx] + widths[idx], tops[idx]],
+                [lefts[idx] + widths[idx], tops[idx] + heights[idx]],
+                [lefts[idx], tops[idx] + heights[idx]]
+            ],
+            extracted_at=datetime.now().isoformat()
+        ))
+    return blocks
+```
+
+#### 统一解析入口
+
+```python
+async def parse_image_with_ocr(file_path: str, options: Dict) -> ParseResult:
     """Use OCR to extract text from image."""
     
-    # Use PaddleOCR or Tesseract
     engine = options.get("ocr_engine", "paddleocr")
     
     if engine == "paddleocr":
         from paddleocr import PaddleOCR
         ocr = PaddleOCR(use_angle_cls=True, lang='ch_en')
-        results = ocr.ocr(file_path, cls=True)
+        raw_results = ocr.ocr(file_path, cls=True)
+        blocks = paddle_to_blocks(raw_results)
     else:
-        # Tesseract fallback
+        # Tesseract
         import pytesseract
         from PIL import Image
         img = Image.open(file_path)
-        results = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+        raw_results = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+        blocks = tesseract_to_blocks(raw_results)
     
-    # Convert to blocks
-    blocks = []
-    for idx, line in enumerate(results):
-        blocks.append(Block(
-            chunk_id=f"image_1_{idx}",
-            type="paragraph",
-            content=line["text"],
-            method=engine,
-            confidence=line.get("confidence", 0) / 100,
-            extracted_at=datetime.now().isoformat()
-        ))
-    
-    markdown = "\n".join(b.content for b in blocks)
+    markdown = "\n".join(b.content for b in blocks if b.content.strip())
     
     return ParseResult(
         success=True,
@@ -335,7 +473,73 @@ async def parse_image_with_ocr(file_path: str) -> ParseResult:
 
 ## 7. LLM Image Integration
 
-### 7.1 Sending Images to LLM
+### 7.1 Image Preprocessing (Compression)
+
+**⚠️ 重要：发送前必须压缩**
+
+直接发送 base64 会导致：
+- 体积膨胀 ~33%
+- 容易触发 payload 限制
+- 大图造成内存尖峰
+
+**压缩策略**:
+```python
+from PIL import Image
+import io
+import base64
+
+def compress_image_for_llm(
+    file_path: str,
+    max_dimension: int = 1024,  # 最长边
+    quality: int = 80           # JPEG 质量
+) -> str:
+    """Compress image and return base64.
+    
+    Args:
+        file_path: Original image path
+        max_dimension: Max width or height in pixels
+        quality: JPEG quality (70-85)
+    
+    Returns:
+        Base64 encoded compressed image
+    """
+    with Image.open(file_path) as img:
+        # Convert to RGB if needed
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        
+        # Resize if needed (maintain aspect ratio)
+        if max(img.size) > max_dimension:
+            ratio = max_dimension / max(img.size)
+            new_size = tuple(int(dim * ratio) for dim in img.size)
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
+        
+        # Compress to JPEG
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=quality, optimize=True)
+        return base64.b64encode(buffer.getvalue()).decode()
+```
+
+**压缩配置**:
+```yaml
+files:
+  parse:
+    llm_image:
+      max_dimension: 1024    # 最长边像素
+      jpeg_quality: 80       # 70-85 推荐
+```
+
+### 7.2 Concurrency Limits
+
+```yaml
+files:
+  parse:
+    llm_image:
+      max_concurrent: 2       # 最大并发请求数
+      max_request_size_mb: 5 # 单次请求体上限（压缩后）
+```
+
+### 7.3 Sending Images to LLM
 
 ```python
 async def send_images_to_llm(file_ids: List[str], llm_client) -> List[Dict]:
@@ -355,18 +559,16 @@ async def send_images_to_llm(file_ids: List[str], llm_client) -> List[Dict]:
         if not valid:
             raise ValueError(f"Image validation failed: {error}")
         
-        # Read and encode
-        with open(file_path, "rb") as f:
-            image_b64 = base64.b64encode(f.read()).decode()
-        
-        ext = Path(file_path).suffix.lower().lstrip(".")
-        mime_type = f"image/{ext}"
-        if ext == "jpg":
-            mime_type = "image/jpeg"
+        # Compress before encoding (critical for performance)
+        image_b64 = compress_image_for_llm(
+            file_path,
+            max_dimension=config.llm_image.max_dimension,
+            quality=config.llm_image.jpeg_quality
+        )
         
         images_content.append({
             "type": "image_url",
-            "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}
+            "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
         })
     
     return images_content
@@ -421,23 +623,70 @@ files:
 
 ### 9.1 File Storage
 
+**⚠️ 安全原则：禁止 glob 模糊匹配，使用 metadata 映射**
+
 ```python
 UPLOAD_DIR = Path("~/.efp/workspace/uploads").expanduser()
 
-def get_file_path(file_id: str, filename: str = None) -> Path:
-    """Get file path by ID or filename."""
-    if filename:
-        return UPLOAD_DIR / f"{file_id}_{filename}"
-    # Find file with matching ID
-    for f in UPLOAD_DIR.glob(f"{file_id}_*"):
-        return f
-    raise FileNotFoundError(f"File not found: {file_id}")
+# 内存缓存 (生产环境可用 Redis)
+_file_metadata: Dict[str, Dict] = {}
 
-async def save_uploaded_file(file_id: str, content: bytes, filename: str) -> Path:
-    """Save uploaded file to storage."""
+def register_file(file_id: str, original_filename: str, stored_filename: str, 
+                  content_type: str, size: int) -> None:
+    """Register file metadata."""
+    _file_metadata[file_id] = {
+        "file_id": file_id,
+        "original_filename": original_filename,  # 用户原始文件名（仅存 metadata）
+        "stored_filename": stored_filename,        # 服务端存储文件名
+        "content_type": content_type,
+        "size": size,
+        "uploaded_at": datetime.now().isoformat()
+    }
+
+def get_file_path(file_id: str) -> Path:
+    """Get file path by ID (from metadata, not glob).
+    
+    ⚠️ 不要用 glob 模糊匹配，可能匹配到意外文件
+    """
+    if file_id not in _file_metadata:
+        raise FileNotFoundError(f"File not found: {file_id}")
+    
+    stored_name = _file_metadata[file_id]["stored_filename"]
+    return UPLOAD_DIR / stored_name
+
+def get_metadata(file_id: str) -> Dict:
+    """Get file metadata."""
+    return _file_metadata.get(file_id)
+
+async def save_uploaded_file(file_id: str, content: bytes, original_filename: str) -> Path:
+    """Save uploaded file to storage.
+    
+    存盘名: {file_id}{ext} (服务端生成，不使用用户输入)
+    """
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    file_path = UPLOAD_DIR / f"{file_id}_{filename}"
+    
+    # 提取安全扩展名
+    ext = Path(original_filename).suffix.lower()
+    if not re.match(r'^\.[a-z0-9]+$', ext):
+        ext = ""  # 无效扩展名则不使用
+    
+    # 服务端生成存储名
+    stored_filename = f"{file_id}{ext}"
+    file_path = UPLOAD_DIR / stored_filename
+    
+    # 写入文件
     file_path.write_bytes(content)
+    
+    # 注册 metadata
+    content_type = magic.from_buffer(content[:1024], mime=True)
+    register_file(
+        file_id=file_id,
+        original_filename=original_filename,
+        stored_filename=stored_filename,
+        content_type=content_type,
+        size=len(content)
+    )
+    
     return file_path
 ```
 
