@@ -93,6 +93,10 @@ async def parse_pdf(file_path: str, options: Dict = None) -> ParseResult:
         # Generate markdown
         markdown = _blocks_to_markdown(blocks)
         
+        # Set error if no content extracted
+        if not blocks and not errors:
+            errors.append("No content extracted. PDF parser dependencies may not be installed.")
+        
         return ParseResult(
             success=len(blocks) > 0,
             content_type="application/pdf",
@@ -458,7 +462,7 @@ def _table_to_json(table: List[List[str]]) -> List[List[str]]:
     Returns:
         2D list suitable for JSON
     """
-    return [[str(cell) if cell else "" for cell in row] for row in table]
+    return [["" if cell is None else str(cell) for cell in row] for row in table]
 
 
 def _blocks_to_markdown(blocks: List[Block]) -> str:

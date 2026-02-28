@@ -129,19 +129,24 @@ async def parse_image_with_ocr(file_path: str, options: Dict) -> ParseResult:
     file_id = Path(file_path).stem.split("_")[0]
     filename = Path(file_path).name
     
+    ocr_error = None
     if engine == "paddleocr":
-        blocks = await _parse_with_paddleocr(file_path, file_id)
+        paddleocr = _get_paddleocr()
+        if paddleocr is None:
+            ocr_error = "PaddleOCR not installed, and Tesseract may also be unavailable"
+        blocks = await _parse_with_paddleocr(file_id, file_id)
     else:
-        blocks = await _parse_with_tesseract(file_path, file_id)
+        blocks = await _parse_with_tesseract(file_id, file_id)
     
     # Check if OCR returned any results
     if not blocks:
+        error_msg = ocr_error if ocr_error else "OCR found no text in image"
         return ParseResult(
             success=False,
             content_type=get_mime_type(file_path),
             file_id=file_id,
             filename=filename,
-            error="OCR found no text in image"
+            error=error_msg
         )
     
     markdown = "\n".join(b.content for b in blocks if b.content.strip())
