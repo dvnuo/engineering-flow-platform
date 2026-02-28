@@ -142,7 +142,7 @@ Response 200:
 ### 4.3 Preview File
 
 ```http
-GET /api/files/{filemax_chars=500_id}/preview?0
+GET /api/files/{file_id}/preview?max_chars=5000
 
 Response 200:
 {
