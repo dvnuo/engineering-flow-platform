@@ -145,7 +145,8 @@ def delete_file(file_id: str) -> bool:
 async def save_uploaded_file(
     content: bytes,
     original_filename: str,
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None,
+    content_type: str = None
 ) -> FileMetadata:
     """Save uploaded file to storage.
     
@@ -156,6 +157,7 @@ async def save_uploaded_file(
         content: File content bytes
         original_filename: User's original filename
         session_id: Optional session ID
+        content_type: Optional pre-detected MIME type (will detect if not provided)
         
     Returns:
         Created FileMetadata
@@ -172,8 +174,9 @@ async def save_uploaded_file(
     from .validators import sanitize_filename
     original_filename = sanitize_filename(original_filename)
     
-    # Detect MIME type based on content (optionally using original extension as hint)
-    content_type = _detect_mime_type(content, original_ext)
+    # Detect MIME type if not provided
+    if content_type is None:
+        content_type = _detect_mime_type(content, original_ext)
     
     # Get canonical extension from MIME type (not user input)
     canonical_ext = _mime_to_extension(content_type)

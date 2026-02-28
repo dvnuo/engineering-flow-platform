@@ -107,8 +107,8 @@ async def upload_file(
     if not validate_content_type(mime_type):
         raise UnsupportedFileTypeError(f"File type {mime_type} not allowed")
     
-    # Save
-    return await save_uploaded_file(content, filename, session_id)
+    # Save (pass detected MIME type to avoid re-detection)
+    return await save_uploaded_file(content, filename, session_id, mime_type)
 
 
 async def parse_file(file_id: str, options: dict = None) -> ParseResult:
@@ -130,23 +130,38 @@ async def parse_file(file_id: str, options: dict = None) -> ParseResult:
     # Dispatch by type
     if content_type.startswith("image/"):
         image_mod = _get_image_module()
-        return await image_mod.parse_image(str(path), options)
+        result = await image_mod.parse_image(str(path), options)
+        result.file_id = file_id
+        result.filename = metadata.original_filename
+        return result
     
     if content_type == "application/pdf":
         pdf_mod = _get_pdf_module()
-        return await pdf_mod.parse_pdf(str(path), options)
+        result = await pdf_mod.parse_pdf(str(path), options)
+        result.file_id = file_id
+        result.filename = metadata.original_filename
+        return result
     
     if content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
         docx_mod = _get_docx_module()
-        return await docx_mod.parse_docx(str(path), options)
+        result = await docx_mod.parse_docx(str(path), options)
+        result.file_id = file_id
+        result.filename = metadata.original_filename
+        return result
     
     if content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
         excel_mod = _get_excel_module()
-        return await excel_mod.parse_excel(str(path), options)
+        result = await excel_mod.parse_excel(str(path), options)
+        result.file_id = file_id
+        result.filename = metadata.original_filename
+        return result
     
     if content_type == "text/csv":
         excel_mod = _get_excel_module()
-        return await excel_mod.parse_csv(str(path), options)
+        result = await excel_mod.parse_csv(str(path), options)
+        result.file_id = file_id
+        result.filename = metadata.original_filename
+        return result
     
     # Unsupported file type
     return ParseResult(
