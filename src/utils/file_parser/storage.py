@@ -172,8 +172,9 @@ async def save_uploaded_file(
     stored_filename = f"{file_id}{ext}"
     file_path = UPLOAD_DIR / stored_filename
     
-    # Write file
-    file_path.write_bytes(content)
+    # Write file (async to avoid blocking event loop)
+    import asyncio
+    await asyncio.to_thread(file_path.write_bytes, content)
     
     # Get MIME type
     content_type = _detect_mime_type(content, ext)

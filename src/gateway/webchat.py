@@ -1144,7 +1144,7 @@ async def api_files_parse(request: web.Request) -> web.Response:
             'file_id': result.file_id,
             'filename': result.filename,
             'markdown': result.markdown,
-            'blocks': [b.model_dump() for b in result.blocks],
+            'blocks': [b.model_dump(by_alias=True, exclude_none=True) for b in result.blocks],
             'json': result.json,
             'parse_time_ms': result.parse_time_ms
         })

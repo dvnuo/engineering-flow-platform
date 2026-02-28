@@ -140,13 +140,15 @@ def _table_to_markdown(rows: List[List[str]]) -> str:
     if not rows:
         return ""
     
-    col_widths = [max(len(str(row[i])) if i < len(row) else 0 for row in rows) for i in range(len(rows[0]))]
+    max_cols = max(len(row) for row in rows)
+    col_widths = [max(len(str(row[i])) if i < len(row) else 0 for row in rows) for i in range(max_cols)]
     
     lines = []
     
     # Header
+    header_row = rows[0]
     header = "| " + " | ".join(
-        str(row[i]).ljust(col_widths[i]) if i < len(row) else " " * col_widths[i]
+        str(header_row[i]).ljust(col_widths[i]) if i < len(header_row) else " " * col_widths[i]
         for i in range(len(col_widths))
     ) + " |"
     lines.append(header)

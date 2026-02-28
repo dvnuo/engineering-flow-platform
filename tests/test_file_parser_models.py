@@ -78,7 +78,7 @@ class TestBlock:
         
         assert block.type == "table"
         assert block.markdown is not None
-        assert block.json is not None
+        assert block.table_json is not None
     
     def test_block_validation(self):
         """Test Block field validation."""

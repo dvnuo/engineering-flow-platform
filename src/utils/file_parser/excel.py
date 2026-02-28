@@ -277,8 +277,9 @@ def _table_to_markdown(rows: List[List[str]]) -> str:
     lines = []
     
     # Header
+    header_row = rows[0]
     header = "| " + " | ".join(
-        str(row[i]).ljust(col_widths[i]) if i < len(row) else " " * col_widths[i]
+        str(header_row[i]).ljust(col_widths[i]) if i < len(header_row) else " " * col_widths[i]
         for i in range(len(col_widths))
     ) + " |"
     lines.append(header)

@@ -44,16 +44,10 @@
                     refreshFileList();
                     
                     // Show file info in chat
-                    addMessage({
-                        role: 'assistant',
-                        content: `📎 File uploaded: **${data.filename}**\n\nYou can now ask me to analyze or discuss this file.`
-                    });
+                    addMessage('assistant', `📎 File uploaded: **${data.filename}**\n\nYou can now ask me to analyze or discuss this file.`);
                 } else {
                     setStatus('Upload failed: ' + data.error, 'error');
-                    addMessage({
-                        role: 'assistant',
-                        content: `❌ File upload failed: ${data.error}`
-                    });
+                    addMessage('assistant', `❌ File upload failed: ${data.error}`);
                 }
             } catch (error) {
                 console.error('Upload error:', error);
@@ -81,7 +75,7 @@
                     html += `
                         <li class="file-item" data-file-id="${file.file_id}">
                             <span class="file-icon">${getFileIcon(file.content_type)}</span>
-                            <span class="file-name">${file.filename}</span>
+                            <span class="file-name">${escapeHtml(file.filename)}</span>
                             <span class="file-size">${formatFileSize(file.size)}</span>
                             <button class="file-action parse-btn" data-file-id="${file.file_id}">Parse</button>
                         </li>
@@ -125,10 +119,7 @@
                 // Show preview
                 const preview = data.markdown.substring(0, 1000) + (data.markdown.length > 1000 ? '...' : '');
                 
-                addMessage({
-                    role: 'assistant',
-                    content: `📄 File parsed:\n\n${preview}\n\n(${data.blocks.length} blocks, ${data.parse_time_ms}ms)`
-                });
+                addMessage('assistant', `📄 File parsed:\n\n${preview}\n\n(${data.blocks.length} blocks, ${data.parse_time_ms}ms)`);
             } else {
                 setStatus('Parse failed: ' + data.error, 'error');
             }
@@ -139,6 +130,12 @@
     }
     
     // Helper functions
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
     function getFileIcon(contentType) {
         if (contentType.startsWith('image/')) return '🖼️';
         if (contentType === 'application/pdf') return '📄';

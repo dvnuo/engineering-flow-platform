@@ -148,7 +148,7 @@ async def parse_file(file_id: str, options: dict = None) -> ParseResult:
         excel_mod = _get_excel_module()
         return await excel_mod.parse_csv(str(path), options)
     
-    # TODO: Word, Excel parsers
+    # Unsupported file type
     return ParseResult(
         success=False,
         content_type=content_type,
@@ -193,19 +193,29 @@ def _detect_mime_type(content: bytes, filename: str) -> str:
     from pathlib import Path
     ext = Path(filename).suffix.lower()
     
+    # Use python-magic if available
     try:
         import magic
-        return magic.from_buffer(content[:1024], mime=True)
+        detected = magic.from_buffer(content[:1024], mime=True)
+        if detected and detected != "application/octet-stream":
+            return detected
     except Exception:
-        mime_map = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".gif": "image/gif",
-            ".webp": "image/webp",
-            ".pdf": "application/pdf",
-        }
-        return mime_map.get(ext, "application/octet-stream")
+        pass
+    
+    # Fallback: extension-based detection for all allowed types
+    mime_map = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".csv": "text/csv",
+        ".txt": "text/plain",
+    }
+    return mime_map.get(ext, "application/octet-stream")
 
 
 # Export for convenience
