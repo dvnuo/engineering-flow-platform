@@ -311,8 +311,9 @@ async def extract_with_ocr(file_path: str, options: Dict, file_id: str) -> List[
                 page_blocks = await _ocr_image_buffer(img_buffer, page_num + 1, file_id)
                 blocks.extend(page_blocks)
     
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.error(f"OCR extraction failed for PDF: {e}", exc_info=True)
     
     return blocks
 

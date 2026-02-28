@@ -259,20 +259,9 @@ def _detect_mime_type(content: bytes, filename: str) -> str:
             return "text/csv"
         return "text/plain"
     
-    # Fallback to extension
-    mime_map = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".pdf": "application/pdf",
-        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".csv": "text/csv",
-        ".txt": "text/plain",
-    }
-    return mime_map.get(ext, "application/octet-stream")
+    # Fallback: unknown content, treat as generic binary
+    # Don't rely on extension to avoid accepting renamed malware
+    return "application/octet-stream"
 
 
 # Export for convenience

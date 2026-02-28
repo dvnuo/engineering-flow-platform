@@ -221,13 +221,13 @@ GET /api/files/uuid/preview?max_chars=5000
 src/
 ├── gateway/
 │   └── webchat.py          # 上传 API
-├── utils/
-│   └── file_parser.py       # 统一解析入口
-│       ├── parse_image()    # 图片解析
-│       ├── parse_docx()    # Word 解析
-│       ├── parse_pdf()     # PDF 解析
-│       ├── parse_csv()     # CSV 解析
-│       └── parse_excel()    # Excel 解析
+└── utils/
+    └── file_parser/        # 文件解析包
+        ├── __init__.py     # 统一解析入口
+        ├── image.py        # 图片解析
+        ├── pdf.py          # PDF 解析
+        ├── docx.py         # Word 解析
+        └── excel.py        # Excel/CSV 解析
 └── workspace/
     └── uploads/            # 上传文件存储
 ```

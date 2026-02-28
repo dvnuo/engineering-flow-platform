@@ -28,14 +28,12 @@ src/
 ├── utils/
 │   └── file_parser/
 │       ├── __init__.py     # Unified parse entry
-│       ├── config.py       # File parser config
 │       ├── models.py       # Data models (ParseResult, Block)
 │       ├── image.py        # Image parser
 │       ├── pdf.py          # PDF parser
 │       ├── docx.py         # Word parser
-│       ├── excel.py       # Excel parser
-│       ├── csv.py         # CSV parser
-│       └── validators.py  # File validation
+│       ├── excel.py        # Excel/CSV parser
+│       └── validators.py   # File validation
 └── workspace/
     └── uploads/            # Uploaded files storage
 ```
