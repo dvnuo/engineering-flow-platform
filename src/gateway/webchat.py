@@ -1064,22 +1064,19 @@ async def api_files_upload(request: web.Request) -> web.Response:
         max_size_mb = 10
         max_bytes = max_size_mb * 1024 * 1024
         chunk_size = 1024 * 1024  # 1 MB
-        content_chunks = []
-        total_size = 0
+        content = bytearray()
         
         while True:
             chunk = await file_field.read(chunk_size)
             if not chunk:
                 break
-            total_size += len(chunk)
-            if total_size > max_bytes:
+            content.extend(chunk)
+            if len(content) > max_bytes:
                 return web.json_response({
                     'success': False,
                     'error': f'File exceeds maximum size of {max_size_mb} MB'
                 }, status=400)
-            content_chunks.append(chunk)
         
-        content = b"".join(content_chunks)
         filename = file_field.filename
         
         # Validate filename
