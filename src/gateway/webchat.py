@@ -61,7 +61,7 @@ async def serve_webchat(request: web.Request) -> web.Response:
                 'Cache-Control': 'no-cache, no-store, must-revalidate',
             }
         )
-    except StoredFileNotFoundError:
+    except FileNotFoundError:
         logger.error(f"WebChat template not found: {TEMPLATE_DIR / 'webchat.html'}")
         return web.Response(
             text="<html><body><h1>WebChat template not found</h1></body></html>",

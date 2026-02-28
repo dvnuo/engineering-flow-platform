@@ -134,7 +134,7 @@ async def parse_csv(file_path: str, options: Dict = None) -> ParseResult:
         rows = [[str(cell) for cell in row] for row in rows]
         
         # Create table block
-        table_block = _rows_to_table_block(rows, 1, "Sheet1", file_id)
+        table_block = _rows_to_table_block(rows, 1, "Sheet1", file_id, "csv", "pandas")
         
         # Also add as paragraphs
         blocks = [table_block]
@@ -208,7 +208,7 @@ async def _parse_csv_basic(file_path: str, options: Dict, file_id: str, filename
                 error="Empty CSV"
             )
         
-        table_block = _rows_to_table_block(rows, 1, "Sheet1", file_id)
+        table_block = _rows_to_table_block(rows, 1, "Sheet1", file_id, "csv", "pandas")
         
         markdown = _blocks_to_markdown([table_block])
         
@@ -234,15 +234,15 @@ async def _parse_csv_basic(file_path: str, options: Dict, file_id: str, filename
         )
 
 
-def _rows_to_table_block(rows: List[List[str]], sheet_idx: int, sheet_name: str, file_id: str) -> Block:
+def _rows_to_table_block(rows: List[List[str]], sheet_idx: int, sheet_name: str, file_id: str, source_type: str = "xlsx", method: str = "openpyxl") -> Block:
     """Convert rows to a table block."""
     if not rows:
         return Block(
-            chunk_id=f"{file_id}_xlsx_{sheet_idx}_1",
+            chunk_id=f"{file_id}_{source_type}_{sheet_idx}_1",
             type="table",
             content="",
             sheet=sheet_name,
-            method="openpyxl",
+            method=method,
             confidence=0.95,
             extracted_at=datetime.now().isoformat()
         )
@@ -252,14 +252,14 @@ def _rows_to_table_block(rows: List[List[str]], sheet_idx: int, sheet_name: str,
     row_range = f"1-{len(rows)}"
     
     return Block(
-        chunk_id=f"{file_id}_xlsx_{sheet_idx}_1",
+        chunk_id=f"{file_id}_{source_type}_{sheet_idx}_1",
         type="table",
         content="",
         markdown=markdown,
         table_json=json_table,
         sheet=sheet_name,
         row_range=row_range,
-        method="openpyxl",
+        method=method,
         confidence=0.95,
         extracted_at=datetime.now().isoformat()
     )

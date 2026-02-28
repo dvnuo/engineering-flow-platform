@@ -165,12 +165,12 @@ async def save_uploaded_file(
     # Generate unique ID
     file_id = _generate_file_id()
     
-    # Sanitize original filename to prevent XSS
+    # Get safe extension from raw original filename first (used as a hint for MIME detection)
+    original_ext = get_safe_extension(original_filename)
+    
+    # Sanitize original filename to prevent XSS (for storage/metadata)
     from .validators import sanitize_filename
     original_filename = sanitize_filename(original_filename)
-    
-    # Get safe extension from original filename first (used as a hint)
-    original_ext = get_safe_extension(original_filename)
     
     # Detect MIME type based on content (optionally using original extension as hint)
     content_type = _detect_mime_type(content, original_ext)

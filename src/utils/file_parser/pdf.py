@@ -268,8 +268,9 @@ async def extract_tables_with_pdfplumber(file_path: str, options: Dict, file_id:
                         extracted_at=datetime.now().isoformat()
                     ))
     
-    except Exception:
-        pass  # Return empty on error
+    except Exception as e:
+        import logging
+        logging.warning(f"PDF table extraction failed: {e}")
     
     return blocks
 
