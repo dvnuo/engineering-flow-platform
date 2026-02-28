@@ -295,12 +295,11 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== END SKILL MATCHING =====
 
         # ===== MESSAGE COMPACTION =====
-        # Check if messages need compaction to fit within token limits
+        # Compaction is DISABLED - see below
+        # Import only what's needed for token estimation
         from src.agents.compaction import (
-            compact_messages,
             estimate_messages_tokens,
             resolve_context_window_tokens,
-            CompactionStats,
         )
         
         # Get context window for the model (not max_tokens which is for responses)
@@ -310,6 +309,9 @@ You have access to the following tools. When a user asks you to do something tha
         # Use 50% of context window as the limit for prompt history
         # This leaves room for response and system prompt
         max_tokens = max(1000, int(context_window * 0.5))
+        
+        # Note: Compaction is disabled to prevent tool_call/tool_response mismatch errors.
+        # If messages exceed token limit, the API will return a proper error instead of 400 bad request.
         
         # Estimate current token count
         # Convert session messages to AgentMessage format
@@ -334,49 +336,10 @@ You have access to the following tools. When a user asks you to do something tha
             f"current_tokens={current_tokens}, max_tokens={max_tokens}"
         )
         
-        # Compact messages if over limit
-        compaction_stats: CompactionStats = None
-        if current_tokens > max_tokens:
-            logger.info(
-                f"[{session_id}] Messages exceed token limit, compacting..."
-            )
-            
-            # Get context window for the model
-            context_window = resolve_context_window_tokens(
-                config.llm.get("model", "gpt-3.5-turbo")
-            )
-            
-            # Compact messages
-            compacted_messages, compaction_stats = await compact_messages(
-                messages=agent_messages,
-                max_tokens=max_tokens,
-                context_window=context_window,
-                recent_count=5,
-            )
-            
-            # Update messages for LLM call
-            # Convert back to dict format for LLM
-            messages = []
-            for msg in compacted_messages:
-                msg_dict = {
-                    "role": msg.role,
-                    "content": msg.content,
-                    "timestamp": msg.timestamp,
-                }
-                # Preserve tool_calls for assistant messages
-                if msg.tool_calls:
-                    msg_dict["tool_calls"] = msg.tool_calls
-                # Preserve tool_call_id for tool messages
-                if msg.tool_use_id:
-                    msg_dict["tool_call_id"] = msg.tool_use_id
-                messages.append(msg_dict)
-            
-            logger.info(
-                f"[{session_id}] Compaction complete: "
-                f"kept_tokens={compaction_stats.kept_tokens}, "
-                f"dropped_messages={compaction_stats.dropped_messages}, "
-                f"summary={truncate(compaction_stats.summary, 100) if compaction_stats.summary else 'N/A'}"
-            )
+        # Note: Compaction is disabled to prevent tool_call/tool_response mismatch errors.
+        # If messages exceed token limit, the API will return a proper error.
+        # This is safer than causing 400 bad request errors from inconsistent tool calls.
+        
         # ===== END MESSAGE COMPACTION =====
 
         # Debug logging for message received
