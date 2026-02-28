@@ -7,6 +7,151 @@
     const messagesContainer = document.getElementById('messages');
     const messageInput = document.getElementById('messageInput');
     const sendButton = document.getElementById('sendButton');
+    const fileInput = document.getElementById('fileInput');
+    const uploadButton = document.getElementById('uploadButton');
+    
+    // File upload handling
+    if (uploadButton && fileInput) {
+        uploadButton.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            // Show uploading status
+            setStatus('Uploading file...', 'uploading');
+            
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                const sessionId = window.currentSessionId || '';
+                const url = `/api/files/upload${sessionId ? '?session_id=' + sessionId : ''}`;
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    setStatus('File uploaded: ' + data.filename, 'success');
+                    
+                    // Add to file list
+                    refreshFileList();
+                    
+                    // Show file info in chat
+                    addMessage({
+                        role: 'assistant',
+                        content: `📎 File uploaded: **${data.filename}**\n\nYou can now ask me to analyze or discuss this file.`
+                    });
+                } else {
+                    setStatus('Upload failed: ' + data.error, 'error');
+                    addMessage({
+                        role: 'assistant',
+                        content: `❌ File upload failed: ${data.error}`
+                    });
+                }
+            } catch (error) {
+                console.error('Upload error:', error);
+                setStatus('Upload failed: ' + error.message, 'error');
+            }
+            
+            // Reset file input
+            fileInput.value = '';
+        });
+    }
+    
+    // Refresh file list
+    async function refreshFileList() {
+        const fileExplorerContent = document.getElementById('fileExplorerContent');
+        if (!fileExplorerContent) return;
+        
+        try {
+            const sessionId = window.currentSessionId || '';
+            const response = await fetch(`/api/files${sessionId ? '?session_id=' + sessionId : ''}`);
+            const data = await response.json();
+            
+            if (data.files && data.files.length > 0) {
+                let html = '<ul class="file-list">';
+                for (const file of data.files) {
+                    html += `
+                        <li class="file-item" data-file-id="${file.file_id}">
+                            <span class="file-icon">${getFileIcon(file.content_type)}</span>
+                            <span class="file-name">${file.filename}</span>
+                            <span class="file-size">${formatFileSize(file.size)}</span>
+                            <button class="file-action parse-btn" data-file-id="${file.file_id}">Parse</button>
+                        </li>
+                    `;
+                }
+                html += '</ul>';
+                fileExplorerContent.innerHTML = html;
+                
+                // Add parse button handlers
+                fileExplorerContent.querySelectorAll('.parse-btn').forEach(btn => {
+                    btn.addEventListener('click', async (e) => {
+                        const fileId = e.target.dataset.fileId;
+                        await parseFile(fileId);
+                    });
+                });
+            } else {
+                fileExplorerContent.innerHTML = '<div class="empty">No files uploaded yet</div>';
+            }
+        } catch (error) {
+            console.error('Error loading files:', error);
+            fileExplorerContent.innerHTML = '<div class="error">Failed to load files</div>';
+        }
+    }
+    
+    // Parse file
+    async function parseFile(fileId) {
+        setStatus('Parsing file...', 'uploading');
+        
+        try {
+            const response = await fetch('/api/files/parse', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({file_id: fileId})
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                setStatus('File parsed successfully', 'success');
+                
+                // Show preview
+                const preview = data.markdown.substring(0, 1000) + (data.markdown.length > 1000 ? '...' : '');
+                
+                addMessage({
+                    role: 'assistant',
+                    content: `📄 File parsed:\n\n${preview}\n\n(${data.blocks.length} blocks, ${data.parse_time_ms}ms)`
+                });
+            } else {
+                setStatus('Parse failed: ' + data.error, 'error');
+            }
+        } catch (error) {
+            console.error('Parse error:', error);
+            setStatus('Parse failed: ' + error.message, 'error');
+        }
+    }
+    
+    // Helper functions
+    function getFileIcon(contentType) {
+        if (contentType.startsWith('image/')) return '🖼️';
+        if (contentType === 'application/pdf') return '📄';
+        if (contentType.includes('word')) return '📝';
+        if (contentType.includes('spreadsheet') || contentType === 'text/csv') return '📊';
+        return '📁';
+    }
+    
+    function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
     const typingIndicator = document.getElementById('typing');
     const statusSpan = document.getElementById('status');
     const tokenCountSpan = document.getElementById('tokenCount');
