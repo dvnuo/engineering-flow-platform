@@ -173,11 +173,11 @@ POST /api/files/parse
 Content-Type: application/json
 
 {
-  "path": "/workspace/uploads/uuid/document.pdf",
+  "file_id": "uuid",  // ✅ 安全: 只接受 file_id
   "options": {
     "include_images": true,
     "max_pages": 100,
-    "table_format": "both"  // "markdown" | "json" | "both"
+    "table_format": "both"
   }
 }
 
@@ -197,7 +197,7 @@ Content-Type: application/json
 ### 3.3 预览 (仅 Markdown)
 
 ```http
-GET /api/files/preview?path=/workspace/uploads/file.pdf&max_chars=5000
+GET /api/files/uuid/preview?max_chars=5000
 
 响应 200:
 {
@@ -336,3 +336,197 @@ PaddleOCR          # OCR (备选)
 | **可分块** | 支持按页/段落/表格分块 |
 | **结构保留** | Markdown 表格 + JSON 双轨 |
 | **统一 IR** | 所有格式 → Markdown + JSON blocks |
+
+---
+
+## 10. 安全要求
+
+### 10.1 路径安全
+- ❌ 禁止直接接受 path 参数 (防路径穿越)
+- ✅ 只接受 file_id，服务端查表映射真实路径
+
+```http
+# ❌ 危险
+POST /api/files/parse?path=/etc/passwd
+
+# ✅ 安全
+POST /api/files/parse
+{"file_id": "uuid-xxx"}
+```
+
+### 10.2 文件安全
+- 文件大小限制: max_size_mb
+- 文件类型白名单: allowed_types
+- 恶意文件扫描 (可选扩展)
+- PII 敏感信息处理策略
+
+### 10.3 鉴权与隔离
+- 租户文件隔离
+- 操作日志脱敏
+
+---
+
+## 11. 执行模型
+
+### 11.1 同步 vs 异步
+| 场景 | 模式 | 说明 |
+|------|------|------|
+| 小文件 (<1MB) | 同步 | 立即返回 |
+| 大文件 (>1MB) | 异步 | 返回 job_id |
+| OCR/复杂解析 | 异步 | 耗时较长 |
+
+### 11.2 异步任务 API
+```http
+# 提交解析任务
+POST /api/files/parse
+{"file_id": "uuid"}
+
+响应 202:
+{"job_id": "job-xxx", "status": "queued"}
+
+# 查询状态
+GET /api/jobs/job-xxx
+
+响应 200:
+{"job_id": "job-xxx", "status": "completed", "result": {...}}
+
+# 获取结果
+GET /api/files/uuid/result
+
+响应 200:
+{"markdown": "...", "json": {...}}
+```
+
+---
+
+## 12. Blocks Schema 规范
+
+### 12.1 Block 结构
+```json
+{
+  "chunk_id": "file_page_row",        // 必填: 块唯一ID
+  "type": "heading|paragraph|table|list|image",  // 必填: 类型枚举
+  "content": "文本内容",              // 必填: 文本
+  "level": 1,                         // heading 专属
+  "markdown": "| A | B |...",       // table 专属
+  "json": [["A","B"],["1","2"]],     // table 专属
+  
+  "location": {                        // 定位信息
+    "page": 1,                        // 页码 (PDF)
+    "sheet": "Sheet1",               // Sheet 名 (Excel)
+    "row_range": "1-10",             // 行范围 (CSV/Excel)
+    "bbox": [x1,y1,x2,y2]            // 坐标 (可选, 图片/PDF)
+  },
+  
+  "metadata": {
+    "method": "pymupdf|pandas|vision", // 提取方法
+    "confidence": 0.95,               // 置信度
+    "extracted_at": "2026-02-28T..."
+  }
+}
+```
+
+### 12.2 定位能力分级
+| 类型 | page | sheet | row_range | bbox |
+|------|------|-------|-----------|------|
+| PDF 文本 | ✅ | N/A | N/A | 可选 |
+| PDF 扫描 | ✅ | N/A | N/A | ✅ |
+| Word | ✅ | N/A | N/A | ❌ |
+| Excel | N/A | ✅ | ✅ | ❌ |
+| CSV | N/A | N/A | ✅ | ❌ |
+| Image | N/A | N/A | N/A | ✅ |
+
+---
+
+## 13. PDF 表格提取策略
+
+### 优先级
+1. **文本表格** (line-based): 用 pdfplumber 规则提取
+2. **视觉表格**: 多模态模型重建表格
+3. **OCR 回退**: PaddleOCR 处理
+
+### 输出标记
+```json
+{
+  "type": "table",
+  "markdown": "...",
+  "json": [[...]],
+  "metadata": {
+    "extraction_method": "text_rules|vision|ocr",
+    "confidence": 0.85
+  }
+}
+```
+
+---
+
+## 14. LLM 输入预算策略
+
+### 14.1 Token 预算
+| 文件类型 | 最大输入 | 策略 |
+|----------|----------|------|
+| 小文件 | < 50K tokens | 直接发送 |
+| 大文件 | 分块 + RAG | 先摘要后详情 |
+
+### 14.2 表格抽样策略
+- **CSV/Excel**: 列说明 + 前 20 行样例 + 统计摘要
+- **大表格**: 分页发送，每页 < 100 行
+
+### 14.3 默认流程
+```
+1. 文件解析 → Markdown + JSON
+2. 内容 < 预算? → 直接发送
+3. 内容 > 预算? → 生成摘要/索引 → 按需加载相关块
+```
+
+---
+
+## 15. 可观测性
+
+### 15.1 解析指标
+- 解析耗时 (ms)
+- 失败原因分类
+- 各解析器成功率
+
+### 15.2 日志示例
+```json
+{
+  "event": "file_parse",
+  "file_id": "uuid",
+  "parser": "pdf_plumber",
+  "duration_ms": 1500,
+  "status": "success|failed",
+  "error": "timeout|invalid|...",
+  "pages": 10,
+  "tables": 3
+}
+```
+
+---
+
+## 16. 缓存与去重
+
+### 16.1 文件哈希
+- 同一文件 (SHA256 相同) → 直接复用解析结果
+- 缓存键: `{file_hash}_{parser_version}`
+
+### 16.2 缓存 API
+```http
+GET /api/files/uuid/cached-result
+
+响应 200:
+{"cached": true, "result": {...}}
+```
+
+---
+
+## 17. 8 条补强清单 (AC)
+
+- [ ] parse/preview 不接受任意 path，改为 file_id（防路径穿越）
+- [ ] 增加异步解析：POST /parse → job_id、GET /jobs/{id}
+- [ ] blocks schema：必填字段、枚举、定位分级
+- [ ] 明确 PDF 提取策略与回退链路（text → table rules → OCR/vision）
+- [ ] 明确 LLM 输入预算与抽样策略
+- [ ] 增加安全要求：鉴权、文件大小/类型白名单
+- [ ] 增加可观测性：解析耗时、失败原因分类、成功率指标
+- [ ] 增加缓存/去重：同一文件 hash 相同直接复用
