@@ -28,7 +28,7 @@ class ExecAsk(Enum):
 # Default safe binaries (text processing utilities and VCS)
 DEFAULT_SAFE_BINS = [
     # Text processing
-    "jq", "grep", "cut", "sort", "uniq",
+    "jq", "grep", "rg", "cut", "sort", "uniq",
     "head", "tail", "tr", "wc", "cat", "less", "more",
     "sed", "awk", "perl", "find", "xargs",
     "vi", "vim", "echo", "printf", "date",
