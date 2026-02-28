@@ -107,14 +107,14 @@ class TestGetSafeExtension:
     
     def test_invalid_extension(self):
         """Test invalid extension."""
-        assert get_safe_extension("file.exe") == ".exe"  # exe is valid format
+        assert get_safe_extension("file.exe") == ""  # exe not in allowlist
         assert get_safe_extension("file.") == ""
     
     def test_double_extension(self):
         """Test double extension."""
-        # Should return the last one
+        # Should return empty since .gz is not in allowlist
         result = get_safe_extension("file.tar.gz")
-        assert result == ".gz"
+        assert result == ""
 
 
 class TestIsImageFile:
@@ -127,7 +127,7 @@ class TestIsImageFile:
         assert is_image_file("photo.png") is True
         assert is_image_file("photo.gif") is True
         assert is_image_file("photo.webp") is True
-        assert is_image_file("photo.bmp") is True
+        assert is_image_file("photo.bmp") is False  # bmp not in allowlist
     
     def test_non_image_extensions(self):
         """Test non-image extensions return False."""

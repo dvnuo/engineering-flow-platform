@@ -22,8 +22,8 @@ ALLOWED_MIME_TYPES = {
 # Filename pattern: alphanumeric, dot, underscore, hyphen, 1-200 chars
 FILENAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$')
 
-# Allowed image extensions
-IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff"}
+# Allowed image extensions (in sync with ALLOWED_MIME_TYPES["image"])
+IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif"}
 
 
 def validate_file_size(size: int, max_size_mb: int = 10) -> bool:
@@ -127,8 +127,11 @@ def sanitize_filename(filename: str) -> str:
     return name
 
 
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".docx", ".xlsx", ".csv", ".txt"}
+
+
 def get_safe_extension(filename: str) -> str:
-    """Get safe file extension.
+    """Get safe file extension based on allowlist.
     
     Args:
         filename: Original filename
@@ -138,8 +141,8 @@ def get_safe_extension(filename: str) -> str:
     """
     ext = Path(filename).suffix.lower()
     
-    # Only allow alphanumeric extensions
-    if re.match(r'^\.[a-z0-9]+$', ext):
+    # Only allow alphanumeric extensions from allowlist
+    if re.match(r'^\.[a-z0-9]+$', ext) and ext in ALLOWED_EXTENSIONS:
         return ext
     
     return ""

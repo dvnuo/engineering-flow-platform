@@ -169,25 +169,22 @@ async def save_uploaded_file(
     from .validators import sanitize_filename
     original_filename = sanitize_filename(original_filename)
     
-    # Get safe extension from original filename first
-    ext = get_safe_extension(original_filename)
+    # Get safe extension from original filename first (used as a hint)
+    original_ext = get_safe_extension(original_filename)
     
-    # Detect MIME type based on extension
-    content_type = _detect_mime_type(content, ext)
+    # Detect MIME type based on content (optionally using original extension as hint)
+    content_type = _detect_mime_type(content, original_ext)
     
-    # Get safe extension from MIME type (not user input)
-    ext = _mime_to_extension(content_type)
+    # Get canonical extension from MIME type (not user input)
+    canonical_ext = _mime_to_extension(content_type)
     
     # Server-side canonical name
-    stored_filename = f"{file_id}{ext}"
+    stored_filename = f"{file_id}{canonical_ext}"
     file_path = UPLOAD_DIR / stored_filename
     
     # Write file (async to avoid blocking event loop)
     import asyncio
     await asyncio.to_thread(file_path.write_bytes, content)
-    
-    # Get MIME type
-    content_type = _detect_mime_type(content, ext)
     
     # Register metadata
     return register_file(
