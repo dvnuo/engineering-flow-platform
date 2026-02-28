@@ -53,6 +53,14 @@ def _get_image_module():
     return _async_modules['image']
 
 
+def _get_pdf_module():
+    """Lazy load PDF module."""
+    if 'pdf' not in _async_modules:
+        from . import pdf as _pdf
+        _async_modules['pdf'] = _pdf
+    return _async_modules['pdf']
+
+
 async def upload_file(
     content: bytes,
     filename: str,
@@ -101,15 +109,21 @@ async def parse_file(file_id: str, options: dict = None) -> ParseResult:
     path = get_file_path(file_id)
     metadata = get_metadata(file_id)
     
+    content_type = metadata.content_type
+    
     # Dispatch by type
-    if metadata.content_type.startswith("image/"):
+    if content_type.startswith("image/"):
         image_mod = _get_image_module()
         return await image_mod.parse_image(str(path), options)
     
-    # TODO: PDF, Word, Excel parsers
+    if content_type == "application/pdf":
+        pdf_mod = _get_pdf_module()
+        return await pdf_mod.parse_pdf(str(path), options)
+    
+    # TODO: Word, Excel parsers
     return ParseResult(
         success=False,
-        content_type=metadata.content_type,
+        content_type=content_type,
         file_id=file_id,
         filename=metadata.original_filename,
         error="Parser not implemented for this file type"
