@@ -1371,7 +1371,7 @@ def setup_webchat_routes(app: web.Application):
     # File upload/parse routes
     app.router.add_post('/api/files/upload', api_files_upload)
     app.router.add_post('/api/files/parse', api_files_parse)
-    app.router.add_get('/api/files', api_files_list)
+    app.router.add_get('/api/files/list', api_files_list)
     app.router.add_get('/api/files/{file_id}/preview', api_files_preview)
     app.router.add_delete('/api/files/{file_id}', api_files_delete)
     

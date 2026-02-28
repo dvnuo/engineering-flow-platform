@@ -66,7 +66,7 @@
         
         try {
             const sessionId = window.currentSessionId || '';
-            const response = await fetch(`/api/files${sessionId ? '?session_id=' + sessionId : ''}`);
+            const response = await fetch(`/api/files/list${sessionId ? '?session_id=' + sessionId : ''}`);
             const data = await response.json();
             
             if (data.files && data.files.length > 0) {
@@ -105,9 +105,15 @@
         setStatus('Parsing file...', 'uploading');
         
         try {
+            const sessionId = window.currentSessionId || '';
+            const headers = {'Content-Type': 'application/json'};
+            if (sessionId) {
+                headers['X-Session-ID'] = sessionId;
+            }
+            
             const response = await fetch('/api/files/parse', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: headers,
                 body: JSON.stringify({file_id: fileId})
             });
             

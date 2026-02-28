@@ -2215,7 +2215,7 @@ input:checked + .slider:before {
 }
 
 /* File Upload */
-.input-wrapper {
+.input-area .input-wrapper {
     display: flex;
     align-items: center;
     gap: 8px;

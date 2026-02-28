@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 # Lazy imports for optional dependencies
-Image = None
+_PIL = None
 
 from .models import Block, ParseResult, ImageConstraints
 from .validators import validate_image_for_llm, get_mime_type
@@ -16,10 +16,11 @@ from .validators import validate_image_for_llm, get_mime_type
 
 def _get_pil():
     """Lazy load PIL."""
-    global Image
-    if Image is None:
-        from PIL import Image
-    return Image
+    global _PIL
+    if _PIL is None:
+        import PIL
+        _PIL = PIL
+    return _PIL
 
 
 # Default constraints
@@ -128,7 +129,7 @@ async def parse_image_with_ocr(file_path: str, options: Dict) -> ParseResult:
     filename = Path(file_path).name
     
     if engine == "paddleocr":
-        blocks = await _parse_with_paddleocr(file_path)
+        blocks = await _parse_with_paddleocr(file_path, file_id)
     else:
         blocks = await _parse_with_tesseract(file_path, file_id)
     
@@ -154,10 +155,15 @@ async def parse_image_with_ocr(file_path: str, options: Dict) -> ParseResult:
     )
 
 
-async def _parse_with_paddleocr(file_path: str) -> List[Block]:
+async def _parse_with_paddleocr(file_path: str, file_id: str) -> List[Block]:
     """Parse image with PaddleOCR.
     
-    PaddleOCR returns: [ [ [box, (text, confidence)], ... ], ... ]
+    Args:
+        file_path: Path to image
+        file_id: File ID for chunk_id
+        
+    Returns:
+        List of blocks
     """
     try:
         from paddleocr import PaddleOCR
