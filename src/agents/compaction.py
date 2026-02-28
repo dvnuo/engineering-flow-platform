@@ -590,19 +590,27 @@ def fix_tool_call_consistency(messages: List[AgentMessage]) -> List[AgentMessage
     if not messages:
         return messages
     
-    # Build a set of valid tool_call_ids from assistant messages
-    valid_tool_call_ids = set()
+    # First, collect ALL tool_call_ids from assistant messages (before filtering)
+    # This is needed to identify orphaned tool responses
+    all_assistant_tool_call_ids = set()
     for msg in messages:
         if msg.role == "assistant" and msg.tool_calls:
             for tc in msg.tool_calls:
                 if tc.get("id"):
-                    valid_tool_call_ids.add(tc.get("id"))
+                    all_assistant_tool_call_ids.add(tc.get("id"))
+    
+    # Build a set of valid tool_call_ids from tool responses
+    # (these are the ones that have responses, so they're valid to keep)
+    valid_tool_call_ids = set()
+    for msg in messages:
+        if msg.role == "tool" and msg.tool_use_id:
+            valid_tool_call_ids.add(msg.tool_use_id)
     
     # Fix messages - filter tool_calls and remove orphaned tool responses
     fixed = []
     for msg in messages:
         if msg.role == "assistant" and msg.tool_calls:
-            # Filter tool_calls to only include those with responses
+            # Filter tool_calls to only include those that have responses
             valid_calls = [
                 tc for tc in msg.tool_calls
                 if tc.get("id") in valid_tool_call_ids
@@ -617,8 +625,10 @@ def fix_tool_call_consistency(messages: List[AgentMessage]) -> List[AgentMessage
                 tool_use_id=msg.tool_use_id,
             ))
         elif msg.role == "tool":
-            # Only include tool responses that have corresponding tool_calls
-            if msg.tool_use_id in valid_tool_call_ids:
+            # Remove orphaned tool responses:
+            # - If tool_use_id is not in any assistant's tool_calls, it's orphaned
+            # - OR if tool_use_id has no response (not in valid_tool_call_ids)
+            if msg.tool_use_id in all_assistant_tool_call_ids and msg.tool_use_id in valid_tool_call_ids:
                 fixed.append(msg)
             # else: orphaned tool response, skip it
         else:
