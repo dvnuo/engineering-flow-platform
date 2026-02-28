@@ -10,6 +10,7 @@
 6. summarizeWithFallback() - Fallback for oversized messages
 7. summarizeInStages() - Multi-stage summarization
 8. pruneHistoryForContextShare() - Prune history for context share
+9. fixToolCallConsistency() - Fix tool_call/tool_response consistency after pruning
 
 ## Constants
 
@@ -574,6 +575,66 @@ async def summarize_in_stages(
     )
 
 
+def fix_tool_call_consistency(messages: List[AgentMessage]) -> List[AgentMessage]:
+    """Fix tool_call consistency after pruning.
+    
+    Ensures that if a tool response is dropped, the corresponding
+    tool_call is also removed from the assistant message.
+    Also removes orphaned tool responses if their assistant message was dropped.
+    
+    Args:
+        messages: List of messages (may have inconsistent tool_calls)
+        
+    Returns:
+        Messages with consistent tool_calls and tool responses
+    """
+    if not messages:
+        return messages
+    
+    # First, collect ALL tool_call_ids from assistant messages (before filtering)
+    # This is needed to identify orphaned tool responses
+    all_assistant_tool_call_ids = set()
+    for msg in messages:
+        if msg.role == "assistant" and msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc.get("id"):
+                    all_assistant_tool_call_ids.add(tc.get("id"))
+    
+    # Build a set of tool_call_ids that have tool responses
+    tool_response_ids = set()
+    for msg in messages:
+        if msg.role == "tool" and msg.tool_use_id:
+            tool_response_ids.add(msg.tool_use_id)
+    
+    # Fix messages - filter tool_calls and remove orphaned tool responses
+    fixed = []
+    for msg in messages:
+        if msg.role == "assistant" and msg.tool_calls:
+            # Filter tool_calls to only include those that have responses
+            valid_calls = [
+                tc for tc in msg.tool_calls
+                if tc.get("id") in tool_response_ids
+            ]
+            
+            # Create new message with filtered tool_calls (don't mutate)
+            fixed.append(AgentMessage(
+                role=msg.role,
+                content=msg.content,
+                timestamp=msg.timestamp,
+                tool_calls=valid_calls if valid_calls else None,
+                tool_use_id=msg.tool_use_id,
+            ))
+        elif msg.role == "tool":
+            # Keep only tool responses whose tool_use_id appears in some assistant.tool_calls
+            if msg.tool_use_id in all_assistant_tool_call_ids:
+                fixed.append(msg)
+            # else: orphaned tool response (assistant message was dropped), skip it
+        else:
+            fixed.append(msg)
+    
+    return fixed
+
+
 def prune_history_for_context_share(
     messages: List[AgentMessage],
     max_context_tokens: int,
@@ -671,6 +732,10 @@ async def compact_messages(
         max_history_share=0.5,
     )
     
+    # Fix tool_call consistency after pruning
+    # Ensures tool_calls and tool responses are paired
+    pruned = fix_tool_call_consistency(pruned)
+    
     # If still over budget, summarize old messages
     if estimate_messages_tokens(pruned) > history_budget:
         # Keep recent messages
@@ -691,10 +756,13 @@ async def compact_messages(
         )
         
         result = [summary_message] + recent
+        # Fix tool_call consistency for summarized messages
+        result = fix_tool_call_consistency(result)
         stats.summary = summary
         
         return result, stats
     
+    # Final fix before returning
     return pruned, stats
 
 
@@ -743,6 +811,7 @@ __all__ = [
     "summarize_in_stages",
     "prune_history_for_context_share",
     "compact_messages",
+    "fix_tool_call_consistency",
     "resolve_context_window_tokens",
     # Constants
     "BASE_CHUNK_RATIO",

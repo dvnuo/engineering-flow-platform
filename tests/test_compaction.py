@@ -402,3 +402,130 @@ class TestConstants:
     def test_default_parts(self):
         """Test DEFAULT_PARTS is 2."""
         assert DEFAULT_PARTS == 2
+
+
+class TestFixToolCallConsistency:
+    """Tests for fix_tool_call_consistency function."""
+    
+    def test_no_tool_calls_unchanged(self):
+        """Test that messages without tool_calls are unchanged."""
+        from src.agents.compaction import fix_tool_call_consistency, AgentMessage
+        
+        messages = [
+            AgentMessage(role="user", content="Hello"),
+            AgentMessage(role="assistant", content="Hi there"),
+            AgentMessage(role="user", content="How are you?"),
+        ]
+        
+        result = fix_tool_call_consistency(messages)
+        
+        assert len(result) == 3
+        assert result[0].role == "user"
+        assert result[1].role == "assistant"
+        assert result[2].role == "user"
+    
+    def test_all_responses_present_no_filtering(self):
+        """Test that when all tool responses are present, tool_calls are unchanged."""
+        from src.agents.compaction import fix_tool_call_consistency, AgentMessage
+        
+        messages = [
+            AgentMessage(
+                role="assistant",
+                content="Let me run that command",
+                tool_calls=[{"id": "call_abc", "function": {"name": "exec", "arguments": "{}"}}]
+            ),
+            AgentMessage(role="tool", content="result", tool_use_id="call_abc"),
+        ]
+        
+        result = fix_tool_call_consistency(messages)
+        
+        assert len(result) == 2
+        assert result[0].tool_calls[0]["id"] == "call_abc"
+        assert result[1].tool_use_id == "call_abc"
+    
+    def test_some_responses_missing_filters_orphans(self):
+        """Test that orphaned tool_calls are removed when response is missing."""
+        from src.agents.compaction import fix_tool_call_consistency, AgentMessage
+        
+        messages = [
+            AgentMessage(
+                role="assistant",
+                content="Running commands",
+                tool_calls=[
+                    {"id": "call_abc", "function": {"name": "exec", "arguments": "{}"}},
+                    {"id": "call_def", "function": {"name": "read", "arguments": "{}"}},
+                ]
+            ),
+            AgentMessage(role="tool", content="result for abc", tool_use_id="call_abc"),
+            # call_def has no response - should be filtered out
+        ]
+        
+        result = fix_tool_call_consistency(messages)
+        
+        assert len(result) == 2
+        assert len(result[0].tool_calls) == 1
+        assert result[0].tool_calls[0]["id"] == "call_abc"
+    
+    def test_orphaned_tool_responses_removed(self):
+        """Test that orphaned tool responses are removed when assistant message is dropped."""
+        from src.agents.compaction import fix_tool_call_consistency, AgentMessage
+        
+        messages = [
+            # Assistant message was dropped, tool response is orphaned
+            AgentMessage(role="tool", content="old result", tool_use_id="call_old"),
+            AgentMessage(role="user", content="New message"),
+            AgentMessage(role="assistant", content="Response"),
+        ]
+        
+        result = fix_tool_call_consistency(messages)
+        
+        assert len(result) == 2
+        assert result[0].role == "user"
+        assert result[1].role == "assistant"
+    
+    def test_all_tool_calls_dropped(self):
+        """Test that tool_calls is set to None when all are filtered out."""
+        from src.agents.compaction import fix_tool_call_consistency, AgentMessage
+        
+        messages = [
+            AgentMessage(
+                role="assistant",
+                content="Running",
+                tool_calls=[
+                    {"id": "call_orphan", "function": {"name": "exec", "arguments": "{}"}},
+                ]
+            ),
+            # No tool response for call_orphan
+        ]
+        
+        result = fix_tool_call_consistency(messages)
+        
+        assert len(result) == 1
+        assert result[0].tool_calls is None
+    
+    def test_empty_messages(self):
+        """Test that empty message list returns empty list."""
+        from src.agents.compaction import fix_tool_call_consistency
+        
+        result = fix_tool_call_consistency([])
+        assert result == []
+    
+    def test_does_not_mutate_input(self):
+        """Test that input messages are not mutated."""
+        from src.agents.compaction import fix_tool_call_consistency, AgentMessage
+        
+        original_msg = AgentMessage(
+            role="assistant",
+            content="Test",
+            tool_calls=[{"id": "call_abc", "function": {"name": "exec", "arguments": "{}"}}]
+        )
+        messages = [original_msg]
+        
+        result = fix_tool_call_consistency(messages)
+        
+        # Original should be unchanged
+        assert original_msg.tool_calls[0]["id"] == "call_abc"
+        # Result should have filtered (or unchanged) version
+        assert len(result) == 1
+        # Since call_abc has no tool response, tool_calls should be None
+        assert result[0].tool_calls is None
