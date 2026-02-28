@@ -1246,7 +1246,7 @@ async def api_files_preview(request: web.Request) -> web.Response:
 async def api_files_list(request: web.Request) -> web.Response:
     """List uploaded files.
     
-    GET /api/files?session_id=xxx
+    GET /api/files/list?session_id=xxx
     
     Returns:
         200: {"files": [...]}

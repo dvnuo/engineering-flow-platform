@@ -15,11 +15,11 @@ from .validators import validate_image_for_llm, get_mime_type
 
 
 def _get_pil():
-    """Lazy load PIL."""
+    """Lazy load PIL.Image."""
     global _PIL
     if _PIL is None:
-        import PIL
-        _PIL = PIL
+        from PIL import Image
+        _PIL = Image
     return _PIL
 
 
@@ -65,7 +65,7 @@ async def parse_image(
         )
     
     # Try Vision LLM first
-    if options.get("vision_enabled", True):
+    if options.get("vision_enabled", False):
         try:
             result = await parse_image_with_vision(file_path, options)
             if result.success:
