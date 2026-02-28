@@ -308,7 +308,7 @@ You have access to the following tools. When a user asks you to do something tha
         context_window = resolve_context_window_tokens(model)
         
         # Use 80% of context window as the limit for prompt history
-        # This is conservative to avoid frequent compaction
+        # This delays compaction by allowing more history before triggering it
         max_tokens = max(4000, int(context_window * 0.8))
         
         # Estimate current token count

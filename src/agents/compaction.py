@@ -579,6 +579,7 @@ def fix_tool_call_consistency(messages: List[AgentMessage]) -> List[AgentMessage
     
     Ensures that if a tool response is dropped, the corresponding
     tool_call is also removed from the assistant message.
+    Also removes orphaned tool responses if their assistant message was dropped.
     
     Args:
         messages: List of messages (may have inconsistent tool_calls)
@@ -589,13 +590,15 @@ def fix_tool_call_consistency(messages: List[AgentMessage]) -> List[AgentMessage
     if not messages:
         return messages
     
-    # Build a set of valid tool_call_ids from tool responses
+    # Build a set of valid tool_call_ids from assistant messages
     valid_tool_call_ids = set()
     for msg in messages:
-        if msg.role == "tool" and msg.tool_use_id:
-            valid_tool_call_ids.add(msg.tool_use_id)
+        if msg.role == "assistant" and msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc.get("id"):
+                    valid_tool_call_ids.add(tc.get("id"))
     
-    # Fix assistant messages with tool_calls
+    # Fix messages - filter tool_calls and remove orphaned tool responses
     fixed = []
     for msg in messages:
         if msg.role == "assistant" and msg.tool_calls:
@@ -605,11 +608,19 @@ def fix_tool_call_consistency(messages: List[AgentMessage]) -> List[AgentMessage
                 if tc.get("id") in valid_tool_call_ids
             ]
             
-            if len(valid_calls) != len(msg.tool_calls):
-                # Some tool_calls were dropped, create new message
-                msg.tool_calls = valid_calls if valid_calls else None
-            
-            fixed.append(msg)
+            # Create new message with filtered tool_calls (don't mutate)
+            fixed.append(AgentMessage(
+                role=msg.role,
+                content=msg.content,
+                timestamp=msg.timestamp,
+                tool_calls=valid_calls if valid_calls else None,
+                tool_use_id=msg.tool_use_id,
+            ))
+        elif msg.role == "tool":
+            # Only include tool responses that have corresponding tool_calls
+            if msg.tool_use_id in valid_tool_call_ids:
+                fixed.append(msg)
+            # else: orphaned tool response, skip it
         else:
             fixed.append(msg)
     
@@ -744,7 +755,6 @@ async def compact_messages(
         return result, stats
     
     # Final fix before returning
-    pruned = fix_tool_call_consistency(pruned)
     return pruned, stats
 
 
@@ -793,6 +803,7 @@ __all__ = [
     "summarize_in_stages",
     "prune_history_for_context_share",
     "compact_messages",
+    "fix_tool_call_consistency",
     "resolve_context_window_tokens",
     # Constants
     "BASE_CHUNK_RATIO",
