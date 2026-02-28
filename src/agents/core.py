@@ -307,9 +307,9 @@ You have access to the following tools. When a user asks you to do something tha
         model = config.llm.get("model", "gpt-5-mini")
         context_window = resolve_context_window_tokens(model)
         
-        # Use 50% of context window as the limit for prompt history
-        # This leaves room for response and system prompt
-        max_tokens = max(1000, int(context_window * 0.5))
+        # Use 80% of context window as the limit for prompt history
+        # This is conservative to avoid frequent compaction
+        max_tokens = max(4000, int(context_window * 0.8))
         
         # Estimate current token count
         # Convert session messages to AgentMessage format
