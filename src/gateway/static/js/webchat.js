@@ -67,7 +67,11 @@
         
         try {
             const sessionId = currentSessionId || '';
-            const headers = sessionId ? { 'X-Session-ID': sessionId } : {};
+            if (!sessionId) {
+                fileExplorerContent.innerHTML = '<div class="empty">Start a conversation to upload files</div>';
+                return;
+            }
+            const headers = { 'X-Session-ID': sessionId };
             const response = await fetch('/api/files/list', { headers });
             
             if (!response.ok) {
