@@ -328,45 +328,50 @@ async def _ocr_image_buffer(buffer: io.BytesIO, page_num: int, file_id: str) -> 
     """
     # Try PaddleOCR first (use cached instance)
     ocr = _get_paddleocr()
-    if ocr is None:
-        return []
+    blocks: List[Block] = []
+    tmp_path = None
     
-    import tempfile
-    
-    # Save to temp file (PaddleOCR needs file path)
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp.write(buffer.getvalue())
-        tmp_path = tmp.name
-    
-    try:
-        results = ocr.ocr(tmp_path, cls=True)
-        
-        if not results or not results[0]:
-            return []
-        
-        blocks = []
-        for line_idx, line in enumerate(results[0]):
-            box, (text, confidence) = line
-            if not text.strip():
-                continue
+    if ocr is not None:
+        # Save to temp file (PaddleOCR needs file path)
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                tmp.write(buffer.getvalue())
+                tmp_path = tmp.name
             
-            blocks.append(Block(
-                chunk_id=f"{file_id}_pdf_{page_num}_ocr_{line_idx + 1}",
-                type="paragraph",
-                content=text,
-                page=page_num,
-                method="paddleocr",
-                confidence=confidence,
-                bbox=box,
-                extracted_at=datetime.now().isoformat()
-            ))
-        
+            results = ocr.ocr(tmp_path, cls=True)
+            
+            if results and results[0]:
+                for line_idx, line in enumerate(results[0]):
+                    box, (text, confidence) = line
+                    if not text.strip():
+                        continue
+                    
+                    blocks.append(Block(
+                        chunk_id=f"{file_id}_pdf_{page_num}_ocr_{line_idx + 1}",
+                        type="paragraph",
+                        content=text,
+                        page=page_num,
+                        method="paddleocr",
+                        confidence=confidence,
+                        bbox=box,
+                        extracted_at=datetime.now().isoformat()
+                    ))
+        except Exception:
+            pass
+        finally:
+            if tmp_path:
+                try:
+                    import os
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+    
+    # If PaddleOCR produced results, return them
+    if blocks:
         return blocks
-    except Exception:
-        pass
-    finally:
-        import os
-        os.unlink(tmp_path)
+    
+    # Fallback to Tesseract
     
     # Fallback to Tesseract
     try:

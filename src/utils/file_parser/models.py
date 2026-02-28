@@ -8,13 +8,21 @@ class Block(BaseModel):
     """A structured block extracted from a file.
     
     Schema Contract:
-    - chunk_id: {file_id}_{page}_{row} format, globally unique
+    - chunk_id: Globally unique ID, format: `{file_id}_{source}_{page}_{index}`
+      (e.g., `{file_id}_pdf_{1}_{para}`, `{file_id}_img_{1}_{1}`, `{file_id}_docx_{1}_{1}`)
     - page: 1-based (PDF, Word)
     - row_range: 1-based, closed interval (e.g., "1-10")
     - confidence: 0.0 - 1.0 (OCR default 0.8, Vision default 0.9)
     """
     model_config = ConfigDict(populate_by_name=True)
-    chunk_id: str = Field(..., description="Unique block ID: {file_id}_{page}_{row}")
+    chunk_id: str = Field(
+        ...,
+        description=(
+            "Globally unique block ID, typically "
+            "`{file_id}_{source}_{page}_{index}` "
+            "(e.g., `{file_id}_pdf_{1}_{para}`, `{file_id}_img_{1}_{1}`)"
+        )
+    )
     type: str = Field(..., description="Type: heading, paragraph, table, list, image")
     content: str = Field(..., description="Text content")
     
