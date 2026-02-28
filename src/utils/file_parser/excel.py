@@ -208,7 +208,7 @@ async def _parse_csv_basic(file_path: str, options: Dict, file_id: str, filename
                 error="Empty CSV"
             )
         
-        table_block = _rows_to_table_block(rows, 1, "Sheet1", file_id, "csv", "pandas")
+        table_block = _rows_to_table_block(rows, 1, "Sheet1", file_id, "csv", "python-csv")
         
         markdown = _blocks_to_markdown([table_block])
         

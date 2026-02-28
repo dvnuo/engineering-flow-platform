@@ -189,20 +189,60 @@ async def preview_file(file_id: str, max_chars: int = 5000) -> dict:
 
 
 def _detect_mime_type(content: bytes, filename: str) -> str:
-    """Detect MIME type."""
+    """Detect MIME type using content signature when possible."""
     from pathlib import Path
+    import io
+    import zipfile
+    
     ext = Path(filename).suffix.lower()
+    header = content[:4096]
     
     # Use python-magic if available
     try:
         import magic
-        detected = magic.from_buffer(content[:1024], mime=True)
+        detected = magic.from_buffer(header, mime=True)
         if detected and detected != "application/octet-stream":
             return detected
     except Exception:
         pass
     
-    # Fallback: extension-based detection for all allowed types
+    # --- Signature-based detection for allowed types ---
+    # Images
+    if header.startswith(b"\xFF\xD8\xFF"):  # JPEG
+        return "image/jpeg"
+    if header.startswith(b"\x89PNG\r \x1a "):  # PNG
+        return "image/png"
+    if header.startswith(b"GIF87a") or header.startswith(b"GIF89a"):  # GIF
+        return "image/gif"
+    if header.startswith(b"RIFF") and b"WEBP" in header[8:16]:  # WebP
+        return "image/webp"
+    
+    # PDF
+    if header.startswith(b"%PDF-"):
+        return "application/pdf"
+    
+    # Office Open XML documents (DOCX/XLSX are ZIP-based)
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            names = set(zf.namelist())
+            if any(name.startswith("word/") for name in names):
+                return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            if any(name.startswith("xl/") for name in names):
+                return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    except zipfile.BadZipFile:
+        pass
+    
+    # Text-based formats
+    if ext in {".txt", ".csv"}:
+        try:
+            snippet = header.decode("utf-8")
+        except UnicodeDecodeError:
+            return "application/octet-stream"
+        if ext == ".csv" and ("," in snippet and " " in snippet):
+            return "text/csv"
+        return "text/plain"
+    
+    # Fallback to extension
     mime_map = {
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
