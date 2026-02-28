@@ -1,7 +1,7 @@
 """File parser data models."""
 
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Block(BaseModel):
@@ -13,6 +13,7 @@ class Block(BaseModel):
     - row_range: 1-based, closed interval (e.g., "1-10")
     - confidence: 0.0 - 1.0 (OCR default 0.8, Vision default 0.9)
     """
+    model_config = ConfigDict(populate_by_name=True)
     chunk_id: str = Field(..., description="Unique block ID: {file_id}_{page}_{row}")
     type: str = Field(..., description="Type: heading, paragraph, table, list, image")
     content: str = Field(..., description="Text content")
@@ -35,10 +36,6 @@ class Block(BaseModel):
     confidence: float = Field(1.0, ge=0.0, le=1.0, description="Confidence score 0.0-1.0")
     extracted_at: str = Field(..., description="ISO timestamp")
     
-    class Config:
-        populate_by_name = True
-
-
 class ParseResult(BaseModel):
     """Result of file parsing."""
     success: bool

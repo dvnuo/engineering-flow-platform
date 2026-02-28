@@ -10,6 +10,8 @@ from typing import Dict, List, Optional
 fitz = None
 _paddleocr = None
 
+from .models import Block, ParseResult
+
 
 def _get_fitz():
     """Lazy load PyMuPDF/fitz."""
@@ -338,34 +340,33 @@ async def _ocr_image_buffer(buffer: io.BytesIO, page_num: int, file_id: str) -> 
     
     try:
         results = ocr.ocr(tmp_path, cls=True)
+        
+        if not results or not results[0]:
+            return []
+        
+        blocks = []
+        for line_idx, line in enumerate(results[0]):
+            box, (text, confidence) = line
+            if not text.strip():
+                continue
             
-            if not results or not results[0]:
-                return []
-            
-            blocks = []
-            for line_idx, line in enumerate(results[0]):
-                box, (text, confidence) = line
-                if not text.strip():
-                    continue
-                
-                blocks.append(Block(
-                    chunk_id=f"{file_id}_pdf_{page_num}_ocr_{line_idx + 1}",
-                    type="paragraph",
-                    content=text,
-                    page=page_num,
-                    method="paddleocr",
-                    confidence=confidence,
-                    bbox=box,
-                    extracted_at=datetime.now().isoformat()
-                ))
-            
-            return blocks
-        finally:
-            import os
-            os.unlink(tmp_path)
-    
+            blocks.append(Block(
+                chunk_id=f"{file_id}_pdf_{page_num}_ocr_{line_idx + 1}",
+                type="paragraph",
+                content=text,
+                page=page_num,
+                method="paddleocr",
+                confidence=confidence,
+                bbox=box,
+                extracted_at=datetime.now().isoformat()
+            ))
+        
+        return blocks
     except Exception:
         pass
+    finally:
+        import os
+        os.unlink(tmp_path)
     
     # Fallback to Tesseract
     try:
