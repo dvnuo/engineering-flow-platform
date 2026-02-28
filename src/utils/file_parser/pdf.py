@@ -8,8 +8,7 @@ from typing import Dict, List, Optional
 
 # Lazy imports for optional dependencies
 fitz = None
-
-from .models import Block, ParseResult
+_paddleocr = None
 
 
 def _get_fitz():
@@ -24,6 +23,18 @@ def _get_fitz():
             except ImportError:
                 pass
     return fitz
+
+
+def _get_paddleocr():
+    """Get or create cached PaddleOCR instance."""
+    global _paddleocr
+    if _paddleocr is None:
+        try:
+            from paddleocr import PaddleOCR
+            _paddleocr = PaddleOCR(use_angle_cls=True, lang='ch_en', show_log=False)
+        except ImportError:
+            pass
+    return _paddleocr
 
 
 async def parse_pdf(file_path: str, options: Dict = None) -> ParseResult:
@@ -313,20 +324,20 @@ async def _ocr_image_buffer(buffer: io.BytesIO, page_num: int, file_id: str) -> 
     Returns:
         List of text blocks
     """
-    # Try PaddleOCR first
+    # Try PaddleOCR first (use cached instance)
+    ocr = _get_paddleocr()
+    if ocr is None:
+        return []
+    
+    import tempfile
+    
+    # Save to temp file (PaddleOCR needs file path)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp.write(buffer.getvalue())
+        tmp_path = tmp.name
+    
     try:
-        from paddleocr import PaddleOCR
-        import tempfile
-        
-        ocr = PaddleOCR(use_angle_cls=True, lang='ch_en', show_log=False)
-        
-        # Save to temp file (PaddleOCR needs file path)
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            tmp.write(buffer.getvalue())
-            tmp_path = tmp.name
-        
-        try:
-            results = ocr.ocr(tmp_path, cls=True)
+        results = ocr.ocr(tmp_path, cls=True)
             
             if not results or not results[0]:
                 return []

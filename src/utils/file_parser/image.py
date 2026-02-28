@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 
 # Lazy imports for optional dependencies
 _PIL = None
+_paddleocr = None
 
 from .models import Block, ParseResult, ImageConstraints
 from .validators import validate_image_for_llm, get_mime_type
@@ -21,6 +22,18 @@ def _get_pil():
         from PIL import Image
         _PIL = Image
     return _PIL
+
+
+def _get_paddleocr():
+    """Get or create cached PaddleOCR instance."""
+    global _paddleocr
+    if _paddleocr is None:
+        try:
+            from paddleocr import PaddleOCR
+            _paddleocr = PaddleOCR(use_angle_cls=True, lang='ch_en', show_log=False)
+        except ImportError:
+            pass
+    return _paddleocr
 
 
 # Default constraints
@@ -92,7 +105,7 @@ async def parse_image_with_vision(file_path: str, options: Dict) -> ParseResult:
     """Parse image using Vision LLM.
     
     Note: This requires an LLM client to be configured.
-    In practice, this would call the configured LLM with vision support.
+    Vision is not yet implemented - fall through to OCR.
     
     Args:
         file_path: Path to image
@@ -101,16 +114,8 @@ async def parse_image_with_vision(file_path: str, options: Dict) -> ParseResult:
     Returns:
         ParseResult with vision-generated description
     """
-    # Read and compress image
-    compressed_b64 = compress_image_for_llm(
-        file_path,
-        max_dimension=options.get("max_dimension", 1024),
-        quality=options.get("jpeg_quality", 80)
-    )
-    
-    # In a real implementation, this would call the LLM
-    # For now, we'll use OCR as fallback since we don't have LLM client here
-    raise NotImplementedError("Vision LLM parsing requires LLM client integration")
+    # Vision LLM not yet implemented - fall back to OCR
+    return await parse_image_with_ocr(file_path, options)
 
 
 async def parse_image_with_ocr(file_path: str, options: Dict) -> ParseResult:
@@ -164,12 +169,10 @@ async def _parse_with_paddleocr(file_path: str, file_id: str) -> List[Block]:
     Returns:
         List of blocks
     """
-    try:
-        from paddleocr import PaddleOCR
-    except ImportError:
+    ocr = _get_paddleocr()
+    if ocr is None:
         return await _parse_with_tesseract(file_path, file_id)
     
-    ocr = PaddleOCR(use_angle_cls=True, lang='ch_en', show_log=False)
     results = ocr.ocr(file_path, cls=True)
     
     if not results or not results[0]:

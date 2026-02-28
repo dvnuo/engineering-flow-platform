@@ -174,7 +174,7 @@ Response 200:
 ### 4.4 List Files
 
 ```http
-GET /api/files?session_id=xxx
+GET /api/files/list?session_id=xxx
 
 Response 200:
 {

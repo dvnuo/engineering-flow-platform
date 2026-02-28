@@ -28,11 +28,12 @@
                 formData.append('file', file);
                 
                 const sessionId = currentSessionId || '';
-                const url = `/api/files/upload${sessionId ? '?session_id=' + sessionId : ''}`;
+                const headers = sessionId ? { 'X-Session-ID': sessionId } : {};
                 
-                const response = await fetch(url, {
+                const response = await fetch('/api/files/upload', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    headers
                 });
                 
                 const data = await response.json();
@@ -66,7 +67,8 @@
         
         try {
             const sessionId = currentSessionId || '';
-            const response = await fetch(`/api/files/list${sessionId ? '?session_id=' + sessionId : ''}`);
+            const headers = sessionId ? { 'X-Session-ID': sessionId } : {};
+            const response = await fetch('/api/files/list', { headers });
             const data = await response.json();
             
             if (data.files && data.files.length > 0) {

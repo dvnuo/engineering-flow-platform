@@ -65,7 +65,7 @@ class ImageConstraints(BaseModel):
     max_dimension: int = Field(1024, description="Max width or height in pixels for compression")
     jpeg_quality: int = Field(80, ge=70, le=85, description="JPEG quality for compression")
     allowed_formats: List[str] = Field(
-        default=["jpg", "jpeg", "png", "webp", "gif"],
+        default_factory=lambda: ["jpg", "jpeg", "png", "webp", "gif"],
         description="Allowed image formats"
     )
 
