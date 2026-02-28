@@ -77,7 +77,11 @@ async def parse_image(
                     result.parse_time_ms = int((time.time() - start_time) * 1000)
                     return result
             except Exception as e:
-                pass  # Fall through to OCR
+                import logging
+                logging.warning(f"Vision parsing failed, falling back to OCR: {e}")
+        else:
+            import logging
+            logging.debug(f"Image validation failed: {error}")
     
     # OCR fallback (no LLM-specific constraints needed)
     try:

@@ -54,7 +54,7 @@ def register_file(
         stored_filename=stored_filename,
         content_type=content_type,
         size=size,
-        uploaded_at=datetime.now().isoformat(),
+        uploaded_at=datetime.utcnow().isoformat() + 'Z',
         session_id=session_id,
     )
     _file_metadata[file_id] = metadata

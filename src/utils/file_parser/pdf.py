@@ -374,8 +374,6 @@ async def _ocr_image_buffer(buffer: io.BytesIO, page_num: int, file_id: str) -> 
         return blocks
     
     # Fallback to Tesseract
-    
-    # Fallback to Tesseract
     try:
         import pytesseract
         from PIL import Image
