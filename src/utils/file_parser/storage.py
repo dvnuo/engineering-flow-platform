@@ -230,7 +230,7 @@ def _detect_mime_type(content: bytes, ext: str) -> str:
         pass
     
     # Fall back to extension if magic is unavailable or returns generic type
-    if not detected or detected == "application/octet-stream":
+    if not detected or detected in ("application/octet-stream", "application/zip"):
         return mime_map.get(ext.lower(), "application/octet-stream")
     
     return detected
