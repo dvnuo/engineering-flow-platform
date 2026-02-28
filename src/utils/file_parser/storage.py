@@ -165,6 +165,10 @@ async def save_uploaded_file(
     # Generate unique ID
     file_id = _generate_file_id()
     
+    # Sanitize original filename to prevent XSS
+    from .validators import sanitize_filename
+    original_filename = sanitize_filename(original_filename)
+    
     # Get safe extension from original filename first
     ext = get_safe_extension(original_filename)
     

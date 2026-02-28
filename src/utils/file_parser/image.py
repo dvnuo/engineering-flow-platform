@@ -70,21 +70,14 @@ async def parse_image(
     vision_enabled = options.get("vision_enabled", False)
     if vision_enabled:
         valid, error = validate_image_for_llm(file_path, constraints)
-        if not valid:
-            return ParseResult(
-                success=False,
-                content_type=get_mime_type(file_path),
-                file_id=file_id,
-                filename=filename,
-                error=error
-            )
-        try:
-            result = await parse_image_with_vision(file_path, options)
-            if result.success:
-                result.parse_time_ms = int((time.time() - start_time) * 1000)
-                return result
-        except Exception as e:
-            pass  # Fall through to OCR
+        if valid:
+            try:
+                result = await parse_image_with_vision(file_path, options)
+                if result.success:
+                    result.parse_time_ms = int((time.time() - start_time) * 1000)
+                    return result
+            except Exception as e:
+                pass  # Fall through to OCR
     
     # OCR fallback (no LLM-specific constraints needed)
     try:
