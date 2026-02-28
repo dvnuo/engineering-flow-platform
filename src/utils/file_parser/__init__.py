@@ -201,7 +201,8 @@ def _detect_mime_type(content: bytes, filename: str) -> str:
     try:
         import magic
         detected = magic.from_buffer(header, mime=True)
-        if detected and detected != "application/octet-stream":
+        # For generic ZIPs, fall through to our ZIP-based Office detection
+        if detected and detected not in ("application/octet-stream", "application/zip"):
             return detected
     except Exception:
         pass
@@ -210,7 +211,7 @@ def _detect_mime_type(content: bytes, filename: str) -> str:
     # Images
     if header.startswith(b"\xFF\xD8\xFF"):  # JPEG
         return "image/jpeg"
-    if header.startswith(b"\x89PNG\r \x1a "):  # PNG
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):  # PNG (correct magic: \r\n\x1a\n)
         return "image/png"
     if header.startswith(b"GIF87a") or header.startswith(b"GIF89a"):  # GIF
         return "image/gif"
@@ -235,10 +236,11 @@ def _detect_mime_type(content: bytes, filename: str) -> str:
     # Text-based formats
     if ext in {".txt", ".csv"}:
         try:
-            snippet = header.decode("utf-8")
+            header.decode("utf-8")
         except UnicodeDecodeError:
             return "application/octet-stream"
-        if ext == ".csv" and ("," in snippet and " " in snippet):
+        # If extension is .csv and file decodes as text, treat as CSV
+        if ext == ".csv":
             return "text/csv"
         return "text/plain"
     
