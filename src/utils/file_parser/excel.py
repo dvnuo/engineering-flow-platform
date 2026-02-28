@@ -56,7 +56,7 @@ async def parse_excel(file_path: str, options: Dict = None) -> ParseResult:
                 continue
             
             # Convert to blocks
-            table_block = _rows_to_table_block(rows, sheet_idx + 1, sheet_name)
+            table_block = _rows_to_table_block(rows, sheet_idx + 1, sheet_name, file_id)
             blocks.append(table_block)
             
             # Also add as paragraphs for small sheets
@@ -134,7 +134,7 @@ async def parse_csv(file_path: str, options: Dict = None) -> ParseResult:
         rows = [[str(cell) for cell in row] for row in rows]
         
         # Create table block
-        table_block = _rows_to_table_block(rows, 1, "Sheet1")
+        table_block = _rows_to_table_block(rows, 1, "Sheet1", file_id)
         
         # Also add as paragraphs
         blocks = [table_block]
@@ -208,7 +208,7 @@ async def _parse_csv_basic(file_path: str, options: Dict, file_id: str, filename
                 error="Empty CSV"
             )
         
-        table_block = _rows_to_table_block(rows, 1, "Sheet1")
+        table_block = _rows_to_table_block(rows, 1, "Sheet1", file_id)
         
         markdown = _blocks_to_markdown([table_block])
         
@@ -234,7 +234,7 @@ async def _parse_csv_basic(file_path: str, options: Dict, file_id: str, filename
         )
 
 
-def _rows_to_table_block(rows: List[List[str]], sheet_idx: int, sheet_name: str) -> Block:
+def _rows_to_table_block(rows: List[List[str]], sheet_idx: int, sheet_name: str, file_id: str) -> Block:
     """Convert rows to a table block."""
     if not rows:
         return Block(

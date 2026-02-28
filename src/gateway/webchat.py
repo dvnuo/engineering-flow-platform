@@ -1250,11 +1250,18 @@ async def api_files_list(request: web.Request) -> web.Response:
     
     Returns:
         200: {"files": [...]}
+        400: {"success": false, "error": "session_id is required"}
     """
     try:
         from src.utils.file_parser import list_files
         
-        session_id = request.query.get('session_id')
+        # Require session_id to avoid leaking files across sessions
+        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
+        if not session_id:
+            return web.json_response({
+                'success': False,
+                'error': 'session_id is required'
+            }, status=400)
         
         files = list_files(session_id)
         
@@ -1288,7 +1295,7 @@ async def api_files_delete(request: web.Request) -> web.Response:
         200: {"success": true}
     """
     try:
-        from src.utils.file_parser import delete_file, get_metadata
+        from src.utils.file_parser import delete_file, get_metadata, FileNotFoundError
         
         file_id = request.match_info.get('file_id')
         

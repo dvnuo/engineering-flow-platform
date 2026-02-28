@@ -58,11 +58,11 @@ async def parse_pdf(file_path: str, options: Dict = None) -> ParseResult:
         # Process based on type
         if pdf_type in ("text", "mixed"):
             try:
-                text_blocks = await extract_text_with_pymupdf(file_path, options)
+                text_blocks = await extract_text_with_pymupdf(file_path, options, file_id)
                 blocks.extend(text_blocks)
                 
                 # Extract tables
-                table_blocks = await extract_tables_with_pdfplumber(file_path, options)
+                table_blocks = await extract_tables_with_pdfplumber(file_path, options, file_id)
                 blocks.extend(table_blocks)
             except Exception as e:
                 errors.append(f"Text extraction failed: {e}")
@@ -70,7 +70,7 @@ async def parse_pdf(file_path: str, options: Dict = None) -> ParseResult:
         # If no content or scanned, try OCR
         if pdf_type == "scanned" or not blocks:
             try:
-                ocr_blocks = await extract_with_ocr(file_path, options)
+                ocr_blocks = await extract_with_ocr(file_path, options, file_id)
                 blocks.extend(ocr_blocks)
             except Exception as e:
                 errors.append(f"OCR failed: {e}")
@@ -145,26 +145,26 @@ def detect_pdf_type(file_path: str) -> str:
         return "scanned"
 
 
-async def extract_text_with_pymupdf(file_path: str, options: Dict) -> List[Block]:
+async def extract_text_with_pymupdf(file_path: str, options: Dict, file_id: str) -> List[Block]:
     """Extract text using PyMuPDF.
     
     Args:
         file_path: Path to PDF
         options: Options including max_pages
+        file_id: File ID for chunk_id
         
     Returns:
         List of text blocks
     """
-    try:
-        import fitz
-    except ImportError:
+    fitz_module = _get_fitz()
+    if fitz_module is None:
         return []
     
-    max_pages = options.get("max_pages", 100)
+    max_pages = options.get("max_pages", 100) if options else 100
     blocks = []
     
     try:
-        with fitz.open(file_path) as doc:
+        with fitz_module.open(file_path) as doc:
             for page_num, page in enumerate(doc):
                 if page_num + 1 > max_pages:
                     break
@@ -209,7 +209,7 @@ async def extract_text_with_pymupdf(file_path: str, options: Dict) -> List[Block
     return blocks
 
 
-async def extract_tables_with_pdfplumber(file_path: str, options: Dict) -> List[Block]:
+async def extract_tables_with_pdfplumber(file_path: str, options: Dict, file_id: str) -> List[Block]:
     """Extract tables using pdfplumber.
     
     Args:
@@ -260,20 +260,20 @@ async def extract_tables_with_pdfplumber(file_path: str, options: Dict) -> List[
     return blocks
 
 
-async def extract_with_ocr(file_path: str, options: Dict) -> List[Block]:
+async def extract_with_ocr(file_path: str, options: Dict, file_id: str) -> List[Block]:
     """Extract text using OCR.
     
     Args:
         file_path: Path to PDF
         options: Options
+        file_id: File ID for chunk_id
         
     Returns:
         List of text blocks
     """
     # Convert PDF pages to images first
-    try:
-        import fitz
-    except ImportError:
+    fitz_module = _get_fitz()
+    if fitz_module is None:
         return []
     
     blocks = []
@@ -281,10 +281,6 @@ async def extract_with_ocr(file_path: str, options: Dict) -> List[Block]:
     
     try:
         # Open PDF and convert each page to image
-        fitz_module = _get_fitz()
-        if fitz_module is None:
-            return []
-        
         with fitz_module.open(file_path) as doc:
             for page_num, page in enumerate(doc):
                 if page_num + 1 > max_pages:
@@ -297,7 +293,7 @@ async def extract_with_ocr(file_path: str, options: Dict) -> List[Block]:
                 img_buffer = io.BytesIO(pix.tobytes("png"))
                 
                 # OCR the image
-                page_blocks = await _ocr_image_buffer(img_buffer, page_num + 1)
+                page_blocks = await _ocr_image_buffer(img_buffer, page_num + 1, file_id)
                 blocks.extend(page_blocks)
     
     except Exception:
@@ -306,7 +302,7 @@ async def extract_with_ocr(file_path: str, options: Dict) -> List[Block]:
     return blocks
 
 
-async def _ocr_image_buffer(buffer: io.BytesIO, page_num: int) -> List[Block]:
+async def _ocr_image_buffer(buffer: io.BytesIO, page_num: int, file_id: str) -> List[Block]:
     """OCR an image buffer.
     
     Args:

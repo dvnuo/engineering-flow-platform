@@ -69,7 +69,7 @@ async def parse_docx(file_path: str, options: Dict = None) -> ParseResult:
         
         # Extract tables
         for table_idx, table in enumerate(doc.tables):
-            table_blocks = _extract_table_blocks(table, table_idx, blocks[-1].page if blocks else 1)
+            table_blocks = _extract_table_blocks(table, table_idx, blocks[-1].page if blocks else 1, file_id)
             blocks.extend(table_blocks)
         
         # Generate markdown
@@ -100,7 +100,7 @@ async def parse_docx(file_path: str, options: Dict = None) -> ParseResult:
         )
 
 
-def _extract_table_blocks(table, table_idx: int, page: int) -> List[Block]:
+def _extract_table_blocks(table, table_idx: int, page: int, file_id: str) -> List[Block]:
     """Extract blocks from a table."""
     blocks = []
     

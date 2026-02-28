@@ -130,7 +130,7 @@ async def parse_image_with_ocr(file_path: str, options: Dict) -> ParseResult:
     if engine == "paddleocr":
         blocks = await _parse_with_paddleocr(file_path)
     else:
-        blocks = await _parse_with_tesseract(file_path)
+        blocks = await _parse_with_tesseract(file_path, file_id)
     
     # Check if OCR returned any results
     if not blocks:
@@ -162,7 +162,7 @@ async def _parse_with_paddleocr(file_path: str) -> List[Block]:
     try:
         from paddleocr import PaddleOCR
     except ImportError:
-        return await _parse_with_tesseract(file_path)
+        return await _parse_with_tesseract(file_path, file_id)
     
     ocr = PaddleOCR(use_angle_cls=True, lang='ch_en', show_log=False)
     results = ocr.ocr(file_path, cls=True)
@@ -187,10 +187,15 @@ async def _parse_with_paddleocr(file_path: str) -> List[Block]:
     return blocks
 
 
-async def _parse_with_tesseract(file_path: str) -> List[Block]:
+async def _parse_with_tesseract(file_path: str, file_id: str) -> List[Block]:
     """Parse image with Tesseract.
     
-    Tesseract returns: Dict with 'text', 'conf', 'left', 'top', etc.
+    Args:
+        file_path: Path to image
+        file_id: File ID for chunk_id
+        
+    Returns:
+        List of blocks
     """
     try:
         import pytesseract
