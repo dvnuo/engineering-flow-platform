@@ -127,7 +127,7 @@ async def parse_csv(file_path: str, options: Dict = None) -> ParseResult:
     
     try:
         # Read CSV with pandas
-        df = pd.read_csv(file_path, max_rows=max_rows)
+        df = pd.read_csv(file_path, nrows=max_rows)
         
         # Convert to rows
         rows = [df.columns.tolist()] + df.values.tolist()
@@ -288,8 +288,8 @@ def _table_to_markdown(rows: List[List[str]]) -> str:
     sep = "| " + " | ".join("-" * w for w in col_widths) + " |"
     lines.append(sep)
     
-    # Data rows
-    for row in rows:
+    # Data rows (skip header)
+    for row in rows[1:]:
         data = "| " + " | ".join(
             str(row[i]).ljust(col_widths[i]) if i < len(row) else " " * col_widths[i]
             for i in range(len(col_widths))

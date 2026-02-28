@@ -7,10 +7,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PIL import Image
+# Lazy imports for optional dependencies
+Image = None
 
 from .models import Block, ParseResult, ImageConstraints
 from .validators import validate_image_for_llm, get_mime_type
+
+
+def _get_pil():
+    """Lazy load PIL."""
+    global Image
+    if Image is None:
+        from PIL import Image
+    return Image
 
 
 # Default constraints
@@ -123,6 +132,16 @@ async def parse_image_with_ocr(file_path: str, options: Dict) -> ParseResult:
     else:
         blocks = await _parse_with_tesseract(file_path)
     
+    # Check if OCR returned any results
+    if not blocks:
+        return ParseResult(
+            success=False,
+            content_type=get_mime_type(file_path),
+            file_id=file_id,
+            filename=filename,
+            error="OCR found no text in image"
+        )
+    
     markdown = "\n".join(b.content for b in blocks if b.content.strip())
     
     return ParseResult(
@@ -179,7 +198,7 @@ async def _parse_with_tesseract(file_path: str) -> List[Block]:
     except ImportError:
         return []
     
-    img = Image.open(file_path)
+    img = _get_pil().open(file_path)
     data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
     
     blocks = []
@@ -191,21 +210,33 @@ async def _parse_with_tesseract(file_path: str) -> List[Block]:
     heights = data.get("height", [])
     
     for idx, (text, conf) in enumerate(zip(texts, confs)):
-        if not text.strip() or conf < 0:
+        # Convert confidence to float safely (Tesseract may return strings)
+        try:
+            conf_value = float(conf) if conf else -1
+        except (TypeError, ValueError):
+            conf_value = -1
+        
+        # Skip empty text or invalid/negative confidence
+        if not text.strip() or conf_value < 0:
             continue
+        
+        # Build bbox if available
+        bbox = None
+        if idx < len(lefts) and idx < len(tops) and idx < len(widths) and idx < len(heights):
+            bbox = [
+                [lefts[idx], tops[idx]],
+                [lefts[idx] + widths[idx], tops[idx]],
+                [lefts[idx] + widths[idx], tops[idx] + heights[idx]],
+                [lefts[idx], tops[idx] + heights[idx]]
+            ]
         
         blocks.append(Block(
             chunk_id=f"img_1_{idx + 1}",
             type="paragraph",
             content=text,
             method="tesseract",
-            confidence=conf / 100,
-            bbox=[
-                [lefts[idx], tops[idx]],
-                [lefts[idx] + widths[idx], tops[idx]],
-                [lefts[idx] + widths[idx], tops[idx] + heights[idx]],
-                [lefts[idx], tops[idx] + heights[idx]]
-            ],
+            confidence=conf_value / 100,
+            bbox=bbox,
             extracted_at=datetime.now().isoformat()
         ))
     
@@ -227,7 +258,7 @@ def compress_image_for_llm(
     Returns:
         Base64 encoded compressed image
     """
-    with Image.open(file_path) as img:
+    with _get_pil().open(file_path) as img:
         # Convert to RGB if needed
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
@@ -236,7 +267,7 @@ def compress_image_for_llm(
         if max(img.size) > max_dimension:
             ratio = max_dimension / max(img.size)
             new_size = tuple(int(dim * ratio) for dim in img.size)
-            img = img.resize(new_size, Image.Resampling.LANCZOS)
+            img = img.resize(new_size, _get_pil().Resampling.LANCZOS)
         
         # Compress to JPEG
         buffer = io.BytesIO()

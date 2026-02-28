@@ -1,12 +1,30 @@
 """PDF parser implementation."""
 
+import io
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# Lazy imports for optional dependencies
+fitz = None
+
 from .models import Block, ParseResult
 from .validators import get_mime_type
+
+
+def _get_fitz():
+    """Lazy load PyMuPDF/fitz."""
+    global fitz
+    if fitz is None:
+        try:
+            import fitz
+        except ImportError:
+            try:
+                import pymupdf as fitz
+            except ImportError:
+                pass
+    return fitz
 
 
 async def parse_pdf(file_path: str, options: Dict = None) -> ParseResult:
@@ -100,9 +118,12 @@ def detect_pdf_type(file_path: str) -> str:
         "text", "scanned", or "mixed"
     """
     try:
-        import PyMuPDF as fitz
+        import fitz
     except ImportError:
-        return "scanned"  # Default to OCR if no PyMuPDF
+        try:
+            import fitz
+        except ImportError:
+            return "scanned"  # Default to OCR if no PyMuPDF
     
     try:
         with fitz.open(file_path) as doc:
@@ -139,7 +160,7 @@ async def extract_text_with_pymupdf(file_path: str, options: Dict) -> List[Block
         List of text blocks
     """
     try:
-        import PyMuPDF as fitz
+        import fitz
     except ImportError:
         return []
     
@@ -252,7 +273,7 @@ async def extract_with_ocr(file_path: str, options: Dict) -> List[Block]:
     """
     # Convert PDF pages to images first
     try:
-        import PyMuPDF as fitz
+        import fitz
     except ImportError:
         return []
     
@@ -376,14 +397,19 @@ def _table_to_markdown(table: List[List[str]]) -> str:
     if not table:
         return ""
     
-    # Get column widths
-    col_widths = [max(len(str(row[i])) if i < len(row) else 0 for row in table) for i in range(len(table[0]))]
+    # Handle empty table
+    if not table or not table[0]:
+        return ""
+    
+    max_cols = max(len(row) for row in table)
+    col_widths = [max(len(str(row[i])) if i < len(row) else 0 for row in table) for i in range(max_cols)]
     
     lines = []
     
-    # Header
+    # Header (use first row)
+    header_row = table[0]
     header = "| " + " | ".join(
-        str(row[i]).ljust(col_widths[i]) if i < len(row) else " " * col_widths[i]
+        str(header_row[i]).ljust(col_widths[i]) if i < len(header_row) else " " * col_widths[i]
         for i in range(len(col_widths))
     ) + " |"
     lines.append(header)

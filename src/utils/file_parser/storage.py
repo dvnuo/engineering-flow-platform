@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 
 from .models import FileMetadata, FileNotFoundError
-from .validators import sanitize_filename, get_safe_extension
+from .validators import get_safe_extension
 
 
 # Upload directory

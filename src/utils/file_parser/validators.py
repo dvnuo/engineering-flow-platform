@@ -171,24 +171,28 @@ def get_mime_type(file_path: str) -> str:
     Returns:
         MIME type string
     """
-    import magic
-    
+    # Use python-magic if available
     try:
+        import magic
         with open(file_path, "rb") as f:
-            return magic.from_buffer(f.read(1024), mime=True)
+            detected = magic.from_buffer(f.read(1024), mime=True)
+            if detected and detected != "application/octet-stream":
+                return detected
     except Exception:
-        # Fallback to extension-based guess
-        ext = Path(file_path).suffix.lower()
-        mime_map = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".gif": "image/gif",
-            ".webp": "image/webp",
-            ".pdf": "application/pdf",
-            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ".csv": "text/csv",
-            ".txt": "text/plain",
-        }
-        return mime_map.get(ext, "application/octet-stream")
+        pass
+    
+    # Fallback to extension-based guess
+    ext = Path(file_path).suffix.lower()
+    mime_map = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".csv": "text/csv",
+        ".txt": "text/plain",
+    }
+    return mime_map.get(ext, "application/octet-stream")

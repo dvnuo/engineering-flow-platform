@@ -46,12 +46,12 @@
           "type": "heading",
           "level": 1,
           "content": "标题内容",
-          " bbox": null
+          "bbox": null
         },
         {
           "type": "paragraph",
           "content": "段落内容...",
-          " bbox": null
+          "bbox": null
         },
         {
           "type": "table",

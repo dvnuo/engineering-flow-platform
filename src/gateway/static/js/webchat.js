@@ -130,12 +130,6 @@
     }
     
     // Helper functions
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-    
     function getFileIcon(contentType) {
         if (contentType.startsWith('image/')) return '🖼️';
         if (contentType === 'application/pdf') return '📄';

@@ -1060,12 +1060,27 @@ async def api_files_upload(request: web.Request) -> web.Response:
                 'error': 'No file provided'
             }, status=400)
         
-        # Read file content
-        content = await file_field.read()
-        filename = file_field.filename
-        
-        # Get max size from config (default 10MB)
+        # Read file content in chunks to enforce size limit
         max_size_mb = 10
+        max_bytes = max_size_mb * 1024 * 1024
+        chunk_size = 1024 * 1024  # 1 MB
+        content_chunks = []
+        total_size = 0
+        
+        while True:
+            chunk = await file_field.read(chunk_size)
+            if not chunk:
+                break
+            total_size += len(chunk)
+            if total_size > max_bytes:
+                return web.json_response({
+                    'success': False,
+                    'error': f'File exceeds maximum size of {max_size_mb} MB'
+                }, status=400)
+            content_chunks.append(chunk)
+        
+        content = b"".join(content_chunks)
+        filename = file_field.filename
         
         # Upload
         metadata = await upload_file(
