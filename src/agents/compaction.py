@@ -574,6 +574,48 @@ async def summarize_in_stages(
     )
 
 
+def fix_tool_call_consistency(messages: List[AgentMessage]) -> List[AgentMessage]:
+    """Fix tool_call consistency after pruning.
+    
+    Ensures that if a tool response is dropped, the corresponding
+    tool_call is also removed from the assistant message.
+    
+    Args:
+        messages: List of messages (may have inconsistent tool_calls)
+        
+    Returns:
+        Messages with consistent tool_calls and tool responses
+    """
+    if not messages:
+        return messages
+    
+    # Build a set of valid tool_call_ids from tool responses
+    valid_tool_call_ids = set()
+    for msg in messages:
+        if msg.role == "tool" and msg.tool_use_id:
+            valid_tool_call_ids.add(msg.tool_use_id)
+    
+    # Fix assistant messages with tool_calls
+    fixed = []
+    for msg in messages:
+        if msg.role == "assistant" and msg.tool_calls:
+            # Filter tool_calls to only include those with responses
+            valid_calls = [
+                tc for tc in msg.tool_calls
+                if tc.get("id") in valid_tool_call_ids
+            ]
+            
+            if len(valid_calls) != len(msg.tool_calls):
+                # Some tool_calls were dropped, create new message
+                msg.tool_calls = valid_calls if valid_calls else None
+            
+            fixed.append(msg)
+        else:
+            fixed.append(msg)
+    
+    return fixed
+
+
 def prune_history_for_context_share(
     messages: List[AgentMessage],
     max_context_tokens: int,
@@ -671,6 +713,10 @@ async def compact_messages(
         max_history_share=0.5,
     )
     
+    # Fix tool_call consistency after pruning
+    # Ensures tool_calls and tool responses are paired
+    pruned = fix_tool_call_consistency(pruned)
+    
     # If still over budget, summarize old messages
     if estimate_messages_tokens(pruned) > history_budget:
         # Keep recent messages
@@ -691,10 +737,14 @@ async def compact_messages(
         )
         
         result = [summary_message] + recent
+        # Fix tool_call consistency for summarized messages
+        result = fix_tool_call_consistency(result)
         stats.summary = summary
         
         return result, stats
     
+    # Final fix before returning
+    pruned = fix_tool_call_consistency(pruned)
     return pruned, stats
 
 
