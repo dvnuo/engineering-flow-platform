@@ -22,7 +22,7 @@ class Block(BaseModel):
     
     # Table specific
     markdown: Optional[str] = None
-    json: Optional[Any] = None
+    table_json: Optional[Any] = Field(None, alias="json")  # Use alias for JSON field
     
     # Location
     page: Optional[int] = Field(None, ge=1, description="Page number, 1-based")
@@ -34,6 +34,9 @@ class Block(BaseModel):
     method: str = Field(..., description="Extraction method: pymupdf, pandas, vision, ocr, paddleocr, tesseract")
     confidence: float = Field(1.0, ge=0.0, le=1.0, description="Confidence score 0.0-1.0")
     extracted_at: str = Field(..., description="ISO timestamp")
+    
+    class Config:
+        populate_by_name = True
 
 
 class ParseResult(BaseModel):

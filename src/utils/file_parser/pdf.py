@@ -227,7 +227,7 @@ async def extract_tables_with_pdfplumber(file_path: str, options: Dict) -> List[
                         type="table",
                         content="",
                         markdown=markdown_table,
-                        json=json_table,
+                        table_json=json_table,
                         page=page_num + 1,
                         method="pdfplumber",
                         confidence=0.9,
