@@ -27,7 +27,7 @@
                 const formData = new FormData();
                 formData.append('file', file);
                 
-                const sessionId = window.currentSessionId || '';
+                const sessionId = currentSessionId || '';
                 const url = `/api/files/upload${sessionId ? '?session_id=' + sessionId : ''}`;
                 
                 const response = await fetch(url, {
@@ -65,7 +65,7 @@
         if (!fileExplorerContent) return;
         
         try {
-            const sessionId = window.currentSessionId || '';
+            const sessionId = currentSessionId || '';
             const response = await fetch(`/api/files/list${sessionId ? '?session_id=' + sessionId : ''}`);
             const data = await response.json();
             
@@ -105,7 +105,7 @@
         setStatus('Parsing file...', 'uploading');
         
         try {
-            const sessionId = window.currentSessionId || '';
+            const sessionId = currentSessionId || '';
             const headers = {'Content-Type': 'application/json'};
             if (sessionId) {
                 headers['X-Session-ID'] = sessionId;
@@ -151,6 +151,14 @@
     }
     const typingIndicator = document.getElementById('typing');
     const statusSpan = document.getElementById('status');
+    
+    // Helper to update status
+    function setStatus(message, type) {
+        if (statusSpan) {
+            statusSpan.textContent = message;
+        }
+    }
+    
     const tokenCountSpan = document.getElementById('tokenCount');
     const costDisplaySpan = document.getElementById('costDisplay');
     const statsButton = document.getElementById('statsButton');

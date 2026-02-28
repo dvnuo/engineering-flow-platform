@@ -10,7 +10,6 @@ from typing import Dict, List, Optional
 fitz = None
 
 from .models import Block, ParseResult
-from .validators import get_mime_type
 
 
 def _get_fitz():

@@ -1,14 +1,12 @@
 """Tests for file parser models."""
 
 import pytest
-from datetime import datetime
 
 from src.utils.file_parser.models import (
     Block,
     ParseResult,
     ImageConstraints,
     FileMetadata,
-    FileValidationError,
     FileTooLargeError,
     UnsupportedFileTypeError,
 )
