@@ -10,6 +10,7 @@
 6. summarizeWithFallback() - Fallback for oversized messages
 7. summarizeInStages() - Multi-stage summarization
 8. pruneHistoryForContextShare() - Prune history for context share
+9. fixToolCallConsistency() - Fix tool_call/tool_response consistency after pruning
 
 ## Constants
 

@@ -527,3 +527,5 @@ class TestFixToolCallConsistency:
         assert original_msg.tool_calls[0]["id"] == "call_abc"
         # Result should have filtered (or unchanged) version
         assert len(result) == 1
+        # Since call_abc has no tool response, tool_calls should be None
+        assert result[0].tool_calls is None
