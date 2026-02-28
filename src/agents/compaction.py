@@ -599,12 +599,11 @@ def fix_tool_call_consistency(messages: List[AgentMessage]) -> List[AgentMessage
                 if tc.get("id"):
                     all_assistant_tool_call_ids.add(tc.get("id"))
     
-    # Build a set of valid tool_call_ids from tool responses
-    # (these are the ones that have responses, so they're valid to keep)
-    valid_tool_call_ids = set()
+    # Build a set of tool_call_ids that have tool responses
+    tool_response_ids = set()
     for msg in messages:
         if msg.role == "tool" and msg.tool_use_id:
-            valid_tool_call_ids.add(msg.tool_use_id)
+            tool_response_ids.add(msg.tool_use_id)
     
     # Fix messages - filter tool_calls and remove orphaned tool responses
     fixed = []
@@ -613,7 +612,7 @@ def fix_tool_call_consistency(messages: List[AgentMessage]) -> List[AgentMessage
             # Filter tool_calls to only include those that have responses
             valid_calls = [
                 tc for tc in msg.tool_calls
-                if tc.get("id") in valid_tool_call_ids
+                if tc.get("id") in tool_response_ids
             ]
             
             # Create new message with filtered tool_calls (don't mutate)
@@ -625,12 +624,10 @@ def fix_tool_call_consistency(messages: List[AgentMessage]) -> List[AgentMessage
                 tool_use_id=msg.tool_use_id,
             ))
         elif msg.role == "tool":
-            # Remove orphaned tool responses:
-            # - If tool_use_id is not in any assistant's tool_calls, it's orphaned
-            # - OR if tool_use_id has no response (not in valid_tool_call_ids)
-            if msg.tool_use_id in all_assistant_tool_call_ids and msg.tool_use_id in valid_tool_call_ids:
+            # Keep only tool responses whose tool_use_id appears in some assistant.tool_calls
+            if msg.tool_use_id in all_assistant_tool_call_ids:
                 fixed.append(msg)
-            # else: orphaned tool response, skip it
+            # else: orphaned tool response (assistant message was dropped), skip it
         else:
             fixed.append(msg)
     
