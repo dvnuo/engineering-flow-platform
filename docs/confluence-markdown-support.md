@@ -20,13 +20,14 @@
 |------|----------|----------|
 | `confluence_get_page` | 返回 HTML storage format | 返回 Markdown (默认) |
 | `confluence_get_page_by_url` | 返回 HTML storage format | 返回 Markdown (默认) |
-| `confluence_search` | 返回 HTML snippets | 返回 Markdown snippets |
+| `confluence_search` | 返回 HTML snippets | 返回 title + url + excerpt (文本) |
 | `confluence_list_pages` | 返回 HTML | 返回 Markdown 标题 |
 
 **新增参数:**
 ```python
 # 所有获取页面的函数新增参数
 format: "markdown" | "storage"  # 默认 "markdown"
+max_chars: int = None  # 返回最多 N 字符 (避免 token 爆)
 ```
 
 ### 3.2 创建 - Markdown 输入
@@ -40,7 +41,7 @@ format: "markdown" | "storage"  # 默认 "markdown"
 confluence_create_page(
     space_key: str,
     title: str,
-    body: str,           # 现在接受 Markdown
+    body: str,                     # 现在接受 Markdown
     body_format: "markdown" | "storage",  # 默认 "markdown"
     parent_id: str = None
 )
@@ -70,94 +71,120 @@ confluence_update_page(
 
 ## 4. 技术方案
 
-### 4.1 Markdown → Storage 转换
+### 4.1 库定位
 
-使用 `markdown2confluence` 库或自实现转换器:
+| 库 | 用途 | 阶段 |
+|---|---|---|
+| `confluence-markdown-exporter` | 读 - Confluence → Markdown | 查询 |
+| `markdown-to-confluence` | 写 - Markdown → Storage (XHTML) | 创建/更新 |
 
-```python
-# 推荐库: markdown2confluence
-# 安装: pip install markdown2confluence
+### 4.2 目录结构
 
-import markdown2confluence
-
-def markdown_to_storage(markdown_text: str) -> str:
-    """Convert Markdown to Confluence Storage Format"""
-    return markdown2confluence.convert(markdown_text)
+```
+src/confluence/
+├── api.py              # ConfluenceChannel (现有)
+├── __init__.py         # 工具函数 (现有)
+├── adapter.py          # 新增: Format Adapter (统一入口)
+└── converter.py        # 新增: 转换器封装
 ```
 
-### 4.2 Storage → Markdown 转换
-
-使用 `confluence-markdown` 或自实现:
+### 4.3 Format Adapter 设计
 
 ```python
-# 推荐方案: 使用正则 + BeautifulSoup 解析
-# 或 confluence-markdown 库
-
-def storage_to_markdown(storage_text: str) -> str:
-    """Convert Confluence Storage Format to Markdown"""
-    # 实现见技术设计文档
+# src/confluence/adapter.py
+class ConfluenceFormatAdapter:
+    """统一处理 Markdown/Storage 格式转换"""
+    
+    def __init__(self, channel: ConfluenceChannel):
+        self.channel = channel
+    
+    # ========== 读 ==========
+    async def get_page(self, page_id: str, format: str = "markdown", max_chars: int = None) -> str:
+        """
+        获取页面内容
+        
+        Args:
+            page_id: 页面 ID
+            format: "markdown" | "storage"
+            max_chars: 最多返回字符数
+        """
+        page = await self.channel.get_page(page_id)
+        
+        if format == "storage":
+            return self._extract_storage(page)
+        
+        # format == "markdown": 使用 confluence-markdown-exporter
+        return self._to_markdown(page, max_chars)
+    
+    async def search(self, query: str, limit: int = 10) -> str:
+        """搜索 - 返回 title + url + excerpt"""
+        result = await self.channel.search_pages(query, limit)
+        return self._format_search_results(result)
+    
+    # ========== 写 ==========
+    async def create_page(
+        self,
+        space_key: str,
+        title: str,
+        body: str,
+        body_format: str = "markdown",
+        parent_id: str = None
+    ) -> str:
+        """创建页面"""
+        if body_format == "markdown":
+            body = self._to_storage(body)
+        
+        return await self.channel.create_page(space_key, title, body, parent_id)
+    
+    async def update_page(
+        self,
+        page_id: str,
+        title: str = None,
+        body: str = None,
+        body_format: str = "markdown"
+    ) -> str:
+        """更新页面"""
+        if body and body_format == "markdown":
+            body = self._to_storage(body)
+        
+        return await self.channel.update_page(page_id, title, body)
+    
+    # ========== 内部方法 ==========
+    def _to_markdown(self, page: dict, max_chars: int = None) -> str:
+        """使用 confluence-markdown-exporter 转换为 Markdown"""
+        # TODO: 封装 exporter 核心逻辑
+        pass
+    
+    def _to_storage(self, markdown: str) -> str:
+        """使用 markdown-to-confluence 转换为 Storage Format"""
+        # TODO: 封装 markdown-to-confluence
+        pass
 ```
 
-### 4.3 转换映射表
+### 4.4 转换映射表
 
 | Markdown | Confluence Storage |
 |----------|-------------------|
 | `# Title` | `<h1>Title</h1>` |
 | `**bold**` | `<strong>bold</strong>` |
 | `*italic*` | `<em>italic</em>` |
-| `~~strike~~` | `<strike>strike</strike>` |
 | ``code`` | `<code>code</code>` |
 | ```lang<br>code``` | `<ac:code-block lang="lang">code</ac:code-block>` |
 | `[link](url)` | `<a href="url">link</a>` |
 | `![alt](url)` | `<ac:image><ri:url ri:value="url"/></ac:image>` |
 | `- item` | `<ul><li>item</li></ul>` |
-| `1. item` | `<ol><li>item</li></ol>` |
 | `> quote` | `<blockquote>quote</blockquote>` |
-| `---` | `<hr/>` |
-| `\| col1 \| col2 \|` | `<table><tr><td>col1</td><td>col2</td></tr></table>` |
-
-### 4.4 目录结构
-
-```
-src/confluence/
-├── api.py              # ConfluenceChannel (现有)
-├── __init__.py         # 工具函数 (现有)
-├── converter.py        # 新增: Markdown ↔ Storage 转换器
-└── markdown.py         # 新增: Markdown 格式工具函数
-```
 
 ## 5. API 变更
 
-### 5.1 新增函数
-
-```python
-# src/confluence/markdown.py
-async def confluence_get_page_markdown(page_id: str) -> str:
-    """Get page content as Markdown"""
-
-async def confluence_create_page_markdown(
-    space_key: str,
-    title: str,
-    body: str,  # Markdown
-    parent_id: str = None
-) -> str:
-    """Create page with Markdown content"""
-
-async def confluence_update_page_markdown(
-    page_id: str,
-    title: str = None,
-    body: str = None  # Markdown
-) -> str:
-    """Update page with Markdown content"""
-```
-
-### 5.2 现有函数参数变更
+### 5.1 现有函数参数变更
 
 ```python
 # confluence_get_page 新增参数
 async def confluence_get_page(
     page_id: str,
-    format: str = "markdown"  # 新增，默认 markdown
+    format: str = "markdown",    # 新增，默认 markdown
+    max_chars: int = None        # 新增，限制返回长度
 ) -> str
 
 # confluence_create_page 新增参数
@@ -167,6 +194,14 @@ async def confluence_create_page(
     body: str = "",
     body_format: str = "markdown",  # 新增，默认 markdown
     parent_id: str = None
+) -> str
+
+# confluence_update_page 新增参数
+async def confluence_update_page(
+    page_id: str,
+    title: str = None,
+    body: str = None,
+    body_format: str = "markdown"  # 新增，默认 markdown
 ) -> str
 ```
 
@@ -179,73 +214,109 @@ async def confluence_create_page(
   "parameters": {
     "type": "object",
     "properties": {
-      "page_id": {"type": "string"},
-      "format": {"type": "string", "enum": ["markdown", "storage"], "default": "markdown"}
+      "page_id": {"type": "string", "description": "Confluence page ID"},
+      "format": {
+        "type": "string",
+        "enum": ["markdown", "storage"],
+        "default": "markdown",
+        "description": "Output format: markdown (default) or storage"
+      },
+      "max_chars": {
+        "type": "integer",
+        "description": "Maximum characters to return (avoid token overflow)",
+        "default": null
+      }
     },
     "required": ["page_id"]
   }
 }
 ```
 
-## 7. 测试计划
+## 7. 已知风险与限制 ⚠️
 
-### 7.1 单元测试
+### 坑 1: Markdown 方言不一致
 
-- `test_markdown_to_storage_basic` - 基本转换
-- `test_markdown_to_storage_complex` - 复杂格式
-- `test_storage_to_markdown_basic` - 反向转换
-- `test_storage_to_markdown_preserves_formatting` - 格式保留
+- `confluence-markdown-exporter` 导出时尽量保留 Confluence 元素
+- `markdown-to-confluence` 写回时某些元素可能丢失/变形
+- **Confluence 特有元素** (macro, panel, status, expand, layouts) 可能往返不一致
 
-### 7.2 集成测试
+**建议:** 在 converter.py 定义"支持矩阵"，列出"不保证往返一致"的元素，并在日志打 warning。
 
-- `test_create_page_with_markdown` - Markdown 创建
-- `test_update_page_with_markdown` - Markdown 更新
-- `test_get_page_returns_markdown` - Markdown 查询
-- `test_backward_compatibility_storage` - 兼容原有 Storage
+### 坑 2: search 返回的是 snippet 而非完整 body
 
-### 7.3 边界测试
+- Confluence search API 的 snippet 是简化 HTML 片段
+- 不是完整的 body.storage
 
-- 空内容
+**建议:** search 结果只返回 title + url + excerpt (纯文本)，用户需要正文时再调用 get_page。
+
+### 坑 3: update 需要处理 version 冲突
+
+- Confluence 更新页面必须带 version 递增
+- 否则返回 409 冲突
+
+**建议:** 在集成测试中验证 markdown-to-confluence 是否正确处理 version。
+
+## 8. 测试计划
+
+### 8.1 单元测试
+
+- [ ] `test_markdown_to_storage_basic` - 基本转换
+- [ ] `test_markdown_to_storage_complex` - 复杂格式
+- [ ] `test_storage_to_markdown_basic` - 反向转换
+- [ ] `test_adapter_get_page_markdown` - Adapter 查询
+- [ ] `test_adapter_create_page_markdown` - Adapter 创建
+
+### 8.2 集成测试
+
+- [ ] `test_create_page_with_markdown` - Markdown 创建
+- [ ] `test_update_page_with_markdown` - Markdown 更新
+- [ ] `test_get_page_returns_markdown` - Markdown 查询
+- [ ] `test_backward_compatibility_storage` - 兼容 Storage
+- [ ] `test_search_returns_excerpt` - 搜索返回 excerpt
+- [ ] `test_update_version_conflict` - version 冲突处理
+
+### 8.3 边界测试
+
+- [ ] 空内容
 - 超大文档 (>100KB)
 - 特殊字符
 - 嵌套结构
+- 不支持的宏元素
 
-## 8. 配置项
+## 9. 配置项
 
 ```yaml
 confluence:
   enabled: true
   default_format: "markdown"  # 新增: 默认格式
+  max_chars: 10000          # 新增: 默认截断长度
   instances:
     - name: "Default"
       # ... existing config
 ```
 
-## 9. 里程碑
+## 10. 里程碑
 
-- [ ] M1: 实现 Markdown ↔ Storage 转换器
-- [ ] M2: 更新 `confluence_get_page` 支持 format 参数
-- [ ] M3: 更新 `confluence_create_page` 支持 body_format 参数
-- [ ] M4: 更新 `confluence_update_page` 支持 body_format 参数
-- [ ] M5: 更新 Tool Schema
-- [ ] M6: 单元测试 + 集成测试
-- [ ] M7: 文档更新
+- [ ] M1: 搭建 adapter.py 框架
+- [ ] M2: 集成 confluence-markdown-exporter (读)
+- [ ] M3: 集成 markdown-to-confluence (写)
+- [ ] M4: 更新 confluence_get_page 支持 format 参数
+- [ ] M5: 更新 confluence_create_page 支持 body_format 参数
+- [ ] M6: 更新 confluence_update_page 支持 body_format 参数
+- [ ] M7: 更新 Tool Schema
+- [ ] M8: 单元测试 + 集成测试
+- [ ] M9: 文档更新
 
-## 10. 依赖
+## 11. 依赖
 
 ```txt
 # requirements.txt 新增
-markdown2confluence>=1.0.0
+confluence-markdown-exporter>=1.0.0
+markdown-to-confluence>=1.0.0
 ```
-
-## 11. 风险与限制
-
-1. **转换丢失**: 某些 Confluence 特有元素可能无法完美转换 (如 macros)
-2. **性能**: 大文档转换可能有性能开销
-3. **版本兼容**: 依赖库版本稳定性
 
 ## 12. 替代方案
 
-如果 `markdown2confluence` 库不符合需求，可以:
-- 使用正则表达式自实现 (推荐用于核心功能)
-- 使用 `pandoc` 命令行转换
+如果上述库不满足需求：
+- 读: 使用正则表达式自实现 storage→markdown
+- 写: 使用 pandoc 命令行转换
