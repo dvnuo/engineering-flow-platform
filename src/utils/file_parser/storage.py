@@ -1,6 +1,8 @@
 """File storage with metadata mapping."""
 
 import os
+import json
+import logging
 from pathlib import Path
 from typing import Dict, Optional
 import uuid
@@ -10,16 +12,38 @@ from .models import FileMetadata, StoredFileNotFoundError
 from .validators import get_safe_extension
 
 
+logger = logging.getLogger(__name__)
+
 # Upload directory
 UPLOAD_DIR = Path("~/.efp/workspace/uploads").expanduser()
+METADATA_FILE = UPLOAD_DIR / "metadata.json"
+UPLOAD_DIR = Path("~/.efp/workspace/uploads").expanduser()
 
-# In-memory metadata storage (use Redis in production)
+# In-memory metadata storage
 _file_metadata: Dict[str, FileMetadata] = {}
+
+
+def _load_metadata():
+    global _file_metadata
+    if METADATA_FILE.exists():
+        try:
+            with open(METADATA_FILE, 'r') as f:
+                data = json.load(f)
+            _file_metadata = {k: FileMetadata(**v) for k, v in data.items()}
+        except:
+            pass
+
+
+def _save_metadata():
+    with open(METADATA_FILE, 'w') as f:
+        json.dump({k: v.model_dump() for k, v in _file_metadata.items()}, f, indent=2)
 
 
 def init_storage() -> None:
     """Initialize storage directory."""
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    _load_metadata()
+    _load_metadata()
 
 
 def _generate_file_id() -> str:
@@ -58,6 +82,7 @@ def register_file(
         session_id=session_id,
     )
     _file_metadata[file_id] = metadata
+    _save_metadata()
     return metadata
 
 
@@ -139,6 +164,7 @@ def delete_file(file_id: str) -> bool:
     
     # Remove metadata
     del _file_metadata[file_id]
+    _save_metadata()
     return True
 
 
