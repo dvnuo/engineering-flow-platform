@@ -98,11 +98,13 @@ class MarkdownConverter:
     def _basic_markdown_to_storage(self, md: str) -> str:
         """Basic Markdown to Storage conversion (fallback)."""
         import html
+        import re
         
         lines = md.split('\n')
         result = []
         in_code_block = False
         code_lang = ""
+        in_list = False
         
         for line in lines:
             # Code blocks
@@ -129,21 +131,28 @@ class MarkdownConverter:
                 result.append(f'<h2>{html.escape(line[3:])}</h2>')
             elif line.startswith('# '):
                 result.append(f'<h1>{html.escape(line[2:])}</h1>')
-            # Bold/Italic
-            elif '**' in line:
+            # Bold/Italic - process before paragraph
+            elif '**' in line or '*' in line:
                 line = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', line)
-                line = re.sub(r'\*(.+?)\*', r'<em>\1</em>', line)
+                # Handle single asterisks for italic (but not at line start for lists)
+                line = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', line)
                 result.append(f'<p>{line}</p>')
             # Lists
             elif line.startswith('- ') or line.startswith('* '):
-                result.append(f'<ul><li>{html.escape(line[2:])}</li></ul>')
-            elif line.strip().isdot() or re.match(r'^\d+\.\s', line):
+                if not in_list:
+                    result.append('<ul>')
+                    in_list = True
+                result.append(f'<li>{html.escape(line[2:])}</li>')
+            elif re.match(r'^\d+\.\s', line):
+                if not in_list:
+                    result.append('<ol>')
+                    in_list = True
                 match = re.match(r'^(\d+)\.\s(.+)', line)
                 if match:
-                    result.append(f'<ol><li>{html.escape(match.group(2))}</li></ol>')
+                    result.append(f'<li>{html.escape(match.group(2))}</li>')
             # Links
-            elif '[' in line and '](' in line:
-                line = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2">\1</a>', line)
+            elif '](' in line:
+                line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', line)
                 result.append(f'<p>{line}</p>')
             # Images
             elif '![' in line and '](' in line:
@@ -155,10 +164,17 @@ class MarkdownConverter:
                 result.append('<hr/>')
             # Code inline
             elif '`' in line:
-                line = re.sub(r'`(.+?)`', r'<code>\1</code>', line)
+                line = re.sub(r'`([^`]+)`', r'<code>\1</code>', line)
                 result.append(f'<p>{line}</p>')
             elif line.strip():
+                if in_list:
+                    result.append('</ul>' if result[-1].startswith('<li>') else '</ol>')
+                    in_list = False
                 result.append(f'<p>{html.escape(line)}</p>')
+        
+        # Close any open list
+        if in_list:
+            result.append('</ul>')
         
         return '\n'.join(result)
     
