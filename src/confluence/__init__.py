@@ -131,8 +131,8 @@ async def confluence_create_page(
     space_key: str,
     title: str,
     body: str = "",
-    body_format: str = "markdown",
-    parent_id: str = None
+    parent_id: str = None,
+    body_format: str = "markdown"
 ) -> str:
     """Create a new Confluence page.
     
@@ -140,8 +140,8 @@ async def confluence_create_page(
         space_key: Space key (e.g., 'DEV')
         title: Page title
         body: Page content
-        body_format: "markdown" (default) or "storage"
         parent_id: Parent page ID (optional)
+        body_format: "markdown" (default) or "storage"
     """
     try:
         if not confluence_channel.is_configured():
@@ -163,7 +163,7 @@ async def confluence_update_page(
     
     Args:
         page_id: Page ID
-        title: New title (optional)
+        title: New title (optional, fetches current if not provided)
         body: New content (optional)
         body_format: "markdown" (default) or "storage"
     """
@@ -172,6 +172,9 @@ async def confluence_update_page(
             return "Confluence is not configured. Please check your settings."
         
         adapter = _get_adapter()
+        return await adapter.update_page(page_id, title=title, body=body, body_format=body_format)
+    except Exception as e:
+        return f"Error updating page: {e}"
         return await adapter.update_page(page_id, title, body, body_format=body_format)
     except Exception as e:
         return f"Error updating page: {e}"

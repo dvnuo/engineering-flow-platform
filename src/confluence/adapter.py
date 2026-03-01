@@ -192,7 +192,16 @@ class ConfluenceFormatAdapter:
         Returns:
             List of pages
         """
-        result = await self.channel.list_pages(space_key, limit)
+        # Use channel's _request directly since list_pages may not exist
+        try:
+            result = await self.channel._request(
+                "GET",
+                f"/space/{space_key}/content",
+                params={"limit": limit, "type": "page"}
+            )
+        except AttributeError:
+            # Fallback if _request not available
+            return "Error: Unable to list pages (method not available)"
         
         if not isinstance(result, dict):
             return "Error: Invalid response"
@@ -266,13 +275,19 @@ class ConfluenceFormatAdapter:
         
         Args:
             page_id: Page ID
-            title: New title (optional)
+            title: New title (optional, fetches current if not provided)
             body: New content (optional)
             body_format: "markdown" (default) or "storage"
             
         Returns:
             Success message
         """
+        # If title is not provided, fetch current page to get the title
+        if title is None:
+            current_page = await self.channel.get_page(page_id)
+            if isinstance(current_page, dict):
+                title = current_page.get("title", "")
+        
         if body and body_format == "markdown":
             body = self.converter.markdown_to_storage(body)
         

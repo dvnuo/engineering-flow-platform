@@ -243,10 +243,21 @@ class TestBackwardCompatibility:
     @pytest.mark.asyncio
     async def test_get_page_storage_works(self):
         """Test that storage format parameter works."""
-        with patch('src.confluence.api.confluence_channel') as mock_ch:
+        # Need to patch the module where confluence_channel is imported
+        with patch('src.confluence.confluence_channel') as mock_ch:
             mock_ch.is_configured = MagicMock(return_value=True)
+            mock_ch.get_page = AsyncMock(return_value={
+                "title": "Test",
+                "body": {"storage": {"value": "<h1>Hello</h1>"}}
+            })
+            
+            # Reset adapter to use patched channel
+            import src.confluence as confluence_module
+            confluence_module._adapter = None
             
             from src.confluence import confluence_get_page
             
             result = await confluence_get_page("123", format="storage")
-            # Should not error - returns from adapter
+            # Should not error - verify it contains expected content
+            assert "Error" not in result
+            assert "<h1>Hello</h1>" in result or "Hello" in result

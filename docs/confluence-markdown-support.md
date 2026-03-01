@@ -71,12 +71,21 @@ confluence_update_page(
 
 ## 4. 技术方案
 
-### 4.1 库定位
+### 4.1 转换器实现
 
-| 库 | 用途 | 阶段 |
-|---|---|---|
-| `confluence-markdown-exporter` | 读 - Confluence → Markdown | 查询 |
-| `markdown-to-confluence` | 写 - Markdown → Storage (XHTML) | 创建/更新 |
+当前使用**内置正则转换器**，支持常见 Markdown 元素:
+
+| 元素 | 支持 |
+|------|------|
+| Headers (h1-h6) | ✅ |
+| Bold/Italic/Strike | ✅ |
+| Code blocks / inline | ✅ |
+| Links / Images | ✅ |
+| Lists (ul/ol) | ✅ |
+| Tables | ✅ |
+| Horizontal rules | ✅ |
+
+> 注: 外部库 (markdown-to-confluence) 需要复杂配置，不适合简单文本转换。
 
 ### 4.2 目录结构
 
@@ -285,11 +294,13 @@ async def confluence_update_page(
 
 ## 9. 配置项
 
+> 注意: 以下配置项当前未实现，仅作未来参考。
+
 ```yaml
 confluence:
   enabled: true
-  default_format: "markdown"  # 新增: 默认格式
-  max_chars: 10000          # 新增: 默认截断长度
+  # default_format: "markdown"  # 未来: 默认格式
+  # max_chars: 10000          # 未来: 默认截断长度
   instances:
     - name: "Default"
       # ... existing config
@@ -297,26 +308,34 @@ confluence:
 
 ## 10. 里程碑
 
-- [ ] M1: 搭建 adapter.py 框架
-- [ ] M2: 集成 confluence-markdown-exporter (读)
-- [ ] M3: 集成 markdown-to-confluence (写)
-- [ ] M4: 更新 confluence_get_page 支持 format 参数
-- [ ] M5: 更新 confluence_create_page 支持 body_format 参数
-- [ ] M6: 更新 confluence_update_page 支持 body_format 参数
-- [ ] M7: 更新 Tool Schema
-- [ ] M8: 单元测试 + 集成测试
-- [ ] M9: 文档更新
+- [x] M1: 搭建 adapter.py 框架
+- [x] M2: 实现内置转换器 (替代 confluence-markdown-exporter)
+- [x] M3: 实现内置转换器 (替代 markdown-to-confluence)
+- [x] M4: 更新 confluence_get_page 支持 format 参数
+- [x] M5: 更新 confluence_create_page 支持 body_format 参数
+- [x] M6: 更新 confluence_update_page 支持 body_format 参数
+- [x] M7: 更新 Tool Schema
+- [x] M8: 单元测试 + 集成测试
+- [x] M9: 文档更新
 
 ## 11. 依赖
 
 ```txt
-# requirements.txt 新增
-confluence-markdown-exporter>=1.0.0
-markdown-to-confluence>=1.0.0
+# 当前实现使用内置转换器，无需额外依赖
+# 如需使用外部库，可安装:
+# markdown-to-confluence>=0.4.0  # 注意: 需要复杂配置，不适合简单转换
 ```
 
 ## 12. 替代方案
 
-如果上述库不满足需求：
-- 读: 使用正则表达式自实现 storage→markdown
-- 写: 使用 pandoc 命令行转换
+当前实现使用正则表达式自实现转换器，支持:
+- Headers, Bold/Italic/Strike
+- Code blocks / inline code
+- Links / Images
+- Lists (ul/ol)
+- Tables
+- Horizontal rules
+
+如需更强大的转换能力，可考虑:
+- 使用 pandoc 命令行转换
+- 自定义实现完整转换器

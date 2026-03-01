@@ -281,10 +281,13 @@ class MarkdownConverter:
                 result.append(f'<h2>{html.escape(line[3:])}</h2>')
             elif line.startswith('# '):
                 result.append(f'<h1>{html.escape(line[2:])}</h1>')
-            # Bold/Italic
+            # Bold/Italic (escape HTML first, then add formatting)
             elif '**' in line:
-                line = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', line)
-                line = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', line)
+                # First escape HTML entities
+                line = html.escape(line)
+                # Then apply formatting
+                line = re.sub(r'&ast;&ast;(.+?)&ast;&ast;', r'<strong>\1</strong>', line)
+                line = re.sub(r'&ast;([^*]+)&ast;', r'<em>\1</em>', line)
                 result.append(f'<p>{line}</p>')
             # Lists
             elif line.startswith('- ') or line.startswith('* '):
@@ -293,15 +296,15 @@ class MarkdownConverter:
                 match = re.match(r'^(\d+)\.\s(.+)', line)
                 if match:
                     result.append(f'<ol><li>{html.escape(match.group(2))}</li></ol>')
+            # Images (must check before links, since both have ]( )
+            elif '![' in line and '](' in line:
+                line = re.sub(r'!\[(.*?)\]\((.+?)\)', 
+                    r'<ac:image><ri:url ri:value="\2"/></ac:image>', line)
+                result.append(line)
             # Links
             elif '](' in line:
                 line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', line)
                 result.append(f'<p>{line}</p>')
-            # Images
-            elif '![' in line and '](' in line:
-                line = re.sub(r'!\[(.*?)\]\((.+?)\)', 
-                    r'<ac:image><ri:url ri:value="\2"/></ac-image>', line)
-                result.append(line)
             # Horizontal rule
             elif line.strip() == '---':
                 result.append('<hr/>')
