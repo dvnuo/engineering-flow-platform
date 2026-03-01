@@ -81,9 +81,35 @@ class ConfluenceFormatAdapter:
         Returns:
             Page content in requested format
         """
-        # Get instance-specific channel
+        import re
+        
+        # Extract page ID from URL
+        # Format: /spaces/KEY/pages/ID/title or ?pageId=ID
+        page_id = None
+        
+        # Format 1: /pages/ID/title
+        match = re.search(r'/pages/(\d+)/', url)
+        if match:
+            page_id = match.group(1)
+        
+        # Format 2: ?pageId=ID
+        if not page_id:
+            match = re.search(r'[?&]pageId=(\d+)', url)
+            if match:
+                page_id = match.group(1)
+        
+        # Format 3: /pages/ID (no title)
+        if not page_id:
+            match = re.search(r'/pages/(\d+)(?:\?|$)', url)
+            if match:
+                page_id = match.group(1)
+        
+        if not page_id:
+            return f"Could not extract page ID from URL: {url}"
+        
+        # Get instance-specific channel and fetch page
         instance_channel = self.channel.get_instance_client(url=url)
-        page = await instance_channel.get_page_by_url(url)
+        page = await instance_channel.get_page(page_id)
         
         if not isinstance(page, dict):
             return f"Error: Invalid page response"
@@ -217,7 +243,7 @@ class ConfluenceFormatAdapter:
         result = await self.channel.create_page(
             space_key=space_key,
             title=title,
-            body=body,
+            content=body,
             parent_id=parent_id
         )
         
@@ -253,7 +279,7 @@ class ConfluenceFormatAdapter:
         result = await self.channel.update_page(
             page_id=page_id,
             title=title,
-            body=body
+            content=body
         )
         
         if result:

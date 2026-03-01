@@ -28,18 +28,23 @@ class MarkdownConverter:
     def _get_markdown_to_confluence(self):
         """Lazy load markdown-to-confluence (md2conf).
         
-        Note: md2conf is designed for publishing, not standalone conversion.
-        This attempts to use it but falls back on complexity.
+        Note: md2conf is designed for publishing to Confluence with full API setup,
+        not for standalone text conversion. For this use case, we use the custom
+        fallback converter which handles common Markdown elements adequately.
+        
+        This method documents the option if a simpler conversion library becomes available.
         """
         if self._markdown2confluence is None:
+            # Try to import md2conf for potential future use
+            # Currently not used because it requires full Confluence API setup
             try:
-                # This library is complex to use for simple conversion
-                # Just log and use fallback
-                logger.info("md2conf available but requires complex setup, using fallback")
-                self._markdown2confluence = None
-            except ImportError as e:
-                logger.warning(f"markdown-to-confluence (md2conf) not installed: {e}")
-                self._markdown2confluence = None
+                import md2conf
+                logger.info("md2conf installed but not used for simple conversion (requires API setup)")
+            except ImportError:
+                logger.debug("md2conf not installed, using fallback converter")
+            
+            # Use fallback converter
+            self._markdown2confluence = None
         return self._markdown2confluence
     
     def markdown_to_storage(self, markdown_text: str) -> str:

@@ -153,9 +153,15 @@ class TestAdapter:
         adapter = ConfluenceFormatAdapter(mock_channel)
         await adapter.create_page("SPACE", "New Page", "<h1>Hello</h1>", body_format="storage")
         
+        # Verify channel was called with content parameter
+        mock_channel.create_page.assert_called_once()
         call_args = mock_channel.create_page.call_args
-        body = call_args.kwargs.get("body") or call_args[1].get("body")
-        assert "<h1>" in body
+        # Check for content parameter (not body)
+        args = call_args.args if call_args.args else ()
+        kwargs = call_args.kwargs if call_args.kwargs else {}
+        content = kwargs.get("content")
+        assert content is not None
+        assert "<h1>" in content
     
     @pytest.mark.asyncio
     async def test_update_page_markdown(self, mock_channel):

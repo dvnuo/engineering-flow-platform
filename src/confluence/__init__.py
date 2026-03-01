@@ -111,28 +111,6 @@ async def confluence_get_page_by_url(
     except Exception as e:
         return f"Error getting page: {e}"
         
-        # Format 2: ?pageId=ID
-        if not page_id:
-            match = re.search(r'[?&]pageId=(\d+)', url)
-            if match:
-                page_id = match.group(1)
-        
-        # Format 3: /pages/ID (no title)
-        if not page_id:
-            match = re.search(r'/pages/(\d+)(?:\?|$)', url)
-            if match:
-                page_id = match.group(1)
-        
-        if not page_id:
-            return f"Could not extract page ID from URL: {url}"
-        
-        # Use instance channel to get page
-        page = await instance_channel.get_page(page_id)
-        
-        # Handle case where page might not be a dict
-        if not isinstance(page, dict):
-            return f"Error: Invalid page response - expected dict, got {type(page)}"
-        
         title = page.get('title', 'Untitled')
         
         # Handle body - could be string or dict
