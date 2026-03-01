@@ -653,26 +653,41 @@
         }
     }
     
-    // Drag and drop file upload
+    // Drag and drop file upload - works on entire chat container
+    const chatContainer = document.querySelector('.chat-container');
     const chatInputArea = messageInput.closest('.input-area') || messageInput.parentElement;
-    chatInputArea.addEventListener('dragover', function(e) {
+    
+    function handleDragOver(e) {
         e.preventDefault();
-        chatInputArea.classList.add('drag-over');
-    });
-    chatInputArea.addEventListener('dragleave', function(e) {
+        chatContainer.classList.add('drag-over');
+    }
+    
+    function handleDragLeave(e) {
         e.preventDefault();
-        chatInputArea.classList.remove('drag-over');
-    });
-    chatInputArea.addEventListener('drop', async function(e) {
+        // Only remove class if leaving the container entirely
+        if (!chatContainer.contains(e.relatedTarget)) {
+            chatContainer.classList.remove('drag-over');
+        }
+    }
+    
+    async function handleDrop(e) {
         e.preventDefault();
-        chatInputArea.classList.remove('drag-over');
+        chatContainer.classList.remove('drag-over');
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             for (const file of files) {
                 await uploadFile(file);
             }
         }
-    });
+    }
+    
+    // Add listeners to both input area and chat container
+    chatInputArea.addEventListener('dragover', handleDragOver);
+    chatInputArea.addEventListener('dragleave', handleDragLeave);
+    chatInputArea.addEventListener('drop', handleDrop);
+    chatContainer.addEventListener('dragover', handleDragOver);
+    chatContainer.addEventListener('dragleave', handleDragLeave);
+    chatContainer.addEventListener('drop', handleDrop);
     
     // Send on Enter (Shift+Enter for new line)
     messageInput.addEventListener('keydown', function(e) {

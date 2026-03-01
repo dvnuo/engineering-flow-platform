@@ -2378,5 +2378,5 @@ input:checked + .slider:before {
     border-color: var(--color-primary, #4a90d9);
 }
 
-.drag-over { background: #e3f2fd; border: 2px dashed #2196f3; }
+.chat-container.drag-over, .input-area.drag-over { background: #e3f2fd; border: 2px dashed #2196f3; }
 
