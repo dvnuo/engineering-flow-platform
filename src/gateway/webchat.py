@@ -1031,6 +1031,339 @@ async def api_skills(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e), 'skills': []}, status=500)
 
 
+# ===== File Upload API =====
+
+async def api_files_upload(request: web.Request) -> web.Response:
+    """Upload a file.
+    
+    POST /api/files/upload
+    Content-Type: multipart/form-data
+    Body: file (binary)
+    
+    Returns:
+        201: {"success": true, "file_id": "...", "filename": "...", ...}
+        400: {"success": false, "error": "..."}
+    """
+    try:
+        from src.utils.file_parser import upload_file, FileTooLargeError, UnsupportedFileTypeError
+        
+        # Get session ID from query or header
+        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
+        
+        # Parse multipart form
+        reader = await request.multipart()
+        file_field = await reader.next()
+        
+        if not file_field or file_field.name != 'file':
+            return web.json_response({
+                'success': False,
+                'error': 'No file provided'
+            }, status=400)
+        
+        # Read file content in chunks to enforce size limit
+        max_size_mb = 10
+        max_bytes = max_size_mb * 1024 * 1024
+        chunk_size = 1024 * 1024  # 1 MB
+        content = bytearray()
+        
+        while True:
+            chunk = await file_field.read(chunk_size)
+            if not chunk:
+                break
+            content.extend(chunk)
+            if len(content) > max_bytes:
+                return web.json_response({
+                    'success': False,
+                    'error': f'File exceeds maximum size of {max_size_mb} MB'
+                }, status=400)
+        
+        filename = file_field.filename
+        
+        # Validate filename
+        if not filename:
+            return web.json_response({
+                'success': False,
+                'error': 'Filename is required'
+            }, status=400)
+        
+        # Upload
+        metadata = await upload_file(
+            content=content,
+            filename=filename,
+            session_id=session_id,
+            max_size_mb=max_size_mb
+        )
+        
+        return web.json_response({
+            'success': True,
+            'file_id': metadata.file_id,
+            'filename': metadata.original_filename,
+            'content_type': metadata.content_type,
+            'size': metadata.size,
+            'uploaded_at': metadata.uploaded_at
+        }, status=201)
+        
+    except FileTooLargeError as e:
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=400)
+        
+    except UnsupportedFileTypeError as e:
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=400)
+        
+    except Exception as e:
+        logger.error(f"File upload error: {e}")
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
+async def api_files_parse(request: web.Request) -> web.Response:
+    """Parse a file.
+    
+    POST /api/files/parse
+    Content-Type: application/json
+    Body: {"file_id": "...", "options": {...}}
+    
+    Returns:
+        200: {"success": true, "markdown": "...", "blocks": [...], ...}
+        400: {"success": false, "error": "..."}
+    """
+    try:
+        from src.utils.file_parser import parse_file, StoredFileNotFoundError, get_metadata
+        
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({
+                'success': False,
+                'error': 'Invalid JSON body'
+            }, status=400)
+        
+        file_id = data.get('file_id')
+        
+        if not file_id:
+            return web.json_response({
+                'success': False,
+                'error': 'file_id is required'
+            }, status=400)
+        
+        # Validate session ownership
+        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
+        try:
+            metadata = get_metadata(file_id)
+            # If the file is bound to a session, require a matching session_id
+            if metadata.session_id:
+                if not session_id or metadata.session_id != session_id:
+                    return web.json_response({
+                        'success': False,
+                        'error': 'File not found'
+                    }, status=404)
+        except StoredFileNotFoundError:
+            pass  # Will be caught below
+        
+        options = data.get('options', {})
+        
+        # Parse file
+        result = await parse_file(file_id, options)
+        
+        if not result.success:
+            return web.json_response({
+                'success': False,
+                'error': result.error
+            }, status=400)
+        
+        return web.json_response({
+            'success': True,
+            'content_type': result.content_type,
+            'file_id': result.file_id,
+            'filename': result.filename,
+            'markdown': result.markdown,
+            'blocks': [b.model_dump(by_alias=True, exclude_none=True) for b in result.blocks],
+            'json': result.json,
+            'parse_time_ms': result.parse_time_ms
+        })
+        
+    except StoredFileNotFoundError as e:
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=404)
+        
+    except Exception as e:
+        logger.error(f"File parse error: {e}")
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
+async def api_files_preview(request: web.Request) -> web.Response:
+    """Preview a file.
+    
+    GET /api/files/{file_id}/preview?max_chars=5000
+    
+    Returns:
+        200: {"success": true, "preview": "...", "truncated": true, ...}
+    """
+    try:
+        from src.utils.file_parser import preview_file, StoredFileNotFoundError, get_metadata
+        
+        file_id = request.match_info.get('file_id')
+        
+        # Validate max_chars
+        max_chars_raw = request.query.get('max_chars', '5000')
+        try:
+            max_chars = int(max_chars_raw)
+        except (TypeError, ValueError):
+            return web.json_response({
+                'success': False,
+                'error': 'max_chars must be an integer'
+            }, status=400)
+        
+        if not file_id:
+            return web.json_response({
+                'success': False,
+                'error': 'file_id is required'
+            }, status=400)
+        
+        # Validate session ownership
+        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
+        try:
+            metadata = get_metadata(file_id)
+            # If the file is bound to a session, require a matching session_id
+            if metadata.session_id:
+                if not session_id or metadata.session_id != session_id:
+                    return web.json_response({
+                        'success': False,
+                        'error': 'File not found'
+                    }, status=404)
+        except StoredFileNotFoundError:
+            pass
+        
+        result = await preview_file(file_id, max_chars)
+        
+        if not result.get('success'):
+            error_msg = str(result.get('error', '') or '')
+            if 'not found' in error_msg.lower():
+                return web.json_response(result, status=404)
+            return web.json_response(result, status=400)
+        
+        return web.json_response(result)
+        
+    except StoredFileNotFoundError:
+        return web.json_response({
+            'success': False,
+            'error': 'File not found'
+        }, status=404)
+        
+    except Exception as e:
+        logger.error(f"File preview error: {e}")
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
+async def api_files_list(request: web.Request) -> web.Response:
+    """List uploaded files.
+    
+    GET /api/files/list?session_id=xxx
+    
+    Returns:
+        200: {"files": [...]}
+        400: {"success": false, "error": "session_id is required"}
+    """
+    try:
+        from src.utils.file_parser import list_files
+        
+        # Require session_id to avoid leaking files across sessions
+        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
+        if not session_id:
+            return web.json_response({
+                'success': False,
+                'error': 'session_id is required'
+            }, status=400)
+        
+        files = list_files(session_id)
+        
+        return web.json_response({
+            'files': [
+                {
+                    'file_id': f.file_id,
+                    'filename': f.original_filename,
+                    'content_type': f.content_type,
+                    'size': f.size,
+                    'uploaded_at': f.uploaded_at
+                }
+                for f in files
+            ]
+        })
+        
+    except Exception as e:
+        logger.error(f"File list error: {e}")
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
+async def api_files_delete(request: web.Request) -> web.Response:
+    """Delete a file.
+    
+    DELETE /api/files/{file_id}
+    
+    Returns:
+        200: {"success": true}
+    """
+    try:
+        from src.utils.file_parser import delete_file, get_metadata, StoredFileNotFoundError
+        
+        file_id = request.match_info.get('file_id')
+        
+        if not file_id:
+            return web.json_response({
+                'success': False,
+                'error': 'file_id is required'
+            }, status=400)
+        
+        # Validate session ownership
+        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
+        try:
+            metadata = get_metadata(file_id)
+            # If the file is bound to a session, require a matching session_id
+            if metadata.session_id:
+                if not session_id or metadata.session_id != session_id:
+                    return web.json_response({
+                        'success': False,
+                        'error': 'File not found'
+                    }, status=404)
+        except StoredFileNotFoundError:
+            pass
+        
+        deleted = delete_file(file_id)
+        
+        if not deleted:
+            return web.json_response({
+                'success': False,
+                'error': 'File not found'
+            }, status=404)
+        
+        return web.json_response({'success': True})
+        
+    except Exception as e:
+        logger.error(f"File delete error: {e}")
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
 def setup_webchat_routes(app: web.Application):
     """Set up WebChat routes.
     
@@ -1063,6 +1396,13 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/skills', api_skills)
     app.router.add_post('/api/copilot/auth/start', api_copilot_auth_start)
     app.router.add_post('/api/copilot/auth/check', api_copilot_auth_check)
+    
+    # File upload/parse routes
+    app.router.add_post('/api/files/upload', api_files_upload)
+    app.router.add_post('/api/files/parse', api_files_parse)
+    app.router.add_get('/api/files/list', api_files_list)
+    app.router.add_get('/api/files/{file_id}/preview', api_files_preview)
+    app.router.add_delete('/api/files/{file_id}', api_files_delete)
     
     logger.info("WebChat routes registered:")
     logger.info("  GET  /              - WebChat UI (root)")
