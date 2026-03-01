@@ -1138,6 +1138,22 @@ async def api_files_upload(request: web.Request) -> web.Response:
                 'success': False,
                 'error': f'File exceeds maximum size of {max_size_mb} MB'
             }, status=400)
+        chunk_size = 1024 * 1024  # 1 MB
+        content_chunks = []
+        total_size = 0
+        
+        while True:
+            chunk = await file_field.read(chunk_size)
+            if not chunk:
+                break
+            content_chunks.append(chunk)
+            total_size += len(chunk)
+            if total_size > max_bytes:
+                return web.json_response({
+                    'success': False,
+                    'error': f'File exceeds maximum size of {max_size_mb} MB'
+                }, status=400)
+
         
         filename = file_field.filename
         
@@ -1148,7 +1164,7 @@ async def api_files_upload(request: web.Request) -> web.Response:
             }, status=400)
         
         metadata = await upload_file(
-            content=content,
+            content=b"".join(content_chunks),
             filename=filename,
             max_size_mb=max_size_mb
         )
