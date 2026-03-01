@@ -130,6 +130,37 @@ class Chunk(BaseModel):
     model_config = {"populate_by_name": True}
 ```
 
+### 2.4 Chunk ID Generation
+
+**Format:** `{file_id}_{type}_{page}_{index}`
+
+| Component | Description | Example |
+|-----------|-------------|---------|
+| `file_id` | Parent file identifier | `file_abc123` |
+| `type` | Content type | `pdf`, `img`, `docx`, `xlsx`, `csv` |
+| `page` | Page/sheet number (1-based) | `1`, `2` |
+| `index` | Chunk index within page | `001`, `002` |
+
+**Examples:**
+- `file_abc123_pdf_1_001` - First paragraph on page 1 of PDF
+- `file_abc123_img_1_001` - First image region on page 1
+- `file_abc123_xlsx_Sheet1_001` - First row in Excel Sheet1
+
+### 2.5 Confidence Score Semantics
+
+| Source | Default Confidence | Notes |
+|--------|-------------------|-------|
+| PDF text (PyMuPDF) | 0.98 | High accuracy |
+| OCR (PaddleOCR) | 0.85 | Varies by image quality |
+| OCR (Tesseract) | 0.80 | Lower accuracy |
+| Table (pdfplumber) | 0.95 | High accuracy |
+| Excel (openpyxl) | 0.98 | Perfect structure |
+| CSV (pandas) | 0.98 | Perfect structure |
+
+**Fusion Rule:** When multiple sources produce overlapping content:
+- Keep highest confidence chunk
+- Mark duplicates via `content_hash`
+
 ### 2.3 Retrieval Request/Response
 
 ```python
@@ -793,11 +824,41 @@ Content-Type: application/json
 - All citation actions logged with timestamp
 - Log format: `{session_id, user_id, file_id, action, timestamp}`
 
+### 9.5 Error Response Examples
+
+**Cross-Session Access (403):**
+```json
+{
+    "error": "Access denied",
+    "code": "E006",
+    "message": "File does not belong to this session"
+}
+```
+
+**Invalid Session (401):**
+```json
+{
+    "error": "Unauthorized",
+    "code": "E007",
+    "message": "Valid session_id required"
+}
+```
+
+**Rate Limited (429):**
+```json
+{
+    "error": "Rate limit exceeded",
+    "code": "E008",
+    "message": "60 requests/minute allowed",
+    "retry_after": 30
+}
+```
+
 ---
 
 ## 10. Testing Strategy
 
-### 9.1 Unit Tests
+### 10.1 Unit Tests
 
 **File:** `tests/test_file_context.py`
 
