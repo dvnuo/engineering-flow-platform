@@ -627,6 +627,53 @@
         this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
     
+    // Upload file function
+    async function uploadFile(file) {
+        setStatus('Uploading file...', 'uploading');
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            const sessionId = currentSessionId || '';
+            const headers = sessionId ? { 'X-Session-ID': sessionId } : {};
+            const response = await fetch('/api/files/upload', { method: 'POST', body: formData, headers });
+            const data = await response.json();
+            if (data.success) {
+                setStatus('File uploaded: ' + data.filename, 'success');
+                const shortId = data.file_id.substring(0, 8);
+                messageInput.value = '@' + shortId + ' ';
+                messageInput.focus();
+                refreshFileList();
+                addMessage('assistant', '📎 File uploaded: ' + data.filename);
+            } else {
+                setStatus('Upload failed: ' + data.error, 'error');
+            }
+        } catch (error) {
+            console.error('Upload error:', error);
+            setStatus('Upload failed', 'error');
+        }
+    }
+    
+    // Drag and drop file upload
+    const chatInputArea = messageInput.closest('.input-area') || messageInput.parentElement;
+    chatInputArea.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        chatInputArea.classList.add('drag-over');
+    });
+    chatInputArea.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        chatInputArea.classList.remove('drag-over');
+    });
+    chatInputArea.addEventListener('drop', async function(e) {
+        e.preventDefault();
+        chatInputArea.classList.remove('drag-over');
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            for (const file of files) {
+                await uploadFile(file);
+            }
+        }
+    });
+    
     // Send on Enter (Shift+Enter for new line)
     messageInput.addEventListener('keydown', function(e) {
         // Skill selector navigation

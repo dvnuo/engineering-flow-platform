@@ -2377,3 +2377,6 @@ input:checked + .slider:before {
     color: white;
     border-color: var(--color-primary, #4a90d9);
 }
+
+.drag-over { background: #e3f2fd; border: 2px dashed #2196f3; }
+
