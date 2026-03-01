@@ -57,8 +57,8 @@ Enable users to chat with AI about uploaded files. The AI should understand and 
 
 **Chunk Deduplication:**
 - Each chunk has `content_hash` for deduplication
-- Chunks from multiple sources (e.g., PDF text + OCR) are tracked separately via `source` field
-- Use `content_hash` to avoid duplicate injection
+- Deduplication only when same `source` AND same `content_hash`
+- Different sources (OCR vs PDF text) are kept separate with source attribution
 
 ### 2. Auto-parse with Async Job Support
 
@@ -73,9 +73,13 @@ Enable users to chat with AI about uploaded files. The AI should understand and 
 - Metadata filtering (file_id, page, type)
 
 **Phase 2: Vector Index (Recommended)**
-- Generate embeddings per chunk (text-embedding-ada-002 or similar)
-- Support L2/inner-product search
-- Hybrid retrieval: keyword + embedding fusion
+- **Embedding Model**: text-embedding-3-small or text-embedding-ada-002
+- **Chunk Overlap**: 10-20% for context continuity
+- **Search**: L2 distance / inner product (cosine similarity)
+- **Hybrid Retrieval**: 
+  - Keyword rank + semantic score fusion
+  - Re-weighting: keyword match × 0.3 + semantic score × 0.7
+- **Multilingual**: Use multilingual embedding model
 
 **Chunk Size Rules:**
 - Max chunk size: 800-1500 tokens
@@ -91,14 +95,34 @@ Enable users to chat with AI about uploaded files. The AI should understand and 
   - `max_chunk_size`: 800-1500 tokens
   - `max_total_tokens`: 4000-6000 for file context
 
-**Token Budget Fallback Policy:**
-| Condition | Action |
-|----------|--------|
-| total_tokens < 1000 | Inject all relevant chunks |
-| 1000 ≤ tokens < 4000 | Top-k retrieval |
-| 4000 ≤ tokens < 8000 | Summarize first, then retrieve top-k |
-| tokens ≥ 8000 | Error + suggest narrowing query |
-| Many small shallow chunks | Page summary first, then chunk detail |
+**Token Budget Fallback Policy (Pseudo-code):**
+```
+function compute_context(query, session_files):
+    chunks = retrieve_chunks(query, session_files, top_k=12)
+    tokens = estimate_tokens(chunks)
+    
+    if tokens < 1000:
+        return chunks, "direct"
+    
+    if tokens < 4000:
+        return top_k(chunks, k=8), "top-k"
+    
+    if tokens < 8000:
+        summary = summarize(chunks)
+        refined = retrieve_chunks(query, session_files, top_k=5)
+        return [summary] + refined, "summarize-then-retrieve"
+    
+    return error("Query too broad. Try focusing on specific files or sections.")
+
+function retrieve_chunks(query, files, top_k):
+    if hybrid_mode:
+        kw_scores = keyword_search(query, files)
+        vec_scores = vector_search(query, files)
+        combined = fuse(kw_scores, vec_scores)
+        return top_k(combined)
+    else:
+        return vector_search(query, files)
+```
 
 **Explicit Reference** (`@file_xxx`, `@all`):
 - Bypasses RAG, retrieves all chunks from specified file(s)
@@ -112,6 +136,14 @@ Enable users to chat with AI about uploaded files. The AI should understand and 
 - `@all` - Include all files in session
 - `@chunk_xxx` - Reference specific chunk (from UI selection)
 - Combined: `@file_A @chunk_xxx @last`
+
+**Syntax Priority Table:**
+| Syntax | Meaning | Priority | Result |
+|--------|---------|----------|--------|
+| `@chunk_xxx` | Specific chunk | 1 | Only those chunks |
+| `@file_xxx` | All chunks of file | 2 | Union of file chunks |
+| `@last` | Last uploaded file | 3 | Last file's chunks |
+| `@all` | All session files | 4 | All chunks (override by above) |
 
 **Combination Logic:**
 - **Union**: Multiple `@file` refs = union of all chunks
@@ -127,11 +159,26 @@ Enable users to chat with AI about uploaded files. The AI should understand and 
 ### 6. Image/Vision Content Handling
 
 - Image chunks include OCR text content
+- **Caption Strategy**: 
+  - Default: Use raw OCR text (fast, reliable)
+  - Opt-in: LLM-generated caption for richer context
+- Image embeddings stored separately (opt-in for vector search)
+- Images excluded from search by default (`include_images: false`)
 - Image metadata: dimensions, format, page location
-- Support both raw OCR text and LLM-generated captions
-- Images filtered in search by default (opt-in with `include_images: true`)
 
-### 7. Token Budget Control
+### 7. Response Attribution
+
+AI responses should include citations:
+- `[file: filename, page: N]`
+- `[file: filename, chunk: N]`
+- Clickable links to preview specific chunks
+
+**Security & Privacy:**
+- Permission check: User can only cite files in their session
+- Audit log: Record citation actions (file_id, user, timestamp)
+- No cross-session file access allowed
+
+### 8. Token Budget Control
 
 | Scenario | Strategy |
 |----------|----------|
@@ -139,13 +186,13 @@ Enable users to chat with AI about uploaded files. The AI should understand and 
 | 1000-4000 tokens | Top-k retrieval |
 | 4000-8000 tokens | Summarize first, then retrieve top-k |
 | > 8000 tokens | Error + suggestion to narrow query |
+| Many small shallow chunks | Page summary first, then chunk detail |
 
-### 8. Response Attribution
+### 9. Query Reproducibility
 
-AI responses should include citations:
-- `[file: filename, page: N]`
-- `[file: filename, chunk: N]`
-- Clickable links to preview specific chunks
+- **Stable Scoring**: Use deterministic ranking within score ties
+- **Seeded Search**: Allow optional seed for reproducible results
+- **Caching**: Cache retrieval results for identical queries within session
 
 ## Implementation Plan
 
@@ -157,22 +204,26 @@ AI responses should include citations:
 
 ### Phase 2: Retrieval System
 - [ ] Keyword index (inverted index)
-- [ ] Vector embedding support (optional, recommended)
+- [ ] Vector embedding support (text-embedding-3-small)
+- [ ] Hybrid retrieval (keyword + semantic fusion)
 - [ ] Top-k retrieval function
 - [ ] Token budget estimator
+- [ ] Budget fallback workflow
 
 ### Phase 3: AI Integration
 - [ ] Modify chat handler to inject file context
 - [ ] Implement RAG prompt template
 - [ ] Add @file/@all/@last/@chunk command parsing
 - [ ] Budget controller with fallback policy
+- [ ] Citation rendering
 
 ### Phase 4: UI Enhancements
 - [ ] File list with parse status in sidebar
 - [ ] Quick search / autocomplete for commands
 - [ ] "引用这段" button on chunk preview
 - [ ] Multi-file context preview
-- [ ] Citation rendering with auto-scroll to chunk
+- [ ] Token count indicator
+- [ ] Citation auto-scroll to chunk
 
 ## API Design
 
@@ -209,6 +260,18 @@ GET /api/chunks/search
   → {chunks: [...], total: N}
 ```
 
+### Citation/Audit API
+```
+POST /api/citations/log
+  {
+    session_id,
+    file_id,
+    chunk_id,
+    action: "view|reference"
+  }
+  → {success: true}
+```
+
 ## File Structure
 
 ```
@@ -240,12 +303,19 @@ src/
 - [ ] Invalid file references return clear errors
 - [ ] Parse failures are logged and user-visible
 - [ ] Parse pending → clear warning + retry option
+- [ ] Audit log captures citation actions
+
+### Security
+- [ ] User can only access their own session files
+- [ ] Cross-session file access blocked
+- [ ] Citation actions logged for audit
 
 ### UX
 - [ ] Responses include citations with file/page info
 - [ ] Citations are clickable → open chunk preview
 - [ ] Parse progress shown for large files
 - [ ] Command autocomplete in input
+- [ ] Token count indicator visible
 
 ## Related Issues
 
