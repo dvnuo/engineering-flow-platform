@@ -72,25 +72,56 @@
                 return;
             }
             const headers = { 'X-Session-ID': sessionId };
-            const response = await fetch('/api/files/list', { headers });
             
-            if (!response.ok) {
-                const errData = await response.json();
-                fileExplorerContent.innerHTML = '<div class="error">Error: ' + escapeHtml(errData.error || 'Failed to load files') + '</div>';
-                return;
+            // Try new context API first, fall back to files API
+            let files = [];
+            try {
+                const contextResp = await fetch('/api/context/files?session_id=' + sessionId, { headers });
+                if (contextResp.ok) {
+                    const contextData = await contextResp.json();
+                    files = contextData.files || [];
+                }
+            } catch (e) {
+                // Fall back to files API
             }
             
-            const data = await response.json();
+            // If no files from context API, try files API
+            if (files.length === 0) {
+                const response = await fetch('/api/files/list', { headers });
+                if (response.ok) {
+                    const data = await response.json();
+                    files = data.files || [];
+                }
+            }
             
-            if (data.files && data.files.length > 0) {
+            if (files && files.length > 0) {
                 let html = '<ul class="file-list">';
-                for (const file of data.files) {
+                for (const file of files) {
+                    // Parse status indicator
+                    let statusClass = 'status-pending';
+                    let statusText = 'Pending';
+                    if (file.parse_status === 'completed') {
+                        statusClass = 'status-completed';
+                        statusText = 'Ready';
+                    } else if (file.parse_status === 'processing') {
+                        statusClass = 'status-processing';
+                        statusText = 'Processing...';
+                    } else if (file.parse_status === 'failed') {
+                        statusClass = 'status-failed';
+                        statusText = 'Failed';
+                    }
+                    
                     html += `
                         <li class="file-item" data-file-id="${file.file_id}">
                             <span class="file-icon">${getFileIcon(file.content_type)}</span>
-                            <span class="file-name">${escapeHtml(file.filename)}</span>
-                            <span class="file-size">${formatFileSize(file.size)}</span>
-                            <button class="file-action parse-btn" data-file-id="${file.file_id}">Parse</button>
+                            <div class="file-info">
+                                <span class="file-name" title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</span>
+                                <span class="file-status ${statusClass}">${statusText}</span>
+                            </div>
+                            <div class="file-actions">
+                                <button class="file-action parse-btn" data-file-id="${file.file_id}" title="Parse file">Parse</button>
+                                <button class="file-action cite-btn" data-file-id="${file.file_id}" title="Ask about this file">@file_${file.file_id.slice(0,8)}</button>
+                            </div>
                         </li>
                     `;
                 }
@@ -102,6 +133,19 @@
                     btn.addEventListener('click', async (e) => {
                         const fileId = e.target.dataset.fileId;
                         await parseFile(fileId);
+                    });
+                });
+                
+                // Add cite button handlers
+                fileExplorerContent.querySelectorAll('.cite-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const fileRef = e.target.dataset.fileId;
+                        // Insert reference into input
+                        const input = document.getElementById('messageInput');
+                        if (input) {
+                            input.value += '@file_' + fileRef.slice(0, 8) + ' ';
+                            input.focus();
+                        }
                     });
                 });
             } else {
