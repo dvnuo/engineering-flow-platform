@@ -1,15 +1,18 @@
 """Confluence Integration - Single source of truth for Confluence operations."""
 
 import logging
+from typing import Optional
 
 from .api import (
     ConfluenceChannel, 
     confluence_channel,
 )
+from .adapter import ConfluenceFormatAdapter
 
 __all__ = [
     "ConfluenceChannel", 
     "confluence_channel",
+    "ConfluenceFormatAdapter",
     "confluence_get_page",
     "confluence_search",
     "confluence_get_page_by_url",
@@ -30,83 +33,83 @@ __all__ = [
 ]
 
 
+# Global adapter instance
+_adapter: Optional[ConfluenceFormatAdapter] = None
+
+
+def _get_adapter() -> ConfluenceFormatAdapter:
+    """Get or create the format adapter."""
+    global _adapter
+    if _adapter is None:
+        _adapter = ConfluenceFormatAdapter(confluence_channel)
+    return _adapter
+
+
 # ========== Tool Functions ==========
 
-async def confluence_get_page(page_id: str) -> str:
-    """Get a Confluence page by ID."""
+async def confluence_get_page(
+    page_id: str,
+    format: str = "markdown",
+    max_chars: Optional[int] = None
+) -> str:
+    """Get a Confluence page by ID.
+    
+    Args:
+        page_id: Page ID
+        format: "markdown" (default) or "storage"
+        max_chars: Maximum characters to return (avoid token overflow)
+    """
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        # Use channel method to get raw page dict
-        page = await confluence_channel.get_page(page_id)
         
-        # Handle case where page might not be a dict
-        if not isinstance(page, dict):
-            return f"Error: Invalid page response - expected dict, got {type(page)}"
-        
-        title = page.get('title', 'Untitled')
-        
-        # Handle body - could be string or dict
-        body_obj = page.get('body', {})
-        if isinstance(body_obj, dict):
-            body = body_obj.get('storage', {}).get('value', 'No content')
-        elif isinstance(body_obj, str):
-            body = body_obj
-        else:
-            body = 'No content'
-        
-        return f"**{title}**\n\n{body}"
+        adapter = _get_adapter()
+        return await adapter.get_page(page_id, format=format, max_chars=max_chars)
     except Exception as e:
         return f"Error getting page: {e}"
 
 
 async def confluence_search(query: str, max_results: int = 10) -> str:
-    """Search Confluence pages."""
+    """Search Confluence pages.
+    
+    Returns title + url + excerpt (plain text).
+    
+    Args:
+        query: CQL search query
+        max_results: Maximum results (default 10)
+    """
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await confluence_channel.search_pages(query, max_results)
-        pages = result.get("results", []) if isinstance(result, dict) else []
         
-        if not pages:
-            return "No pages found."
-        
-        lines = [f"**Search Results** ({len(pages)}):\n"]
-        for r in pages:
-            if not isinstance(r, dict):
-                continue
-            title = r.get("title", "Untitled")
-            url = r.get("url", "")
-            lines.append(f"- **{title}**: {url}")
-        return "\n".join(lines)
+        adapter = _get_adapter()
+        return await adapter.search(query, limit=max_results)
     except Exception as e:
         return f"Error searching: {e}"
 
 
-async def confluence_get_page_by_url(url: str) -> str:
+async def confluence_get_page_by_url(
+    url: str,
+    format: str = "markdown",
+    max_chars: Optional[int] = None
+) -> str:
     """Get a Confluence page by its URL.
     
     Uses the URL to find the correct Confluence instance automatically.
     
     Args:
-        url: Full Confluence page URL (e.g., https://company.atlassian.net/wiki/spaces/SPACE/pages/123456789/Page-Title)
+        url: Full Confluence page URL
+        format: "markdown" (default) or "storage"
+        max_chars: Maximum characters to return
     """
-    # Get the correct instance client based on URL
-    instance_channel = confluence_channel.get_instance_client(url=url)
-    
     try:
-        if not instance_channel.is_configured():
+        if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
         
-        # Extract page ID from URL
-        import re
-        
-        page_id = None
-        
-        # Format 1: /spaces/KEY/pages/ID/title
-        match = re.search(r'/pages/(\d+)/', url)
-        if match:
-            page_id = match.group(1)
+        adapter = _get_adapter()
+        return await adapter.get_page_by_url(url, format=format, max_chars=max_chars)
+    except Exception as e:
+        return f"Error getting page: {e}"
         
         # Format 2: ?pageId=ID
         if not page_id:
@@ -146,29 +149,52 @@ async def confluence_get_page_by_url(url: str) -> str:
         return f"Error getting page by URL: {e}"
 
 
-async def confluence_create_page(space_key: str, title: str, body: str = "", parent_id: str = None) -> str:
-    """Create a new Confluence page."""
+async def confluence_create_page(
+    space_key: str,
+    title: str,
+    body: str = "",
+    body_format: str = "markdown",
+    parent_id: str = None
+) -> str:
+    """Create a new Confluence page.
+    
+    Args:
+        space_key: Space key (e.g., 'DEV')
+        title: Page title
+        body: Page content
+        body_format: "markdown" (default) or "storage"
+        parent_id: Parent page ID (optional)
+    """
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await confluence_channel.create_page(space_key, title, body, parent_id)
         
-        if isinstance(result, dict):
-            page_id = result.get("id", "unknown")
-            url = f"{confluence_channel.base_url}/pages/viewpage.action?pageId={page_id}"
-            return f"Page created: **{title}**\nID: {page_id}\nURL: {url}"
-        return str(result)
+        adapter = _get_adapter()
+        return await adapter.create_page(space_key, title, body, body_format=body_format, parent_id=parent_id)
     except Exception as e:
         return f"Error creating page: {e}"
 
 
-async def confluence_update_page(page_id: str, title: str = None, body: str = None) -> str:
-    """Update an existing Confluence page."""
+async def confluence_update_page(
+    page_id: str,
+    title: str = None,
+    body: str = None,
+    body_format: str = "markdown"
+) -> str:
+    """Update an existing Confluence page.
+    
+    Args:
+        page_id: Page ID
+        title: New title (optional)
+        body: New content (optional)
+        body_format: "markdown" (default) or "storage"
+    """
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await confluence_channel.update_page(page_id, title, body)
-        return f"Page {page_id} updated successfully"
+        
+        adapter = _get_adapter()
+        return await adapter.update_page(page_id, title, body, body_format=body_format)
     except Exception as e:
         return f"Error updating page: {e}"
 
@@ -399,11 +425,22 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "confluence_get_page",
-                "description": "Get a Confluence page by its ID",
+                "description": "Get a Confluence page by its ID. Returns Markdown by default.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "page_id": {"type": "string", "description": "Confluence page ID (numeric)"}
+                        "page_id": {"type": "string", "description": "Confluence page ID (numeric)"},
+                        "format": {
+                            "type": "string",
+                            "enum": ["markdown", "storage"],
+                            "default": "markdown",
+                            "description": "Output format: markdown (default) or storage"
+                        },
+                        "max_chars": {
+                            "type": "integer",
+                            "description": "Maximum characters to return (avoid token overflow)",
+                            "default": None
+                        }
                     },
                     "required": ["page_id"]
                 }
@@ -413,11 +450,22 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "confluence_get_page_by_url",
-                "description": "Get a Confluence page directly by its full URL. Use this when user provides a Confluence page URL.",
+                "description": "Get a Confluence page directly by its full URL. Returns Markdown by default.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "url": {"type": "string", "description": "Full Confluence page URL (e.g., https://company.atlassian.net/wiki/spaces/SPACE/pages/123456789/Page-Title)"}
+                        "url": {"type": "string", "description": "Full Confluence page URL"},
+                        "format": {
+                            "type": "string",
+                            "enum": ["markdown", "storage"],
+                            "default": "markdown",
+                            "description": "Output format: markdown (default) or storage"
+                        },
+                        "max_chars": {
+                            "type": "integer",
+                            "description": "Maximum characters to return",
+                            "default": None
+                        }
                     },
                     "required": ["url"]
                 }
@@ -427,7 +475,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "confluence_search",
-                "description": "Search Confluence pages using CQL (Confluence Query Language)",
+                "description": "Search Confluence pages using CQL. Returns title + url + excerpt.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -457,13 +505,19 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "confluence_create_page",
-                "description": "Create a new Confluence page",
+                "description": "Create a new Confluence page. Accepts Markdown by default.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "space_key": {"type": "string", "description": "Space key (e.g., 'DEV', 'TEAM')"},
                         "title": {"type": "string", "description": "Page title"},
-                        "body": {"type": "string", "description": "Page content in HTML format", "default": ""},
+                        "body": {"type": "string", "description": "Page content (Markdown or HTML)", "default": ""},
+                        "body_format": {
+                            "type": "string",
+                            "enum": ["markdown", "storage"],
+                            "default": "markdown",
+                            "description": "Input format: markdown (default) or storage"
+                        },
                         "parent_id": {"type": "string", "description": "Parent page ID for hierarchy", "default": None}
                     },
                     "required": ["space_key", "title"]
@@ -474,13 +528,19 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "confluence_update_page",
-                "description": "Update an existing Confluence page",
+                "description": "Update an existing Confluence page. Accepts Markdown by default.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "page_id": {"type": "string", "description": "Page ID to update"},
                         "title": {"type": "string", "description": "New title (optional)"},
-                        "body": {"type": "string", "description": "New content in HTML format (optional)"}
+                        "body": {"type": "string", "description": "New content (Markdown or HTML, optional)"},
+                        "body_format": {
+                            "type": "string",
+                            "enum": ["markdown", "storage"],
+                            "default": "markdown",
+                            "description": "Input format: markdown (default) or storage"
+                        }
                     },
                     "required": ["page_id"]
                 }
