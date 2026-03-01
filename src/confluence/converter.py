@@ -2,8 +2,8 @@
 Confluence Format Converter - Convert between Markdown and Storage Format.
 
 Uses:
-- confluence-markdown-exporter for Storage → Markdown
-- markdown-to-confluence for Markdown → Storage
+- markdown-to-confluence for Markdown → Storage (writing)
+- Custom converter for Storage → Markdown (reading)
 """
 
 import logging
@@ -24,33 +24,29 @@ class MarkdownConverter:
     
     def __init__(self):
         self._markdown2confluence = None
-        self._exporter = None
     
     def _get_markdown_to_confluence(self):
-        """Lazy load markdown-to-confluence."""
+        """Lazy load markdown-to-confluence (md2conf).
+        
+        Note: md2conf is designed for publishing, not standalone conversion.
+        This attempts to use it but falls back on complexity.
+        """
         if self._markdown2confluence is None:
             try:
-                from markdown_to_confluence import ConfluenceConverter
-                self._markdown2confluence = ConfluenceConverter()
-            except ImportError:
-                logger.warning("markdown-to-confluence not installed, using fallback")
+                # This library is complex to use for simple conversion
+                # Just log and use fallback
+                logger.info("md2conf available but requires complex setup, using fallback")
+                self._markdown2confluence = None
+            except ImportError as e:
+                logger.warning(f"markdown-to-confluence (md2conf) not installed: {e}")
                 self._markdown2confluence = None
         return self._markdown2confluence
-    
-    def _get_exporter(self):
-        """Lazy load confluence-markdown-exporter."""
-        if self._exporter is None:
-            try:
-                from confluence_markdown_exporter import ConfluenceMarkdownExporter
-                self._exporter = ConfluenceMarkdownExporter
-            except ImportError:
-                logger.warning("confluence-markdown-exporter not installed, using fallback")
-                self._exporter = None
-        return self._exporter
     
     def markdown_to_storage(self, markdown_text: str) -> str:
         """
         Convert Markdown to Confluence Storage Format.
+        
+        Uses markdown-to-confluence library for proper conversion.
         
         Args:
             markdown_text: Markdown content
@@ -62,17 +58,22 @@ class MarkdownConverter:
         
         if converter:
             try:
-                return converter.convert(markdown_text)
+                result = converter.convert(markdown_text)
+                logger.debug("Successfully converted Markdown to Storage using md2conf")
+                return result
             except Exception as e:
-                logger.error(f"markdown-to-confluence conversion failed: {e}")
+                logger.error(f"md2conf conversion failed: {e}")
                 # Fall through to basic converter
         
         # Fallback: basic conversion
+        logger.warning("Using fallback basic converter for MD→Storage")
         return self._basic_markdown_to_storage(markdown_text)
     
     def storage_to_markdown(self, storage_text: str) -> str:
         """
         Convert Confluence Storage Format to Markdown.
+        
+        Uses custom converter to handle Confluence-specific elements.
         
         Args:
             storage_text: Storage Format (XHTML) content
@@ -80,20 +81,165 @@ class MarkdownConverter:
         Returns:
             Markdown string
         """
-        exporter_class = self._get_exporter()
+        # Use custom converter for Storage → Markdown
+        try:
+            result = self._convert_storage_to_markdown(storage_text)
+            logger.debug("Successfully converted Storage to Markdown")
+            return result
+        except Exception as e:
+            logger.error(f"Storage to Markdown conversion failed: {e}")
+            # Fallback
+            return self._basic_storage_to_markdown(storage_text)
+    
+    def _convert_storage_to_markdown(self, storage: str) -> str:
+        """Convert Confluence Storage Format to Markdown with proper handling."""
+        import html
+        import re
         
-        if exporter_class:
-            try:
-                # exporter expects page data dict
-                page_data = {"body": {"storage": {"value": storage_text}}}
-                exporter = exporter_class(page_data)
-                return exporter.to_markdown()
-            except Exception as e:
-                logger.error(f"confluence-markdown-exporter conversion failed: {e}")
-                # Fall through to basic converter
+        md = storage
         
-        # Fallback: basic conversion
-        return self._basic_storage_to_markdown(storage_text)
+        # Handle code blocks first (must be before other tags)
+        md = re.sub(
+            r'<ac:code-block[^>]*lang="([^"]*)"[^>]*>(.*?)</ac:code-block>',
+            lambda m: f"```{m.group(1) if m.group(1) else ''}\n{self._unescape_html(m.group(2))}\n```",
+            md,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        
+        # Handle Confluence-specific macros - convert to blockquotes with note
+        md = re.sub(
+            r'<ac:structured-macro ac:name="(info|warning|tip|note|panel)"[^>]*>.*?<ac:rich-text-body>(.*?)</ac:rich-text-body>.*?</ac:structured-macro>',
+            lambda m: f"> **[{m.group(1).upper()}]** {self._strip_tags(m.group(2))}",
+            md,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        
+        # Handle expand macro
+        md = re.sub(
+            r'<ac:structured-macro ac:name="expand"[^>]*>.*?<ac:parameter ac:name="title">([^<]*)</ac:parameter>.*?<ac:rich-text-body>(.*?)</ac:rich-text-body>.*?</ac:structured-macro>',
+            lambda m: f"### {m.group(1)}\n{m.group(2)}",
+            md,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        
+        # Handle images with attachments
+        md = re.sub(
+            r'<ac:image[^>]*><ri:attachment[^>]*ri:filename="([^"]*)"[^/]*/></ac:image>',
+            r'![\1](attachment:\1)',
+            md,
+            flags=re.IGNORECASE
+        )
+        
+        # Handle images with URL
+        md = re.sub(
+            r'<ac:image[^>]*><ri:url[^>]*ri:value="([^"]*)"[^/]*/></ac:image>',
+            r'![](\1)',
+            md,
+            flags=re.IGNORECASE
+        )
+        
+        # Handle links
+        md = re.sub(
+            r'<a[^>]*href="([^"]*)"[^>]*>([^<]*)</a>',
+            r'[\2](\1)',
+            md,
+            flags=re.IGNORECASE
+        )
+        
+        # Headers
+        md = re.sub(r'<h1[^>]*>(.*?)</h1>', r'# \1\n', md, flags=re.IGNORECASE | re.DOTALL)
+        md = re.sub(r'<h2[^>]*>(.*?)</h2>', r'## \1\n', md, flags=re.IGNORECASE | re.DOTALL)
+        md = re.sub(r'<h3[^>]*>(.*?)</h3>', r'### \1\n', md, flags=re.IGNORECASE | re.DOTALL)
+        md = re.sub(r'<h4[^>]*>(.*?)</h4>', r'#### \1\n', md, flags=re.IGNORECASE | re.DOTALL)
+        md = re.sub(r'<h5[^>]*>(.*?)</h5>', r'##### \1\n', md, flags=re.IGNORECASE | re.DOTALL)
+        md = re.sub(r'<h6[^>]*>(.*?)</h6>', r'###### \1\n', md, flags=re.IGNORECASE | re.DOTALL)
+        
+        # Bold/Italic
+        md = re.sub(r'<strong[^>]*>(.*?)</strong>', r'**\1**', md, flags=re.IGNORECASE | re.DOTALL)
+        md = re.sub(r'<b[^>]*>(.*?)</b>', r'**\1**', md, flags=re.IGNORECASE | re.DOTALL)
+        md = re.sub(r'<em[^>]*>(.*?)</em>', r'*\1*', md, flags=re.IGNORECASE | re.DOTALL)
+        md = re.sub(r'<i[^>]*>(.*?)</i>', r'*\1*', md, flags=re.IGNORECASE | re.DOTALL)
+        md = re.sub(r'<u[^>]*>(.*?)</u>', r'_\1_', md, flags=re.IGNORECASE | re.DOTALL)
+        md = re.sub(r'<strike[^>]*>(.*?)</strike>', r'~~\1~~', md, flags=re.IGNORECASE | re.DOTALL)
+        md = re.sub(r'<s[^>]*>(.*?)</s>', r'~~\1~~', md, flags=re.IGNORECASE | re.DOTALL)
+        
+        # Code inline
+        md = re.sub(r'<code[^>]*>(.*?)</code>', r'`\1`', md, flags=re.IGNORECASE | re.DOTALL)
+        
+        # Lists - handle nested structures
+        md = re.sub(r'<ul[^>]*>\s*<li[^>]*>(.*?)</li>\s*</ul>', r'- \1\n', md, flags=re.IGNORECASE | re.DOTALL)
+        md = re.sub(r'<ol[^>]*>\s*<li[^>]*>(.*?)</li>\s*</ol>', r'1. \1\n', md, flags=re.IGNORECASE | re.DOTALL)
+        
+        # Horizontal rule
+        md = re.sub(r'<hr\s*/?>', r'---\n', md, flags=re.IGNORECASE)
+        
+        # Line breaks
+        md = re.sub(r'<br\s*/?>', '\n', md, flags=re.IGNORECASE)
+        
+        # Paragraphs
+        md = re.sub(r'<p[^>]*>(.*?)</p>', r'\1\n\n', md, flags=re.IGNORECASE | re.DOTALL)
+        
+        # Tables - basic support
+        md = self._convert_tables(md)
+        
+        # Remove remaining Confluence-specific tags
+        md = re.sub(r'<ac:[^>]*>.*?</ac:[^>]*>', '', md, flags=re.DOTALL | re.IGNORECASE)
+        md = re.sub(r'<ri:[^>]*>', '', md, flags=re.IGNORECASE)
+        
+        # Strip remaining HTML tags
+        md = re.sub(r'<[^>]+>', '', md)
+        
+        # Unescape HTML entities
+        md = html.unescape(md)
+        
+        # Clean up whitespace
+        md = re.sub(r'\n{3,}', '\n\n', md)
+        
+        return md.strip()
+    
+    def _convert_tables(self, md: str) -> str:
+        """Convert HTML tables to Markdown."""
+        import re
+        
+        # Find table blocks
+        table_pattern = r'<table[^>]*>(.*?)</table>'
+        
+        def replace_table(match):
+            table_html = match.group(1)
+            
+            # Extract rows
+            rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table_html, re.DOTALL | re.IGNORECASE)
+            if not rows:
+                return ''
+            
+            md_rows = []
+            for row in rows:
+                cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL | re.IGNORECASE)
+                if cells:
+                    # Strip tags from cells
+                    clean_cells = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
+                    md_rows.append('| ' + ' | '.join(clean_cells) + ' |')
+            
+            if len(md_rows) >= 2:
+                # Add header separator
+                sep = '| ' + ' | '.join(['---'] * len(re.findall(r'<td[^>]*>', rows[0]))) + ' |'
+                md_rows.insert(1, sep)
+            
+            return '\n'.join(md_rows)
+        
+        return re.sub(table_pattern, replace_table, md, flags=re.DOTALL | re.IGNORECASE)
+    
+    def _strip_tags(self, text: str) -> str:
+        """Strip HTML tags from text."""
+        import re
+        text = re.sub(r'<[^>]+>', '', text)
+        import html
+        return html.unescape(text).strip()
+    
+    def _unescape_html(self, text: str) -> str:
+        """Unescape HTML entities."""
+        import html
+        return html.unescape(text)
     
     def _basic_markdown_to_storage(self, md: str) -> str:
         """Basic Markdown to Storage conversion (fallback)."""
@@ -104,7 +250,6 @@ class MarkdownConverter:
         result = []
         in_code_block = False
         code_lang = ""
-        in_list = False
         
         for line in lines:
             # Code blocks
@@ -131,25 +276,18 @@ class MarkdownConverter:
                 result.append(f'<h2>{html.escape(line[3:])}</h2>')
             elif line.startswith('# '):
                 result.append(f'<h1>{html.escape(line[2:])}</h1>')
-            # Bold/Italic - process before paragraph
-            elif '**' in line or '*' in line:
+            # Bold/Italic
+            elif '**' in line:
                 line = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', line)
-                # Handle single asterisks for italic (but not at line start for lists)
                 line = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', line)
                 result.append(f'<p>{line}</p>')
             # Lists
             elif line.startswith('- ') or line.startswith('* '):
-                if not in_list:
-                    result.append('<ul>')
-                    in_list = True
-                result.append(f'<li>{html.escape(line[2:])}</li>')
+                result.append(f'<ul><li>{html.escape(line[2:])}</li></ul>')
             elif re.match(r'^\d+\.\s', line):
-                if not in_list:
-                    result.append('<ol>')
-                    in_list = True
                 match = re.match(r'^(\d+)\.\s(.+)', line)
                 if match:
-                    result.append(f'<li>{html.escape(match.group(2))}</li>')
+                    result.append(f'<ol><li>{html.escape(match.group(2))}</li></ol>')
             # Links
             elif '](' in line:
                 line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', line)
@@ -157,7 +295,7 @@ class MarkdownConverter:
             # Images
             elif '![' in line and '](' in line:
                 line = re.sub(r'!\[(.*?)\]\((.+?)\)', 
-                    r'<ac:image><ri:url ri:value="\2"/></ac:image>', line)
+                    r'<ac:image><ri:url ri:value="\2"/></ac-image>', line)
                 result.append(line)
             # Horizontal rule
             elif line.strip() == '---':
@@ -167,14 +305,7 @@ class MarkdownConverter:
                 line = re.sub(r'`([^`]+)`', r'<code>\1</code>', line)
                 result.append(f'<p>{line}</p>')
             elif line.strip():
-                if in_list:
-                    result.append('</ul>' if result[-1].startswith('<li>') else '</ol>')
-                    in_list = False
                 result.append(f'<p>{html.escape(line)}</p>')
-        
-        # Close any open list
-        if in_list:
-            result.append('</ul>')
         
         return '\n'.join(result)
     
@@ -218,7 +349,7 @@ class MarkdownConverter:
         # Code
         md = re.sub(r'<code>(.*?)</code>', r'`\1`', md)
         
-        # Lists (basic)
+        # Lists
         md = re.sub(r'<ul><li>(.*?)</li></ul>', r'- \1\n', md)
         md = re.sub(r'<ol><li>(.*?)</li></ol>', r'1. \1\n', md)
         
