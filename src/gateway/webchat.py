@@ -30,6 +30,7 @@ _yaml.width = 4096
 from src.agents.core import Agent as AgentCore
 from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
+from src.hooks.file_context import inject_context
 from src.config import config
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
@@ -149,6 +150,24 @@ async def api_chat(request: web.Request) -> web.Response:
             }, status=503)
         
         logger.info(f"[api_chat] Processing message for session: {session_id}")
+        
+        # Inject file context if user has uploaded files
+        original_message = message
+        try:
+            enhanced_message, budget_status, citations = inject_context(
+                session_id=session_id,
+                message=message,
+                top_k=5,
+                max_tokens=4000
+            )
+            if enhanced_message != message:
+                logger.info(f"[api_chat] File context injected: status={budget_status}, chunks={len(citations)}")
+                message = enhanced_message
+                # Attach citations to request for response
+                request['file_citations'] = citations
+        except Exception as e:
+            logger.warning(f"[api_chat] File context injection failed: {e}")
+            # Continue without file context if injection fails
         
         # Initialize session manager if needed
         if not session_manager._initialized:
@@ -1172,6 +1191,60 @@ async def api_files_parse(request: web.Request) -> web.Response:
         # Parse file
         result = await parse_file(file_id, options)
         
+        # Save chunks to file context storage
+        if result.success and result.blocks:
+            try:
+                from src.hooks.file_context import storage
+                from src.hooks.file_context.models import Chunk, SessionFileMeta
+                import hashlib
+                
+                # Update file status to processing
+                storage.update_file_status(
+                    session_id=session_id,
+                    file_id=file_id,
+                    status="processing"
+                )
+                
+                # Save chunks
+                total_chars = 0
+                for block in result.blocks:
+                    # Generate chunk_id if not present
+                    chunk_id = block.get('chunk_id') or f"{file_id}_{block.get('type', 'chunk')}_{block.get('page', 1)}_{block.get('index', 1)}"
+                    
+                    # Compute content hash for deduplication
+                    content = block.get('content', '')
+                    content_hash = hashlib.sha256(content.encode()).hexdigest()
+                    
+                    chunk = Chunk(
+                        chunk_id=chunk_id,
+                        file_id=file_id,
+                        session_id=session_id or '',
+                        type=block.get('type', 'paragraph'),
+                        content=content,
+                        markdown=block.get('markdown'),
+                        page=block.get('page'),
+                        index=block.get('index', 1),
+                        source=block.get('method', 'unknown'),
+                        confidence=block.get('confidence', 0.95),
+                        content_hash=content_hash
+                    )
+                    storage.save_chunk(chunk)
+                    total_chars += len(content)
+                
+                # Update file status to completed
+                storage.update_file_status(
+                    session_id=session_id,
+                    file_id=file_id,
+                    status="completed",
+                    chunk_count=len(result.blocks),
+                    total_chars=total_chars
+                )
+                
+                logger.info(f"[api_files_parse] Saved {len(result.blocks)} chunks for file {file_id}")
+            except Exception as e:
+                logger.error(f"[api_files_parse] Failed to save chunks: {e}")
+                # Continue anyway, parse succeeded
+        
         if not result.success:
             return web.json_response({
                 'success': False,
@@ -1313,6 +1386,100 @@ async def api_files_list(request: web.Request) -> web.Response:
         }, status=500)
 
 
+async def api_context_files(request: web.Request) -> web.Response:
+    """List files in session context.
+    
+    GET /api/context/files?session_id=xxx
+    
+    Returns:
+        200: {"files": [...]}
+    """
+    try:
+        session_id = request.query.get('session_id')
+        if not session_id:
+            return web.json_response({
+                'success': False,
+                'error': 'session_id is required'
+            }, status=400)
+        
+        from src.hooks.file_context import storage
+        files = storage.get_session_files(session_id)
+        
+        return web.json_response({
+            'success': True,
+            'files': [
+                {
+                    'file_id': f.file_id,
+                    'filename': f.filename,
+                    'content_type': f.content_type,
+                    'parse_status': f.parse_status,
+                    'chunk_count': f.chunk_count,
+                    'total_chars': f.total_chars,
+                    'parsed_at': f.parsed_at
+                }
+                for f in files
+            ]
+        })
+    except Exception as e:
+        logger.error(f"Error listing context files: {e}")
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
+async def api_chunks_search(request: web.Request) -> web.Response:
+    """Search chunks in session.
+    
+    GET /api/chunks/search?session_id=xxx&query=revenue&top_k=5
+    
+    Returns:
+        200: {"chunks": [...], "total": N}
+    """
+    try:
+        session_id = request.query.get('session_id')
+        if not session_id:
+            return web.json_response({
+                'success': False,
+                'error': 'session_id is required'
+            }, status=400)
+        
+        query = request.query.get('query', '')
+        top_k = int(request.query.get('top_k', 5))
+        
+        from src.hooks.file_context import retrieval_engine
+        from src.hooks.file_context.models import RetrievalRequest
+        
+        result = retrieval_engine.retrieve(RetrievalRequest(
+            session_id=session_id,
+            query=query,
+            top_k=top_k
+        ))
+        
+        return web.json_response({
+            'success': True,
+            'chunks': [
+                {
+                    'chunk_id': c.chunk_id,
+                    'file_id': c.file_id,
+                    'type': c.type,
+                    'content': c.content[:500],  # Truncate for preview
+                    'page': c.page,
+                    'confidence': c.confidence
+                }
+                for c in result.chunks
+            ],
+            'total': result.total_chunks,
+            'estimated_tokens': result.estimated_tokens
+        })
+    except Exception as e:
+        logger.error(f"Error searching chunks: {e}")
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
 async def api_files_delete(request: web.Request) -> web.Response:
     """Delete a file.
     
@@ -1403,6 +1570,10 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/files/list', api_files_list)
     app.router.add_get('/api/files/{file_id}/preview', api_files_preview)
     app.router.add_delete('/api/files/{file_id}', api_files_delete)
+    
+    # File context API endpoints
+    app.router.add_get('/api/context/files', api_context_files)
+    app.router.add_get('/api/chunks/search', api_chunks_search)
     
     logger.info("WebChat routes registered:")
     logger.info("  GET  /              - WebChat UI (root)")
