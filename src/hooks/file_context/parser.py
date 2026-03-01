@@ -83,7 +83,12 @@ class CommandParser:
         
         # File references (highest explicit priority)
         for ref in ref_by_type['file']:
-            file_ids.add(ref.value)
+            # Resolve @file_<prefix> against known session file_ids
+            if ref.value and ref.value.startswith('file_'):
+                prefix = ref.value[5:]  # Remove 'file_' prefix
+                for f in session_files:
+                    if f.file_id.startswith(prefix):
+                        file_ids.add(f.file_id)
         
         # Last reference
         if ref_by_type['last'] and session_files:

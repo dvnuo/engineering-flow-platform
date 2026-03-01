@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 # Upload directory
 UPLOAD_DIR = Path("~/.efp/workspace/uploads").expanduser()
 METADATA_FILE = UPLOAD_DIR / "metadata.json"
-UPLOAD_DIR = Path("~/.efp/workspace/uploads").expanduser()
 
 # In-memory metadata storage
 _file_metadata: Dict[str, FileMetadata] = {}
@@ -30,8 +29,16 @@ def _load_metadata():
             with open(METADATA_FILE, 'r') as f:
                 data = json.load(f)
             _file_metadata = {k: FileMetadata(**v) for k, v in data.items()}
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f'Failed to load file metadata from {METADATA_FILE}: {e}. Proceeding with empty metadata.')
+            # Try to backup corrupt file
+            try:
+                backup_path = METADATA_FILE.with_suffix('.json.bak')
+                METADATA_FILE.rename(backup_path)
+                logger.info(f'Backed up corrupt metadata file to {backup_path}')
+            except Exception:
+                pass
+            _file_metadata = {}
 
 
 def _save_metadata():
