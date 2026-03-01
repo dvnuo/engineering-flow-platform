@@ -2,7 +2,7 @@
 
 ## Overview
 
-Enable users to chat with AI about uploaded files. The AI should be understand and discuss the content of uploaded files (images, PDFs, documents, etc.).
+Enable users to chat with AI about uploaded files. The AI should understand and discuss the content of uploaded files (images, PDFs, documents, etc.).
 
 ## Current State
 
@@ -28,7 +28,7 @@ Enable users to chat with AI about uploaded files. The AI should be understand a
       "file_id": "xxx",
       "filename": "document.pdf",
       "content_type": "application/pdf",
-      "parse_status": "completed|pending|failed",
+      "parse_status": "pending|processing|completed|failed",
       "parsed_at": "2026-03-01T12:00:00Z",
       "chunk_count": 42,
       "total_chars": 15000
@@ -49,17 +49,40 @@ Enable users to chat with AI about uploaded files. The AI should be understand a
   "markdown": "...",
   "table_json": [...],
   "confidence": 0.95,
+  "source": "pymupdf|ocr|pandas|openpyxl|python-docx",
+  "content_hash": "sha256...",
   "extracted_at": "2026-03-01T12:00:00Z"
 }
 ```
 
+**Chunk Deduplication:**
+- Each chunk has `content_hash` for deduplication
+- Chunks from multiple sources (e.g., PDF text + OCR) are tracked separately via `source` field
+- Use `content_hash` to avoid duplicate injection
+
 ### 2. Auto-parse with Async Job Support
 
 - Upload triggers parse job (large files: async with job_id)
-- Parse status: `pending` → `processing` → `completed|failed`
-- Build retrieval index after parse (keyword minimum, embedding preferred)
+- Parse status flow: `pending` → `processing` → `completed|failed`
+- Build retrieval index after parse
 
-### 3. AI Context Injection (Default: RAG)
+### 3. Retrieval & Indexing Strategy
+
+**Phase 1: Keyword Index**
+- Simple inverted index on content
+- Metadata filtering (file_id, page, type)
+
+**Phase 2: Vector Index (Recommended)**
+- Generate embeddings per chunk (text-embedding-ada-002 or similar)
+- Support L2/inner-product search
+- Hybrid retrieval: keyword + embedding fusion
+
+**Chunk Size Rules:**
+- Max chunk size: 800-1500 tokens
+- Split by paragraph/table/page boundaries
+- Overlap: 10-20% for context continuity
+
+### 4. AI Context Injection (Default: RAG)
 
 **Default Behavior** (RAG-style):
 - User message → retrieve top-k relevant chunks → inject into prompt
@@ -67,42 +90,60 @@ Enable users to chat with AI about uploaded files. The AI should be understand a
   - `top_k`: 5-12 chunks
   - `max_chunk_size`: 800-1500 tokens
   - `max_total_tokens`: 4000-6000 for file context
-- Fallback when over budget: summarize first, then retrieve
+
+**Token Budget Fallback Policy:**
+| Condition | Action |
+|----------|--------|
+| total_tokens < 1000 | Inject all relevant chunks |
+| 1000 ≤ tokens < 4000 | Top-k retrieval |
+| 4000 ≤ tokens < 8000 | Summarize first, then retrieve top-k |
+| tokens ≥ 8000 | Error + suggest narrowing query |
+| Many small shallow chunks | Page summary first, then chunk detail |
 
 **Explicit Reference** (`@file_xxx`, `@all`):
 - Bypasses RAG, retrieves all chunks from specified file(s)
 - Only when file is small enough or user explicitly requests
 
-### 4. File Reference Commands
+### 5. File Reference Commands
 
 **Syntax Rules:**
 - `@file_xxx` - Reference specific file by ID
 - `@last` - Reference last uploaded file
 - `@all` - Include all files in session
 - `@chunk_xxx` - Reference specific chunk (from UI selection)
+- Combined: `@file_A @chunk_xxx @last`
 
-**Priority & Combination:**
-- Multiple refs: union of all referenced files
-- `@all` + specific: specific files override `@all`
-- Invalid reference: return error with available files list
+**Combination Logic:**
+- **Union**: Multiple `@file` refs = union of all chunks
+- **Override**: Specific files override `@all`
+- **Priority**: `@chunk` > `@file` > `@last` > `@all`
 
 **Error Handling:**
-- File not found: `{error: "File not found", available_files: [...]}`
-- Empty result: `{warning: "No relevant content found", suggestions: [...]}`
+- File not found: `{error: "File not found", available_files: [...], suggestions: [...]}`
+- Parse pending: `{warning: "File is still parsing", progress: 50%, retry_after: 5s}`
+- Parse failed: `{error: "Parse failed", reason: "...", action: "re-parse"}`
+- No relevant chunks: `{warning: "No relevant content found", suggestions: ["Try a broader query", "Use @all to include all content"]}`
 
-### 5. Token Budget Control
+### 6. Image/Vision Content Handling
+
+- Image chunks include OCR text content
+- Image metadata: dimensions, format, page location
+- Support both raw OCR text and LLM-generated captions
+- Images filtered in search by default (opt-in with `include_images: true`)
+
+### 7. Token Budget Control
 
 | Scenario | Strategy |
 |----------|----------|
 | < 1000 tokens | Inject all relevant chunks |
 | 1000-4000 tokens | Top-k retrieval |
-| > 4000 tokens | Summarize first, then retrieve top-k |
+| 4000-8000 tokens | Summarize first, then retrieve top-k |
 | > 8000 tokens | Error + suggestion to narrow query |
 
-### 6. Response Attribution
+### 8. Response Attribution
 
 AI responses should include citations:
-- `[file: filename, page: N]` 
+- `[file: filename, page: N]`
 - `[file: filename, chunk: N]`
 - Clickable links to preview specific chunks
 
@@ -112,21 +153,26 @@ AI responses should include citations:
 - [ ] Create `src/hooks/file_context.py`
 - [ ] Implement chunk storage (file-based KV)
 - [ ] Session metadata management
+- [ ] Chunk deduplication logic
 
 ### Phase 2: Retrieval System
-- [ ] Simple keyword index (inverted index on content)
+- [ ] Keyword index (inverted index)
+- [ ] Vector embedding support (optional, recommended)
 - [ ] Top-k retrieval function
 - [ ] Token budget estimator
 
 ### Phase 3: AI Integration
 - [ ] Modify chat handler to inject file context
 - [ ] Implement RAG prompt template
-- [ ] Add @file/@all/@last command parsing
+- [ ] Add @file/@all/@last/@chunk command parsing
+- [ ] Budget controller with fallback policy
 
 ### Phase 4: UI Enhancements
 - [ ] File list with parse status in sidebar
+- [ ] Quick search / autocomplete for commands
 - [ ] "引用这段" button on chunk preview
-- [ ] Citation rendering in chat
+- [ ] Multi-file context preview
+- [ ] Citation rendering with auto-scroll to chunk
 
 ## API Design
 
@@ -145,11 +191,22 @@ POST /api/context/inject
   {
     session_id,
     message: "What is this about?",
-    mode: "auto|explicit",  // auto = RAG, explicit = @file refs
+    mode: "auto|explicit",
     top_k: 5,
-    max_tokens: 4000
+    max_tokens: 4000,
+    include_images: false
   }
-  → {chunks: [...], prompt: "..."}
+  → {chunks: [...], prompt: "...", citations: [...]}
+```
+
+### Retrieval API
+```
+GET /api/chunks/search
+  ?session_id=xxx
+  &query=revenue
+  &top_k=5
+  &file_id=xxx (optional filter)
+  → {chunks: [...], total: N}
 ```
 
 ## File Structure
@@ -182,11 +239,13 @@ src/
 - [ ] Same query produces same results (deterministic retrieval)
 - [ ] Invalid file references return clear errors
 - [ ] Parse failures are logged and user-visible
+- [ ] Parse pending → clear warning + retry option
 
 ### UX
 - [ ] Responses include citations with file/page info
 - [ ] Citations are clickable → open chunk preview
 - [ ] Parse progress shown for large files
+- [ ] Command autocomplete in input
 
 ## Related Issues
 
