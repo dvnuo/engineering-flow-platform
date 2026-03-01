@@ -222,7 +222,8 @@ async def extract_text_with_pymupdf(file_path: str, options: Dict, file_id: str)
                     ))
     
     except Exception as e:
-        pass  # Return empty list on error
+        import logging
+        logging.warning(f"PDF text extraction failed: {e}")
     
     return blocks
 

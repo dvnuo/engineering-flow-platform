@@ -1249,7 +1249,10 @@ async def api_files_preview(request: web.Request) -> web.Response:
         result = await preview_file(file_id, max_chars)
         
         if not result.get('success'):
-            return web.json_response(result, status=404)
+            error_msg = str(result.get('error', '') or '')
+            if 'not found' in error_msg.lower():
+                return web.json_response(result, status=404)
+            return web.json_response(result, status=400)
         
         return web.json_response(result)
         
