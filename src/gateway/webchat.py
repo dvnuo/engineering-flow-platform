@@ -185,6 +185,7 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Inject file context if user has uploaded files
         original_msg_for_history = message if message.strip() else ("[image]" if attached_images else "")
+        logger.info(f"[api_chat] DEBUG: original_msg_for_history='{original_msg_for_history}', attached_images={len(attached_images) if attached_images else 0}")
         original_message = message
         try:
             enhanced_message, budget_status, citations = inject_context(

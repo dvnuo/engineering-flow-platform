@@ -404,18 +404,6 @@ You have access to the following tools. When a user asks you to do something tha
                     logger.info(f"[Agent] Attached {len(attached_images)} image(s)")
                     break
 
-        # Inject attached images
-        if attached_images and messages:
-            for i in range(len(messages) - 1, -1, -1):
-                if messages[i].get("role") == "user":
-                    user_content = messages[i].get("content", "")
-                    msg_content = [{"type": "text", "text": user_content}]
-                    for img in attached_images[:1]:
-                        msg_content.append({"type": "image_url", "image_url": {"url": img}})
-                    messages[i] = {"role": "user", "content": msg_content}
-                    logger.info(f"[Agent] Attached {len(attached_images)} image(s)")
-                    break
-
         # ===== REACT PATTERN =====
 
         # Log thinking level for subagent tracking
