@@ -423,6 +423,24 @@ class RetrievalEngine:
         )
 ```
 
+### 4.3 Image Chunk Retrieval
+
+- **Default**: `include_images = False` (text chunks only)
+- **When enabled**:
+  - Use OCR text content for retrieval
+  - Store image metadata separately
+  - Option for LLM-generated captions (if `generate_captions: true`)
+
+### 4.4 Multi-File Ranking
+
+When retrieving across multiple files:
+1. **Relevance Score**: Primary sort by keyword/semantic match
+2. **File Priority**: 
+   - Explicitly referenced files get highest priority
+   - `@last` referenced files: recent files boosted
+   - `@all`: equal weight
+3. **Deduplication**: Use `content_hash` to avoid duplicate content
+
 ---
 
 ## 5. AI Context Injection
@@ -755,7 +773,29 @@ Content-Type: application/json
 
 ---
 
-## 9. Testing Strategy
+## 9. Security & Privacy
+
+### 9.1 Session Isolation
+- All APIs require valid `session_id` in header or query
+- Files are strictly isolated to their owning session
+- Cross-session access returns 403 Forbidden
+
+### 9.2 Rate Limiting
+- Context injection API: 60 requests/minute per session
+- File parse API: 10 requests/minute per session
+
+### 9.3 Input Validation
+- Sanitize all user input in prompts
+- Escape markdown in chunk content
+- Limit citation preview length (max 500 chars)
+
+### 9.4 Audit Logging
+- All citation actions logged with timestamp
+- Log format: `{session_id, user_id, file_id, action, timestamp}`
+
+---
+
+## 10. Testing Strategy
 
 ### 9.1 Unit Tests
 
