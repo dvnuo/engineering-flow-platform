@@ -165,6 +165,9 @@ async def api_chat(request: web.Request) -> web.Response:
                     for short_id in set(refs):
                         for file_id, meta in file_data.items():
                             if file_id.startswith(short_id):
+                                # Enforce session ownership to avoid cross-session file leakage
+                                if meta.get('session_id') != session_id:
+                                    continue
                                 ct = meta.get('content_type', '')
                                 if ct.startswith('image/'):
                                     try:
