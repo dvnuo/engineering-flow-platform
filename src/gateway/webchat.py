@@ -216,7 +216,7 @@ async def api_chat(request: web.Request) -> web.Response:
         # Run agent (history is managed internally by session_manager)
         agent = AgentCore(model=model)
         result = await agent.process(
-            message=message,
+            message=original_msg_for_history,
             session_id=session_id,
             user_name="webchat-user",
             track_usage=True,
