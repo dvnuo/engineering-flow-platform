@@ -134,7 +134,7 @@
                             const response = await fetch('/api/files/' + fileId, { method: 'DELETE' });
                             const data = await response.json();
                             if (data.success || response.ok) {
-                                loadMyUploads(); // Reload list
+                                refreshFileList(); // Reload list
                             } else {
                                 alert('Delete failed: ' + (data.error || 'Unknown error'));
                             }
