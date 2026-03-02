@@ -380,14 +380,13 @@ class JiraFormatAdapter:
             format: Input format - "markdown", "wiki", or "raw"
             
         Returns:
-            Converted text (string for wiki, or JSON string for ADF)
+            - For wiki (Server/DC): wiki markup string
+            - For Cloud: ADF dict (not JSON string)
         """
         if format == "markdown":
             if self.deployment == "cloud":
-                # Cloud: convert to ADF and serialize to JSON string
-                import json
-                adf_dict = self.converter.markdown_to_adf(text)
-                return json.dumps(adf_dict)
+                # Cloud: return ADF dict directly (channel methods should handle dict)
+                return self.converter.markdown_to_adf(text)
             else:
                 # Server/DC: convert to wiki
                 return self.converter.markdown_to_wiki(text)
