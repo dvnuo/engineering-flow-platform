@@ -303,6 +303,9 @@ class ConfluenceFormatAdapter:
         Returns:
             Success message
         """
+        # Track if body was provided by caller (not fetched)
+        body_provided = body is not None
+        
         # Fetch current page if we need title or body
         current_page = None
         if title is None or body is None:
@@ -319,7 +322,9 @@ class ConfluenceFormatAdapter:
                     else:
                         body = ""
         
-        if body and body_format == "markdown":
+        # Only convert if caller provided body AND wants markdown conversion
+        # If we fetched the current content, keep it as storage
+        if body and body_format == "markdown" and body_provided:
             body = self.converter.markdown_to_storage(body)
         
         result = await self.channel.update_page(
