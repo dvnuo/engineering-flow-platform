@@ -255,7 +255,7 @@ class OpenAIProvider(BaseProvider):
             api_base=config.llm.get('api_base', 'https://api.openai.com/v1'),
             api_key_env='EFP_LLM_API_KEY'
         )
-        self.default_model = config.llm.get('model', 'gpt-3.5-turbo')
+        self.default_model = config.llm.get('model', 'gpt-5-mini')
     
     async def chat(
         self,
@@ -389,8 +389,8 @@ class OpenAIProvider(BaseProvider):
     
     def list_models(self) -> List[str]:
         return [
-            "gpt-3.5-turbo",
-            "gpt-3.5-turbo-16k",
+            "gpt-5-mini",
+            "gpt-5-mini-16k",
             "gpt-4",
             "gpt-4-turbo",
             "gpt-4o",
