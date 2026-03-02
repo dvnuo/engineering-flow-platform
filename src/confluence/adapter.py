@@ -54,9 +54,10 @@ class ConfluenceFormatAdapter:
             return f"Error: Invalid page response"
         
         if format == "storage":
+            # Storage format: return raw body content only
             content = self._extract_storage(page)
         else:
-            # format == "markdown"
+            # Markdown format: include title as header
             content = await self._to_markdown(page)
         
         # Apply character limit
