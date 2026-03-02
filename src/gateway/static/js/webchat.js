@@ -1615,6 +1615,8 @@
     async function showFileExplorer(path = '/root') {
         fileExplorerPanel.classList.add('show');
         fileExplorerContent.innerHTML = '<div class="loading">Loading...</div>';
+        const feTitle = document.getElementById('fileExplorerTitle');
+        if (feTitle) feTitle.textContent = 'Server Files';
         
         try {
             const response = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
