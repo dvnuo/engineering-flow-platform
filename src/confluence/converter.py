@@ -8,7 +8,6 @@ Currently uses a custom regex-based converter for both directions.
 import logging
 import re
 import html
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
