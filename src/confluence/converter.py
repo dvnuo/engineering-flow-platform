@@ -1,13 +1,13 @@
 """
 Confluence Format Converter - Convert between Markdown and Storage Format.
 
-Uses:
-- markdown-to-confluence for Markdown → Storage (writing)
-- Custom converter for Storage → Markdown (reading)
+This module provides conversion between Markdown and Confluence Storage Format.
+Currently uses a custom regex-based converter for both directions.
 """
 
 import logging
 import re
+import html
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -20,38 +20,16 @@ UNSUPPORTED_ELEMENTS = {
 
 
 class MarkdownConverter:
-    """Convert between Confluence Storage Format and Markdown."""
+    """Convert between Confluence Storage Format and Markdown using regex-based conversion."""
     
     def __init__(self):
-        self._markdown2confluence = None
-    
-    def _get_markdown_to_confluence(self):
-        """Lazy load markdown-to-confluence (md2conf).
-        
-        Note: md2conf is designed for publishing to Confluence with full API setup,
-        not for standalone text conversion. For this use case, we use the custom
-        fallback converter which handles common Markdown elements adequately.
-        
-        This method documents the option if a simpler conversion library becomes available.
-        """
-        if self._markdown2confluence is None:
-            # Try to import md2conf for potential future use
-            # Currently not used because it requires full Confluence API setup
-            try:
-                import md2conf
-                logger.info("md2conf installed but not used for simple conversion (requires API setup)")
-            except ImportError:
-                logger.debug("md2conf not installed, using fallback converter")
-            
-            # Use fallback converter
-            self._markdown2confluence = None
-        return self._markdown2confluence
+        pass  # No external dependencies needed
     
     def markdown_to_storage(self, markdown_text: str) -> str:
         """
         Convert Markdown to Confluence Storage Format.
         
-        Uses markdown-to-confluence library for proper conversion.
+        Uses a custom regex-based converter.
         
         Args:
             markdown_text: Markdown content
@@ -59,15 +37,7 @@ class MarkdownConverter:
         Returns:
             Storage Format (XHTML) string
         """
-        converter = self._get_markdown_to_confluence()
-        
-        if converter:
-            try:
-                result = converter.convert(markdown_text)
-                logger.debug("Successfully converted Markdown to Storage using md2conf")
-                return result
-            except Exception as e:
-                logger.error(f"md2conf conversion failed: {e}")
+        return self._basic_markdown_to_storage(markdown_text)
                 # Fall through to basic converter
         
         # Fallback: basic conversion
