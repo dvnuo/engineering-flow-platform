@@ -164,9 +164,9 @@ class ConfluenceFormatAdapter:
             
             title = p.get("title", "Untitled")
             
-            # Get URL from _links.webui
+            # Get URL - try _links.webui first, then fall back to top-level url
             links = p.get("_links", {})
-            url = links.get("webui", "")
+            url = links.get("webui", "") or p.get("url", "")
             if url and hasattr(self.channel, 'base_url'):
                 base = self.channel.base_url
                 if base and not url.startswith('http'):
