@@ -142,19 +142,23 @@ async def jira_get_issue_by_url(
 
 async def jira_add_comment(
     issue_key: str,
-    body: str,
-    body_format: str = "markdown"
+    body: str = None,
+    body_format: str = "markdown",
+    comment: str = None
 ) -> str:
     """Add a comment to a Jira issue.
     
     Args:
         issue_key: Jira issue key
-        body: Comment body (Markdown by default)
+        body: Comment body (Markdown by default) - alias: comment
         body_format: Input format - "markdown" (default), "wiki", or "raw"
+        comment: Alias for body
         
     Returns:
         Success message
     """
+    # Support both "body" and "comment" parameter names
+    body = body or comment or ""
     try:
         if not jira_channel.is_configured():
             return "Error: Jira is not configured."
@@ -379,7 +383,7 @@ def get_tools_schemas() -> list:
                     "type": "object",
                     "properties": {
                         "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"},
-                        "body": {"type": "string", "description": "Comment body (Markdown by default)"},
+                        "comment": {"type": "string", "description": "Comment body (Markdown by default)"},
                         "body_format": {
                             "type": "string",
                             "enum": ["markdown", "wiki", "raw"],
@@ -387,7 +391,7 @@ def get_tools_schemas() -> list:
                             "description": "Input format: markdown, wiki, or raw"
                         }
                     },
-                    "required": ["issue_key", "body"]
+                    "required": ["issue_key", "comment"]
                 }
             }
         },
