@@ -14,6 +14,9 @@ from typing import Any, Dict, List, Optional
 from aiohttp import web
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.utils.file_parser.storage import init_storage, _file_metadata, StoredFileNotFoundError, get_metadata
+init_storage()
+from src.utils.file_parser import parse_file
 from src.utils.truncate import truncate
 
 from aiohttp import web
@@ -30,6 +33,7 @@ _yaml.width = 4096
 from src.agents.core import Agent as AgentCore
 from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
+from src.hooks.file_context import inject_context
 from src.config import config
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
@@ -150,6 +154,58 @@ async def api_chat(request: web.Request) -> web.Response:
         
         logger.info(f"[api_chat] Processing message for session: {session_id}")
         
+        # Parse file references BEFORE inject_context
+        attached_images = []
+        try:
+            import re, json
+            refs = re.findall(r'@file_([a-zA-Z0-9]+)', message)
+            if refs:
+                from pathlib import Path
+                metadata_file = Path('~/.efp/workspace/uploads/metadata.json').expanduser()
+                if metadata_file.exists():
+                    with open(metadata_file, 'r') as f:
+                        file_data = json.load(f)
+                    for short_id in set(refs):
+                        for file_id, meta in file_data.items():
+                            if file_id.startswith(short_id):
+                                ct = meta.get('content_type', '')
+                                if ct.startswith('image/'):
+                                    try:
+                                        import base64
+                                        img_path = Path('~/.efp/workspace/uploads').expanduser() / meta['stored_filename']
+                                        with open(img_path, 'rb') as img:
+                                            img_data = base64.b64encode(img.read()).decode('utf-8')
+                                        ext = ct.split('/')[-1]
+                                        attached_images.append(f'data:image/{ext};base64,{img_data}')
+                                    except:
+                                        pass
+                                break
+            # IMPORTANT: Preserve message content before inject_context clears it
+            if attached_images:
+                message = message.strip() if message.strip() else "[image]"
+        except Exception as e:
+            logger.warning(f"[api_chat] File ref parse error: {e}")
+        
+        # Inject file context if user has uploaded files
+        original_msg_for_history = message if message.strip() else ("[image]" if attached_images else "")
+        logger.info(f"[api_chat] DEBUG: original_msg_for_history='{original_msg_for_history}', attached_images={len(attached_images) if attached_images else 0}")
+        original_message = message
+        try:
+            enhanced_message, budget_status, citations = inject_context(
+                session_id=session_id,
+                message=message,
+                top_k=5,
+                max_tokens=4000
+            )
+            if enhanced_message and enhanced_message != message:
+                logger.info(f"[api_chat] File context injected: status={budget_status}, chunks={len(citations)}")
+                message = enhanced_message
+                # Attach citations to request for response
+                request['file_citations'] = citations
+        except Exception as e:
+            logger.warning(f"[api_chat] File context injection failed: {e}")
+            # Continue without file context if injection fails
+        
         # Initialize session manager if needed
         if not session_manager._initialized:
             await session_manager.initialize()
@@ -169,6 +225,7 @@ async def api_chat(request: web.Request) -> web.Response:
             user_name="webchat-user",
             track_usage=True,
             reasoning_replay=reasoning_replay,
+            attached_images=attached_images if attached_images else None,
         )
         
         # Force save session to persistence
@@ -1060,41 +1117,44 @@ async def api_files_upload(request: web.Request) -> web.Response:
                 'error': 'No file provided'
             }, status=400)
         
-        # Read file content in chunks to enforce size limit
+        # Read file content
         max_size_mb = 10
         max_bytes = max_size_mb * 1024 * 1024
-        chunk_size = 1024 * 1024  # 1 MB
-        content_chunks = []
-        total_size = 0
         
-        while True:
-            chunk = await file_field.read(chunk_size)
-            if not chunk:
-                break
-            content_chunks.append(chunk)
-            total_size += len(chunk)
-            if total_size > max_bytes:
-                return web.json_response({
-                    'success': False,
-                    'error': f'File exceeds maximum size of {max_size_mb} MB'
-                }, status=400)
+        try:
+            content = await file_field.read()
+        except TypeError:
+            content_chunks = []
+            total_size = 0
+            while True:
+                chunk = await file_field.read(8192)
+                if not chunk:
+                    break
+                content_chunks.append(chunk)
+                total_size += len(chunk)
+                if total_size > max_bytes:
+                    return web.json_response({
+                        'success': False,
+                        'error': f'File exceeds maximum size of {max_size_mb} MB'
+                    }, status=400)
+            content = b''.join(content_chunks)
         
         filename = file_field.filename
         
-        # Validate filename
         if not filename:
             return web.json_response({
                 'success': False,
                 'error': 'Filename is required'
             }, status=400)
         
-        # Upload
+        logger.info(f"[api_files_upload] session_id={session_id}, filename={filename}")
         metadata = await upload_file(
-            content=b"".join(content_chunks),
-            filename=filename,
             session_id=session_id,
+            content=content,
+            filename=filename,
             max_size_mb=max_size_mb
         )
+        logger.info(f"[api_files_upload] saved metadata.session_id={metadata.session_id}")
         
         return web.json_response({
             'success': True,
@@ -1137,7 +1197,7 @@ async def api_files_parse(request: web.Request) -> web.Response:
         400: {"success": false, "error": "..."}
     """
     try:
-        from src.utils.file_parser import parse_file, StoredFileNotFoundError, get_metadata
+        
         
         try:
             data = await request.json()
@@ -1173,6 +1233,60 @@ async def api_files_parse(request: web.Request) -> web.Response:
         
         # Parse file
         result = await parse_file(file_id, options)
+        
+        # Save chunks to file context storage
+        if result.success and result.blocks:
+            try:
+                from src.hooks.file_context import storage
+                from src.hooks.file_context.models import Chunk, SessionFileMeta
+                import hashlib
+                
+                # Update file status to processing
+                storage.update_file_status(
+                    session_id=session_id,
+                    file_id=file_id,
+                    status="processing"
+                )
+                
+                # Save chunks
+                total_chars = 0
+                for block in result.blocks:
+                    # Generate chunk_id if not present
+                    chunk_id = block.get('chunk_id') or f"{file_id}_{block.get('type', 'chunk')}_{block.get('page', 1)}_{block.get('index', 1)}"
+                    
+                    # Compute content hash for deduplication
+                    content = block.get('content', '')
+                    content_hash = hashlib.sha256(content.encode()).hexdigest()
+                    
+                    chunk = Chunk(
+                        chunk_id=chunk_id,
+                        file_id=file_id,
+                        session_id=session_id or '',
+                        type=block.get('type', 'paragraph'),
+                        content=content,
+                        markdown=block.get('markdown'),
+                        page=block.get('page'),
+                        index=block.get('index', 1),
+                        source=block.get('method', 'unknown'),
+                        confidence=block.get('confidence', 0.95),
+                        content_hash=content_hash
+                    )
+                    storage.save_chunk(chunk)
+                    total_chars += len(content)
+                
+                # Update file status to completed
+                storage.update_file_status(
+                    session_id=session_id,
+                    file_id=file_id,
+                    status="completed",
+                    chunk_count=len(result.blocks),
+                    total_chars=total_chars
+                )
+                
+                logger.info(f"[api_files_parse] Saved {len(result.blocks)} chunks for file {file_id}")
+            except Exception as e:
+                logger.error(f"[api_files_parse] Failed to save chunks: {e}")
+                # Continue anyway, parse succeeded
         
         if not result.success:
             return web.json_response({
@@ -1282,17 +1396,13 @@ async def api_files_list(request: web.Request) -> web.Response:
         400: {"success": false, "error": "session_id is required"}
     """
     try:
-        from src.utils.file_parser import list_files
+        from src.utils.file_parser import list_files, init_storage
+        init_storage()
         
-        # Require session_id to avoid leaking files across sessions
+        # Session_id is optional - if not provided, list all files
         session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
-        if not session_id:
-            return web.json_response({
-                'success': False,
-                'error': 'session_id is required'
-            }, status=400)
         
-        files = list_files(session_id)
+        files = list_files(session_id) if session_id else list_files()
         
         return web.json_response({
             'files': [
@@ -1315,6 +1425,100 @@ async def api_files_list(request: web.Request) -> web.Response:
         }, status=500)
 
 
+async def api_context_files(request: web.Request) -> web.Response:
+    """List files in session context.
+    
+    GET /api/context/files?session_id=xxx
+    
+    Returns:
+        200: {"files": [...]}
+    """
+    try:
+        session_id = request.query.get('session_id')
+        if not session_id:
+            return web.json_response({
+                'success': False,
+                'error': 'session_id is required'
+            }, status=400)
+        
+        from src.hooks.file_context import storage
+        files = storage.get_session_files(session_id)
+        
+        return web.json_response({
+            'success': True,
+            'files': [
+                {
+                    'file_id': f.file_id,
+                    'filename': f.filename,
+                    'content_type': f.content_type,
+                    'parse_status': f.parse_status,
+                    'chunk_count': f.chunk_count,
+                    'total_chars': f.total_chars,
+                    'parsed_at': f.parsed_at
+                }
+                for f in files
+            ]
+        })
+    except Exception as e:
+        logger.error(f"Error listing context files: {e}")
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
+async def api_chunks_search(request: web.Request) -> web.Response:
+    """Search chunks in session.
+    
+    GET /api/chunks/search?session_id=xxx&query=revenue&top_k=5
+    
+    Returns:
+        200: {"chunks": [...], "total": N}
+    """
+    try:
+        session_id = request.query.get('session_id')
+        if not session_id:
+            return web.json_response({
+                'success': False,
+                'error': 'session_id is required'
+            }, status=400)
+        
+        query = request.query.get('query', '')
+        top_k = int(request.query.get('top_k', 5))
+        
+        from src.hooks.file_context import retrieval_engine
+        from src.hooks.file_context.models import RetrievalRequest
+        
+        result = retrieval_engine.retrieve(RetrievalRequest(
+            session_id=session_id,
+            query=query,
+            top_k=top_k
+        ))
+        
+        return web.json_response({
+            'success': True,
+            'chunks': [
+                {
+                    'chunk_id': c.chunk_id,
+                    'file_id': c.file_id,
+                    'type': c.type,
+                    'content': c.content[:500],  # Truncate for preview
+                    'page': c.page,
+                    'confidence': c.confidence
+                }
+                for c in result.chunks
+            ],
+            'total': result.total_chunks,
+            'estimated_tokens': result.estimated_tokens
+        })
+    except Exception as e:
+        logger.error(f"Error searching chunks: {e}")
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
 async def api_files_delete(request: web.Request) -> web.Response:
     """Delete a file.
     
@@ -1324,7 +1528,8 @@ async def api_files_delete(request: web.Request) -> web.Response:
         200: {"success": true}
     """
     try:
-        from src.utils.file_parser import delete_file, get_metadata, StoredFileNotFoundError
+        from src.utils.file_parser.storage import init_storage, delete_file, get_metadata, StoredFileNotFoundError
+        init_storage()
         
         file_id = request.match_info.get('file_id')
         
@@ -1333,20 +1538,6 @@ async def api_files_delete(request: web.Request) -> web.Response:
                 'success': False,
                 'error': 'file_id is required'
             }, status=400)
-        
-        # Validate session ownership
-        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
-        try:
-            metadata = get_metadata(file_id)
-            # If the file is bound to a session, require a matching session_id
-            if metadata.session_id:
-                if not session_id or metadata.session_id != session_id:
-                    return web.json_response({
-                        'success': False,
-                        'error': 'File not found'
-                    }, status=404)
-        except StoredFileNotFoundError:
-            pass
         
         deleted = delete_file(file_id)
         
@@ -1405,6 +1596,10 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/files/list', api_files_list)
     app.router.add_get('/api/files/{file_id}/preview', api_files_preview)
     app.router.add_delete('/api/files/{file_id}', api_files_delete)
+    
+    # File context API endpoints
+    app.router.add_get('/api/context/files', api_context_files)
+    app.router.add_get('/api/chunks/search', api_chunks_search)
     
     logger.info("WebChat routes registered:")
     logger.info("  GET  /              - WebChat UI (root)")

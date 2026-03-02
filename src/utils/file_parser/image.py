@@ -1,3 +1,6 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 """Image parser implementation."""
 
 import base64
@@ -102,17 +105,93 @@ async def parse_image_with_vision(file_path: str, options: Dict) -> ParseResult:
     """Parse image using Vision LLM.
     
     Note: This requires an LLM client to be configured.
-    Vision is not yet implemented - fall through to OCR.
     
     Args:
         file_path: Path to image
-        options: Options including vision_enabled
+        options: Options including vision_enabled, prompt
         
     Returns:
         ParseResult with vision-generated description
     """
-    # Vision LLM not yet implemented - fall back to OCR
-    return await parse_image_with_ocr(file_path, options)
+    from src.agents.core import Agent
+    import uuid
+    
+    file_id = Path(file_path).stem.split("_")[0]
+    filename = Path(file_path).name
+    
+    try:
+        # Get image as data URL for LLM
+        image_data_url = get_image_for_llm(file_path)
+    except Exception as e:
+        return ParseResult(
+            success=False,
+            content_type=get_mime_type(file_path),
+            file_id=file_id,
+            filename=filename,
+            error=f"Failed to prepare image: {str(e)}"
+        )
+    
+    # Create a prompt to analyze the image
+    prompt = options.get("prompt", "Describe this image in detail. Extract all visible text, diagrams, charts, or other content.")
+    
+    # Use a temporary session for the vision request
+    session_id = f"vision_{uuid.uuid4().hex[:8]}"
+    
+    try:
+        # Create agent and run with image
+        agent = Agent(
+            session_id=session_id,
+            system_prompt="You are an expert at analyzing images. Provide detailed, accurate descriptions of images and extract any text visible in them."
+        )
+        
+        # Run with the image
+        response = await agent.process(
+            message=prompt,
+            session_id=session_id,
+            attached_images=[image_data_url]
+        )
+        
+        # Extract the response
+        if response.get("response"):
+            description = response.get("response") or "No description generated"
+            
+            # Create result with the vision description
+            return ParseResult(
+                success=True,
+                content_type=get_mime_type(file_path),
+                file_id=file_id,
+                filename=filename,
+                content=description,
+                markdown=f"## Image Analysis\n\n{description}",
+                blocks=[
+                    Block(
+                        type="text",
+                        content=description,
+                        page=1,
+                        index=1,
+                        method="vision",
+                        chunk_id=f"{file_id}_vision_1_1",
+                        extracted_at=datetime.utcnow().isoformat() + "Z",
+                        confidence=0.9
+                    )
+                ]
+            )
+        else:
+            return ParseResult(
+                success=False,
+                content_type=get_mime_type(file_path),
+                file_id=file_id,
+                filename=filename,
+                error=f"Vision LLM failed: {response.error}"
+            )
+    except Exception as e:
+        return ParseResult(
+            success=False,
+            content_type=get_mime_type(file_path),
+            file_id=file_id,
+            filename=filename,
+            error=f"Vision parsing error: {str(e)}"
+        )
 
 
 async def parse_image_with_ocr(file_path: str, options: Dict) -> ParseResult:

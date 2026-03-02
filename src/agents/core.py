@@ -195,6 +195,7 @@ You have access to the following tools. When a user asks you to do something tha
         track_usage: bool = True,
         reasoning_replay: Optional[bool] = None,
         stream_callback: Optional[Callable[[str], None]] = None,
+        attached_images: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Process a user message with ReAct pattern.
         
@@ -390,6 +391,18 @@ You have access to the following tools. When a user asks you to do something tha
             logger.debug(f"System prompt preview: {_format_content(self.system_prompt, max_length=300)}")
             logger.debug(f"Tools count: {len(self.tools)}")
             logger.debug(f"History messages: {len(messages)}")
+
+        # Inject attached images
+        if attached_images and messages:
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].get("role") == "user":
+                    user_content = messages[i].get("content", "")
+                    msg_content = [{"type": "text", "text": user_content}]
+                    for img in attached_images[:1]:
+                        msg_content.append({"type": "image_url", "image_url": {"url": img}})
+                    messages[i] = {"role": "user", "content": msg_content}
+                    logger.info(f"[Agent] Attached {len(attached_images)} image(s)")
+                    break
 
         # ===== REACT PATTERN =====
 

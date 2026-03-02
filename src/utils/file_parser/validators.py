@@ -20,7 +20,7 @@ ALLOWED_MIME_TYPES = {
 }
 
 # Filename pattern: alphanumeric, dot, underscore, hyphen, 1-200 chars
-FILENAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$')
+FILENAME_PATTERN = re.compile(r'^[^\x00-\x1f]{1,200}$')  # Allow any visible chars, max 200
 
 # Allowed image extensions (in sync with ALLOWED_MIME_TYPES["image"])
 IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif"}
@@ -119,8 +119,8 @@ def sanitize_filename(filename: str) -> str:
     # Strip control characters
     name = ''.join(c for c in name if ord(c) >= 32)
     
-    # Check if valid
-    if not FILENAME_PATTERN.match(name):
+    # Check if valid (only reject empty or control chars)
+    if not name or not FILENAME_PATTERN.match(name):
         import uuid
         return f"file_{uuid.uuid4().hex[:8]}"
     
