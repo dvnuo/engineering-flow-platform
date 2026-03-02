@@ -194,7 +194,7 @@
         if (contentType === 'application/pdf') return '📄';
         if (contentType.includes('word')) return '📝';
         if (contentType.includes('spreadsheet') || contentType === 'text/csv') return '📊';
-        return '📁';
+        return '📄';  // text file
     }
     
     function formatFileSize(bytes) {

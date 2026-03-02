@@ -252,7 +252,7 @@ body {
 }
 
 .sidebar-section-title {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -400,7 +400,7 @@ body {
     display: inline-flex;
     align-items: center;
     gap: var(--space-xs);
-    font-size: 11px;
+    font-size: 11px; color: #333;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -415,7 +415,7 @@ body {
     display: inline-flex;
     align-items: center;
     gap: var(--space-xs);
-    font-size: 11px;
+    font-size: 11px; color: #333;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -592,7 +592,7 @@ body {
 
 /* Timestamp */
 .message-timestamp {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-subtle);
     margin-top: var(--space-xs);
     padding: 0 var(--space-sm);
@@ -982,7 +982,7 @@ body {
 }
 
 .stat-label {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-muted);
     margin-bottom: var(--space-xs);
     text-transform: uppercase;
@@ -1001,7 +1001,7 @@ body {
 }
 
 .stat-model {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-muted);
     margin-top: var(--space-xs);
 }
@@ -1046,7 +1046,7 @@ body {
 
 .skill-selector-header {
     padding: var(--space-sm) var(--space-md);
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1092,7 +1092,7 @@ body {
 
 .skill-item .skill-examples {
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-accent);
     display: none;
 }
@@ -1248,7 +1248,7 @@ body {
 }
 
 .recent-session-preview {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-subtle);
     white-space: nowrap;
     overflow: hidden;
@@ -1446,7 +1446,7 @@ body {
     background: var(--color-bg-input);
     border-radius: var(--radius-md);
     margin-bottom: var(--space-md);
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-muted);
 }
 
@@ -1706,7 +1706,7 @@ input:checked + .slider:before {
     border-radius: var(--radius-sm);
     padding: var(--space-xs) var(--space-sm);
     color: var(--color-text-muted);
-    font-size: 11px;
+    font-size: 11px; color: #333;
     font-family: var(--font-sans);
     cursor: pointer;
     opacity: 0;
@@ -2006,7 +2006,7 @@ input:checked + .slider:before {
 }
 
 .agent-event-label {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-muted);
     margin-top: var(--space-xs);
     text-transform: uppercase;
@@ -2268,7 +2268,7 @@ input:checked + .slider:before {
 }
 
 .file-size {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-muted, #999);
 }
 
@@ -2278,7 +2278,7 @@ input:checked + .slider:before {
     border: none;
     padding: 4px 8px;
     border-radius: 4px;
-    font-size: 11px;
+    font-size: 11px; color: #333;
     cursor: pointer;
 }
 
@@ -2332,7 +2332,7 @@ input:checked + .slider:before {
 }
 
 #fileExplorerContent .file-status {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     padding: 2px 6px;
     border-radius: 3px;
     width: fit-content;
@@ -2365,7 +2365,7 @@ input:checked + .slider:before {
 
 #fileExplorerContent .file-actions .file-action {
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: 11px; color: #333;
     border: 1px solid var(--color-border, #ddd);
     background: var(--color-bg, #fff);
     border-radius: 4px;
@@ -2390,7 +2390,7 @@ input:checked + .slider:before {
 
 .toggle-btn {
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: 11px; color: #333;
     border: 1px solid var(--border-color, #ddd);
     background: transparent;
     border-radius: 4px;
