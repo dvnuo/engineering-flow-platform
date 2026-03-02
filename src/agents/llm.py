@@ -549,8 +549,9 @@ class OpenAIProvider(BaseProvider):
                                     "arguments": json.dumps(msg_item.get("arguments", {}))
                                 }
                             })
-                else:
-                    content = msg_content
+                elif isinstance(msg_content, str):
+                    # Append string content instead of overwriting
+                    content += msg_content
             
             elif item_type == "function_call":
                 # Handle function_call as top-level output item (Responses API can emit this)
@@ -933,8 +934,9 @@ class GitHubCopilotProvider(BaseProvider):
                                     "arguments": json.dumps(msg_item.get("arguments", {}))
                                 }
                             })
-                else:
-                    content = msg_content
+                elif isinstance(msg_content, str):
+                    # Append string content instead of overwriting
+                    content += msg_content
             
             elif item_type == "function_call":
                 # Handle function_call as top-level output item (Responses API can emit this)
