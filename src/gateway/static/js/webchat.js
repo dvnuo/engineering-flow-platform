@@ -236,6 +236,7 @@
     let selectedSkillIndex = -1;
     let skillsLoaded = false;
     let currentSessionId = localStorage.getItem('efp-session-id') || null;
+    let fileViewMode = 'server'; // 'server' or 'uploads'
     console.log('[WebChat] Initial sessionId from localStorage:', currentSessionId);
     
     // ========== Helper Functions ==========
