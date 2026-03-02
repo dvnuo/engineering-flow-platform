@@ -401,8 +401,7 @@ def get_tools_schemas() -> list:
                         },
                         "max_chars": {
                             "type": "integer",
-                            "description": "Maximum characters to return (avoid token overflow)",
-                            "default": None
+                            "description": "Maximum characters to return (avoid token overflow)"
                         }
                     },
                     "required": ["page_id"]
@@ -426,8 +425,7 @@ def get_tools_schemas() -> list:
                         },
                         "max_chars": {
                             "type": "integer",
-                            "description": "Maximum characters to return",
-                            "default": None
+                            "description": "Maximum characters to return (avoid token overflow)"
                         }
                     },
                     "required": ["url"]
@@ -458,7 +456,7 @@ def get_tools_schemas() -> list:
                     "type": "object",
                     "properties": {
                         "title": {"type": "string", "description": "Page title to search for"},
-                        "space_key": {"type": "string", "description": "Optional space key to limit search", "default": None}
+                        "space_key": {"type": "string", "description": "Optional space key to limit search", }
                     },
                     "required": ["title"]
                 }
@@ -481,7 +479,7 @@ def get_tools_schemas() -> list:
                             "default": "markdown",
                             "description": "Input format: markdown (default) or storage"
                         },
-                        "parent_id": {"type": "string", "description": "Parent page ID for hierarchy", "default": None}
+                        "parent_id": {"type": "string", "description": "Parent page ID for hierarchy", }
                     },
                     "required": ["space_key", "title"]
                 }
@@ -631,8 +629,8 @@ def get_tools_schemas() -> list:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "user_id": {"type": "string", "description": "User ID", "default": None},
-                        "username": {"type": "string", "description": "Username", "default": None}
+                        "user_id": {"type": "string", "description": "User ID", },
+                        "username": {"type": "string", "description": "Username", }
                     }
                 }
             }
