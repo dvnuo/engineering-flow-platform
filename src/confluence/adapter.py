@@ -61,8 +61,7 @@ class ConfluenceFormatAdapter:
             content = await self._to_markdown(page)
         
         # Apply character limit
-        if max_chars:
-            content = truncate(content, max_chars)
+        content = truncate(content, max_chars) if max_chars else content
         
         return content
     
@@ -121,8 +120,7 @@ class ConfluenceFormatAdapter:
         else:
             content = await self._to_markdown(page)
         
-        if max_chars:
-            content = truncate(content, max_chars)
+        content = truncate(content, max_chars) if max_chars else content
         
         return content
     
