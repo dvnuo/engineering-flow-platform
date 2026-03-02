@@ -31,7 +31,6 @@ __all__ = [
     "jira_transition",
     "jira_get_transitions",
     "jira_get_comments",
-    "jira_update_issue",
     "jira_assign_issue",
     "jira_get_projects",
     "jira_get_components",
