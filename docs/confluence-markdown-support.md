@@ -292,19 +292,28 @@ async def confluence_update_page(
 - 嵌套结构
 - 不支持的宏元素
 
-## 9. 配置项
+## 9. 当前行为
 
-> 注意: 以下配置项当前未实现，仅作未来参考。
+当前实现使用函数参数控制格式:
 
-```yaml
-confluence:
-  enabled: true
-  # default_format: "markdown"  # 未来: 默认格式
-  # max_chars: 10000          # 未来: 默认截断长度
-  instances:
-    - name: "Default"
-      # ... existing config
+```python
+# 查询 - 使用 format 参数
+confluence_get_page(page_id, format="markdown")  # 默认返回 Markdown
+
+# 创建/更新 - 使用 body_format 参数
+confluence_create_page(space_key, title, body, body_format="markdown")
+confluence_update_page(page_id, body, body_format="markdown")
+
+# 截断 - 使用 max_chars 参数
+confluence_get_page(page_id, max_chars=10000)
 ```
+
+**默认值:**
+- `format`: "markdown"
+- `body_format`: "markdown"
+- `max_chars`: 无限制
+
+> 注意: 配置项 (default_format, max_chars) 当前未通过 config.yaml 实现，仅支持函数参数。
 
 ## 10. 里程碑
 
