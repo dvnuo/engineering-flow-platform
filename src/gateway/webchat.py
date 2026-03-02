@@ -15,6 +15,7 @@ from aiohttp import web
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.file_parser.storage import init_storage, _file_metadata, StoredFileNotFoundError, get_metadata
+init_storage()
 from src.utils.file_parser import parse_file
 from src.utils.truncate import truncate
 

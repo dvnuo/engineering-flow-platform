@@ -28,8 +28,11 @@ def _load_metadata():
         try:
             with open(METADATA_FILE, 'r') as f:
                 data = json.load(f)
-            _file_metadata = {k: FileMetadata(**v) for k, v in data.items()}
+            # Clear and update in place to preserve imported references
+            _file_metadata.clear()
+            _file_metadata.update({k: FileMetadata(**v) for k, v in data.items()})
         except Exception as e:
+            print('LOAD ERROR:', e)  # Debug
             logger.warning(f'Failed to load file metadata from {METADATA_FILE}: {e}. Proceeding with empty metadata.')
             # Try to backup corrupt file
             try:
