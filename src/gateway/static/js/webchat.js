@@ -1517,10 +1517,97 @@
             if (newChatBtn) newChatBtn.classList.add('active');
         } else if (action === 'files') {
             showFileExplorer();
+        } else if (action === 'my-uploads') {
+            showMyUploads();
         } else if (action === 'settings') {
             showSettings();
         }
     });
+    
+    // ========== My Uploads ==========
+    
+    async function showMyUploads() {
+        const fileExplorerPanel = document.getElementById('fileExplorerPanel');
+        const fileExplorerContent = document.getElementById('fileExplorerContent');
+        const fileExplorerTitle = document.getElementById('fileViewerTitleText');
+        
+        if (!fileExplorerPanel || !fileExplorerContent) return;
+        
+        fileExplorerPanel.classList.add('show');
+        fileExplorerContent.innerHTML = '<div class="loading">Loading...</div>';
+        if (fileExplorerTitle) fileExplorerTitle.textContent = 'My Uploads';
+        
+        try {
+            const headers = getAuthHeaders();
+            const sessionId = getSessionId();
+            
+            // Try context API first, then fall back to files API
+            let files = [];
+            
+            // Try context API
+            try {
+                const contextResp = await fetch('/api/context/files?session_id=' + sessionId, { headers });
+                if (contextResp.ok) {
+                    const contextData = await contextResp.json();
+                    files = contextData.files || [];
+                }
+            } catch (e) {}
+            
+            // Fall back to files API
+            if (files.length === 0) {
+                const response = await fetch('/api/files/list', { headers });
+                if (response.ok) {
+                    const data = await response.json();
+                    files = data.files || [];
+                }
+            }
+            
+            if (files && files.length > 0) {
+                let html = '<div class="file-list">';
+                for (const file of files) {
+                    const sizeKB = Math.round(file.size / 1024);
+                    const icon = file.content_type?.startsWith('image/') ? '🖼️' : '📄';
+                    html += `
+                        <div class="file-item" data-file-id="${file.file_id}">
+                            <div class="file-icon">${icon}</div>
+                            <div class="file-info">
+                                <div class="file-name">${escapeHtml(file.filename)}</div>
+                                <div class="file-meta">${sizeKB} KB • ${new Date(file.uploaded_at).toLocaleDateString()}</div>
+                            </div>
+                            <div class="file-actions">
+                                <button class="btn-small cite-btn" data-file-id="${file.file_id}" title="Use in chat">@</button>
+                                <button class="btn-small parse-btn" data-file-id="${file.file_id}" title="Parse content">📄</button>
+                            </div>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+                fileExplorerContent.innerHTML = html;
+                
+                // Add event listeners for parse buttons
+                fileExplorerContent.querySelectorAll('.parse-btn').forEach(btn => {
+                    btn.addEventListener('click', async (e) => {
+                        const fileId = e.target.dataset.fileId;
+                        await parseUploadedFile(fileId);
+                    });
+                });
+                
+                // Add event listeners for cite buttons
+                fileExplorerContent.querySelectorAll('.cite-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const fileId = e.target.dataset.fileId;
+                        messageInput.value += '@file_' + fileId.substring(0, 8) + ' ';
+                        messageInput.focus();
+                    });
+                });
+            } else {
+                fileExplorerContent.innerHTML = '<div class="empty">No files uploaded yet. Click the upload button to add files.</div>';
+            }
+        } catch (error) {
+            console.error('Error loading files:', error);
+            fileExplorerContent.innerHTML = '<div class="error">Failed to load files</div>';
+        }
+    }
     
     // ========== File Explorer ==========
     
