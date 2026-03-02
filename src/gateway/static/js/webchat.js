@@ -187,6 +187,9 @@
     const skillSelector = document.getElementById('skillSelector');
     const skillDropdown = document.getElementById('skillDropdown');
     const skillList = document.getElementById('skillList');
+    const fileSelector = document.getElementById('fileSelector');
+    const fileDropdown = document.getElementById('fileDropdown');
+    const fileList = document.getElementById('fileList');
     const themeToggle = document.getElementById('themeToggle');
     const newChatBtn = document.querySelector('[data-action="new-chat"]');
     
@@ -197,6 +200,9 @@
     let skills = [];
     let selectedSkillIndex = -1;
     let skillsLoaded = false;
+    let uploadedFiles = [];
+    let selectedFileIndex = -1;
+    let filesLoaded = false;
     let currentSessionId = localStorage.getItem('efp-session-id') || null;
     let fileViewMode = 'server'; // 'server' or 'uploads'
     console.log('[WebChat] Initial sessionId from localStorage:', currentSessionId);
@@ -497,6 +503,114 @@
     }
     
     /**
+     * Show file selector dropdown
+     */
+    function showFileSelector() {
+        if (!uploadedFiles.length) {
+            loadFilesForSelector().then(() => {
+                if (uploadedFiles.length) {
+                    renderFileList();
+                    fileSelector.classList.add('active');
+                }
+            });
+            return;
+        }
+        renderFileList();
+        fileSelector.classList.add('active');
+    }
+    
+    /**
+     * Hide file selector dropdown
+     */
+    function hideFileSelector() {
+        fileSelector.classList.remove('active');
+        selectedFileIndex = -1;
+    }
+    
+    /**
+     * Load files for selector
+     */
+    async function loadFilesForSelector() {
+        if (filesLoaded) return;
+        
+        try {
+            const response = await fetch('/api/files/list');
+            const data = await response.json();
+            uploadedFiles = data.files || [];
+            filesLoaded = true;
+        } catch (error) {
+            console.error('Error loading files:', error);
+            uploadedFiles = [];
+        }
+    }
+    
+    /**
+     * Render file list in dropdown
+     */
+    function renderFileList() {
+        if (!uploadedFiles.length) {
+            fileList.innerHTML = '<div class="skill-item"><span class="skill-desc">No files uploaded</span></div>';
+            return;
+        }
+        
+        // Get query after @
+        const inputVal = messageInput.value;
+        const atIndex = inputVal.lastIndexOf('@');
+        const query = atIndex >= 0 ? inputVal.slice(atIndex + 1).toLowerCase() : '';
+        
+        let filteredFiles = uploadedFiles;
+        
+        if (query) {
+            filteredFiles = uploadedFiles.filter(f => 
+                f.filename.toLowerCase().includes(query) || 
+                f.file_id.toLowerCase().includes(query)
+            );
+        }
+        
+        fileList.innerHTML = filteredFiles.map((file, index) => `
+            <div class="skill-item" 
+                 role="option" 
+                 data-file-id="${file.file_id}"
+                 data-index="${index}">
+                <span class="skill-name">${getFileIcon(file.content_type)} ${escapeHtml(file.filename)}</span>
+                <span class="skill-desc">@file_${file.file_id.slice(0, 8)}</span>
+            </div>
+        `).join('');
+        
+        // Add click handlers
+        fileList.querySelectorAll('.skill-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const fileId = item.dataset.fileId;
+                const atIndex = messageInput.value.lastIndexOf('@');
+                messageInput.value = messageInput.value.slice(0, atIndex) + '@file_' + fileId.slice(0, 8) + ' ';
+                messageInput.focus();
+                hideFileSelector();
+            });
+        });
+        
+        selectedFileIndex = -1;
+    }
+    
+    /**
+     * Navigate file list
+     */
+    function navigateFileList(direction) {
+        const items = fileList.querySelectorAll('.skill-item');
+        if (!items.length) return;
+        
+        if (selectedFileIndex >= 0) {
+            items[selectedFileIndex].classList.remove('selected');
+        }
+        
+        selectedFileIndex += direction;
+        if (selectedFileIndex < 0) selectedFileIndex = items.length - 1;
+        if (selectedFileIndex >= items.length) selectedFileIndex = 0;
+        
+        items[selectedFileIndex].classList.add('selected');
+        items[selectedFileIndex].scrollIntoView({ block: 'nearest' });
+    }
+    
+    /**
      * Render skill list in dropdown
      */
     function renderSkillList() {
@@ -690,15 +804,62 @@
             return;
         }
         
+        // Show file selector on @
+        if (e.key === '@') {
+            const cursorPos = messageInput.selectionStart;
+            const textBefore = messageInput.value.slice(0, cursorPos);
+            // Only show if @ is at start or after space
+            if (cursorPos === 0 || textBefore.endsWith(' ') || textBefore.endsWith('\n')) {
+                e.preventDefault();
+                showFileSelector();
+                return;
+            }
+        }
+        
+        // File selector navigation
+        if (fileSelector.classList.contains('active')) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                navigateFileList(1);
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                navigateFileList(-1);
+                return;
+            }
+            if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                const selected = fileList.querySelector('.skill-item.selected');
+                if (selected) {
+                    const fileId = selected.dataset.fileId;
+                    const atIndex = messageInput.value.lastIndexOf('@');
+                    messageInput.value = messageInput.value.slice(0, atIndex) + '@file_' + fileId.slice(0, 8) + ' ';
+                    messageInput.focus();
+                    hideFileSelector();
+                }
+                return;
+            }
+            if (e.key === 'Escape') {
+                hideFileSelector();
+                return;
+            }
+        }
+        
         // Close skill selector when deleting the /
         if (e.key === 'Backspace' || e.key === 'Delete') {
             if (messageInput.value === '/' && skillSelector.classList.contains('active')) {
                 hideSkillSelector();
             }
+            // Close file selector when deleting @
+            const atIndex = messageInput.value.lastIndexOf('@');
+            if (atIndex === -1 && fileSelector.classList.contains('active')) {
+                hideFileSelector();
+            }
         }
         
         // Send message
-        if (e.key === 'Enter' && !e.shiftKey && !skillSelector.classList.contains('active')) {
+        if (e.key === 'Enter' && !e.shiftKey && !skillSelector.classList.contains('active') && !fileSelector.classList.contains('active')) {
             e.preventDefault();
             sendMessage();
         }
