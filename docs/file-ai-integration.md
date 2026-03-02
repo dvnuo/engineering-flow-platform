@@ -8,7 +8,7 @@ Enable users to chat with AI about uploaded files. The AI should understand and 
 
 ### Working
 - File upload via web UI
-- File parsing (OCR, PDF text extraction, document parsing)
+- File parsing (Vision LLM, OCR fallback, PDF text extraction, document parsing)
 - File listing and management
 
 ### Not Working
@@ -291,7 +291,7 @@ src/
 - [ ] Upload PDF → auto-parse → ask "What is this document about?" → AI responds
 - [ ] Upload multiple files → reference individually with @file_xxx
 - [ ] File context persists within session
-- [ ] Works with: PDF, Images (OCR), DOCX, XLSX, CSV
+- [ ] Works with: PDF, Images (Vision LLM with OCR fallback), DOCX, XLSX, CSV
 
 ### Performance
 - [ ] Large files (50+ page PDF / 10k row CSV) don't timeout or OOM
