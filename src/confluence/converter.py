@@ -37,11 +37,6 @@ class MarkdownConverter:
             Storage Format (XHTML) string
         """
         return self._basic_markdown_to_storage(markdown_text)
-                # Fall through to basic converter
-        
-        # Fallback: basic conversion
-        logger.warning("Using fallback basic converter for MD→Storage")
-        return self._basic_markdown_to_storage(markdown_text)
     
     def storage_to_markdown(self, storage_text: str) -> str:
         """
