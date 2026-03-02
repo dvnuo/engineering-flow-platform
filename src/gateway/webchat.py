@@ -1147,12 +1147,14 @@ async def api_files_upload(request: web.Request) -> web.Response:
                 'error': 'Filename is required'
             }, status=400)
         
+        logger.info(f"[api_files_upload] session_id={session_id}, filename={filename}")
         metadata = await upload_file(
             session_id=session_id,
             content=content,
             filename=filename,
             max_size_mb=max_size_mb
         )
+        logger.info(f"[api_files_upload] saved metadata.session_id={metadata.session_id}")
         
         return web.json_response({
             'success': True,
