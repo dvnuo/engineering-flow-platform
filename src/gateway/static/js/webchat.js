@@ -1024,10 +1024,13 @@
         return html;
     }
     
-    // Close skill selector when clicking outside
+    // Close skill and file selector when clicking outside
     document.addEventListener('click', function(e) {
         if (!skillSelector.contains(e.target)) {
             hideSkillSelector();
+        }
+        if (!fileSelector.contains(e.target)) {
+            hideFileSelector();
         }
     });
     
