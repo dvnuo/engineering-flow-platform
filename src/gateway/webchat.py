@@ -1528,7 +1528,8 @@ async def api_files_delete(request: web.Request) -> web.Response:
         200: {"success": true}
     """
     try:
-        from src.utils.file_parser import delete_file, get_metadata, StoredFileNotFoundError
+        from src.utils.file_parser.storage import init_storage, delete_file, get_metadata, StoredFileNotFoundError
+        init_storage()
         
         file_id = request.match_info.get('file_id')
         
