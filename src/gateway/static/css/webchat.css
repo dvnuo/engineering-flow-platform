@@ -1186,7 +1186,7 @@ body {
     display: flex;
     flex-direction: column;
     gap: var(--space-xs);
-    height: calc(100vh - 410px);
+    height: calc(100vh - 450px);
     overflow-y: auto;
     padding-right: var(--space-xs);
 }
