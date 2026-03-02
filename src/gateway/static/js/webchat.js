@@ -115,7 +115,6 @@
                                 <span class="file-status ${statusClass}">${statusText}</span>
                             </div>
                             <div class="file-actions">
-                                <button class="file-action parse-btn" data-file-id="${file.file_id}" title="Parse file">Parse</button>
                                 <button class="file-action cite-btn" data-file-id="${file.file_id}" title="Ask about this file">@file_${file.file_id.slice(0,8)}</button>
                             </div>
                         </li>
@@ -123,13 +122,6 @@
                 }
                 html += '</ul>';
                 fileExplorerContent.innerHTML = html;
-                
-                // Add parse button handlers
-                fileExplorerContent.querySelectorAll('.parse-btn').forEach(btn => {
-                    btn.addEventListener('click', async (e) => {
-                        const fileId = e.target.dataset.fileId;
-                        await parseFile(fileId);
-                    });
                 });
                 
                 // Add cite button handlers
@@ -154,40 +146,6 @@
     }
     
     // Parse file
-    async function parseFile(fileId) {
-        setStatus('Parsing file...', 'uploading');
-        
-        try {
-            const sessionId = ''; // Not required for My Uploads
-            const headers = {'Content-Type': 'application/json'};
-            if (sessionId) {
-                headers['X-Session-ID'] = sessionId;
-            }
-            
-            const response = await fetch('/api/files/parse', {
-                method: 'POST',
-                headers: headers,
-                body: JSON.stringify({file_id: fileId})
-            });
-            
-            const data = await response.json();
-            
-            if (data.success) {
-                setStatus('File parsed successfully', 'success');
-                
-                // Show preview
-                const preview = data.markdown.substring(0, 1000) + (data.markdown.length > 1000 ? '...' : '');
-                
-                addMessage('assistant', `📄 File parsed:\n\n${preview}\n\n(${data.blocks.length} blocks, ${data.parse_time_ms}ms)`);
-            } else {
-                setStatus('Parse failed: ' + data.error, 'error');
-            }
-        } catch (error) {
-            console.error('Parse error:', error);
-            setStatus('Parse failed: ' + error.message, 'error');
-        }
-    }
-    
     // Helper functions
     function getFileIcon(contentType) {
         if (contentType.startsWith('image/')) return '<span class="file-type-badge img">IMG</span>';
