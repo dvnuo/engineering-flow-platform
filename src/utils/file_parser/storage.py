@@ -1,6 +1,8 @@
 """File storage with metadata mapping."""
 
 import os
+import json
+import logging
 from pathlib import Path
 from typing import Dict, Optional
 import uuid
@@ -10,16 +12,52 @@ from .models import FileMetadata, StoredFileNotFoundError
 from .validators import get_safe_extension
 
 
+logger = logging.getLogger(__name__)
+
 # Upload directory
 UPLOAD_DIR = Path("~/.efp/workspace/uploads").expanduser()
+METADATA_FILE = UPLOAD_DIR / "metadata.json"
 
-# In-memory metadata storage (use Redis in production)
+# In-memory metadata storage
 _file_metadata: Dict[str, FileMetadata] = {}
+
+
+def _load_metadata():
+    global _file_metadata
+    if METADATA_FILE.exists():
+        try:
+            with open(METADATA_FILE, 'r') as f:
+                data = json.load(f)
+            # Clear and update in place to preserve imported references
+            _file_metadata.clear()
+            _file_metadata.update({k: FileMetadata(**v) for k, v in data.items()})
+        except Exception as e:
+            print('LOAD ERROR:', e)  # Debug
+            logger.warning(f'Failed to load file metadata from {METADATA_FILE}: {e}. Proceeding with empty metadata.')
+            # Try to backup corrupt file
+            try:
+                backup_path = METADATA_FILE.with_suffix('.json.bak')
+                METADATA_FILE.rename(backup_path)
+                logger.info(f'Backed up corrupt metadata file to {backup_path}')
+            except Exception:
+                pass
+            _file_metadata = {}
+
+
+def _save_metadata():
+    # Write to temp file first, then atomically replace
+    temp_path = METADATA_FILE.with_suffix('.json.tmp')
+    data = {k: v.model_dump() for k, v in _file_metadata.items()}
+    with open(temp_path, 'w') as f:
+        json.dump(data, f, indent=2)
+    os.replace(temp_path, METADATA_FILE)
 
 
 def init_storage() -> None:
     """Initialize storage directory."""
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    _load_metadata()
+    _load_metadata()
 
 
 def _generate_file_id() -> str:
@@ -58,6 +96,7 @@ def register_file(
         session_id=session_id,
     )
     _file_metadata[file_id] = metadata
+    _save_metadata()
     return metadata
 
 
@@ -139,6 +178,7 @@ def delete_file(file_id: str) -> bool:
     
     # Remove metadata
     del _file_metadata[file_id]
+    _save_metadata()
     return True
 
 

@@ -252,7 +252,7 @@ body {
 }
 
 .sidebar-section-title {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -400,7 +400,7 @@ body {
     display: inline-flex;
     align-items: center;
     gap: var(--space-xs);
-    font-size: 11px;
+    font-size: 11px; color: #333;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -415,7 +415,7 @@ body {
     display: inline-flex;
     align-items: center;
     gap: var(--space-xs);
-    font-size: 11px;
+    font-size: 11px; color: #333;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -592,7 +592,7 @@ body {
 
 /* Timestamp */
 .message-timestamp {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-subtle);
     margin-top: var(--space-xs);
     padding: 0 var(--space-sm);
@@ -982,7 +982,7 @@ body {
 }
 
 .stat-label {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-muted);
     margin-bottom: var(--space-xs);
     text-transform: uppercase;
@@ -1001,7 +1001,7 @@ body {
 }
 
 .stat-model {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-muted);
     margin-top: var(--space-xs);
 }
@@ -1046,7 +1046,7 @@ body {
 
 .skill-selector-header {
     padding: var(--space-sm) var(--space-md);
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1092,7 +1092,7 @@ body {
 
 .skill-item .skill-examples {
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-accent);
     display: none;
 }
@@ -1186,7 +1186,7 @@ body {
     display: flex;
     flex-direction: column;
     gap: var(--space-xs);
-    height: calc(100vh - 410px);
+    height: calc(100vh - 450px);
     overflow-y: auto;
     padding-right: var(--space-xs);
 }
@@ -1248,7 +1248,7 @@ body {
 }
 
 .recent-session-preview {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-subtle);
     white-space: nowrap;
     overflow: hidden;
@@ -1446,7 +1446,7 @@ body {
     background: var(--color-bg-input);
     border-radius: var(--radius-md);
     margin-bottom: var(--space-md);
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-muted);
 }
 
@@ -1706,7 +1706,7 @@ input:checked + .slider:before {
     border-radius: var(--radius-sm);
     padding: var(--space-xs) var(--space-sm);
     color: var(--color-text-muted);
-    font-size: 11px;
+    font-size: 11px; color: #333;
     font-family: var(--font-sans);
     cursor: pointer;
     opacity: 0;
@@ -2006,7 +2006,7 @@ input:checked + .slider:before {
 }
 
 .agent-event-label {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-muted);
     margin-top: var(--space-xs);
     text-transform: uppercase;
@@ -2268,7 +2268,7 @@ input:checked + .slider:before {
 }
 
 .file-size {
-    font-size: 11px;
+    font-size: 11px; color: #333;
     color: var(--color-text-muted, #999);
 }
 
@@ -2278,7 +2278,7 @@ input:checked + .slider:before {
     border: none;
     padding: 4px 8px;
     border-radius: 4px;
-    font-size: 11px;
+    font-size: 11px; color: #333;
     cursor: pointer;
 }
 
@@ -2331,33 +2331,6 @@ input:checked + .slider:before {
     text-overflow: ellipsis;
 }
 
-#fileExplorerContent .file-status {
-    font-size: 11px;
-    padding: 2px 6px;
-    border-radius: 3px;
-    width: fit-content;
-}
-
-#fileExplorerContent .file-status.status-pending {
-    background: #f0f0f0;
-    color: #666;
-}
-
-#fileExplorerContent .file-status.status-completed {
-    background: #d4edda;
-    color: #155724;
-}
-
-#fileExplorerContent .file-status.status-processing {
-    background: #fff3cd;
-    color: #856404;
-}
-
-#fileExplorerContent .file-status.status-failed {
-    background: #f8d7da;
-    color: #721c24;
-}
-
 #fileExplorerContent .file-actions {
     display: flex;
     gap: 4px;
@@ -2365,7 +2338,7 @@ input:checked + .slider:before {
 
 #fileExplorerContent .file-actions .file-action {
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: 11px; color: #333;
     border: 1px solid var(--color-border, #ddd);
     background: var(--color-bg, #fff);
     border-radius: 4px;
@@ -2376,4 +2349,79 @@ input:checked + .slider:before {
     background: var(--color-primary, #4a90d9);
     color: white;
     border-color: var(--color-primary, #4a90d9);
+}
+
+.chat-container.drag-over, .input-area.drag-over { background: #e3f2fd; border: 2px dashed #2196f3; }
+
+
+/* File Explorer Toggle */
+.file-toggle {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+}
+
+.toggle-btn {
+    padding: 4px 8px;
+    font-size: 11px; color: #333;
+    border: 1px solid var(--border-color, #ddd);
+    background: transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: all 0.2s;
+}
+
+.toggle-btn:hover {
+    opacity: 1;
+}
+
+.toggle-btn.active {
+    background: var(--primary-color, #2196f3);
+    color: white;
+    opacity: 1;
+    border-color: var(--primary-color, #2196f3);
+}
+
+/* File Type Badges */
+.file-type-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-family: monospace;
+}
+
+.file-type-badge.img {
+    background: #e3f2fd;
+    color: #1976d2;
+}
+
+.file-type-badge.pdf {
+    background: #ffebee;
+    color: #c62828;
+}
+
+.file-type-badge.txt {
+    background: #f5f5f5;
+    color: #616161;
+}
+
+/* Delete button - match other buttons, red on hover */
+#fileExplorerContent .file-actions .delete-btn {
+    color: #666;
+    border-color: #ddd;
+    background: #fff;
+    padding: 4px 8px;
+    font-size: 11px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+#fileExplorerContent .file-actions .delete-btn:hover {
+    background: #dc3545;
+    color: white;
+    border-color: #dc3545;
 }

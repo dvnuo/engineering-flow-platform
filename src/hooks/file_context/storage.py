@@ -1,7 +1,6 @@
 """File context storage implementation."""
 
 import json
-import os
 import hashlib
 from pathlib import Path
 from typing import List, Optional

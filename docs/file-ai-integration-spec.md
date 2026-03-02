@@ -151,8 +151,9 @@ class Chunk(BaseModel):
 | Source | Default Confidence | Notes |
 |--------|-------------------|-------|
 | PDF text (PyMuPDF) | 0.98 | High accuracy |
-| OCR (PaddleOCR) | 0.85 | Varies by image quality |
-| OCR (Tesseract) | 0.80 | Lower accuracy |
+| Vision LLM | 0.95 | Uses GPT-4o/GPT-4V for image understanding |
+| OCR (PaddleOCR) | 0.85 | Fallback when LLM unavailable |
+| OCR (Tesseract) | 0.80 | Fallback when PaddleOCR unavailable |
 | Table (pdfplumber) | 0.95 | High accuracy |
 | Excel (openpyxl) | 0.98 | Perfect structure |
 | CSV (pandas) | 0.98 | Perfect structure |
