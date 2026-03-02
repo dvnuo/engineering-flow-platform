@@ -111,7 +111,7 @@ src/jira/
 | `[link](url)` | [link\|url] |
 | `- item` | * item |
 | `1. item` | # item |
-| `> quote` | {quote}quote{/quote} |
+| `> quote` | {quote}quote{quote} |
 | `---` | ---- |
 | `![alt](url)` | !url! |
 
