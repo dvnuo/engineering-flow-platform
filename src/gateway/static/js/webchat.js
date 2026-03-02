@@ -1597,7 +1597,7 @@
     // Show My Uploads (user's uploaded files)
     async function showMyUploads() {
         fileExplorerPanel.classList.add('show');
-        fileExplorerContent.innerHTML = '<div class=loading>Loading...</div>';
+        fileExplorerContent.innerHTML = '<div class="loading">Loading...</div>';
         
         // Update title
         const titleEl = document.getElementById('fileExplorerTitle');
