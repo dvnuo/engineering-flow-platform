@@ -9,6 +9,7 @@ Provides:
 import logging
 from typing import Any, Dict, List, Optional
 
+from ..utils.truncate import truncate
 from .api import ConfluenceChannel
 from .converter import converter
 
@@ -59,8 +60,8 @@ class ConfluenceFormatAdapter:
             content = await self._to_markdown(page)
         
         # Apply character limit
-        if max_chars and len(content) > max_chars:
-            content = content[:max_chars] + f"\n\n... (truncated, {max_chars} chars limit)"
+        if max_chars:
+            content = truncate(content, max_chars)
         
         return content
     
@@ -119,8 +120,8 @@ class ConfluenceFormatAdapter:
         else:
             content = await self._to_markdown(page)
         
-        if max_chars and len(content) > max_chars:
-            content = content[:max_chars] + f"\n\n... (truncated, {max_chars} chars limit)"
+        if max_chars:
+            content = truncate(content, max_chars)
         
         return content
     

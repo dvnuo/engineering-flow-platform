@@ -132,8 +132,9 @@ class TestAdapter:
         
         result = await adapter.get_page("123", max_chars=100)
         
+        # truncate() uses "..." suffix
         assert len(result) <= 150
-        assert "truncated" in result
+        assert "..." in result
     
     @pytest.mark.asyncio
     async def test_create_page_markdown(self, mock_channel):
