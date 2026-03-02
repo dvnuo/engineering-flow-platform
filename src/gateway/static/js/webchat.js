@@ -762,10 +762,10 @@
         }
     }
     
-    // Add listeners to both input area and chat container
-    chatInputArea.addEventListener('dragover', handleDragOver);
-    chatInputArea.addEventListener('dragleave', handleDragLeave);
-    chatInputArea.addEventListener('drop', handleDrop);
+    // Add listeners to chat container
+    chatContainer.addEventListener('dragover', handleDragOver);
+    chatContainer.addEventListener('dragleave', handleDragLeave);
+    chatContainer.addEventListener('drop', handleDrop);
     
     // Send on Enter (Shift+Enter for new line)
     messageInput.addEventListener('keydown', function(e) {
