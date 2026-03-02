@@ -1194,10 +1194,11 @@ async def api_files_parse(request: web.Request) -> web.Response:
         400: {"success": false, "error": "..."}
     """
     try:
-        from src.utils.file_parser import parse_file, StoredFileNotFoundError, get_metadata, init_storage
+        from src.utils.file_parser.storage import init_storage, _file_metadata, get_metadata
         
         # Initialize storage to load metadata
         init_storage()
+        logger.info(f"[api_files_parse] init_storage done, metadata count: {len(fm)}")
         
         try:
             data = await request.json()
