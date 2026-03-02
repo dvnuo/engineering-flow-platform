@@ -288,11 +288,21 @@ class ConfluenceFormatAdapter:
         Returns:
             Success message
         """
-        # If title is not provided, fetch current page to get the title
-        if title is None:
+        # Fetch current page if we need title or body
+        current_page = None
+        if title is None or body is None:
             current_page = await self.channel.get_page(page_id)
             if isinstance(current_page, dict):
-                title = current_page.get("title", "")
+                if title is None:
+                    title = current_page.get("title", "")
+                if body is None:
+                    body_obj = current_page.get("body", {})
+                    if isinstance(body_obj, dict):
+                        body = body_obj.get("storage", {}).get("value", "")
+                    elif isinstance(body_obj, str):
+                        body = body_obj
+                    else:
+                        body = ""
         
         if body and body_format == "markdown":
             body = self.converter.markdown_to_storage(body)
