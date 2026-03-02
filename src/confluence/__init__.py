@@ -33,12 +33,11 @@ __all__ = [
 ]
 
 
-# Global adapter instance
-_adapter: Optional[ConfluenceFormatAdapter] = None
+# Factory for creating adapter instances bound to the current channel.
 
 
 def _get_adapter() -> ConfluenceFormatAdapter:
-    """Create a format adapter bound to the current channel.
+    """Create a new format adapter bound to the current channel.
     
     A new adapter is returned on each call to avoid caching a channel instance
     in a module-level singleton, which can interfere with tests or runtime reconfiguration.
