@@ -1583,7 +1583,6 @@
             fileViewMode = 'server';
             showFileExplorer();
         } else if (action === 'my-uploads') {
-            alert('my-uploads clicked!');
             fileViewMode = 'uploads';
             showMyUploads();
         } else if (action === 'settings') {
