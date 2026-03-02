@@ -2733,4 +2733,27 @@
     // Connect to WebSocket on page load
     connectEventWebSocket();
     
+    // File explorer toggle buttons
+    const toggleServerFiles = document.getElementById('toggleServerFiles');
+    const toggleMyUploads = document.getElementById('toggleMyUploads');
+    const fileExplorerTitle = document.getElementById('fileExplorerTitle');
+    
+    if (toggleServerFiles && toggleMyUploads) {
+        toggleServerFiles.addEventListener('click', function() {
+            fileViewMode = 'server';
+            toggleServerFiles.classList.add('active');
+            toggleMyUploads.classList.remove('active');
+            if (fileExplorerTitle) fileExplorerTitle.textContent = 'Server Files';
+            refreshFileList();
+        });
+        
+        toggleMyUploads.addEventListener('click', function() {
+            fileViewMode = 'uploads';
+            toggleMyUploads.classList.add('active');
+            toggleServerFiles.classList.remove('active');
+            if (fileExplorerTitle) fileExplorerTitle.textContent = 'My Uploads';
+            refreshFileList();
+        });
+    }
+    
 })();

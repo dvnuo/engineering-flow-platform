@@ -2380,3 +2380,32 @@ input:checked + .slider:before {
 
 .chat-container.drag-over, .input-area.drag-over { background: #e3f2fd; border: 2px dashed #2196f3; }
 
+
+/* File Explorer Toggle */
+.file-toggle {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+}
+
+.toggle-btn {
+    padding: 4px 8px;
+    font-size: 11px;
+    border: 1px solid var(--border-color, #ddd);
+    background: transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: all 0.2s;
+}
+
+.toggle-btn:hover {
+    opacity: 1;
+}
+
+.toggle-btn.active {
+    background: var(--primary-color, #2196f3);
+    color: white;
+    opacity: 1;
+    border-color: var(--primary-color, #2196f3);
+}
