@@ -2,14 +2,26 @@
 
 ## 1. 背景
 
-当前 Jira 集成使用 Atlassian 的 REST API 返回的原始格式（通常是 JSON 或 Atlassian Document Format）。为了与 Confluence 保持一致，并提升开发者体验，需要为 Jira 增加 Markdown 格式支持。
+当前 Jira 集成使用 Atlassian 的 REST API 返回的原始格式。
+
+**Jira 私有化 (Server/Data Center):**
+- `description` / `comment.body` 通常是 **wiki/renderer 字符串**（REST v2）
+- 这是私有化环境最常见的格式
+
+**Jira Cloud:**
+- 使用 **ADF (Atlassian Document Format)** - JSON 结构（REST v3）
+
+**本需求设计:**
+- 以 **Server/DC** 为主场景
+- **主路径**: wiki/renderer ↔ Markdown
+- **兼容路径**: ADF (Cloud) ↔ Markdown（检测到 ADF JSON 时启用）
 
 ## 2. 目标
 
 为 Jira 集成增加 Markdown 格式支持：
 - 查询（Issue 内容）默认返回 Markdown
-- 创建/更新接受 Markdown 输入
-- 保留现有格式作为备选
+- 创建/更新/评论接受 Markdown 输入
+- 保留 wiki 和 raw 作为备选
 
 ## 3. 功能需求
 
@@ -17,15 +29,17 @@
 
 | 场景 | 当前行为 | 期望行为 |
 |------|----------|----------|
-| `jira_get_issue` | 返回 JSON / ADF | 返回 Markdown (默认) |
+| `jira_get_issue` | 返回 JSON | 返回 Markdown (默认) |
 | `jira_get_comments` | 返回 JSON | 返回 Markdown (默认) |
 
 **新增参数:**
 ```python
 jira_get_issue(
     issue_key: str,
-    format: "markdown" | "raw",  # 默认 "markdown"
-    max_chars: int = None  # 可选截断
+    format: "markdown" | "wiki" | "raw",  # 默认 "markdown"
+    max_chars: int = None,
+    max_comments: int = 5,
+    include_fields: list[str] = None,  # ["summary", "status", "description"]
 )
 ```
 
@@ -33,8 +47,8 @@ jira_get_issue(
 
 | 场景 | 当前行为 | 期望行为 |
 |------|----------|----------|
-| `jira_create_issue` | 需要 JSON/ADF | 接受 Markdown (自动转换) |
-| `jira_update_issue` | 需要 JSON/ADF | 接受 Markdown (自动转换) |
+| `jira_create_issue` | 需要 JSON | 接受 Markdown (自动转换) |
+| `jira_update_issue` | 需要 JSON | 接受 Markdown (自动转换) |
 | `jira_add_comment` | 需要 JSON | 接受 Markdown (自动转换) |
 
 **新增参数:**
@@ -43,24 +57,31 @@ jira_create_issue(
     project_key: str,
     summary: str,
     description: str = "",  # Markdown
-    description_format: "markdown" | "raw",  # 默认 "markdown"
+    description_format: "markdown" | "wiki" | "raw",  # 默认 "markdown"
     issue_type: str = "Bug",
-    priority: str = None,
     ...
 )
 
 jira_add_comment(
     issue_key: str,
     body: str,  # Markdown
-    body_format: "markdown" | "raw",  # 默认 "markdown"
+    body_format: "markdown" | "wiki" | "raw",  # 默认 "markdown"
 )
 ```
 
-### 3.3 保留现有方式
+### 3.3 format 参数说明
+
+| 值 | 说明 | 用途 |
+|-----|------|------|
+| `markdown` | LLM 友好的 Markdown | **默认**，给 AI 用 |
+| `wiki` | Jira 私有化可渲染的源文本 | 写回/渲染用 |
+| `raw` | 完整 JSON / issue 原始数据 | 调试/兼容用 |
+
+### 3.4 保留现有方式
 
 - 所有函数保留 `format` / `body_format` 参数
-- 显式指定 `format: "raw"` 时使用原有行为
-- 不指定时默认 Markdown
+- 显式指定 `format: "wiki"` 或 `format: "raw"` 时使用对应格式
+- 不指定时默认 **Markdown**
 
 ## 4. 技术方案
 
@@ -70,55 +91,107 @@ jira_add_comment(
 src/jira/
 ├── api.py              # JiraChannel (现有)
 ├── __init__.py         # 工具函数 (现有)
-├── converter.py        # 新增: Markdown ↔ Jira ADF 转换器
-└── adapter.py         # 新增: 格式适配器
+├── converter.py        # Markdown ↔ Jira wiki (ADF 兼容)
+└── adapter.py          # 格式适配器
 ```
 
-### 4.2 Jira ADF (Atlassian Document Format) 转换
+### 4.2 主路径：Jira wiki/renderer ↔ Markdown (Server/DC)
 
-Jira 使用 ADF 格式，需要实现：
-- ADF → Markdown
-- Markdown → ADF
+**核心映射 (最小支持):**
+
+| Markdown | Jira Wiki |
+|----------|-----------|
+| `# Title` | h1. Title |
+| `## Title` | h2. Title |
+| `### Title` | h3. Title |
+| `**bold**` | *bold* |
+| `*italic** | _italic_ |
+| ``code`` | {{code}} |
+| ```lang<br>code``` | {code:lang\|code} |
+| `[link](url)` | [link\|url] |
+| `- item` | * item |
+| `1. item` | # item |
+| `> quote` | {quote}quote{/quote} |
+| `---` | ---- |
+| `![alt](url)` | !url! |
+
+**实现策略:**
+- 不是追求 100% round-trip
+- 优先保证 "LLM 可读、token 省"
+- wiki → markdown：解析 wiki 标记
+- markdown → wiki：生成 wiki 标记
+
+### 4.3 兼容路径：ADF ↔ Markdown (Cloud)
+
+**仅当检测到 ADF JSON 时启用**（body 是 dict 且包含 `type: doc` 等特征）。
 
 **ADF 元素映射:**
 
 | ADF | Markdown |
 |-----|----------|
-| `heading` | `#` |
+| `heading` | # |
 | `paragraph` | 文本 |
-| `bulletList` | `-` |
-| `orderedList` | `1.` |
+| `bulletList` | - |
+| `orderedList` | 1. |
 | `codeBlock` | ```lang |
 | `codeMark` | ``code`` |
 | `strong` | **bold** |
 | `emphasis` | *italic* |
 | `link` | [text](url) |
-| `media` | ![](url) |
-| `blockquote` | `>` |
 
-### 4.3 Format Adapter 设计
+### 4.4 Format Adapter 设计
 
 ```python
 # src/jira/adapter.py
 class JiraFormatAdapter:
     def __init__(self, channel: JiraChannel):
         self.channel = channel
-        self.converter = JiraMarkdownConverter()
+        self.converter = JiraMarkupConverter()
     
-    async def get_issue(self, issue_key: str, format: str = "markdown", max_chars: int = None) -> str:
+    async def get_issue(
+        self,
+        issue_key: str,
+        format: str = "markdown",
+        max_chars: int = None,
+        max_comments: int = 5,
+        include_fields: list[str] = None
+    ) -> str:
         issue = await self.channel.get_issue(issue_key)
         
         if format == "raw":
             return self._extract_raw(issue)
         
-        # format == "markdown"
-        return self._to_markdown(issue, max_chars)
+        if format == "wiki":
+            return self._to_wiki(issue)
+        
+        # format == "markdown" (default)
+        return self._to_markdown(issue, max_chars, max_comments, include_fields)
     
-    async def add_comment(self, issue_key: str, body: str, body_format: str = "markdown") -> str:
+    async def add_comment(
+        self,
+        issue_key: str,
+        body: str,
+        body_format: str = "markdown"
+    ) -> str:
+        # 根据部署类型和内容选择转换路径
         if body_format == "markdown":
-            body = self.converter.markdown_to_adf(body)
+            # 优先转 wiki（Server/DC）
+            body = self.converter.markdown_to_wiki(body)
+        elif body_format == "raw":
+            # ADF 兼容（仅当检测到 ADF 时）
+            if self._is_adf(body):
+                body = self.converter.markdown_to_adf(body)
         
         return await self.channel.add_comment(issue_key, body)
+    
+    def _is_adf(self, text: str) -> bool:
+        """检测是否是 ADF JSON"""
+        import json
+        try:
+            data = json.loads(text)
+            return isinstance(data, dict) and data.get("type") == "doc"
+        except:
+            return False
 ```
 
 ## 5. API 变更
@@ -129,16 +202,19 @@ class JiraFormatAdapter:
 # jira_get_issue
 async def jira_get_issue(
     issue_key: str,
-    format: str = "markdown",
-    max_chars: int = None
+    format: str = "markdown",  # markdown | wiki | raw
+    max_chars: int = None,
+    max_comments: int = 5,
+    include_fields: list[str] = None
 ) -> str
 
-# jira_create_issue  
+# jira_create_issue
 async def jira_create_issue(
     project_key: str,
     summary: str,
     description: str = "",
-    description_format: str = "markdown",
+    description_format: str = "markdown",  # markdown | wiki | raw
+    issue_type: str = "Bug",
     ...
 ) -> str
 
@@ -146,7 +222,7 @@ async def jira_create_issue(
 async def jira_add_comment(
     issue_key: str,
     body: str,
-    body_format: str = "markdown"
+    body_format: str = "markdown"  # markdown | wiki | raw
 ) -> str
 ```
 
@@ -162,13 +238,23 @@ async def jira_add_comment(
       "issue_key": {"type": "string", "description": "Jira issue key (e.g., 'PROJ-123')"},
       "format": {
         "type": "string",
-        "enum": ["markdown", "raw"],
+        "enum": ["markdown", "wiki", "raw"],
         "default": "markdown",
-        "description": "Output format: markdown (default) or raw"
+        "description": "Output format: markdown (LLM-friendly), wiki (renderable), or raw (JSON)"
       },
       "max_chars": {
         "type": "integer",
         "description": "Maximum characters to return"
+      },
+      "max_comments": {
+        "type": "integer",
+        "description": "Maximum number of comments to include",
+        "default": 5
+      },
+      "include_fields": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Fields to include (default: summary, status, description, comments)"
       }
     },
     "required": ["issue_key"]
@@ -178,22 +264,36 @@ async def jira_add_comment(
 
 ## 7. 已知限制
 
-1. **ADF 复杂性**: Jira ADF 是复杂的 JSON 结构，完整转换可能有遗漏
-2. **宏/组件**: 某些 Jira 特有元素可能无法完美转换
-3. **附件**: 附件处理需要单独实现
+### 7.1 Wiki/Renderer 方言差异
+- 不同 Jira 版本/渲染器对语法支持不同
+- 转换以常用语法为主
+
+### 7.2 往返不保证一致
+- Markdown → wiki → Markdown 可能丢失部分格式
+
+### 7.3 ADF 仅兼容
+- 如遇 ADF JSON，尽力转换
+- 不保证覆盖全部节点
 
 ## 8. 里程碑
 
-- [ ] M1: 实现 JiraMarkdownConverter (ADF ↔ Markdown)
+- [ ] M1: 实现 JiraMarkupConverter (wiki ↔ markdown + ADF 兼容分支)
 - [ ] M2: 创建 JiraFormatAdapter
-- [ ] M3: 更新 jira_get_issue 支持 format 参数
+- [ ] M3: 更新 jira_get_issue 支持 format/max_chars/max_comments/include_fields
 - [ ] M4: 更新 jira_create_issue 支持 description_format
 - [ ] M5: 更新 jira_add_comment 支持 body_format
 - [ ] M6: 更新 Tool Schema
 - [ ] M7: 单元测试 + 集成测试
 
-## 9. 参考
+## 9. 对外契约（一句话版）
+
+**读:** 默认返回 Markdown（LLM-friendly），可选返回 wiki 或 raw JSON
+
+**写:** 默认接受 Markdown，内部转换成 Jira 可写入的 wiki（Server/DC），ADF 仅作兼容
+
+## 10. 参考
 
 - Confluence Markdown 支持实现: `src/confluence/converter.py`, `src/confluence/adapter.py`
 - Jira REST API: https://developer.atlassian.com/server/jira/platform/rest-apis/
+- Jira wiki markup: https://confluence.atlassian.com/doc/wiki-markup-228382720.html
 - Atlassian Document Format: https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/
