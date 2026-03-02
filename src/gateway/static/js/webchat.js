@@ -506,6 +506,10 @@
      * Show file selector dropdown
      */
     function showFileSelector() {
+        // Always reload files to get latest
+        filesLoaded = false;
+        uploadedFiles = [];
+        
         if (!uploadedFiles.length) {
             loadFilesForSelector().then(() => {
                 if (uploadedFiles.length) {
