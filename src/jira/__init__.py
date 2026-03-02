@@ -255,27 +255,169 @@ from .api import jira_update_issue as _original_update_issue
 from .api import jira_get_comments
 
 
-# Re-export get_tools_schemas with additional tool
-from .api import get_tools_schemas as _get_tools_schemas
-
 def get_tools_schemas() -> list:
-    """Get all Jira tool schemas including URL-based lookup."""
-    tools = _get_tools_schemas()
-    
-    # Add URL-based lookup tool
-    tools.append({
-        "type": "function",
-        "function": {
-            "name": "jira_get_issue_by_url",
-            "description": "Get a Jira issue directly by its full URL. Use this when user provides a Jira issue URL.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "Full Jira issue URL (e.g., https://company.atlassian.net/browse/PROJ-123)"}
-                },
-                "required": ["url"]
+    """Get all Jira tool schemas with Markdown support."""
+    # Return updated schemas with new parameters
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_get_issue",
+                "description": "Get a Jira issue by key. Returns Markdown by default.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"},
+                        "format": {
+                            "type": "string",
+                            "enum": ["markdown", "wiki", "raw"],
+                            "default": "markdown",
+                            "description": "Output format: markdown (LLM-friendly), wiki (renderable), or raw (JSON)"
+                        },
+                        "max_chars": {
+                            "type": "integer",
+                            "description": "Maximum characters to return"
+                        },
+                        "max_comments": {
+                            "type": "integer",
+                            "description": "Maximum number of comments to include",
+                            "default": 5
+                        },
+                        "include_fields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Fields to include (default: summary, status, description, comments)"
+                        },
+                        "include_comments": {
+                            "type": "boolean",
+                            "description": "Whether to include comments",
+                            "default": True
+                        }
+                    },
+                    "required": ["issue_key"]
+                }
             }
-        }
-    })
-    
-    return tools
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_get_issue_by_url",
+                "description": "Get a Jira issue by its full URL. Returns Markdown by default.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "Full Jira issue URL (e.g., https://company.atlassian.net/browse/PROJ-123)"},
+                        "format": {
+                            "type": "string",
+                            "enum": ["markdown", "wiki", "raw"],
+                            "default": "markdown",
+                            "description": "Output format: markdown, wiki, or raw"
+                        },
+                        "max_chars": {"type": "integer", "description": "Maximum characters to return"},
+                        "max_comments": {"type": "integer", "description": "Maximum comments to include", "default": 5},
+                        "include_comments": {"type": "boolean", "description": "Include comments", "default": True}
+                    },
+                    "required": ["url"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_create_issue",
+                "description": "Create a new Jira issue. Accepts Markdown by default.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "project_key": {"type": "string", "description": "Project key (e.g., PROJ)"},
+                        "summary": {"type": "string", "description": "Issue summary/title"},
+                        "description": {"type": "string", "description": "Issue description (Markdown by default)"},
+                        "description_format": {
+                            "type": "string",
+                            "enum": ["markdown", "wiki", "raw"],
+                            "default": "markdown",
+                            "description": "Input format: markdown, wiki, or raw"
+                        },
+                        "issue_type": {"type": "string", "description": "Issue type", "default": "Task"},
+                        "priority": {"type": "string", "description": "Priority name"},
+                        "labels": {"type": "array", "items": {"type": "string"}, "description": "List of labels"}
+                    },
+                    "required": ["project_key", "summary"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_update_issue",
+                "description": "Update a Jira issue. Accepts Markdown by default.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"},
+                        "summary": {"type": "string", "description": "New summary (optional)"},
+                        "description": {"type": "string", "description": "New description (optional)"},
+                        "description_format": {
+                            "type": "string",
+                            "enum": ["markdown", "wiki", "raw"],
+                            "default": "markdown",
+                            "description": "Input format: markdown, wiki, or raw"
+                        },
+                        "priority": {"type": "string", "description": "New priority"},
+                        "labels": {"type": "array", "items": {"type": "string"}, "description": "New labels"}
+                    },
+                    "required": ["issue_key"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_add_comment",
+                "description": "Add a comment to a Jira issue. Accepts Markdown by default.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"},
+                        "body": {"type": "string", "description": "Comment body (Markdown by default)"},
+                        "body_format": {
+                            "type": "string",
+                            "enum": ["markdown", "wiki", "raw"],
+                            "default": "markdown",
+                            "description": "Input format: markdown, wiki, or raw"
+                        }
+                    },
+                    "required": ["issue_key", "body"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_search",
+                "description": "Search Jira issues using JQL.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "jql": {"type": "string", "description": "JQL query string"},
+                        "max_results": {"type": "integer", "description": "Maximum results", "default": 10}
+                    },
+                    "required": ["jql"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_get_comments",
+                "description": "Get comments on a Jira issue.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key"}
+                    },
+                    "required": ["issue_key"]
+                }
+            }
+        },
+    ]
