@@ -161,9 +161,6 @@ async def confluence_update_page(
         return await adapter.update_page(page_id, title=title, body=body, body_format=body_format)
     except Exception as e:
         return f"Error updating page: {e}"
-        return await adapter.update_page(page_id, title, body, body_format=body_format)
-    except Exception as e:
-        return f"Error updating page: {e}"
 
 
 async def confluence_get_comments(page_id: str) -> str:
