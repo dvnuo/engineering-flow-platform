@@ -641,7 +641,7 @@
             if (data.success) {
                 setStatus('File uploaded: ' + data.filename, 'success');
                 const shortId = data.file_id.substring(0, 8);
-                messageInput.value = '@' + shortId + ' ';
+                messageInput.value = '@file_' + shortId + ' ';
                 messageInput.focus();
                 refreshFileList();
                 addMessage('assistant', '📎 File uploaded: ' + data.filename);
