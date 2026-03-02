@@ -1594,6 +1594,22 @@
     const closeFileExplorer = document.getElementById('closeFileExplorer');
     const fileExplorerContent = document.getElementById('fileExplorerContent');
     
+    // Show My Uploads (user's uploaded files)
+    async function showMyUploads() {
+        fileExplorerPanel.classList.add('show');
+        fileExplorerContent.innerHTML = '<div class=loading>Loading...</div>';
+        
+        // Update title
+        const titleEl = document.getElementById('fileExplorerTitle');
+        if (titleEl) titleEl.textContent = 'My Uploads';
+        
+        // Hide toggle buttons in panel
+        const toggleDiv = document.querySelector('.file-toggle');
+        if (toggleDiv) toggleDiv.style.display = 'none';
+        
+        await refreshFileList();
+    }
+    
     async function showFileExplorer(path = '/root') {
         fileExplorerPanel.classList.add('show');
         fileExplorerContent.innerHTML = '<div class="loading">Loading...</div>';
