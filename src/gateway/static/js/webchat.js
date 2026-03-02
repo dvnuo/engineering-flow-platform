@@ -122,7 +122,6 @@
                 }
                 html += '</ul>';
                 fileExplorerContent.innerHTML = html;
-                });
                 
                 // Add cite button handlers
                 fileExplorerContent.querySelectorAll('.cite-btn').forEach(btn => {
