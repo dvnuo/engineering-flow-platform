@@ -231,14 +231,15 @@ class MarkdownConverter:
                 if not in_code_block:
                     in_code_block = True
                     code_lang = line[3:].strip()
-                    result.append(f'<ac:code-block lang="{code_lang}">')
+                    result.append(f'<ac:code-block lang="{html.escape(code_lang)}">')
                 else:
                     in_code_block = False
                     result.append('</ac:code-block>')
                 continue
             
             if in_code_block:
-                result.append(line)
+                # Escape content inside code blocks
+                result.append(html.escape(line))
                 continue
             
             # Headers
@@ -267,19 +268,28 @@ class MarkdownConverter:
                     result.append(f'<ol><li>{html.escape(match.group(2))}</li></ol>')
             # Images (must check before links, since both have ]( )
             elif '![' in line and '](' in line:
-                line = re.sub(r'!\[(.*?)\]\((.+?)\)', 
-                    r'<ac:image><ri:url ri:value="\2"/></ac:image>', line)
+                # Escape both alt text and URL
+                def image_repl(m):
+                    alt_text = html.escape(m.group(1))
+                    url = html.escape(m.group(2), quote=True)
+                    return f'<ac:image><ri:url ri:value="{url}"/></ac:image>'
+                line = re.sub(r'!\[(.*?)\]\((.+?)\)', image_repl, line)
                 result.append(line)
             # Links
             elif '](' in line:
-                line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', line)
+                # Escape both link text and URL
+                def link_repl(m):
+                    link_text = html.escape(m.group(1))
+                    url = html.escape(m.group(2), quote=True)
+                    return f'<a href="{url}">{link_text}</a>'
+                line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', link_repl, line)
                 result.append(f'<p>{line}</p>')
             # Horizontal rule
             elif line.strip() == '---':
                 result.append('<hr/>')
             # Code inline
             elif '`' in line:
-                line = re.sub(r'`([^`]+)`', r'<code>\1</code>', line)
+                line = re.sub(r'`([^`]+)`', lambda m: f'<code>{html.escape(m.group(1))}</code>', line)
                 result.append(f'<p>{line}</p>')
             elif line.strip():
                 result.append(f'<p>{html.escape(line)}</p>')
