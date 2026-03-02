@@ -1577,8 +1577,12 @@
             statusSpan.textContent = 'Ready';
             recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
             if (newChatBtn) newChatBtn.classList.add('active');
-        } else if (action === 'files') {
+        } else if (action === 'files' || action === 'server-files') {
+            fileViewMode = 'server';
             showFileExplorer();
+        } else if (action === 'my-uploads') {
+            fileViewMode = 'uploads';
+            showMyUploads();
         } else if (action === 'settings') {
             showSettings();
         }
