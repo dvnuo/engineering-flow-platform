@@ -1563,6 +1563,7 @@
     
     document.addEventListener('click', function(e) {
         const action = e.target.closest('[data-action]')?.dataset.action;
+        console.log('Sidebar click action:', action);
         if (!action) return;
         
         if (action === 'new-chat') {
