@@ -278,12 +278,19 @@ class MarkdownConverter:
             # Horizontal rule
             elif line.strip() == '---':
                 result.append('<hr/>')
-            # Code inline - escape entire line first, then replace code segments
+            # Code inline - split on backticks and wrap code segments
             elif '`' in line:
-                escaped_line = html.escape(line)
-                # Replace escaped backticks with code tags
-                escaped_line = escaped_line.replace('&#96;', '<code>').replace('&#96;', '</code>')
-                result.append(f'<p>{escaped_line}</p>')
+                parts = line.split('`')
+                segments = []
+                for i, part in enumerate(parts):
+                    if i % 2 == 0:
+                        # Outside code: escape as normal text
+                        segments.append(html.escape(part))
+                    else:
+                        # Inside code: escape and wrap in <code> tags
+                        segments.append(f'<code>{html.escape(part)}</code>')
+                inline_html = ''.join(segments)
+                result.append(f'<p>{inline_html}</p>')
             elif line.strip():
                 result.append(f'<p>{html.escape(line)}</p>')
         
