@@ -105,15 +105,19 @@ src/jira/
 | `## Title` | h2. Title |
 | `### Title` | h3. Title |
 | `**bold**` | *bold* |
-| `*italic** | _italic_ |
-| ``code`` | {{code}} |
-| ```lang<br>code``` | {code:lang\|code} |
+| `*italic*` | _italic_ |
+| `` `code` `` | `{{code}}` |
+| ` ```lang<br>code``` ` | `{code:lang}<br>code<br>{code}` |
 | `[link](url)` | [link\|url] |
 | `- item` | * item |
 | `1. item` | # item |
 | `> quote` | {quote}quote{/quote} |
 | `---` | ---- |
 | `![alt](url)` | !url! |
+
+**说明:**
+- inline code: 使用 `{{code}}`
+- block code: 使用 `{code:lang}...{code}`
 
 **实现策略:**
 - 不是追求 100% round-trip
@@ -147,6 +151,8 @@ class JiraFormatAdapter:
     def __init__(self, channel: JiraChannel):
         self.channel = channel
         self.converter = JiraMarkupConverter()
+        # 部署类型：Server/DC 或 Cloud（从 channel 配置获取）
+        self.deployment = getattr(channel, 'deployment', 'server')
     
     async def get_issue(
         self,
@@ -154,18 +160,89 @@ class JiraFormatAdapter:
         format: str = "markdown",
         max_chars: int = None,
         max_comments: int = 5,
-        include_fields: list[str] = None
+        include_fields: list[str] = None,
+        include_comments: bool = True
     ) -> str:
         issue = await self.channel.get_issue(issue_key)
         
         if format == "raw":
-            return self._extract_raw(issue)
+            # raw 返回原始 dict（用于调试/兼容）
+            return self._format_raw(issue, include_fields, include_comments)
         
         if format == "wiki":
-            return self._to_wiki(issue)
+            return self._to_wiki(issue, max_chars, max_comments, include_fields, include_comments)
         
         # format == "markdown" (default)
-        return self._to_markdown(issue, max_chars, max_comments, include_fields)
+        return self._to_markdown(issue, max_chars, max_comments, include_fields, include_comments)
+    
+    def _to_markdown(
+        self,
+        issue: dict,
+        max_chars: int = None,
+        max_comments: int = 5,
+        include_fields: list[str] = None,
+        include_comments: bool = True
+    ) -> str:
+        """转换 issue 为 Markdown 格式"""
+        # 构建 Markdown
+        lines = []
+        
+        fields = include_fields or ["summary", "status", "description"]
+        
+        if "summary" in fields:
+            lines.append(f"# {issue.get('fields', {}).get('summary', '')}")
+        
+        if "status" in fields:
+            status = issue.get('fields', {}).get('status', {})
+            lines.append(f"**Status:** {status.get('name', '')}")
+        
+        if "description" in fields:
+            desc = issue.get('fields', {}).get('description')
+            if desc:
+                # 检测是 wiki 还是 ADF
+                if isinstance(desc, dict):
+                    # ADF - 转换为 Markdown
+                    md = self.converter.adf_to_markdown(desc)
+                else:
+                    # wiki 字符串
+                    md = self.converter.wiki_to_markdown(str(desc))
+                lines.append(f"\n{md}")
+        
+        if include_comments and "comments" in fields:
+            lines.append("\n## Comments")
+            # 添加评论...
+        
+        result = "\n".join(lines)
+        
+        # 截断处理
+        if max_chars:
+            result = self._truncate_markdown(result, max_chars)
+        
+        return result
+    
+    def _truncate_markdown(self, text: str, max_chars: int) -> str:
+        """安全截断 Markdown，优先按段落边界截断"""
+        # 优先按段落边界 (\n\n) 截断
+        paragraphs = text.split('\n\n')
+        result = []
+        total = 0
+        
+        for p in paragraphs:
+            if total + len(p) + 2 <= max_chars:
+                result.append(p)
+                total += len(p) + 2
+            else:
+                # 剩余空间不够，按句子截断
+                remaining = max_chars - total
+                if remaining > 50:  # 至少保留一些内容
+                    result.append(p[:remaining])
+                break
+        
+        truncated = "\n\n".join(result)
+        if len(text) > max_chars:
+            truncated += f"\n\n... (truncated, {max_chars} chars limit)"
+        
+        return truncated
     
     async def add_comment(
         self,
@@ -173,25 +250,19 @@ class JiraFormatAdapter:
         body: str,
         body_format: str = "markdown"
     ) -> str:
-        # 根据部署类型和内容选择转换路径
+        """添加评论"""
+        # 根据部署类型选择转换路径
+        # Server/DC: markdown -> wiki
+        # Cloud: markdown -> ADF
         if body_format == "markdown":
-            # 优先转 wiki（Server/DC）
-            body = self.converter.markdown_to_wiki(body)
-        elif body_format == "raw":
-            # ADF 兼容（仅当检测到 ADF 时）
-            if self._is_adf(body):
+            if self.deployment == "cloud":
                 body = self.converter.markdown_to_adf(body)
+            else:
+                # Server/DC: 默认转 wiki
+                body = self.converter.markdown_to_wiki(body)
+        # body_format == "wiki" 或 "raw" 时不做转换
         
         return await self.channel.add_comment(issue_key, body)
-    
-    def _is_adf(self, text: str) -> bool:
-        """检测是否是 ADF JSON"""
-        import json
-        try:
-            data = json.loads(text)
-            return isinstance(data, dict) and data.get("type") == "doc"
-        except:
-            return False
 ```
 
 ## 5. API 变更
@@ -199,14 +270,23 @@ class JiraFormatAdapter:
 ### 5.1 新增参数
 
 ```python
+from typing import Union
+
 # jira_get_issue
 async def jira_get_issue(
     issue_key: str,
     format: str = "markdown",  # markdown | wiki | raw
     max_chars: int = None,
     max_comments: int = 5,
-    include_fields: list[str] = None
-) -> str
+    include_fields: list[str] = None,  # 默认: ["summary", "status", "description", "comments"]
+    include_comments: bool = True  # 是否包含评论
+) -> Union[str, dict]:
+    """获取 Jira Issue
+    
+    Returns:
+        markdown/wiki: str
+        raw: dict (完整 issue JSON)
+    """
 
 # jira_create_issue
 async def jira_create_issue(
@@ -255,6 +335,11 @@ async def jira_add_comment(
         "type": "array",
         "items": {"type": "string"},
         "description": "Fields to include (default: summary, status, description, comments)"
+      },
+      "include_comments": {
+        "type": "boolean",
+        "description": "Whether to include comments",
+        "default": true
       }
     },
     "required": ["issue_key"]
@@ -279,7 +364,7 @@ async def jira_add_comment(
 
 - [ ] M1: 实现 JiraMarkupConverter (wiki ↔ markdown + ADF 兼容分支)
 - [ ] M2: 创建 JiraFormatAdapter
-- [ ] M3: 更新 jira_get_issue 支持 format/max_chars/max_comments/include_fields
+- [ ] M3: 更新 jira_get_issue 支持 format/max_chars/max_comments/include_fields/include_comments
 - [ ] M4: 更新 jira_create_issue 支持 description_format
 - [ ] M5: 更新 jira_add_comment 支持 body_format
 - [ ] M6: 更新 Tool Schema
