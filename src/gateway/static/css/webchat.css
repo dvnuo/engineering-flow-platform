@@ -2409,13 +2409,19 @@ input:checked + .slider:before {
     color: #616161;
 }
 
-/* Delete button */
+/* Delete button - match other buttons, red on hover */
 #fileExplorerContent .file-actions .delete-btn {
-    color: #dc3545;
-    border-color: #dc3545;
+    color: #666;
+    border-color: #ddd;
+    background: #fff;
+    padding: 4px 8px;
+    font-size: 11px;
+    border-radius: 4px;
+    cursor: pointer;
 }
 
 #fileExplorerContent .file-actions .delete-btn:hover {
     background: #dc3545;
     color: white;
+    border-color: #dc3545;
 }

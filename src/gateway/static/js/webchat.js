@@ -102,8 +102,8 @@
                             </div>
                             <div class="file-actions">
                                 
-                                <button class="file-action delete-btn" data-file-id="${file.file_id}" title="Delete file">✕</button>
                                 <button class="file-action cite-btn" data-file-id="${file.file_id}" title="Ask about this file">@file_${file.file_id.slice(0,8)}</button>
+                                <button class="file-action delete-btn" data-file-id="${file.file_id}" title="Delete file">🗑️</button>
                             </div>
                         </li>
                     `;
