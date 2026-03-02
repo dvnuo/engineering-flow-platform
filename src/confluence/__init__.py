@@ -110,21 +110,6 @@ async def confluence_get_page_by_url(
         return await adapter.get_page_by_url(url, format=format, max_chars=max_chars)
     except Exception as e:
         return f"Error getting page: {e}"
-        
-        title = page.get('title', 'Untitled')
-        
-        # Handle body - could be string or dict
-        body_obj = page.get('body', {})
-        if isinstance(body_obj, dict):
-            body = body_obj.get('storage', {}).get('value', 'No content')
-        elif isinstance(body_obj, str):
-            body = body_obj
-        else:
-            body = 'No content'
-        
-        return f"**{title}**\n\nURL: {url}\n\n{body}"
-    except Exception as e:
-        return f"Error getting page by URL: {e}"
 
 
 async def confluence_create_page(
