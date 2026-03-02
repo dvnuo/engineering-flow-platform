@@ -303,6 +303,7 @@ class ConfluenceFormatAdapter:
         """
         # Track if body was provided by caller (not fetched)
         body_provided = body is not None
+        current_version = None
         
         # Fetch current page if we need title or body
         current_page = None
@@ -319,6 +320,10 @@ class ConfluenceFormatAdapter:
                         body = body_obj
                     else:
                         body = ""
+                # Extract version to avoid extra API call
+                version_info = current_page.get("version", {})
+                if isinstance(version_info, dict):
+                    current_version = version_info.get("number")
             else:
                 # Failed to fetch current page - return error if we still need title/body
                 if title is None or body is None:
@@ -332,7 +337,8 @@ class ConfluenceFormatAdapter:
         result = await self.channel.update_page(
             page_id=page_id,
             title=title,
-            content=body
+            content=body,
+            current_version=current_version
         )
         
         if result:
