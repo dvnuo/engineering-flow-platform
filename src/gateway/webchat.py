@@ -1539,20 +1539,6 @@ async def api_files_delete(request: web.Request) -> web.Response:
                 'error': 'file_id is required'
             }, status=400)
         
-        # Validate session ownership
-        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
-        try:
-            metadata = get_metadata(file_id)
-            # If the file is bound to a session, require a matching session_id
-            if metadata.session_id:
-                if not session_id or metadata.session_id != session_id:
-                    return web.json_response({
-                        'success': False,
-                        'error': 'File not found'
-                    }, status=404)
-        except StoredFileNotFoundError:
-            pass
-        
         deleted = delete_file(file_id)
         
         if not deleted:
