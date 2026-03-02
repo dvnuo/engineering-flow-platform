@@ -319,6 +319,10 @@ class ConfluenceFormatAdapter:
                         body = body_obj
                     else:
                         body = ""
+            else:
+                # Failed to fetch current page - return error if we still need title/body
+                if title is None or body is None:
+                    return f"Error: Could not fetch current page {page_id} to get missing title/body"
         
         # Only convert if caller provided body AND wants markdown conversion
         # If we fetched the current content, keep it as storage
