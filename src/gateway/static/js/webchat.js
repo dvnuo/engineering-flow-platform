@@ -101,6 +101,8 @@
                                 <span class="file-name" title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</span>
                             </div>
                             <div class="file-actions">
+                                
+                                <button class="file-action delete-btn" data-file-id="${file.file_id}" title="Delete file">✕</button>
                                 <button class="file-action cite-btn" data-file-id="${file.file_id}" title="Ask about this file">@file_${file.file_id.slice(0,8)}</button>
                             </div>
                         </li>
@@ -118,6 +120,27 @@
                         if (input) {
                             input.value += '@file_' + fileRef.slice(0, 8) + ' ';
                             input.focus();
+                        }
+                    });
+                });
+                
+                // Add delete button handlers
+                fileExplorerContent.querySelectorAll('.delete-btn').forEach(btn => {
+                    btn.addEventListener('click', async (e) => {
+                        const fileId = e.target.dataset.fileId;
+                        if (!confirm('Delete this file?')) return;
+                        
+                        try {
+                            const response = await fetch('/api/files/' + fileId, { method: 'DELETE' });
+                            const data = await response.json();
+                            if (data.success || response.ok) {
+                                loadMyUploads(); // Reload list
+                            } else {
+                                alert('Delete failed: ' + (data.error || 'Unknown error'));
+                            }
+                        } catch (err) {
+                            console.error('Delete error:', err);
+                            alert('Delete failed');
                         }
                     });
                 });
