@@ -1390,6 +1390,14 @@ async def api_files_list(request: web.Request) -> web.Response:
     
     Returns:
         200: {"files": [...]}
+        400: {"success": false, "error": "session_id is required"}
+    """
+    try:
+        from src.utils.file_parser import list_files, init_storage
+        init_storage()
+        
+        # Session_id is optional - if not provided, list all files
+        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
         
         files = list_files(session_id) if session_id else list_files()
         
@@ -1427,6 +1435,8 @@ async def api_context_files(request: web.Request) -> web.Response:
         if not session_id:
             return web.json_response({
                 'success': False,
+                'error': 'session_id is required'
+            }, status=400)
         
         from src.hooks.file_context import storage
         files = storage.get_session_files(session_id)
@@ -1467,6 +1477,8 @@ async def api_chunks_search(request: web.Request) -> web.Response:
         if not session_id:
             return web.json_response({
                 'success': False,
+                'error': 'session_id is required'
+            }, status=400)
         
         query = request.query.get('query', '')
         top_k = int(request.query.get('top_k', 5))
