@@ -85,7 +85,7 @@ confluence_update_page(
 | Tables | ✅ |
 | Horizontal rules | ✅ |
 
-> 注: 外部库 (markdown-to-confluence) 需要复杂配置，不适合简单文本转换。
+> 注: 当前使用内置正则转换器，不需要外部依赖。
 
 ### 4.2 目录结构
 
@@ -122,7 +122,7 @@ class ConfluenceFormatAdapter:
         if format == "storage":
             return self._extract_storage(page)
         
-        # format == "markdown": 使用 confluence-markdown-exporter
+        # format == "markdown": 使用内置 converter
         return self._to_markdown(page, max_chars)
     
     async def search(self, query: str, limit: int = 10) -> str:
@@ -154,20 +154,28 @@ class ConfluenceFormatAdapter:
     ) -> str:
         """更新页面"""
         if body and body_format == "markdown":
-            body = self._to_storage(body)
+            body = self.converter.markdown_to_storage(body)
         
         return await self.channel.update_page(page_id, title, body)
     
     # ========== 内部方法 ==========
     def _to_markdown(self, page: dict, max_chars: int = None) -> str:
-        """使用 confluence-markdown-exporter 转换为 Markdown"""
-        # TODO: 封装 exporter 核心逻辑
-        pass
+        """使用内置 converter 转换为 Markdown"""
+        title = page.get("title", "Untitled")
+        body_obj = page.get("body", {})
+        if isinstance(body_obj, dict):
+            storage_value = body_obj.get("storage", {}).get("value", "")
+        else:
+            storage_value = ""
+        
+        if not storage_value:
+            return f"# {title}\n\n_No content_"
+        
+        return f"# {title}\n\n{self.converter.storage_to_markdown(storage_value)}"
     
     def _to_storage(self, markdown: str) -> str:
-        """使用 markdown-to-confluence 转换为 Storage Format"""
-        # TODO: 封装 markdown-to-confluence
-        pass
+        """使用内置 converter 转换为 Storage Format"""
+        return self.converter.markdown_to_storage(markdown)
 ```
 
 ### 4.4 转换映射表
@@ -245,8 +253,8 @@ async def confluence_update_page(
 
 ### 坑 1: Markdown 方言不一致
 
-- `confluence-markdown-exporter` 导出时尽量保留 Confluence 元素
-- `markdown-to-confluence` 写回时某些元素可能丢失/变形
+- 内置正则转换器 导出时尽量保留元素
+- 某些元素可能往返不一致
 - **Confluence 特有元素** (macro, panel, status, expand, layouts) 可能往返不一致
 
 **建议:** 在 converter.py 定义"支持矩阵"，列出"不保证往返一致"的元素，并在日志打 warning。
@@ -263,7 +271,7 @@ async def confluence_update_page(
 - Confluence 更新页面必须带 version 递增
 - 否则返回 409 冲突
 
-**建议:** 在集成测试中验证 markdown-to-confluence 是否正确处理 version。
+**建议:** 在集成测试中验证 API 是否正确处理 version。
 
 ## 8. 测试计划
 
