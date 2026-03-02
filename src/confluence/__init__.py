@@ -38,11 +38,12 @@ _adapter: Optional[ConfluenceFormatAdapter] = None
 
 
 def _get_adapter() -> ConfluenceFormatAdapter:
-    """Get or create the format adapter."""
-    global _adapter
-    if _adapter is None:
-        _adapter = ConfluenceFormatAdapter(confluence_channel)
-    return _adapter
+    """Create a format adapter bound to the current channel.
+    
+    A new adapter is returned on each call to avoid caching a channel instance
+    in a module-level singleton, which can interfere with tests or runtime reconfiguration.
+    """
+    return ConfluenceFormatAdapter(confluence_channel)
 
 
 # ========== Tool Functions ==========
