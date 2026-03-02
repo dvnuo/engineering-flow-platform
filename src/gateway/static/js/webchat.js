@@ -93,26 +93,12 @@
             if (files && files.length > 0) {
                 let html = '<ul class="file-list">';
                 for (const file of files) {
-                    // Parse status indicator
-                    let statusClass = 'status-pending';
-                    let statusText = 'Pending';
-                    if (file.parse_status === 'completed') {
-                        statusClass = 'status-completed';
-                        statusText = 'Ready';
-                    } else if (file.parse_status === 'processing') {
-                        statusClass = 'status-processing';
-                        statusText = 'Processing...';
-                    } else if (file.parse_status === 'failed') {
-                        statusClass = 'status-failed';
-                        statusText = 'Failed';
-                    }
                     
                     html += `
                         <li class="file-item" data-file-id="${file.file_id}">
                             <span class="file-icon">${getFileIcon(file.content_type)}</span>
                             <div class="file-info">
                                 <span class="file-name" title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</span>
-                                <span class="file-status ${statusClass}">${statusText}</span>
                             </div>
                             <div class="file-actions">
                                 <button class="file-action cite-btn" data-file-id="${file.file_id}" title="Ask about this file">@file_${file.file_id.slice(0,8)}</button>

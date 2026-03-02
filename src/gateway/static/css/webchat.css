@@ -2331,33 +2331,6 @@ input:checked + .slider:before {
     text-overflow: ellipsis;
 }
 
-#fileExplorerContent .file-status {
-    font-size: 11px; color: #333;
-    padding: 2px 6px;
-    border-radius: 3px;
-    width: fit-content;
-}
-
-#fileExplorerContent .file-status.status-pending {
-    background: #f0f0f0;
-    color: #666;
-}
-
-#fileExplorerContent .file-status.status-completed {
-    background: #d4edda;
-    color: #155724;
-}
-
-#fileExplorerContent .file-status.status-processing {
-    background: #fff3cd;
-    color: #856404;
-}
-
-#fileExplorerContent .file-status.status-failed {
-    background: #f8d7da;
-    color: #721c24;
-}
-
 #fileExplorerContent .file-actions {
     display: flex;
     gap: 4px;
