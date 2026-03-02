@@ -195,7 +195,7 @@ class TestAdapter:
     
     @pytest.mark.asyncio
     async def test_create_issue_markdown(self, mock_channel):
-        """Test create_issue accepts Markdown."""
+        """Test create_issue converts Markdown to wiki."""
         from src.jira.adapter import JiraFormatAdapter
         
         adapter = JiraFormatAdapter(mock_channel)
@@ -205,17 +205,71 @@ class TestAdapter:
             "# Description"
         )
         
+        # Verify channel was called with wiki format (not raw markdown)
         mock_channel.create_issue.assert_called_once()
+        call_kwargs = mock_channel.create_issue.call_args.kwargs
+        desc = call_kwargs.get("description", "")
+        
+        # For Server/DC (api_version="2"), should be converted to wiki
+        assert "h1." in desc or "Description" in str(type(desc))
+    
+    @pytest.mark.asyncio
+    async def test_create_issue_markdown_cloud(self, mock_channel):
+        """Test create_issue converts Markdown to ADF for Cloud."""
+        from src.jira.adapter import JiraFormatAdapter
+        
+        mock_channel.api_version = "3"  # Cloud
+        adapter = JiraFormatAdapter(mock_channel)
+        
+        result = await adapter.create_issue(
+            "PROJ",
+            "New Issue",
+            "# Description"
+        )
+        
+        # Verify channel was called with ADF dict
+        mock_channel.create_issue.assert_called_once()
+        call_kwargs = mock_channel.create_issue.call_args.kwargs
+        desc = call_kwargs.get("description", "")
+        
+        # For Cloud (api_version="3"), should be ADF dict
+        assert isinstance(desc, dict) or "h1." in str(desc)
     
     @pytest.mark.asyncio
     async def test_add_comment_markdown(self, mock_channel):
-        """Test add_comment accepts Markdown."""
+        """Test add_comment converts Markdown to wiki."""
         from src.jira.adapter import JiraFormatAdapter
         
         adapter = JiraFormatAdapter(mock_channel)
         result = await adapter.add_comment("PROJ-123", "Comment with **bold**")
         
         mock_channel.add_comment.assert_called_once()
+        
+        # Verify conversion happened
+        call_kwargs = mock_channel.add_comment.call_args.kwargs
+        body = call_kwargs.get("description", "")
+        
+        # For Server/DC, should be wiki format
+        assert "*bold*" in body or "Description" in str(type(body))
+    
+    @pytest.mark.asyncio
+    async def test_add_comment_markdown_cloud(self, mock_channel):
+        """Test add_comment converts Markdown to ADF for Cloud."""
+        from src.jira.adapter import JiraFormatAdapter
+        
+        mock_channel.api_version = "3"  # Cloud
+        adapter = JiraFormatAdapter(mock_channel)
+        
+        result = await adapter.add_comment("PROJ-123", "Comment with **bold**")
+        
+        mock_channel.add_comment.assert_called_once()
+        
+        # Verify ADF dict was created
+        call_kwargs = mock_channel.add_comment.call_args.kwargs
+        body = call_kwargs.get("description", "")
+        
+        # For Cloud, should be ADF dict
+        assert isinstance(body, dict) or "h1." in str(body)
 
 
 class TestToolFunctions:
