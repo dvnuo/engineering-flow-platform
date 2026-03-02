@@ -125,40 +125,44 @@ class JiraMarkupConverter:
                 result.append(f'h2. {line[3:]}')
             elif line.startswith('# '):
                 result.append(f'h1. {line[2:]}')
-            # Bold (only, not italic)
+            # Bold
             elif '**' in line:
                 line = re.sub(r'\*\*(.+?)\*\*', r'*\1*', line)
-                result.append(line)
-            # Italic (only, not bold)
+            # Italic
             elif '*' in line:
                 line = re.sub(r'\*([^*]+)\*', r'_\1_', line)
-                result.append(line)
             # Inline code
             elif '`' in line:
                 line = re.sub(r'`([^`]+)`', r'{{\1}}', line)
-                result.append(line)
-            # Images ![alt](url) - must check before links
-            if '![' in line and '](' in line:
+            # Images ![alt](url) - check before links
+            elif '![' in line and '](' in line:
                 line = re.sub(r'!\[(.*?)\]\((.+?)\)', r'!\2!', line)
             # Links [text](url)
-            if '](' in line:
+            elif '](' in line:
                 line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'[\1|\2]', line)
-            result.append(line)
             # Lists
             elif line.startswith('- ') or line.startswith('* '):
                 result.append(f'* {line[2:]}')
+                continue
             elif re.match(r'^\d+\.\s', line):
                 match = re.match(r'^(\d+)\.\s(.+)', line)
                 if match:
                     result.append(f'# {match.group(2)}')
+                    continue
             # Quote
             elif line.startswith('> '):
                 result.append(f'{{quote}}{line[2:]}{{quote}}')
+                continue
             # Horizontal rule
             elif line.strip() == '---':
                 result.append('----')
+                continue
             elif line.strip():
                 result.append(line)
+                continue
+            
+            # Empty line
+            result.append('')
         
         return '\n'.join(result)
     
@@ -347,8 +351,6 @@ class JiraMarkupConverter:
     
     def _adf_text_with_marks(self, text: str) -> dict:
         """Create ADF text node with marks (bold, italic, etc)."""
-        # Simple implementation - just text without marks
-        # A full implementation would parse **, *, ` etc
         return {"type": "text", "text": text}
     
     def _adf_bullet_item(self, text: str) -> dict:
@@ -382,14 +384,7 @@ class JiraMarkupConverter:
     # ========== Utility ==========
     
     def is_adf(self, data: Any) -> bool:
-        """Check if data is ADF format.
-        
-        Args:
-            data: Data to check
-            
-        Returns:
-            True if data appears to be ADF JSON
-        """
+        """Check if data is ADF format."""
         if not isinstance(data, dict):
             return False
         return data.get("type") == "doc"

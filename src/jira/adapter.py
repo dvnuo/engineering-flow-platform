@@ -20,7 +20,8 @@ class JiraFormatAdapter:
     """Unified interface for Jira operations with format conversion."""
     
     def __init__(self, channel: JiraChannel):
-        self.channel = self.converter = converter
+        self.channel = channel
+        self.converter = converter
         # 部署类型：从 api_version 判断
         # v2 = Server/DC (wiki), v3 = Cloud (ADF)
         self.deployment = 'cloud' if getattr(channel, 'api_version', '2') == '3' else 'server'
@@ -73,10 +74,16 @@ class JiraFormatAdapter:
         fields = include_fields or ["summary", "status", "description", "comments"]
         lines = []
         
-        # Summary
+        # Get issue key
+        issue_key = issue.get("key", "")
+        
+        # Summary with key
         if "summary" in fields:
             summary = issue.get("fields", {}).get("summary", "")
-            lines.append(f"# {summary}")
+            if issue_key:
+                lines.append(f"# {issue_key}: {summary}")
+            else:
+                lines.append(f"# {summary}")
         
         # Status, Type, Priority
         if "status" in fields:
@@ -134,13 +141,19 @@ class JiraFormatAdapter:
         include_comments: bool = True
     ) -> str:
         """Convert issue to Jira wiki format."""
-        fields = include_fields or ["summary", "status", "description", "comments"]
+        fields = include_fields or ["summary", "status", "description"]
         lines = []
         
-        # Summary
+        # Get issue key
+        issue_key = issue.get("key", "")
+        
+        # Summary with key
         if "summary" in fields:
             summary = issue.get("fields", {}).get("summary", "")
-            lines.append(f"h1. {summary}")
+            if issue_key:
+                lines.append(f"h1. {issue_key}: {summary}")
+            else:
+                lines.append(f"h1. {summary}")
         
         # Status
         if "status" in fields:
@@ -154,6 +167,19 @@ class JiraFormatAdapter:
                 desc_wiki = self._convert_description_to_wiki(desc)
                 if desc_wiki:
                     lines.append(f"\n{desc_wiki}")
+        
+        # Comments (only if explicitly requested)
+        if include_comments and "comments" in fields:
+            comments = self._get_comments_list(issue, max_comments)
+            if comments:
+                lines.append("\n-- Comments --")
+                for i, comment in enumerate(comments, 1):
+                    author = comment.get("author", {}).get("displayName", "Unknown")
+                    created = comment.get("created", "")[:10]
+                    body = comment.get("body", {})
+                    body_wiki = self._convert_description_to_wiki(body)
+                    lines.append(f"\n*Comment {i}* - {author} ({created})")
+                    lines.append(body_wiki)
         
         result = "\n".join(lines)
         
@@ -354,12 +380,14 @@ class JiraFormatAdapter:
             format: Input format - "markdown", "wiki", or "raw"
             
         Returns:
-            Converted text in wiki or ADF format
+            Converted text (string for wiki, or JSON string for ADF)
         """
         if format == "markdown":
             if self.deployment == "cloud":
-                # Cloud: convert to ADF
-                return self.converter.markdown_to_adf(text)
+                # Cloud: convert to ADF and serialize to JSON string
+                import json
+                adf_dict = self.converter.markdown_to_adf(text)
+                return json.dumps(adf_dict)
             else:
                 # Server/DC: convert to wiki
                 return self.converter.markdown_to_wiki(text)
