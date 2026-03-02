@@ -27,7 +27,7 @@
                 const formData = new FormData();
                 formData.append('file', file);
                 
-                const sessionId = currentSessionId || '';
+                const sessionId = ''; // Not required for My Uploads
                 const headers = sessionId ? { 'X-Session-ID': sessionId } : {};
                 
                 const response = await fetch('/api/files/upload', {
@@ -66,12 +66,8 @@
         if (!fileExplorerContent) return;
         
         try {
-            const sessionId = currentSessionId || '';
-            if (!sessionId) {
-                fileExplorerContent.innerHTML = '<div class="empty">Start a conversation to upload files</div>';
-                return;
-            }
-            const headers = { 'X-Session-ID': sessionId };
+            // My Uploads - show all uploaded files from metadata
+            const headers = {};
             
             // Try new context API first, fall back to files API
             let files = [];
@@ -162,7 +158,7 @@
         setStatus('Parsing file...', 'uploading');
         
         try {
-            const sessionId = currentSessionId || '';
+            const sessionId = ''; // Not required for My Uploads
             const headers = {'Content-Type': 'application/json'};
             if (sessionId) {
                 headers['X-Session-ID'] = sessionId;
@@ -634,7 +630,7 @@
         try {
             const formData = new FormData();
             formData.append('file', file);
-            const sessionId = currentSessionId || '';
+            const sessionId = ''; // Not required for My Uploads
             const headers = sessionId ? { 'X-Session-ID': sessionId } : {};
             const response = await fetch('/api/files/upload', { method: 'POST', body: formData, headers });
             const data = await response.json();
