@@ -190,11 +190,11 @@
     
     // Helper functions
     function getFileIcon(contentType) {
-        if (contentType.startsWith('image/')) return '🖼️';
-        if (contentType === 'application/pdf') return '📄';
+        if (contentType.startsWith('image/')) return '<span class="file-type-badge img">IMG</span>';
+        if (contentType === 'application/pdf') return '<span class="file-type-badge pdf">PDF</span>';
         if (contentType.includes('word')) return '📝';
         if (contentType.includes('spreadsheet') || contentType === 'text/csv') return '📊';
-        return '📄';  // text file
+        return '<span class="file-type-badge txt">TXT</span>';
     }
     
     function formatFileSize(bytes) {

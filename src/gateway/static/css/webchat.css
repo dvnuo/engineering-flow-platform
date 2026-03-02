@@ -2409,3 +2409,29 @@ input:checked + .slider:before {
     opacity: 1;
     border-color: var(--primary-color, #2196f3);
 }
+
+/* File Type Badges */
+.file-type-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-family: monospace;
+}
+
+.file-type-badge.img {
+    background: #e3f2fd;
+    color: #1976d2;
+}
+
+.file-type-badge.pdf {
+    background: #ffebee;
+    color: #c62828;
+}
+
+.file-type-badge.txt {
+    background: #f5f5f5;
+    color: #616161;
+}
