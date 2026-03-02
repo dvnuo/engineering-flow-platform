@@ -251,12 +251,14 @@ class MarkdownConverter:
                 result.append(f'<h2>{html.escape(line[3:])}</h2>')
             elif line.startswith('# '):
                 result.append(f'<h1>{html.escape(line[2:])}</h1>')
-            # Bold/Italic (escape HTML first, then add formatting)
+            # Bold
             elif '**' in line:
-                # First escape HTML entities
                 line = html.escape(line)
-                # Then apply formatting
                 line = re.sub(r'&ast;&ast;(.+?)&ast;&ast;', r'<strong>\1</strong>', line)
+                result.append(f'<p>{line}</p>')
+            # Italic
+            elif '*' in line:
+                line = html.escape(line)
                 line = re.sub(r'&ast;([^*]+)&ast;', r'<em>\1</em>', line)
                 result.append(f'<p>{line}</p>')
             # Lists
