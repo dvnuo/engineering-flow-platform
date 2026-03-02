@@ -403,13 +403,14 @@ class OpenAIProvider(BaseProvider):
         - max_tokens -> max_output_tokens
         - temperature not supported with gpt-5-mini
         - tools not supported in Responses API (will be ignored)
+        
+        Uses _call_api() for centralized retry/backoff behavior.
         """
         # Check if API key is configured
         error = self._check_api_key()
         if error:
             return error
         
-        headers = self._get_headers()
         model_name = model or self.default_model
         
         # Build input array from messages ( Responses API format)
@@ -478,7 +479,7 @@ class OpenAIProvider(BaseProvider):
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
         }
         
-        # Debug: Log request details
+        # Debug: Log request details (before calling _call_api)
         if _is_debug_enabled():
             logger.debug(f"=== [LLM] RESPONSES API REQUEST ===")
             logger.debug(f"Provider: {self.name}")
@@ -494,46 +495,16 @@ class OpenAIProvider(BaseProvider):
                     content_preview = truncate(content, 100)
                 logger.debug(f"  [{i}] {role}: {content_preview}")
         
-        # Make API call
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.api_base}/responses",
-                    headers=headers,
-                    json=payload
-                )
-                
-                # Log response details for debugging
-                if _is_debug_enabled():
-                    logger.debug(f"=== [LLM] RESPONSE STATUS ===")
-                    logger.debug(f"Status: {response.status_code}")
-                    logger.debug(f"Headers: {dict(response.headers)}")
-                
-                # For error responses, log the body for debugging
-                if response.status_code >= 400:
-                    try:
-                        error_body = response.json()
-                        logger.error(f"[LLM] API Error Response: {json.dumps(error_body)}")
-                    except Exception:
-                        logger.error(f"[LLM] API Error Response (raw): {response.text}")
-                
-                response.raise_for_status()
-                data = response.json()
-        except httpx.HTTPStatusError as e:
-            # Log more details for debugging
-            logger.error(f"[LLM] HTTPStatusError: {e.response.status_code} - {e.response.text}")
-            error = handle_httpx_error(e, provider=self.name, endpoint="/responses")
-            log_error(error, component=self.name.upper())
-            raise error
-        except httpx.RequestError as e:
-            error = handle_httpx_request_error(e, provider=self.name, endpoint="/responses")
-            log_error(error, component=self.name.upper())
-            raise error
+        # Use _call_api for centralized retry/backoff behavior
+        data = await self._call_api("/responses", payload)
+        
+        # Check._call_api("/ for error in response
+        if isinstance(data, dict) and data.get("error"):
+            return data
         
         # Debug: Log response
         if _is_debug_enabled():
             logger.debug(f"=== [LLM] RESPONSES API RESPONSE ===")
-            logger.debug(f"Status: {response.status_code}")
         
         # Parse response - Responses API uses 'output' array instead of 'choices'
         output_items = data.get("output", [])
@@ -541,7 +512,10 @@ class OpenAIProvider(BaseProvider):
         tool_calls = []
         
         for item in output_items:
-            if item.get("type") == "message":
+            item_type = item.get("type", "")
+            
+            if item_type == "message":
+                # Content in message type
                 msg_content = item.get("content", [])
                 # Handle content as array or string
                 if isinstance(msg_content, list):
@@ -549,7 +523,7 @@ class OpenAIProvider(BaseProvider):
                         if msg_item.get("type") == "output_text":
                             content += msg_item.get("text", "")
                         elif msg_item.get("type") == "function_call":
-                            # Handle function calls
+                            # Handle function calls inside message content
                             tool_calls.append({
                                 "id": item.get("id", f"call_{len(tool_calls)}"),
                                 "function": {
@@ -559,6 +533,16 @@ class OpenAIProvider(BaseProvider):
                             })
                 else:
                     content = msg_content
+            
+            elif item_type == "function_call":
+                # Handle function_call as top-level output item (Responses API can emit this)
+                tool_calls.append({
+                    "id": item.get("id", f"call_{len(tool_calls)}"),
+                    "function": {
+                        "name": item.get("name", ""),
+                        "arguments": json.dumps(item.get("arguments", {}))
+                    }
+                })
         
         # Calculate usage
         usage_data = data.get("usage", {})
@@ -888,12 +872,15 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"Status: {response.status_code}")
         
         # Parse response - Responses API uses 'output' array instead of 'choices'
+        # Handle both nested function_call in message content AND top-level function_call
         output_items = data.get("output", [])
         content = ""
         tool_calls = []
         
         for item in output_items:
-            if item.get("type") == "message":
+            item_type = item.get("type", "")
+            
+            if item_type == "message":
                 msg_content = item.get("content", [])
                 # Handle content as array or string
                 if isinstance(msg_content, list):
@@ -901,7 +888,7 @@ class GitHubCopilotProvider(BaseProvider):
                         if msg_item.get("type") == "output_text":
                             content += msg_item.get("text", "")
                         elif msg_item.get("type") == "function_call":
-                            # Handle function calls
+                            # Handle function calls inside message content
                             tool_calls.append({
                                 "id": item.get("id", f"call_{len(tool_calls)}"),
                                 "function": {
@@ -911,6 +898,16 @@ class GitHubCopilotProvider(BaseProvider):
                             })
                 else:
                     content = msg_content
+            
+            elif item_type == "function_call":
+                # Handle function_call as top-level output item (Responses API can emit this)
+                tool_calls.append({
+                    "id": item.get("id", f"call_{len(tool_calls)}"),
+                    "function": {
+                        "name": item.get("name", ""),
+                        "arguments": json.dumps(item.get("arguments", {}))
+                    }
+                })
         
         # Calculate usage
         usage_data = data.get("usage", {})
