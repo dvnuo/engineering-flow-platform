@@ -386,6 +386,216 @@ class OpenAIProvider(BaseProvider):
         )
         
         return result
+
+    async def responses(
+        self,
+        messages: List[Dict],
+        system_prompt: Optional[str] = None,
+        tools: Optional[List[Dict]] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Call OpenAI Responses API (/responses endpoint).
+        
+        Note: The Responses API has different payload format than Chat Completions:
+        - System prompt goes to 'instructions' field
+        - Messages go to 'input' array
+        - max_tokens -> max_output_tokens
+        - temperature not supported with gpt-5-mini
+        - tools not supported in Responses API (will be ignored)
+        """
+        # Check if API key is configured
+        error = self._check_api_key()
+        if error:
+            return error
+        
+        headers = self._get_headers()
+        model_name = model or self.default_model
+        
+        # Build input array from messages ( Responses API format)
+        # System prompt goes to 'instructions', user messages to 'input'
+        input_messages = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            
+            # Handle content as string or array (for vision)
+            if isinstance(content, list):
+                # Already in vision format - convert to Responses API format
+                # "type": "image_url" -> "type": "input_image"
+                # IMPORTANT: image_url must be a STRING (URL or base64 data URL), not an object
+                converted_content = []
+                for item in content:
+                    if isinstance(item, dict):
+                        item_type = item.get("type", "")
+                        if item_type == "text":
+                            converted_content.append({
+                                "type": "input_text",
+                                "text": item.get("text", "")
+                            })
+                        elif item_type == "image_url":
+                            # Extract the URL from image_url object
+                            img_url_obj = item.get("image_url", {})
+                            # Get the actual URL string - could be direct URL or base64
+                            img_url = img_url_obj.get("url") if isinstance(img_url_obj, dict) else str(img_url_obj)
+                            if img_url:
+                                converted_content.append({
+                                    "type": "input_image",
+                                    "image_url": img_url  # Must be STRING, not object!
+                                })
+                            else:
+                                logger.warning(f"[LLM] Skipping image: no valid URL in image_url")
+                        elif item_type == "input_image":
+                            # Already in correct format, ensure image_url is string
+                            img_url_obj = item.get("image_url")
+                            if isinstance(img_url_obj, dict):
+                                img_url = img_url_obj.get("url", "")
+                                converted_content.append({
+                                    "type": "input_image",
+                                    "image_url": img_url
+                                })
+                            else:
+                                converted_content.append(item)
+                        else:
+                            converted_content.append(item)
+                    else:
+                        converted_content.append({"type": "input_text", "text": str(item)})
+                input_messages.append({
+                    "role": role,
+                    "content": converted_content
+                })
+            else:
+                input_messages.append({
+                    "role": role,
+                    "content": content
+                })
+        
+        # Build payload for Responses API
+        payload = {
+            "model": model_name,
+            "instructions": system_prompt or "",
+            "input": input_messages,
+            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+        }
+        
+        # Debug: Log request details
+        if _is_debug_enabled():
+            logger.debug(f"=== [LLM] RESPONSES API REQUEST ===")
+            logger.debug(f"Provider: {self.name}")
+            logger.debug(f"Model: {model_name}")
+            logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
+            logger.debug(f"Input messages count: {len(input_messages)}")
+            for i, msg in enumerate(input_messages[:3]):
+                role = msg.get("role", "unknown")
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    content_preview = f"[array with {len(content)} items]"
+                else:
+                    content_preview = truncate(content, 100)
+                logger.debug(f"  [{i}] {role}: {content_preview}")
+        
+        # Make API call
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.api_base}/responses",
+                    headers=headers,
+                    json=payload
+                )
+                
+                # Log response details for debugging
+                if _is_debug_enabled():
+                    logger.debug(f"=== [LLM] RESPONSE STATUS ===")
+                    logger.debug(f"Status: {response.status_code}")
+                    logger.debug(f"Headers: {dict(response.headers)}")
+                
+                # For error responses, log the body for debugging
+                if response.status_code >= 400:
+                    try:
+                        error_body = response.json()
+                        logger.error(f"[LLM] API Error Response: {json.dumps(error_body)}")
+                    except Exception:
+                        logger.error(f"[LLM] API Error Response (raw): {response.text}")
+                
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPStatusError as e:
+            # Log more details for debugging
+            logger.error(f"[LLM] HTTPStatusError: {e.response.status_code} - {e.response.text}")
+            error = handle_httpx_error(e, provider=self.name, endpoint="/responses")
+            log_error(error, component=self.name.upper())
+            raise error
+        except httpx.RequestError as e:
+            error = handle_httpx_request_error(e, provider=self.name, endpoint="/responses")
+            log_error(error, component=self.name.upper())
+            raise error
+        
+        # Debug: Log response
+        if _is_debug_enabled():
+            logger.debug(f"=== [LLM] RESPONSES API RESPONSE ===")
+            logger.debug(f"Status: {response.status_code}")
+        
+        # Parse response - Responses API uses 'output' array instead of 'choices'
+        output_items = data.get("output", [])
+        content = ""
+        tool_calls = []
+        
+        for item in output_items:
+            if item.get("type") == "message":
+                msg_content = item.get("content", [])
+                # Handle content as array or string
+                if isinstance(msg_content, list):
+                    for msg_item in msg_content:
+                        if msg_item.get("type") == "output_text":
+                            content += msg_item.get("text", "")
+                        elif msg_item.get("type") == "function_call":
+                            # Handle function calls
+                            tool_calls.append({
+                                "id": item.get("id", f"call_{len(tool_calls)}"),
+                                "function": {
+                                    "name": msg_item.get("name", ""),
+                                    "arguments": json.dumps(msg_item.get("arguments", {}))
+                                }
+                            })
+                else:
+                    content = msg_content
+        
+        # Calculate usage
+        usage_data = data.get("usage", {})
+        prompt_tokens = usage_data.get("input_tokens", 0)
+        completion_tokens = usage_data.get("output_tokens", 0)
+        
+        # Estimate if not provided
+        if prompt_tokens == 0:
+            prompt_tokens = sum(len(str(m).split()) * 4 for m in input_messages)
+        if completion_tokens == 0:
+            completion_tokens = len(content.split()) * 4
+        
+        result = {
+            "content": content,
+            "tool_calls": tool_calls,
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
+        }
+        
+        # Calculate cost and record usage
+        cost = estimate_cost(model_name, prompt_tokens, completion_tokens)
+        result["usage"]["cost_usd"] = cost
+        
+        # Record usage for tracking
+        usage_tracker.record_usage(
+            provider=self.name,
+            model=model_name,
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            session_id="llm_api",
+            task_type="responses",
+        )
+        
+        return result
     
     def list_models(self) -> List[str]:
         return [
@@ -545,6 +755,195 @@ class GitHubCopilotProvider(BaseProvider):
             output_tokens=output_tokens,
             session_id="llm_api",
             task_type="chat",
+        )
+        
+        return result
+
+    async def responses(
+        self,
+        messages: List[Dict],
+        system_prompt: Optional[str] = None,
+        tools: Optional[List[Dict]] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Call GitHub Copilot Responses API (/responses endpoint).
+        
+        Note: The Responses API has different payload format than Chat Completions:
+        - System prompt goes to 'instructions' field
+        - Messages go to 'input' array
+        - max_tokens -> max_output_tokens
+        - tools not supported in Responses API (will be ignored)
+        """
+        # Check if API key is configured
+        api_key = os.environ.get('GITHUB_COPILOT_TOKEN') or config.llm.get('api_key', '')
+        if not api_key:
+            return {
+                "error": {
+                    "message": "LLM API key not configured. Please configure api_key in webchat settings.",
+                    "type": "configuration_error",
+                    "code": "api_key_missing"
+                }
+            }
+        
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": "2023-06-01",
+        }
+        
+        model_name = model or self.default_model
+        
+        # Build input array from messages (Responses API format)
+        input_messages = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            
+            # Handle content as string or array (for vision)
+            if isinstance(content, list):
+                # Convert vision format to Responses API format
+                # IMPORTANT: image_url must be a STRING (URL or base64 data URL), not an object
+                converted_content = []
+                for item in content:
+                    if isinstance(item, dict):
+                        item_type = item.get("type", "")
+                        if item_type == "text":
+                            converted_content.append({
+                                "type": "input_text",
+                                "text": item.get("text", "")
+                            })
+                        elif item_type == "image_url":
+                            # Extract the URL from image_url object
+                            img_url_obj = item.get("image_url", {})
+                            img_url = img_url_obj.get("url") if isinstance(img_url_obj, dict) else str(img_url_obj)
+                            if img_url:
+                                converted_content.append({
+                                    "type": "input_image",
+                                    "image_url": img_url  # Must be STRING, not object!
+                                })
+                            else:
+                                logger.warning(f"[Copilot] Skipping image: no valid URL")
+                        elif item_type == "input_image":
+                            img_url_obj = item.get("image_url")
+                            if isinstance(img_url_obj, dict):
+                                img_url = img_url_obj.get("url", "")
+                                converted_content.append({
+                                    "type": "input_image",
+                                    "image_url": img_url
+                                })
+                            else:
+                                converted_content.append(item)
+                        else:
+                            converted_content.append(item)
+                    else:
+                        converted_content.append({"type": "input_text", "text": str(item)})
+                input_messages.append({
+                    "role": role,
+                    "content": converted_content
+                })
+            else:
+                input_messages.append({
+                    "role": role,
+                    "content": content
+                })
+        
+        # Build payload for Responses API
+        payload = {
+            "model": model_name,
+            "instructions": system_prompt or "",
+            "input": input_messages,
+            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+        }
+        
+        # Debug: Log request details
+        if _is_debug_enabled():
+            logger.debug(f"=== [GITHUB COPILOT] RESPONSES API REQUEST ===")
+            logger.debug(f"Model: {model_name}")
+            logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
+            logger.debug(f"Input messages count: {len(input_messages)}")
+        
+        # Make API call
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.api_base}/responses",
+                    headers=headers,
+                    json=payload
+                )
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPStatusError as e:
+            error = handle_httpx_error(e, provider=self.name, endpoint="/responses")
+            log_error(error, component=self.name.upper())
+            raise error
+        except httpx.RequestError as e:
+            error = handle_httpx_request_error(e, provider=self.name, endpoint="/responses")
+            log_error(error, component=self.name.upper())
+            raise error
+        
+        # Debug: Log response
+        if _is_debug_enabled():
+            logger.debug(f"=== [GITHUB COPILOT] RESPONSES API RESPONSE ===")
+            logger.debug(f"Status: {response.status_code}")
+        
+        # Parse response - Responses API uses 'output' array instead of 'choices'
+        output_items = data.get("output", [])
+        content = ""
+        tool_calls = []
+        
+        for item in output_items:
+            if item.get("type") == "message":
+                msg_content = item.get("content", [])
+                # Handle content as array or string
+                if isinstance(msg_content, list):
+                    for msg_item in msg_content:
+                        if msg_item.get("type") == "output_text":
+                            content += msg_item.get("text", "")
+                        elif msg_item.get("type") == "function_call":
+                            # Handle function calls
+                            tool_calls.append({
+                                "id": item.get("id", f"call_{len(tool_calls)}"),
+                                "function": {
+                                    "name": msg_item.get("name", ""),
+                                    "arguments": json.dumps(msg_item.get("arguments", {}))
+                                }
+                            })
+                else:
+                    content = msg_content
+        
+        # Calculate usage
+        usage_data = data.get("usage", {})
+        prompt_tokens = usage_data.get("input_tokens", 0)
+        completion_tokens = usage_data.get("output_tokens", 0)
+        
+        # Estimate if not provided
+        if prompt_tokens == 0:
+            prompt_tokens = sum(len(str(m).split()) * 4 for m in input_messages)
+        if completion_tokens == 0:
+            completion_tokens = len(content.split()) * 4
+        
+        result = {
+            "content": content,
+            "tool_calls": tool_calls,
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
+        }
+        
+        # Calculate cost and record usage
+        cost = estimate_cost(model_name, prompt_tokens, completion_tokens)
+        result["usage"]["cost_usd"] = cost
+        
+        usage_tracker.record_usage(
+            provider=self.name,
+            model=model_name,
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            session_id="llm_api",
+            task_type="responses",
         )
         
         return result
@@ -994,6 +1393,50 @@ class LLMClient:
             temperature=temperature,
             max_tokens=max_tokens,
             reasoning_replay=reasoning_replay,
+        )
+    
+    async def responses(
+        self,
+        messages: List[Dict[str, str]],
+        system_prompt: Optional[str] = None,
+        tools: Optional[List[Dict]] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Call LLM using Responses API (/responses endpoint).
+        
+        This uses the new OpenAI Responses API which has different:
+        - Payload format (instructions, input instead of messages)
+        - Response format (output array instead of choices)
+        - Parameter names (max_output_tokens instead of max_tokens)
+        """
+        provider = provider or self.default_provider or 'openai'
+        
+        if provider not in self.providers:
+            logger.error(f"Unknown provider: {provider}, using openai")
+            provider = 'openai'
+        
+        client = self.providers[provider]
+        
+        # Check if provider supports responses() method
+        if not hasattr(client, 'responses'):
+            logger.warning(f"Provider {provider} does not support responses() method, falling back to chat()")
+            return await self.chat(
+                messages=messages,
+                system_prompt=system_prompt,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+                provider=provider,
+            )
+        
+        return await client.responses(
+            messages=messages,
+            system_prompt=system_prompt,
+            tools=tools,
+            model=model,
+            max_tokens=max_tokens,
         )
     
     def list_models(self, provider: Optional[str] = None) -> List[str]:
