@@ -257,10 +257,6 @@ class TestBackwardCompatibility:
                 "body": {"storage": {"value": "<h1>Hello</h1>"}}
             })
             
-            # Reset adapter to use patched channel
-            import src.confluence as confluence_module
-            confluence_module._adapter = None
-            
             from src.confluence import confluence_get_page
             
             result = await confluence_get_page("123", format="storage")
