@@ -310,7 +310,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Use 80% of context window as the limit for prompt history
         # This delays compaction by allowing more history before triggering it
-        max_tokens = max(4000, int(context_window * 0.8))
+        max_tokens = max(128000, int(context_window * 0.8))
         
         # Estimate current token count
         # Convert session messages to AgentMessage format
