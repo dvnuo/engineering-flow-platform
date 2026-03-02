@@ -319,7 +319,8 @@ def get_tools_schemas() -> list:
                         },
                         "max_chars": {"type": "integer", "description": "Maximum characters to return"},
                         "max_comments": {"type": "integer", "description": "Maximum comments to include", "default": 5},
-                        "include_comments": {"type": "boolean", "description": "Include comments", "default": True}
+                        "include_comments": {"type": "boolean", "description": "Include comments", "default": True},
+                        "include_fields": {"type": "array", "items": {"type": "string"}, "description": "Fields to include"}
                     },
                     "required": ["url"]
                 }
@@ -342,7 +343,7 @@ def get_tools_schemas() -> list:
                             "default": "markdown",
                             "description": "Input format: markdown, wiki, or raw"
                         },
-                        "issue_type": {"type": "string", "description": "Issue type", "default": "Task"},
+                        "issue_type": {"type": "string", "description": "Issue type", "default": "Bug"},
                         "priority": {"type": "string", "description": "Priority name"},
                         "labels": {"type": "array", "items": {"type": "string"}, "description": "List of labels"}
                     },
