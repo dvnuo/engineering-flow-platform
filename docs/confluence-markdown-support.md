@@ -321,7 +321,7 @@ confluence_get_page(page_id, max_chars=10000)
 - `body_format`: "markdown"
 - `max_chars`: 无限制
 
-> 注意: 配置项 (default_format, max_chars) 当前未通过 config.yaml 实现，仅支持函数参数。
+> 设计决策: 使用函数参数控制格式和限制，而非 config.yaml。这样更灵活，调用方可根据需要调整。
 
 ## 10. 里程碑
 
