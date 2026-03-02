@@ -402,10 +402,22 @@ class OpenAIProvider(BaseProvider):
         - Messages go to 'input' array
         - max_tokens -> max_output_tokens
         - temperature not supported with gpt-5-mini
-        - tools not supported in Responses API (will be ignored)
+        - tools not fully supported in Responses API
         
+        When tools are provided, fall back to chat() for reliable tool calling.
         Uses _call_api() for centralized retry/backoff behavior.
         """
+        # Fall back to chat() when tools are needed for reliable tool calling
+        if tools:
+            logger.info(f"[OpenAI] Tools provided, falling back to chat() for tool support")
+            return await self.chat(
+                messages=messages,
+                system_prompt=system_prompt,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+            )
+        
         # Check if API key is configured
         error = self._check_api_key()
         if error:
@@ -757,8 +769,21 @@ class GitHubCopilotProvider(BaseProvider):
         - System prompt goes to 'instructions' field
         - Messages go to 'input' array
         - max_tokens -> max_output_tokens
-        - tools not supported in Responses API (will be ignored)
+        - tools not fully supported in Responses API
+        
+        When tools are provided, fall back to chat() for tool calling support.
         """
+        # Fall back to chat() when tools are needed
+        if tools:
+            logger.info(f"[GitHubCopilot] Tools provided, falling back to chat() for tool support")
+            return await self.chat(
+                messages=messages,
+                system_prompt=system_prompt,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+            )
+        
         # Check if API key is configured
         api_key = os.environ.get('GITHUB_COPILOT_TOKEN') or config.llm.get('api_key', '')
         if not api_key:
