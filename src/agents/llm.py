@@ -394,6 +394,7 @@ class OpenAIProvider(BaseProvider):
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Call OpenAI Responses API (/responses endpoint).
         
@@ -403,19 +404,24 @@ class OpenAIProvider(BaseProvider):
         - max_tokens -> max_output_tokens
         - temperature not supported with gpt-5-mini
         - tools not fully supported in Responses API
+        - reasoning_replay not supported in Responses API
         
-        When tools are provided, fall back to chat() for reliable tool calling.
+        When tools or reasoning are needed, fall back to chat() for reliable support.
         Uses _call_api() for centralized retry/backoff behavior.
         """
-        # Fall back to chat() when tools are needed for reliable tool calling
-        if tools:
-            logger.info(f"[OpenAI] Tools provided, falling back to chat() for tool support")
+        # Fall back to chat() when tools or reasoning_replay are needed
+        if tools or reasoning_replay:
+            if tools:
+                logger.info(f"[OpenAI] Tools provided, falling back to chat() for tool support")
+            if reasoning_replay:
+                logger.info(f"[OpenAI] reasoning_replay enabled, falling back to chat()")
             return await self.chat(
                 messages=messages,
                 system_prompt=system_prompt,
                 tools=tools,
                 model=model,
                 max_tokens=max_tokens,
+                reasoning_replay=reasoning_replay,
             )
         
         # Check if API key is configured
@@ -762,6 +768,7 @@ class GitHubCopilotProvider(BaseProvider):
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Call GitHub Copilot Responses API (/responses endpoint).
         
@@ -770,18 +777,23 @@ class GitHubCopilotProvider(BaseProvider):
         - Messages go to 'input' array
         - max_tokens -> max_output_tokens
         - tools not fully supported in Responses API
+        - reasoning_replay not supported in Responses API
         
-        When tools are provided, fall back to chat() for tool calling support.
+        When tools or reasoning are needed, fall back to chat() for reliable support.
         """
-        # Fall back to chat() when tools are needed
-        if tools:
-            logger.info(f"[GitHubCopilot] Tools provided, falling back to chat() for tool support")
+        # Fall back to chat() when tools or reasoning_replay are needed
+        if tools or reasoning_replay:
+            if tools:
+                logger.info(f"[GitHubCopilot] Tools provided, falling back to chat() for tool support")
+            if reasoning_replay:
+                logger.info(f"[GitHubCopilot] reasoning_replay enabled, falling back to chat()")
             return await self.chat(
                 messages=messages,
                 system_prompt=system_prompt,
                 tools=tools,
                 model=model,
                 max_tokens=max_tokens,
+                reasoning_replay=reasoning_replay,
             )
         
         # Check if API key is configured
@@ -1419,12 +1431,13 @@ class LLMClient:
     
     async def responses(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
         provider: Optional[str] = None,
+        reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Call LLM using Responses API (/responses endpoint).
         
@@ -1459,6 +1472,7 @@ class LLMClient:
             tools=tools,
             model=model,
             max_tokens=max_tokens,
+            reasoning_replay=reasoning_replay,
         )
     
     def list_models(self, provider: Optional[str] = None) -> List[str]:

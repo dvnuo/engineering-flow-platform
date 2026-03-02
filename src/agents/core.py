@@ -527,6 +527,7 @@ You have access to the following tools. When a user asks you to do something tha
                 messages=messages,
                 system_prompt=effective_system_prompt,
                 tools=self.tools,
+                reasoning_replay=enable_reasoning,
             )
             
             # Check for LLM configuration error
