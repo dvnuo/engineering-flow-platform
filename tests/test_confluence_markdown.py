@@ -89,7 +89,12 @@ class TestAdapter:
         channel.update_page = AsyncMock(return_value=True)
         channel.search_pages = AsyncMock(return_value={
             "results": [
-                {"title": "Page 1", "url": "/pages/1", "excerpt": "test excerpt"}
+                {
+                    "title": "Page 1",
+                    "url": "/pages/1",
+                    "_links": {"webui": "/spaces/TEST/pages/Page1"},
+                    "body": {"storage": {"value": "<p>This is test content</p>"}}
+                }
             ]
         })
         channel.list_pages = AsyncMock(return_value={
