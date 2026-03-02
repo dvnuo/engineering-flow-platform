@@ -144,6 +144,8 @@ class ConfluenceFormatAdapter:
         Returns:
             Formatted search results
         """
+        import re
+        
         result = await self.channel.search_pages(query, limit)
         
         if not isinstance(result, dict):
@@ -161,13 +163,25 @@ class ConfluenceFormatAdapter:
                 continue
             
             title = p.get("title", "Untitled")
-            url = p.get("url", "")
-            excerpt = p.get("excerpt", "")
             
-            # Clean excerpt (remove HTML tags)
-            import re
-            excerpt = re.sub(r'<[^>]+>', '', excerpt)
-            excerpt = excerpt[:200] + "..." if len(excerpt) > 200 else excerpt
+            # Get URL from _links.webui
+            links = p.get("_links", {})
+            url = links.get("webui", "")
+            if url and hasattr(self.channel, 'base_url'):
+                base = self.channel.base_url
+                if base and not url.startswith('http'):
+                    url = base.rstrip('/') + url
+            
+            # Derive excerpt from body if available
+            excerpt = ""
+            body = p.get("body", {})
+            if isinstance(body, dict):
+                storage = body.get("storage", {})
+                if isinstance(storage, dict):
+                    content = storage.get("value", "")
+                    # Strip HTML tags and truncate
+                    excerpt = re.sub(r'<[^>]+>', '', content)
+                    excerpt = excerpt.strip()[:200] + "..." if len(excerpt) > 200 else excerpt
             
             lines.append(f"- **{title}**")
             lines.append(f"  {url}")
