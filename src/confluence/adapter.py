@@ -260,6 +260,11 @@ class ConfluenceFormatAdapter:
         if isinstance(result, dict):
             page_id = result.get("id", "")
             url = result.get("_links", {}).get("webui", "")
+            # Prefix with base_url to create a full URL
+            if url and hasattr(self.channel, 'base_url'):
+                base = self.channel.base_url
+                if base and not url.startswith('http'):
+                    url = base.rstrip('/') + url
             return f"Page created successfully: {title}\nID: {page_id}\nURL: {url}"
         
         return str(result)
