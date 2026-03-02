@@ -70,7 +70,7 @@ class MarkdownConverter:
         # Handle code blocks first (must be before other tags)
         md = re.sub(
             r'<ac:code-block[^>]*lang="([^"]*)"[^>]*>(.*?)</ac:code-block>',
-            lambda m: f"```{m.group(1) if m.group(1) else ''}\n{self._unescape_html(m.group(2))}\n```",
+            lambda m: f"```{m.group(1) if m.group(1) else ''}\n{m.group(2)}\n```",
             md,
             flags=re.DOTALL | re.IGNORECASE
         )
