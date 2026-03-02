@@ -11,12 +11,6 @@ import html
 
 logger = logging.getLogger(__name__)
 
-# Track unsupported elements for warning
-UNSUPPORTED_ELEMENTS = {
-    "macros": ["info", "warning", "tip", "note", "panel", "status", "expand", "layout"],
-    "description": "Elements that may not round-trip perfectly between Markdown and Storage"
-}
-
 
 class MarkdownConverter:
     """Convert between Confluence Storage Format and Markdown using regex-based conversion."""
