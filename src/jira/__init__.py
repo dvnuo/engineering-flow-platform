@@ -256,11 +256,39 @@ from .api import jira_add_comment as _original_add_comment
 from .api import jira_create_issue as _original_create_issue
 from .api import jira_update_issue as _original_update_issue
 from .api import jira_get_comments
+from .api import get_tools_schemas as _get_api_schemas
 
 
 def get_tools_schemas() -> list:
-    """Get all Jira tool schemas with Markdown support."""
-    # Return updated schemas with new parameters
+    """Get all Jira tool schemas with Markdown support.
+    
+    Delegates to api.get_tools_schemas() and augments Markdown-related tools.
+    """
+    # Get base schemas from api
+    base_tools = _get_api_schemas()
+    
+    # Map of tool names to their enhanced schemas in this module
+    enhanced_schemas = {}
+    current_schemas = _get_all_schemas()
+    for schema in current_schemas:
+        name = schema.get("function", {}).get("name", "")
+        if name:
+            enhanced_schemas[name] = schema
+    
+    # Replace enhanced tools, keep others from base
+    result = []
+    for tool in base_tools:
+        name = tool.get("function", {}).get("name", "")
+        if name in enhanced_schemas:
+            result.append(enhanced_schemas[name])
+        else:
+            result.append(tool)
+    
+    return result
+
+
+def _get_all_schemas() -> list:
+    """Return all Jira tool schemas with Markdown support."""
     return [
         {
             "type": "function",
