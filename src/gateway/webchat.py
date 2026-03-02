@@ -1149,7 +1149,7 @@ async def api_files_upload(request: web.Request) -> web.Response:
         
         metadata = await upload_file(
             session_id=session_id,
-            content=b"".join(content_chunks),
+            content=content,
             filename=filename,
             max_size_mb=max_size_mb
         )
