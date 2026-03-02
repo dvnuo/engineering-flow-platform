@@ -197,7 +197,7 @@ async def api_chat(request: web.Request) -> web.Response:
                 top_k=5,
                 max_tokens=4000
             )
-            if enhanced_message != message:
+            if enhanced_message and enhanced_message != message:
                 logger.info(f"[api_chat] File context injected: status={budget_status}, chunks={len(citations)}")
                 message = enhanced_message
                 # Attach citations to request for response
