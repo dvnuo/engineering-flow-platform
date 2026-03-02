@@ -195,6 +195,7 @@ You have access to the following tools. When a user asks you to do something tha
         track_usage: bool = True,
         reasoning_replay: Optional[bool] = None,
         stream_callback: Optional[Callable[[str], None]] = None,
+        attached_images: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Process a user message with ReAct pattern.
         
@@ -482,6 +483,24 @@ You have access to the following tools. When a user asks you to do something tha
         if matched_skills:
             send_event("skill_matched", {"skill": matched_skills[0].name})
         
+        # ===== INJECT ATTACHED IMAGES =====
+        if attached_images and len(messages) > 0:
+            # Find the last user message and add images to it
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].get("role") == "user":
+                    # Replace with content + images
+                    user_content = messages[i].get("content", "")
+                    # Build vision content - use "input_image" for Responses API
+                    # IMPORTANT: image_url must be a STRING (URL or base64 data URL), not an object
+                    msg_content = [{"type": "text", "text": user_content}]
+                    for img in attached_images[:1]:  # Limit to 1 image
+                        # Use "input_image" for Responses API with string URL (not object)
+                        msg_content.append({"type": "input_image", "image_url": img})
+                    messages[i] = {"role": "user", "content": msg_content}
+                    logger.info(f"[Agent] Attached {len(attached_images)} image(s) to user message")
+                    break
+        # ===== END IMAGE INJECTION =====
+
         while iteration < max_tool_iterations:
             iteration += 1
             
@@ -504,11 +523,10 @@ You have access to the following tools. When a user asks you to do something tha
                     content = truncate(msg.get("content", ""), 50)
                     logger.debug(f"  Msg {i}: {msg.get('role')}: {content}")
             
-            llm_result = await llm_client.chat(
+            llm_result = await llm_client.responses(
                 messages=messages,
                 system_prompt=effective_system_prompt,
                 tools=self.tools,
-                reasoning_replay=enable_reasoning,
             )
             
             # Check for LLM configuration error
