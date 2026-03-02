@@ -42,8 +42,12 @@ def _load_metadata():
 
 
 def _save_metadata():
-    with open(METADATA_FILE, 'w') as f:
-        json.dump({k: v.model_dump() for k, v in _file_metadata.items()}, f, indent=2)
+    # Write to temp file first, then atomically replace
+    temp_path = METADATA_FILE.with_suffix('.json.tmp')
+    data = {k: v.model_dump() for k, v in _file_metadata.items()}
+    with open(temp_path, 'w') as f:
+        json.dump(data, f, indent=2)
+    os.replace(temp_path, METADATA_FILE)
 
 
 def init_storage() -> None:

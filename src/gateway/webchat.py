@@ -220,7 +220,7 @@ async def api_chat(request: web.Request) -> web.Response:
         # Run agent (history is managed internally by session_manager)
         agent = AgentCore(model=model)
         result = await agent.process(
-            message=original_msg_for_history,
+            message=message,
             session_id=session_id,
             user_name="webchat-user",
             track_usage=True,
@@ -1124,17 +1124,20 @@ async def api_files_upload(request: web.Request) -> web.Response:
         try:
             content = await file_field.read()
         except TypeError:
-            content = b''
+            content_chunks = []
+            total_size = 0
             while True:
                 chunk = await file_field.read(8192)
                 if not chunk:
                     break
-                content += chunk
-                if len(content) > max_bytes:
+                content_chunks.append(chunk)
+                total_size += len(chunk)
+                if total_size > max_bytes:
                     return web.json_response({
                         'success': False,
                         'error': f'File exceeds maximum size of {max_size_mb} MB'
                     }, status=400)
+            content = b''.join(content_chunks)
         
         if len(content) > max_bytes:
             return web.json_response({
