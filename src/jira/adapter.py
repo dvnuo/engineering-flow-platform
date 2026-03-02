@@ -20,11 +20,10 @@ class JiraFormatAdapter:
     """Unified interface for Jira operations with format conversion."""
     
     def __init__(self, channel: JiraChannel):
-        self.channel = channel
-        self.converter = converter
-        # 部署类型：Server/DC 或 Cloud
-        # 从 channel 配置获取，默认 server
-        self.deployment = getattr(channel, 'deployment', 'server')
+        self.channel = self.converter = converter
+        # 部署类型：从 api_version 判断
+        # v2 = Server/DC (wiki), v3 = Cloud (ADF)
+        self.deployment = 'cloud' if getattr(channel, 'api_version', '2') == '3' else 'server'
     
     # ========== Query Operations ==========
     

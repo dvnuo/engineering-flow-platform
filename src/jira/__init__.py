@@ -109,25 +109,35 @@ async def jira_get_issue_by_url(
     """
     import re
     
-    # Extract issue key from URL
-    match = re.search(r'/browse/([A-Z]+-\d+)', url)
-    if not match:
-        return f"Could not extract issue key from URL: {url}"
-    
-    issue_key = match.group(1)
-    
-    # Get the correct instance client based on URL
-    instance_channel = jira_channel.get_instance_client(url=url)
-    adapter = JiraFormatAdapter(instance_channel)
-    
-    return await adapter.get_issue(
-        issue_key=issue_key,
-        format=format,
-        max_chars=max_chars,
-        max_comments=max_comments,
-        include_fields=include_fields,
-        include_comments=include_comments
-    )
+    try:
+        # Extract issue key from URL
+        match = re.search(r'/browse/([A-Z]+-\d+)', url)
+        if not match:
+            return f"Could not extract issue key from URL: {url}"
+        
+        issue_key = match.group(1)
+        
+        # Get the correct instance client based on URL
+        if not jira_channel.is_configured():
+            return "Error: Jira is not configured."
+        
+        instance_channel = jira_channel.get_instance_client(url=url)
+        
+        if not instance_channel.is_configured():
+            return f"Error: Jira instance for {url} is not configured."
+        
+        adapter = JiraFormatAdapter(instance_channel)
+        
+        return await adapter.get_issue(
+            issue_key=issue_key,
+            format=format,
+            max_chars=max_chars,
+            max_comments=max_comments,
+            include_fields=include_fields,
+            include_comments=include_comments
+        )
+    except Exception as e:
+        return f"Error getting issue from URL: {str(e)}"
 
 
 async def jira_add_comment(

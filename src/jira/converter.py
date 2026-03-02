@@ -125,23 +125,25 @@ class JiraMarkupConverter:
                 result.append(f'h2. {line[3:]}')
             elif line.startswith('# '):
                 result.append(f'h1. {line[2:]}')
-            # Bold/Italic
+            # Bold (only, not italic)
             elif '**' in line:
                 line = re.sub(r'\*\*(.+?)\*\*', r'*\1*', line)
+                result.append(line)
+            # Italic (only, not bold)
+            elif '*' in line:
                 line = re.sub(r'\*([^*]+)\*', r'_\1_', line)
                 result.append(line)
             # Inline code
             elif '`' in line:
                 line = re.sub(r'`([^`]+)`', r'{{\1}}', line)
                 result.append(line)
-            # Links [text](url)
-            elif '](' in line:
-                line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'[\1|\2]', line)
-                result.append(line)
-            # Images ![alt](url)
-            elif '![' in line and '](' in line:
+            # Images ![alt](url) - must check before links
+            if '![' in line and '](' in line:
                 line = re.sub(r'!\[(.*?)\]\((.+?)\)', r'!\2!', line)
-                result.append(line)
+            # Links [text](url)
+            if '](' in line:
+                line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'[\1|\2]', line)
+            result.append(line)
             # Lists
             elif line.startswith('- ') or line.startswith('* '):
                 result.append(f'* {line[2:]}')
