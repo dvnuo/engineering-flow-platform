@@ -469,7 +469,7 @@ class GitHubCopilotProvider(BaseProvider):
                     msg_summary["tool_call_id"] = msg.get("tool_call_id")
                 if msg.get("content"):
                     content = msg.get("content", "")
-                    msg_summary["content"] = truncate(content, 100)
+                    msg_summary["content"] = truncate(content, 3000)
                 logger.debug(f"  Message {i}: {msg_summary}")
         
         # Make API call with proper error handling
