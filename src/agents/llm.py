@@ -414,18 +414,13 @@ class OpenAIProvider(BaseProvider):
         - Messages go to 'input' array
         - max_tokens -> max_output_tokens
         - temperature not supported with gpt-5-mini
-        - tools not fully supported in Responses API
         - reasoning_replay not supported in Responses API
         
-        When tools or reasoning are needed, fall back to chat() for reliable support.
         Uses _call_api() for centralized retry/backoff behavior.
         """
-        # Fall back to chat() when tools or reasoning_replay are needed
-        if tools or reasoning_replay:
-            if tools:
-                logger.info(f"[OpenAI] Tools provided, falling back to chat() for tool support")
-            if reasoning_replay:
-                logger.info(f"[OpenAI] reasoning_replay enabled, falling back to chat()")
+        # Fall back to chat() only when reasoning_replay is needed (not supported in Responses API)
+        if reasoning_replay:
+            logger.info(f"[OpenAI] reasoning_replay enabled, falling back to chat()")
             return await self.chat(
                 messages=messages,
                 system_prompt=system_prompt,
@@ -507,6 +502,12 @@ class OpenAIProvider(BaseProvider):
             "input": input_messages,
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
         }
+        
+        # Add tools to payload if provided
+        if tools:
+            payload["tools"] = tools
+            if _is_debug_enabled():
+                logger.debug(f"Tools count: {len(tools)}")
         
         # Debug: Log request details (before calling _call_api)
         if _is_debug_enabled():
@@ -796,17 +797,13 @@ class GitHubCopilotProvider(BaseProvider):
         - System prompt goes to 'instructions' field
         - Messages go to 'input' array
         - max_tokens -> max_output_tokens
-        - tools not fully supported in Responses API
         - reasoning_replay not supported in Responses API
         
-        When tools or reasoning are needed, fall back to chat() for reliable support.
+        Uses _call_api() for centralized retry/backoff behavior.
         """
-        # Fall back to chat() when tools or reasoning_replay are needed
-        if tools or reasoning_replay:
-            if tools:
-                logger.info(f"[GitHubCopilot] Tools provided, falling back to chat() for tool support")
-            if reasoning_replay:
-                logger.info(f"[GitHubCopilot] reasoning_replay enabled, falling back to chat()")
+        # Fall back to chat() only when reasoning_replay is needed (not supported in Responses API)
+        if reasoning_replay:
+            logger.info(f"[GitHubCopilot] reasoning_replay enabled, falling back to chat()")
             return await self.chat(
                 messages=messages,
                 system_prompt=system_prompt,
@@ -899,6 +896,12 @@ class GitHubCopilotProvider(BaseProvider):
             "input": input_messages,
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
         }
+        
+        # Add tools to payload if provided
+        if tools:
+            payload["tools"] = tools
+            if _is_debug_enabled():
+                logger.debug(f"Tools count: {len(tools)}")
         
         # Debug: Log request details
         if _is_debug_enabled():

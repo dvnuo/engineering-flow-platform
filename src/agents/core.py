@@ -532,10 +532,8 @@ You have access to the following tools. When a user asks you to do something tha
                     logger.debug(f"  Msg {i}: {msg.get('role')}: {content}")
             
             # Note: Responses API (/responses) does not fully support tool calling for all models.
-            # We keep using chat() (/chat/completions) for the main agent loop to ensure
-            # reliable tool execution. The responses() method is available for sub-agents
-            # that don't need tools (e.g., vision-only tasks, simple text generation).
-            llm_result = await llm_client.chat(
+            # Use responses() for the main agent loop (now supports tools)
+            llm_result = await llm_client.responses(
                 messages=messages,
                 system_prompt=effective_system_prompt,
                 tools=self.tools,
