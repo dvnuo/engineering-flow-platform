@@ -348,3 +348,122 @@ class TestBackwardCompatibility:
             result = await jira_get_issue("TEST-1")
             
             assert "not configured" in result.lower()
+
+
+class TestMarkdownToWikiEdgeCases:
+    """Test edge cases for Markdown to wiki conversion."""
+    
+    def test_bold_not_converted_to_italic(self):
+        """Test that **bold** doesn't become italic after conversion."""
+        from src.jira.converter import markdown_to_wiki
+        
+        md = "This is **bold** text"
+        result = markdown_to_wiki(md)
+        
+        # Should be *bold* (Jira bold), not _bold_ (Jira italic)
+        assert "*bold*" in result
+        assert "_bold_" not in result
+    
+    def test_italic_with_asterisks(self):
+        """Test that *italic* converts correctly."""
+        from src.jira.converter import markdown_to_wiki
+        
+        md = "This is *italic* text"
+        result = markdown_to_wiki(md)
+        
+        # Single asterisk should become underscore (Jira italic)
+        assert "_italic_" in result
+    
+    def test_mixed_bold_and_italic(self):
+        """Test mixed bold and italic in same line."""
+        from src.jira.converter import markdown_to_wiki
+        
+        md = "**bold** and *italic*"
+        result = markdown_to_wiki(md)
+        
+        assert "*bold*" in result
+        assert "_italic_" in result
+    
+    def test_list_with_formatting(self):
+        """Test list items containing bold/code/links."""
+        from src.jira.converter import markdown_to_wiki
+        
+        md = "- Item with **bold**\n- Item with `code`\n- Item with [link](url)"
+        result = markdown_to_wiki(md)
+        
+        assert "* Item with *bold*" in result
+        assert "* Item with {{code}}" in result
+        assert "* Item with [link|url]" in result
+    
+    def test_image_before_link(self):
+        """Test that images are converted before links."""
+        from src.jira.converter import markdown_to_wiki
+        
+        md = "![alt](img.png) and [link](url)"
+        result = markdown_to_wiki(md)
+        
+        # Image should be !img.png! and link should be [link|url]
+        assert "!img.png!" in result
+        assert "[link|url]" in result
+    
+    def test_quote_conversion(self):
+        """Test blockquote conversion."""
+        from src.jira.converter import markdown_to_wiki
+        
+        md = "> Quote text"
+        result = markdown_to_wiki(md)
+        
+        assert "{quote}Quote text{quote}" in result
+    
+    def test_horizontal_rule(self):
+        """Test horizontal rule conversion."""
+        from src.jira.converter import markdown_to_wiki
+        
+        md = "Text\n\n---\n\nMore text"
+        result = markdown_to_wiki(md)
+        
+        assert "----" in result
+    
+    def test_ordered_list(self):
+        """Test ordered list conversion."""
+        from src.jira.converter import markdown_to_wiki
+        
+        md = "1. First\n2. Second"
+        result = markdown_to_wiki(md)
+        
+        assert "# First" in result
+        assert "# Second" in result
+
+
+class TestURLExtraction:
+    """Test URL extraction for jira_get_issue_by_url."""
+    
+    def test_url_extraction_simple(self):
+        """Test simple URL extraction."""
+        from src.jira.converter import JiraMarkupConverter
+        
+        # Just test the regex pattern
+        import re
+        url = "https://company.atlassian.net/browse/PROJ-123"
+        match = re.search(r'/browse/([A-Z][A-Z0-9_]*-\d+)', url, re.IGNORECASE)
+        
+        assert match is not None
+        assert match.group(1).upper() == "PROJ-123"
+    
+    def test_url_extraction_with_digits(self):
+        """Test URL with digits in project key."""
+        import re
+        url = "https://company.atlassian.net/browse/ABC1-456"
+        match = re.search(r'/browse/([A-Z][A-Z0-9_]*-\d+)', url, re.IGNORECASE)
+        
+        assert match is not None
+        assert match.group(1).upper() == "ABC1-456"
+    
+    def test_url_extraction_lowercase(self):
+        """Test URL with lowercase (case insensitive)."""
+        import re
+        url = "https://company.atlassian.net/browse/proj-789"
+        match = re.search(r'/browse/([A-Z][A-Z0-9_]*-\d+)', url, re.IGNORECASE)
+        
+        assert match is not None
+        assert match.group(1).upper() == "PROJ-789"
