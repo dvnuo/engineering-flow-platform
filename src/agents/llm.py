@@ -839,7 +839,8 @@ class GitHubCopilotProvider(BaseProvider):
 
     async def responses(
         self,
-        messages: List[Dict],
+        messages: Optional[List[Dict]] = None,
+        input_items: Optional[List[Dict]] = None,
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
