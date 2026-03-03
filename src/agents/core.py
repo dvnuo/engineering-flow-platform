@@ -531,8 +531,7 @@ You have access to the following tools. When a user asks you to do something tha
                     content = truncate(msg.get("content", ""), 50)
                     logger.debug(f"  Msg {i}: {msg.get('role')}: {content}")
             
-            # Note: Responses API (/responses) does not fully support tool calling for all models.
-            # Use responses() for the main agent loop (now supports tools)
+            # Use responses() for the main agent loop (supports tools)
             llm_result = await llm_client.responses(
                 messages=messages,
                 system_prompt=effective_system_prompt,
