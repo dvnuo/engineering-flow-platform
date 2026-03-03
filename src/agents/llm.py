@@ -237,6 +237,9 @@ class BaseProvider:
                     logger.debug(f"=== [LLM] ERROR ===")
                     logger.debug(f"Attempt: {attempt + 1}/{max_retries}")
                     logger.debug(f"Error: {type(e).__name__}: {e}")
+                    # Log response body for debugging 400 errors
+                    if isinstance(e, httpx.HTTPStatusError):
+                        logger.debug(f"Response body: {e.response.text}")
 
                 if attempt < max_retries - 1:
                     delay = retry_delay * (2 ** attempt)
