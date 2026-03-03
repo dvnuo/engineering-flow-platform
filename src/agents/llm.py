@@ -892,62 +892,9 @@ class GitHubCopilotProvider(BaseProvider):
         
         model_name = model or self.default_model
         
-        # Build input array from messages (Responses API format)
-        input_items = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            # Handle content as string or array (for vision)
-            if isinstance(content, list):
-                # Convert vision format to Responses API format
-                # IMPORTANT: image_url must be a STRING (URL or base64 data URL), not an object
-                converted_content = []
-                for item in content:
-                    if isinstance(item, dict):
-                        item_type = item.get("type", "")
-                        if item_type == "text":
-                            converted_content.append({
-                                "type": "input_text",
-                                "text": item.get("text", "")
-                            })
-                        elif item_type == "image_url":
-                            # Extract the URL from image_url object
-                            img_url_obj = item.get("image_url", {})
-                            img_url = img_url_obj.get("url") if isinstance(img_url_obj, dict) else str(img_url_obj)
-                            if img_url:
-                                converted_content.append({
-                                    "type": "input_image",
-                                    "image_url": img_url  # Must be STRING, not object!
-                                })
-                            else:
-                                logger.warning(f"[Copilot] Skipping image: no valid URL")
-                        elif item_type == "input_image":
-                            img_url_obj = item.get("image_url")
-                            if isinstance(img_url_obj, dict):
-                                img_url = img_url_obj.get("url", "")
-                                if img_url:
-                                    converted_content.append({
-                                        "type": "input_image",
-                                        "image_url": img_url
-                                    })
-                                else:
-                                    logger.warning("[Copilot] Skipping image: no valid URL in existing input_image block")
-                            else:
-                                converted_content.append(item)
-                        else:
-                            converted_content.append(item)
-                    else:
-                        converted_content.append({"type": "input_text", "text": str(item)})
-                input_items.append({
-                    "role": role,
-                    "content": converted_content
-                })
-            else:
-                input_items.append({
-                    "role": role,
-                    "content": content
-                })
+        # Use parent class method to convert messages to input_items
+        if input_items is None:
+            input_items = self._convert_messages_to_input_items(messages or [])
         
         # Build payload for Responses API
         payload = {
