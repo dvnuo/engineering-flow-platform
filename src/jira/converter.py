@@ -50,8 +50,8 @@ class JiraMarkupConverter:
         # Images
         md = re.sub(r'!(.+?)!', r'![](\1)', md)
         
-        # Lists re.sub(r'
-        md =^\* (.+)$', r'- \1', md, flags=re.MULTILINE)
+        # Lists
+        md = re.sub(r'^\* (.+)$', r'- \1', md, flags=re.MULTILINE)
         md = re.sub(r'^# (.+)$', r'1. \1', md, flags=re.MULTILINE)
         
         # Quote (handle multi-line properly)
