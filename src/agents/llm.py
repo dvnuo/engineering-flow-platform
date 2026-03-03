@@ -418,9 +418,13 @@ class OpenAIProvider(BaseProvider):
         
         Uses _call_api() for centralized retry/backoff behavior.
         """
-        # Fall back to chat() only when reasoning_replay is needed (not supported in Responses API)
-        if reasoning_replay:
-            logger.info(f"[OpenAI] reasoning_replay enabled, falling back to chat()")
+        # Fall back to chat() when tools or reasoning_replay are needed
+        # (Responses API does not fully support tools for all models)
+        if tools or reasoning_replay:
+            if reasoning_replay:
+                logger.info(f"[OpenAI] reasoning_replay enabled, falling back to chat()")
+            if tools:
+                logger.info(f"[OpenAI] Tools provided, falling back to chat()")
             return await self.chat(
                 messages=messages,
                 system_prompt=system_prompt,
@@ -827,9 +831,13 @@ class GitHubCopilotProvider(BaseProvider):
         
         Uses _call_api() for centralized retry/backoff behavior.
         """
-        # Fall back to chat() only when reasoning_replay is needed (not supported in Responses API)
-        if reasoning_replay:
-            logger.info(f"[GitHubCopilot] reasoning_replay enabled, falling back to chat()")
+        # Fall back to chat() when tools or reasoning_replay are needed
+        # (Responses API does not fully support tools for all models)
+        if tools or reasoning_replay:
+            if reasoning_replay:
+                logger.info(f"[GitHubCopilot] reasoning_replay enabled, falling back to chat()")
+            if tools:
+                logger.info(f"[GitHubCopilot] Tools provided, falling back to chat()")
             return await self.chat(
                 messages=messages,
                 system_prompt=system_prompt,
