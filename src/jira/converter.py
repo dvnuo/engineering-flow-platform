@@ -114,12 +114,12 @@ class JiraMarkupConverter:
                 continue
             
             # Apply inline conversions cumulatively (use if, not elif)
-            # Bold
+            # Italic first (single asterisk, avoid matching bold **...**)
+            if '*' in line:
+                line = re.sub(r'(?<!\*)\*([^*]+)\*(?!\*)', r'_\1_', line)
+            # Bold (after italic to avoid reprocessing)
             if '**' in line:
                 line = re.sub(r'\*\*(.+?)\*\*', r'*\1*', line)
-            # Italic
-            if '*' in line:
-                line = re.sub(r'\*([^*]+)\*', r'_\1_', line)
             # Inline code
             if '`' in line:
                 line = re.sub(r'`([^`]+)`', r'{{\1}}', line)
