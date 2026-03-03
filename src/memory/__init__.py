@@ -113,10 +113,29 @@ class MemoryStore:
         raise NotImplementedError
 
 
-def get_memory_path(date_str: str = None) -> Path:
+def get_memory_dir(workspace_dir: Path = None) -> Path:
+    """Get the memory directory path.
+    
+    Args:
+        workspace_dir: Workspace directory. Uses DEFAULT_WORKSPACE if not provided.
+        
+    Returns:
+        Path to the memory directory.
+    """
+    if workspace_dir is None:
+        workspace_dir = DEFAULT_WORKSPACE
+    
+    memory_dir = workspace_dir / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    
+    return memory_dir
+
+
+def get_memory_path(workspace_dir: Path = None, date_str: str = None) -> Path:
     """Get the path for daily memory file.
     
     Args:
+        workspace_dir: Workspace directory. Uses DEFAULT_WORKSPACE if not provided.
         date_str: Date string in YYYY-MM-DD format. Uses today if not provided.
         
     Returns:
@@ -127,19 +146,71 @@ def get_memory_path(date_str: str = None) -> Path:
     if date_str is None:
         date_str = datetime.now().strftime("%Y-%m-%d")
     
-    memory_dir = DEFAULT_WORKSPACE / "memory"
-    memory_dir.mkdir(parents=True, exist_ok=True)
+    memory_dir = get_memory_dir(workspace_dir)
     
     return memory_dir / f"{date_str}.md"
 
 
-def get_long_term_memory_path() -> Path:
+def get_long_term_memory_path(workspace_dir: Path = None) -> Path:
     """Get the path for long-term memory file.
     
+    Args:
+        workspace_dir: Workspace directory. Uses DEFAULT_WORKSPACE if not provided.
+        
     Returns:
         Path to MEMORY.md
     """
-    return DEFAULT_WORKSPACE / "MEMORY.md"
+    if workspace_dir is None:
+        workspace_dir = DEFAULT_WORKSPACE
+    
+    return workspace_dir / "MEMORY.md"
+
+
+def write_daily_memory(workspace_dir: Path, content: str, date_str: str = None, append: bool = True) -> Path:
+    """Write content to daily memory file.
+    
+    Args:
+        workspace_dir: Workspace directory (required - no default)
+        content: Content to write
+        date_str: Date string in YYYY-MM-DD format. Uses today if not provided.
+        append: If True (default), append content to existing file; if False, overwrite.
+        
+    Returns:
+        Path to the written file.
+    """
+    filepath = get_memory_path(workspace_dir, date_str)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    
+    if append:
+        with filepath.open("a", encoding="utf-8") as f:
+            f.write(content + "\n")
+    else:
+        filepath.write_text(content, encoding='utf-8')
+    
+    return filepath
+
+
+def write_long_term_memory(workspace_dir: Path, content: str, append: bool = True) -> Path:
+    """Write content to long-term memory file.
+    
+    Args:
+        workspace_dir: Workspace directory (required - no default)
+        content: Content to write
+        append: If True (default), append content; if False, overwrite.
+        
+    Returns:
+        Path to the written file.
+    """
+    filepath = get_long_term_memory_path(workspace_dir)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    
+    if append:
+        with filepath.open("a", encoding="utf-8") as f:
+            f.write(content + "\n")
+    else:
+        filepath.write_text(content, encoding='utf-8')
+    
+    return filepath
 
 
 # Global memory store instance (kept for backward compatibility)
@@ -170,47 +241,9 @@ def get_memory_store() -> Optional[MemoryStore]:
     Note: Memory store is disabled. Using LightweightMemory in agents instead.
     
     Returns:
-        None
+        None (disabled)
     """
-    # Memory store disabled - using LightweightMemory instead
     return None
-
-
-async def write_daily_memory(content: str, date_str: str = None) -> Path:
-    """Write content to daily memory file.
-    
-    Args:
-        content: Content to write.
-        date_str: Optional date string (YYYY-MM-DD).
-        
-    Returns:
-        Path to the written file.
-    """
-    memory_file = get_memory_path(date_str)
-    
-    with open(memory_file, "a", encoding="utf-8") as f:
-        f.write(content + "\n")
-    
-    logger.info(f"Wrote daily memory: {memory_file}")
-    return memory_file
-
-
-async def write_long_term_memory(content: str) -> Path:
-    """Write content to long-term memory file.
-    
-    Args:
-        content: Content to write.
-        
-    Returns:
-        Path to MEMORY.md
-    """
-    memory_file = get_long_term_memory_path()
-    
-    with open(memory_file, "a", encoding="utf-8") as f:
-        f.write(content + "\n")
-    
-    logger.info(f"Wrote long-term memory: {memory_file}")
-    return memory_file
 
 
 # Lightweight Memory exports
@@ -221,6 +254,7 @@ __all__ = [
     'MemoryEntry',
     'MemoryConfig',
     'MemoryStore',
+    'get_memory_dir',
     'get_memory_path',
     'get_long_term_memory_path',
     'init_memory_store',
