@@ -466,10 +466,13 @@ class OpenAIProvider(BaseProvider):
                             img_url_obj = item.get("image_url")
                             if isinstance(img_url_obj, dict):
                                 img_url = img_url_obj.get("url", "")
-                                converted_content.append({
-                                    "type": "input_image",
-                                    "image_url": img_url
-                                })
+                                if img_url:
+                                    converted_content.append({
+                                        "type": "input_image",
+                                        "image_url": img_url
+                                    })
+                                else:
+                                    logger.warning("[LLM] Skipping image: no valid URL in existing input_image block")
                             else:
                                 converted_content.append(item)
                         else:
@@ -855,10 +858,13 @@ class GitHubCopilotProvider(BaseProvider):
                             img_url_obj = item.get("image_url")
                             if isinstance(img_url_obj, dict):
                                 img_url = img_url_obj.get("url", "")
-                                converted_content.append({
-                                    "type": "input_image",
-                                    "image_url": img_url
-                                })
+                                if img_url:
+                                    converted_content.append({
+                                        "type": "input_image",
+                                        "image_url": img_url
+                                    })
+                                else:
+                                    logger.warning("[Copilot] Skipping image: no valid URL in existing input_image block")
                             else:
                                 converted_content.append(item)
                         else:
