@@ -6,8 +6,6 @@ Uses TF-IDF inspired scoring with keyword matching.
 
 import json
 import logging
-import math
-import os
 import re
 from collections import Counter
 from dataclasses import dataclass

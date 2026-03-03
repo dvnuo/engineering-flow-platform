@@ -123,6 +123,7 @@ class MemorySystem:
         source_name: str,
         chunk_markdown=None,
         kind: str = "core",
+        date: str = None,
     ) -> None:
         """Index a single file, optionally using chunking.
         
@@ -131,6 +132,7 @@ class MemorySystem:
             source_name: Name for the source (e.g., "MEMORY.md")
             chunk_markdown: Optional chunking function
             kind: Type of file ("core" or "daily")
+            date: Date for daily notes (YYYY-MM-DD format)
         """
         if not self.search_memory:
             return
@@ -145,6 +147,7 @@ class MemorySystem:
                     text=content,
                     source_name=source_name,
                     kind=kind,
+                    date=date,
                     max_chars=1200,
                     min_chars=200,
                 )
@@ -202,7 +205,7 @@ class MemorySystem:
             
             if filepath.exists():
                 source_name = filepath.name  # e.g., "2026-03-03.md"
-                self._index_file(filepath, source_name, chunk_markdown, kind="daily")
+                self._index_file(filepath, source_name, chunk_markdown, kind="daily", date=date_str)
     
     def refresh_index_if_needed(self) -> bool:
         """Refresh index if any source files have changed.
@@ -259,10 +262,47 @@ class MemorySystem:
                             except ImportError:
                                 chunk_markdown = None
                             
-                            self._index_file(filepath, filename, chunk_markdown, kind="daily")
+                            # Extract date from filename (e.g., "2026-03-03.md")
+                            date_str = filename.replace('.md', '')
+                            self._index_file(filepath, filename, chunk_markdown, kind="daily", date=date_str)
                             refreshed = True
                     except Exception as e:
                         logger.debug(f"Error checking {filename}: {e}")
+        
+        # Cleanup: remove chunks for deleted core files
+        for filename in CORE_MEMORY_FILES:
+            filepath = self.workspace / filename
+            if not filepath.exists() and filename in self._source_mtimes:
+                logger.info(f"Removing index for deleted file: {filename}")
+                self.search_memory.delete_by_source(filename)
+                del self._source_mtimes[filename]
+                refreshed = True
+        
+        # Cleanup: remove chunks for daily notes outside the date range
+        if memory_dir.exists():
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=self.daily_notes_index_days - 1)
+            
+            # Get all daily note files in current range
+            current_daily = set()
+            for i in range(self.daily_notes_index_days):
+                date = start_date + timedelta(days=i)
+                date_str = date.strftime("%Y-%m-%d")
+                current_daily.add(f"{date_str}.md")
+            
+            # Delete chunks for daily notes not in range
+            for filename in list(self._source_mtimes.keys()):
+                if filename.endswith('.md') and filename not in current_daily:
+                    # Check if it's a daily note (not a core file)
+                    if self._source_mtimes.get(filename):
+                        meta_check = self.search_memory.get_entry(
+                            f"daily:{filename}#"
+                        ) if self.search_memory else None
+                        if meta_check or filename.startswith("20"):
+                            logger.info(f"Removing index for out-of-range daily note: {filename}")
+                            self.search_memory.delete_by_source(filename)
+                            del self._source_mtimes[filename]
+                            refreshed = True
         
         return refreshed
     

@@ -6,6 +6,7 @@ Reserved for future: hooking LLM to output ops.
 Note: This is scaffolding only - not yet integrated into agent flow.
 """
 
+import hashlib
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
 from enum import Enum
@@ -59,7 +60,14 @@ def apply_ops(memory_backend, ops: List[MemoryOp]) -> List[str]:
                     results.append(f"ADD failed: no content provided")
                     continue
                 
-                entry_id = mem_op.payload.get('id') or f"mem:{hash(mem_op.payload['content'])}"
+                # Use stable ID: either provided or SHA256 hash of content
+                if mem_op.payload.get('id'):
+                    entry_id = mem_op.payload['id']
+                else:
+                    # Use SHA256 for stable, deterministic ID
+                    content_hash = hashlib.sha256(mem_op.payload['content'].encode()).hexdigest()[:16]
+                    entry_id = f"mem:{content_hash}"
+                
                 content = mem_op.payload['content']
                 metadata = mem_op.payload.get('metadata', {})
                 

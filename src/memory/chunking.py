@@ -107,8 +107,7 @@ def _create_chunks_from_text(
     if not text.strip():
         return []
     
-    # Remove the heading from the text for content (it's in the heading)
-    # but keep it for context
+    # Get the full content (heading markup is kept in the text for context)
     content = text.strip()
     
     chunks = []
@@ -226,12 +225,16 @@ def _generate_chunk_id(
     """Generate a stable chunk ID.
     
     Format:
-    - Core: mem:MEMORY.md#h1-01:chunk-01
-    - Daily: daily:2026-03-02#chunk-01
+    - Core: mem:MEMORY.md#heading-slug-01
+    - Daily: daily:2026-03-02.md#heading-slug-01
+    
+    If heading is empty, uses "-" as slug.
     """
     # Create heading slug (alphanumeric, limited length)
     heading_slug = re.sub(r'[^a-zA-Z0-9]', '-', heading.lower())
     heading_slug = re.sub(r'-+', '-', heading_slug).strip('-')
+    if not heading_slug:
+        heading_slug = "-"
     if len(heading_slug) > 20:
         heading_slug = heading_slug[:20]
     
