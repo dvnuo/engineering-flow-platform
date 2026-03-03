@@ -109,12 +109,12 @@ async def jira_get_issue_by_url(
     import re
     
     try:
-        # Extract issue key from URL
-        match = re.search(r'/browse/([A-Z]+-\d+)', url)
+        # Extract issue key from URL (support letters, digits, underscores in project key)
+        match = re.search(r'/browse/([A-Z][A-Z0-9_]*-\d+)', url, re.IGNORECASE)
         if not match:
             return f"Could not extract issue key from URL: {url}"
         
-        issue_key = match.group(1)
+        issue_key = match.group(1).upper()
         
         # Get the correct instance client based on URL
         if not jira_channel.is_configured():
