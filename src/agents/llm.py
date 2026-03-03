@@ -241,6 +241,13 @@ class BaseProvider:
                 if attempt < max_retries - 1:
                     delay = retry_delay * (2 ** attempt)
                     logger.warning(f"API error, retrying in {delay}s: {e}")
+                    # Log error response body for debugging
+                    if hasattr(e, 'response') and e.response is not None:
+                        try:
+                            error_body = e.response.text
+                            logger.warning(f"Error response: {error_body[:500]}")
+                        except:
+                            pass
                     await asyncio.sleep(delay)
 
         raise last_error
