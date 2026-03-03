@@ -424,10 +424,7 @@ class OpenAIProvider(BaseProvider):
                 reasoning_replay=reasoning_replay,
             )
         
-        # Check if API key is configured
-        error = self._check_api_key()
-        if error:
-            return error
+        # Note: API key check is done in _call_api() to avoid duplication
         
         model_name = model or self.default_model
         
