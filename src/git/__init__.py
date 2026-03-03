@@ -37,55 +37,6 @@ async def git_push(workspace: str = ".") -> str:
         return f"Error: {e}"
 
 
-def get_tools_schemas() -> list:
-    """Return GitHub tool schemas for OpenAI."""
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": "git_status",
-                "description": "Get git status of a repository",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "workspace": {"type": "string", "description": "Workspace path", "default": "."}
-                    },
-                    "required": []
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "git_commit",
-                "description": "Create a git commit",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "message": {"type": "string", "description": "Commit message"},
-                        "workspace": {"type": "string", "description": "Workspace path", "default": "."}
-                    },
-                    "required": ["message"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "git_push",
-                "description": "Push to remote",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "workspace": {"type": "string", "description": "Workspace path", "default": "."}
-                    },
-                    "required": []
-                }
-            }
-        },
-    ]
-
-
 # ========== Git Clone Tool ==========
 
 async def git_clone(repo_url: str, workspace: str = ".") -> str:
@@ -100,15 +51,6 @@ async def git_clone(repo_url: str, workspace: str = ".") -> str:
 
 def get_tools_schemas() -> list:
     """Return Git tool schemas for OpenAI."""
-    # Re-read the original file content to get all schemas
-    import importlib
-    import sys
-    # Clear cached module
-    if 'src.git' in sys.modules:
-        del sys.modules['src.git']
-    
-    from .api import GitClient
-    
     return [
         {
             "type": "function",
