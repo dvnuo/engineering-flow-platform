@@ -187,8 +187,12 @@ def _create_chunks_from_text(
                     meta=meta,
                 ))
                 chunk_index += 1
+            else:
+                # Content too small for standalone chunk - merge with next paragraph
+                # (don't start new chunk yet, combine with para)
+                para = current_chunk_text + "\n\n" + para if current_chunk_text else para
             
-            # Start new chunk
+            # Start new chunk with current paragraph
             current_chunk_text = para
         else:
             # Add to current chunk
