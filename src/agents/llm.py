@@ -782,7 +782,7 @@ class GitHubCopilotProvider(BaseProvider):
         
         # Build function_calls (Responses API format)
         function_calls_result = []
-        for fc in (function_calls or []):
+        for fc in (tool_calls or []):
             args = fc.get("arguments", {})
             arguments = json.dumps(args) if isinstance(args, dict) else args
             function_calls_result.append({
@@ -793,7 +793,7 @@ class GitHubCopilotProvider(BaseProvider):
         
         # Also include tool_calls for backward compatibility
         tool_calls_compat = []
-        for fc in (function_calls or []):
+        for fc in (tool_calls or []):
             args = fc.get("arguments", {})
             arguments = json.dumps(args) if isinstance(args, dict) else args
             tool_calls_compat.append({
@@ -1048,7 +1048,7 @@ class GitHubCopilotProvider(BaseProvider):
         
         # Build function_calls (Responses API format)
         function_calls_result = []
-        for fc in (function_calls or []):
+        for fc in (tool_calls or []):
             args = fc.get("arguments", {})
             arguments = json.dumps(args) if isinstance(args, dict) else args
             function_calls_result.append({
@@ -1059,7 +1059,7 @@ class GitHubCopilotProvider(BaseProvider):
         
         # Also include tool_calls for backward compatibility
         tool_calls_compat = []
-        for fc in (function_calls or []):
+        for fc in (tool_calls or []):
             args = fc.get("arguments", {})
             arguments = json.dumps(args) if isinstance(args, dict) else args
             tool_calls_compat.append({
