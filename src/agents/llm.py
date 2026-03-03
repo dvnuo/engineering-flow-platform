@@ -281,11 +281,18 @@ class OpenAIProvider(BaseProvider):
         # Use config setting if not explicitly provided
         enable_reasoning = reasoning_replay if reasoning_replay is not None else config.llm.get('reasoning_replay', False)
         
+        # GPT-5 models require max_completion_tokens instead of max_tokens
+        model_name = (model or self.default_model).lower()
+        if model_name.startswith("gpt-5"):
+            max_tokens_key = "max_completion_tokens"
+        else:
+            max_tokens_key = "max_tokens"
+        
         payload = {
             "model": model or self.default_model,
             "messages": all_messages,
             "temperature": temperature,
-            "max_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+            max_tokens_key: max_tokens or config.llm.get('max_tokens', 1000),
         }
         
         # Add reasoning_replay if enabled (for o1/o3 style reasoning)
