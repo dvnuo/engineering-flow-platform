@@ -544,6 +544,7 @@ class OpenAIProvider(BaseProvider):
                             # Handle function calls inside message content
                             tool_calls.append({
                                 "id": item.get("id", f"call_{len(tool_calls)}"),
+                                "type": "function",
                                 "function": {
                                     "name": msg_item.get("name", ""),
                                     "arguments": json.dumps(msg_item.get("arguments", {}))
@@ -557,6 +558,7 @@ class OpenAIProvider(BaseProvider):
                 # Handle function_call as top-level output item (Responses API can emit this)
                 tool_calls.append({
                     "id": item.get("id", f"call_{len(tool_calls)}"),
+                                "type": "function",
                     "function": {
                         "name": item.get("name", ""),
                         "arguments": json.dumps(item.get("arguments", {}))
@@ -929,6 +931,7 @@ class GitHubCopilotProvider(BaseProvider):
                             # Handle function calls inside message content
                             tool_calls.append({
                                 "id": item.get("id", f"call_{len(tool_calls)}"),
+                                "type": "function",
                                 "function": {
                                     "name": msg_item.get("name", ""),
                                     "arguments": json.dumps(msg_item.get("arguments", {}))
@@ -942,6 +945,7 @@ class GitHubCopilotProvider(BaseProvider):
                 # Handle function_call as top-level output item (Responses API can emit this)
                 tool_calls.append({
                     "id": item.get("id", f"call_{len(tool_calls)}"),
+                                "type": "function",
                     "function": {
                         "name": item.get("name", ""),
                         "arguments": json.dumps(item.get("arguments", {}))
