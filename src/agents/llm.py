@@ -612,6 +612,7 @@ class OpenAIProvider(BaseProvider):
 
     def _convert_tools_schema(self, tools: List[Dict]) -> List[Dict]:
         """Convert Chat-style tools to Responses API format."""
+        import copy
         converted = []
         for tool in tools:
             if not isinstance(tool, dict):
@@ -619,7 +620,8 @@ class OpenAIProvider(BaseProvider):
             tool_type = tool.get("type", "")
             if tool_type == "function":
                 func = tool.get("function", {})
-                params = func.get("parameters", {})
+                # Deep copy parameters to avoid mutating the original
+                params = copy.deepcopy(func.get("parameters", {}))
                 
                 # Ensure additionalProperties: false
                 if "additionalProperties" not in params:
