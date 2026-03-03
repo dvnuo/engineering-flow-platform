@@ -271,7 +271,7 @@ class JiraFormatAdapter:
         summary: str,
         description: str = "",
         description_format: str = "markdown",
-        issue_type: str = "Bug",
+        issue_type: str = "Task",
         priority: str = None,
         assignee: str = None,
         labels: List[str] = None

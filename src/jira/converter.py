@@ -33,8 +33,8 @@ class JiraMarkupConverter:
         md = re.sub(r'^h5\. (.+)$', r'##### \1', md, flags=re.MULTILINE)
         md = re.sub(r'^h6\. (.+)$', r'###### \1', md, flags=re.MULTILINE)
         
-        # Bold/Italic
-        md = re.sub(r'\*(.+?)\*', r'**\1**', md)
+        # Bold/Italic (exclude list markers: * followed by space)
+        md = re.sub(r'\*(?!\s)(.+?)(?<!\s)\*', r'**\1**', md)
         md = re.sub(r'_(.+?)_', r'*\1*', md)
         
         # Inline code
