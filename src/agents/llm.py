@@ -447,8 +447,6 @@ class OpenAIProvider(BaseProvider):
         if converted_tools:
             payload["tools"] = converted_tools
             payload["tool_choice"] = "auto"
-            # Debug: print tools
-            print(f"DEBUG TOOLS: {converted_tools}")
         
         # Debug: Log request details (before calling _call_api)
         if _is_debug_enabled():
