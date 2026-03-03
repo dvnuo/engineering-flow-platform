@@ -50,12 +50,17 @@ class JiraMarkupConverter:
         # Images
         md = re.sub(r'!(.+?)!', r'![](\1)', md)
         
-        # Lists
-        md = re.sub(r'^\* (.+)$', r'- \1', md, flags=re.MULTILINE)
+        # Lists re.sub(r'
+        md =^\* (.+)$', r'- \1', md, flags=re.MULTILINE)
         md = re.sub(r'^# (.+)$', r'1. \1', md, flags=re.MULTILINE)
         
-        # Quote
-        md = re.sub(r'\{quote\}(.*?)\{quote\}', r'> \1', md, flags=re.DOTALL)
+        # Quote (handle multi-line properly)
+        def _quote_replacer(match):
+            content = match.group(1)
+            lines = content.split('\n')
+            return '\n'.join('> ' + line for line in lines)
+        
+        md = re.sub(r'\{quote\}(.*?)\{quote\}', _quote_replacer, md, flags=re.DOTALL)
         
         # Horizontal rule
         md = re.sub(r'^----+$', r'---', md, flags=re.MULTILINE)

@@ -207,8 +207,8 @@ class TestAdapter:
         
         # Verify channel was called with wiki format (not raw markdown)
         mock_channel.create_issue.assert_called_once()
-        call_kwargs = mock_channel.create_issue.call_args.kwargs
-        desc = call_kwargs.get("description", "")
+        call_args = mock_channel.create_issue.call_args
+        desc = call_args.args[2] if len(call_args.args) > 2 else call_args.kwargs.get("description", "")
         
         # For Server/DC (api_version="2"), should be converted to wiki
         assert "h1." in desc or "Description" in str(type(desc))
@@ -229,8 +229,8 @@ class TestAdapter:
         
         # Verify channel was called with ADF dict
         mock_channel.create_issue.assert_called_once()
-        call_kwargs = mock_channel.create_issue.call_args.kwargs
-        desc = call_kwargs.get("description", "")
+        call_args = mock_channel.create_issue.call_args
+        desc = call_args.args[2] if len(call_args.args) > 2 else call_args.kwargs.get("description", "")
         
         # For Cloud (api_version="3"), should be ADF dict
         assert isinstance(desc, dict) or "h1." in str(desc)
@@ -246,8 +246,8 @@ class TestAdapter:
         mock_channel.add_comment.assert_called_once()
         
         # Verify conversion happened
-        call_kwargs = mock_channel.add_comment.call_args.kwargs
-        body = call_kwargs.get("description", "")
+        call_args = mock_channel.add_comment.call_args
+        body = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("comment", "")
         
         # For Server/DC, should be wiki format
         assert "*bold*" in body or "Description" in str(type(body))
@@ -265,8 +265,8 @@ class TestAdapter:
         mock_channel.add_comment.assert_called_once()
         
         # Verify ADF dict was created
-        call_kwargs = mock_channel.add_comment.call_args.kwargs
-        body = call_kwargs.get("description", "")
+        call_args = mock_channel.add_comment.call_args
+        body = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("comment", "")
         
         # For Cloud, should be ADF dict
         assert isinstance(body, dict) or "h1." in str(body)
