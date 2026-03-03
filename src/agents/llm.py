@@ -425,65 +425,7 @@ class OpenAIProvider(BaseProvider):
         converted_tools = None
         if tools:
             converted_tools = self._convert_tools_schema(tools)
-        # System prompt goes to 'instructions', user messages to 'input'
-        input_messages = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            # Handle content as string or array (for vision)
-            if isinstance(content, list):
-                # Already in vision format - convert to Responses API format
-                # "type": "image_url" -> "type": "input_image"
-                # IMPORTANT: image_url must be a STRING (URL or base64 data URL), not an object
-                converted_content = []
-                for item in content:
-                    if isinstance(item, dict):
-                        item_type = item.get("type", "")
-                        if item_type == "text":
-                            converted_content.append({
-                                "type": "input_text",
-                                "text": item.get("text", "")
-                            })
-                        elif item_type == "image_url":
-                            # Extract the URL from image_url object
-                            img_url_obj = item.get("image_url", {})
-                            # Get the actual URL string - could be direct URL or base64
-                            img_url = img_url_obj.get("url") if isinstance(img_url_obj, dict) else str(img_url_obj)
-                            if img_url:
-                                converted_content.append({
-                                    "type": "input_image",
-                                    "image_url": img_url  # Must be STRING, not object!
-                                })
-                            else:
-                                logger.warning(f"[LLM] Skipping image: no valid URL in image_url")
-                        elif item_type == "input_image":
-                            # Already in correct format, ensure image_url is string
-                            img_url_obj = item.get("image_url")
-                            if isinstance(img_url_obj, dict):
-                                img_url = img_url_obj.get("url", "")
-                                if img_url:
-                                    converted_content.append({
-                                        "type": "input_image",
-                                        "image_url": img_url
-                                    })
-                                else:
-                                    logger.warning("[LLM] Skipping image: no valid URL in existing input_image block")
-                            else:
-                                converted_content.append(item)
-                        else:
-                            converted_content.append(item)
-                    else:
-                        converted_content.append({"type": "input_text", "text": str(item)})
-                input_messages.append({
-                    "role": role,
-                    "content": converted_content
-                })
-            else:
-                input_messages.append({
-                    "role": role,
-                    "content": content
-                })
+        # Note: messages are already converted to input_items above
         
         # Build payload for Responses API
         payload = {
@@ -499,7 +441,7 @@ class OpenAIProvider(BaseProvider):
             logger.debug(f"Provider: {self.name}")
             logger.debug(f"Model: {model_name}")
             logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
-            logger.debug(f"Input messages count: {len(input_messages)}")
+            logger.debug(f"Input messages count: {len(input_items)}")
             for i, msg in enumerate(input_messages[:3]):
                 role = msg.get("role", "unknown")
                 content = msg.get("content", "")
@@ -986,7 +928,7 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"=== [GITHUB COPILOT] RESPONSES API REQUEST ===")
             logger.debug(f"Model: {model_name}")
             logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
-            logger.debug(f"Input messages count: {len(input_messages)}")
+            logger.debug(f"Input messages count: {len(input_items)}")
         
         # Make API call
         try:
