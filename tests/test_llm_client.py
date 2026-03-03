@@ -456,6 +456,14 @@ class TestResponsesAPI:
     @pytest.mark.asyncio
     async def test_responses_with_vision_content(self, openai_provider):
         """Test responses() converts vision content to correct format."""
+        # Track the request payload
+        captured_payload = {}
+        
+        class TrackingMockClient(MockHttpClient):
+            async def post(self, *args, **kwargs):
+                captured_payload['json'] = kwargs.get('json', {})
+                return self.response
+        
         # Response
         mock_response = MockResponse({
             "output": [
@@ -467,9 +475,9 @@ class TestResponsesAPI:
             "usage": {"input_tokens": 100, "output_tokens": 5}
         })
         
-        mock_client = MockHttpClient(mock_response)
+        mock_client = TrackingMockClient(mock_response)
         
-        # Messages with vision content
+        # Messages with vision content in Chat Completions format
         messages = [
             {
                 "role": "user",
@@ -483,6 +491,21 @@ class TestResponsesAPI:
         with patch('httpx.AsyncClient', return_value=mock_client):
             result = await openai_provider.responses(messages=messages)
             assert result["content"] == "It's a cat!"
+            
+            # Verify the conversion: input_image with string URL
+            assert 'input' in captured_payload.get('json', {})
+            input_items = captured_payload['json']['input']
+            assert len(input_items) == 1
+            # Check that content was converted to Responses API format
+            content = input_items[0].get('content', [])
+            assert isinstance(content, list)
+            # Should have text and image blocks
+            text_block = next((b for b in content if b.get('type') == 'input_text'), None)
+            image_block = next((b for b in content if b.get('type') == 'input_image'), None)
+            assert text_block is not None
+            assert image_block is not None
+            # image_url should be a string, not an object
+            assert isinstance(image_block.get('image_url'), str)
 
     @pytest.mark.asyncio
     async def test_responses_top_level_function_call(self, openai_provider):

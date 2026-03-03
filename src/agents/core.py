@@ -491,8 +491,9 @@ You have access to the following tools. When a user asks you to do something tha
                     # Get existing content - could be string or list (for vision)
                     user_content = messages[i].get("content", "")
                     
-                    # Build vision content - use "input_image" for Responses API
-                    # IMPORTANT: image_url must be a STRING (URL or base64 data URL), not an object
+                    # Build vision content for Chat Completions API
+                    # Text blocks use {"type": "text", "text": "..."}
+                    # Image blocks use {"type": "image_url", "image_url": {"url": "..."}}
                     if isinstance(user_content, list):
                         # Already a list (e.g., from previous vision content) - append to it
                         msg_content = list(user_content)
@@ -501,10 +502,10 @@ You have access to the following tools. When a user asks you to do something tha
                         msg_content = [{"type": "text", "text": str(user_content)}]
                     
                     for img in attached_images[:1]:  # Limit to 1 image
-                        # Use "input_image" for Responses API with string URL (not object)
-                        msg_content.append({"type": "input_image", "image_url": img})
+                        # Use Chat Completions vision format with image_url object
+                        msg_content.append({"type": "image_url", "image_url": {"url": img}})
                     messages[i] = {"role": "user", "content": msg_content}
-                    logger.info(f"[Agent] Attached {len(attached_images)} image(s) to user message")
+                    logger.info(f"[Agent] Attached {min(len(attached_images), 1)} image(s) to user message")
                     break
         # ===== END IMAGE INJECTION =====
 
