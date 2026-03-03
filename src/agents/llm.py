@@ -542,12 +542,15 @@ class OpenAIProvider(BaseProvider):
                             content += msg_item.get("text", "")
                         elif msg_item.get("type") == "function_call":
                             # Handle function calls inside message content
+                            # Avoid double-encoding: if arguments is already a string, don't json.dumps it
+                            args = msg_item.get("arguments", {})
+                            arguments = args if isinstance(args, str) else json.dumps(args)
                             tool_calls.append({
-                                "id": item.get("id", f"call_{len(tool_calls)}"),
+                                "id": msg_item.get("call_id", f"call_{len(tool_calls)}"),
                                 "type": "function",
                                 "function": {
                                     "name": msg_item.get("name", ""),
-                                    "arguments": json.dumps(msg_item.get("arguments", {}))
+                                    "arguments": arguments
                                 }
                             })
                 elif isinstance(msg_content, str):
@@ -556,12 +559,15 @@ class OpenAIProvider(BaseProvider):
             
             elif item_type == "function_call":
                 # Handle function_call as top-level output item (Responses API can emit this)
+                # Avoid double-encoding: if arguments is already a string, don't json.dumps it
+                args = item.get("arguments", {})
+                arguments = args if isinstance(args, str) else json.dumps(args)
                 tool_calls.append({
-                    "id": item.get("id", f"call_{len(tool_calls)}"),
-                                "type": "function",
+                    "id": item.get("id", item.get("call_id", f"call_{len(tool_calls)}")),
+                    "type": "function",
                     "function": {
                         "name": item.get("name", ""),
-                        "arguments": json.dumps(item.get("arguments", {}))
+                        "arguments": arguments
                     }
                 })
         
@@ -929,12 +935,15 @@ class GitHubCopilotProvider(BaseProvider):
                             content += msg_item.get("text", "")
                         elif msg_item.get("type") == "function_call":
                             # Handle function calls inside message content
+                            # Avoid double-encoding: if arguments is already a string, don't json.dumps it
+                            args = msg_item.get("arguments", {})
+                            arguments = args if isinstance(args, str) else json.dumps(args)
                             tool_calls.append({
-                                "id": item.get("id", f"call_{len(tool_calls)}"),
+                                "id": msg_item.get("call_id", f"call_{len(tool_calls)}"),
                                 "type": "function",
                                 "function": {
                                     "name": msg_item.get("name", ""),
-                                    "arguments": json.dumps(msg_item.get("arguments", {}))
+                                    "arguments": arguments
                                 }
                             })
                 elif isinstance(msg_content, str):
@@ -943,12 +952,15 @@ class GitHubCopilotProvider(BaseProvider):
             
             elif item_type == "function_call":
                 # Handle function_call as top-level output item (Responses API can emit this)
+                # Avoid double-encoding: if arguments is already a string, don't json.dumps it
+                args = item.get("arguments", {})
+                arguments = args if isinstance(args, str) else json.dumps(args)
                 tool_calls.append({
-                    "id": item.get("id", f"call_{len(tool_calls)}"),
-                                "type": "function",
+                    "id": item.get("id", item.get("call_id", f"call_{len(tool_calls)}")),
+                    "type": "function",
                     "function": {
                         "name": item.get("name", ""),
-                        "arguments": json.dumps(item.get("arguments", {}))
+                        "arguments": arguments
                     }
                 })
         

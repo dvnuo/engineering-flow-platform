@@ -60,6 +60,16 @@ def llm_client():
     return client
 
 
+@pytest.fixture
+def openai_provider():
+    """Create an OpenAIProvider with _check_api_key patched."""
+    from src.agents.llm import OpenAIProvider
+    provider = OpenAIProvider()
+    # Patch _check_api_key to avoid env dependency
+    provider._check_api_key = lambda: None
+    return provider
+
+
 class TestLLMClientSuccess:
     """Successful LLM client tests."""
 
@@ -328,13 +338,8 @@ class TestResponsesAPI:
     """Tests for Responses API (/responses endpoint)."""
 
     @pytest.mark.asyncio
-    async def test_responses_basic_text(self):
+    async def test_responses_basic_text(self, openai_provider):
         """Test basic responses() call with text content."""
-        from src.agents.llm import OpenAIProvider
-        
-        provider = OpenAIProvider()
-        provider.api_key = "test_key"
-        
         # Mock Response API response format
         mock_response = MockResponse({
             "output": [
@@ -355,7 +360,7 @@ class TestResponsesAPI:
         mock_client = MockHttpClient(mock_response)
         
         with patch('httpx.AsyncClient', return_value=mock_client):
-            result = await provider.responses(
+            result = await openai_provider.responses(
                 messages=[{"role": "user", "content": "hi"}],
                 system_prompt="You are helpful"
             )
@@ -363,13 +368,8 @@ class TestResponsesAPI:
             assert "usage" in result
 
     @pytest.mark.asyncio
-    async def test_responses_string_content(self):
+    async def test_responses_string_content(self, openai_provider):
         """Test responses() with string content (not list)."""
-        from src.agents.llm import OpenAIProvider
-        
-        provider = OpenAIProvider()
-        provider.api_key = "test_key"
-        
         # Response with string content (not list)
         mock_response = MockResponse({
             "output": [
@@ -385,19 +385,14 @@ class TestResponsesAPI:
         mock_client = MockHttpClient(mock_response)
         
         with patch('httpx.AsyncClient', return_value=mock_client):
-            result = await provider.responses(
+            result = await openai_provider.responses(
                 messages=[{"role": "user", "content": "hello"}]
             )
             assert result["content"] == "Direct string response"
 
     @pytest.mark.asyncio
-    async def test_responses_multiple_messages(self):
+    async def test_responses_multiple_messages(self, openai_provider):
         """Test responses() with multiple output messages (accumulation)."""
-        from src.agents.llm import OpenAIProvider
-        
-        provider = OpenAIProvider()
-        provider.api_key = "test_key"
-        
         # Multiple message outputs
         mock_response = MockResponse({
             "output": [
@@ -416,7 +411,7 @@ class TestResponsesAPI:
         mock_client = MockHttpClient(mock_response)
         
         with patch('httpx.AsyncClient', return_value=mock_client):
-            result = await provider.responses(
+            result = await openai_provider.responses(
                 messages=[{"role": "user", "content": "test"}]
             )
             # Should accumulate both parts
@@ -424,13 +419,8 @@ class TestResponsesAPI:
             assert "Part2" in result["content"]
 
     @pytest.mark.asyncio
-    async def test_responses_tool_calls(self):
+    async def test_responses_tool_calls(self, openai_provider):
         """Test responses() parses tool calls correctly."""
-        from src.agents.llm import OpenAIProvider
-        
-        provider = OpenAIProvider()
-        provider.api_key = "test_key"
-        
         # Response with function call
         mock_response = MockResponse({
             "output": [
@@ -453,22 +443,19 @@ class TestResponsesAPI:
         mock_client = MockHttpClient(mock_response)
         
         with patch('httpx.AsyncClient', return_value=mock_client):
-            result = await provider.responses(
-                messages=[{"role": "user", "content": "What's the weather?"}],
-                tools=[{"type": "function", "function": {"name": "get_weather"}}]
+            # Don't pass tools so Responses API path is tested (not fallback to chat)
+            result = await openai_provider.responses(
+                messages=[{"role": "user", "content": "What's the weather?"}]
             )
-            # Should fallback to chat() when tools provided
-            # Verify tool_calls structure includes type field
-            assert "tool_calls" in result or "content" in result
+            # Verify tool_calls are parsed correctly
+            assert "tool_calls" in result
+            assert len(result["tool_calls"]) > 0
+            # Check type field is present
+            assert result["tool_calls"][0].get("type") == "function"
 
     @pytest.mark.asyncio
-    async def test_responses_with_vision_content(self):
+    async def test_responses_with_vision_content(self, openai_provider):
         """Test responses() converts vision content to correct format."""
-        from src.agents.llm import OpenAIProvider
-        
-        provider = OpenAIProvider()
-        provider.api_key = "test_key"
-        
         # Response
         mock_response = MockResponse({
             "output": [
@@ -494,17 +481,12 @@ class TestResponsesAPI:
         ]
         
         with patch('httpx.AsyncClient', return_value=mock_client):
-            result = await provider.responses(messages=messages)
+            result = await openai_provider.responses(messages=messages)
             assert result["content"] == "It's a cat!"
 
     @pytest.mark.asyncio
-    async def test_responses_top_level_function_call(self):
+    async def test_responses_top_level_function_call(self, openai_provider):
         """Test responses() handles top-level function_call output."""
-        from src.agents.llm import OpenAIProvider
-        
-        provider = OpenAIProvider()
-        provider.api_key = "test_key"
-        
         # Response with top-level function_call (not nested in message)
         mock_response = MockResponse({
             "output": [
@@ -516,12 +498,11 @@ class TestResponsesAPI:
         mock_client = MockHttpClient(mock_response)
         
         with patch('httpx.AsyncClient', return_value=mock_client):
-            result = await provider.responses(
-                messages=[{"role": "user", "content": "search for test"}],
-                tools=[{"type": "function", "function": {"name": "search"}}]
+            # Don't pass tools to test Responses path
+            result = await openai_provider.responses(
+                messages=[{"role": "user", "content": "search for test"}]
             )
-            # Should fallback to chat when tools provided
-            assert "tool_calls" in result or "content" in result
+            assert "tool_calls" in result
 
     @pytest.mark.asyncio
     async def test_llm_client_responses_type_annotation(self):
