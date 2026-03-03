@@ -121,6 +121,11 @@
                             input.value += '@file_' + fileRef.slice(0, 8) + ' ';
                             input.focus();
                         }
+                        // Close My Uploads panel
+                        const fileExplorerPanel = document.getElementById('fileExplorerPanel');
+                        if (fileExplorerPanel) {
+                            fileExplorerPanel.classList.remove('show');
+                        }
                     });
                 });
                 
