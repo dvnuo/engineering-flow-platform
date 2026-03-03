@@ -431,7 +431,7 @@ class OpenAIProvider(BaseProvider):
         payload = {
             "model": model_name,
             "instructions": system_prompt or "",
-            "input": input_messages,
+            "input": input_items,
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
         }
         
@@ -442,7 +442,7 @@ class OpenAIProvider(BaseProvider):
             logger.debug(f"Model: {model_name}")
             logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
             logger.debug(f"Input messages count: {len(input_items)}")
-            for i, msg in enumerate(input_messages[:3]):
+            for i, msg in enumerate(input_items[:3]):
                 role = msg.get("role", "unknown")
                 content = msg.get("content", "")
                 if isinstance(content, list):
@@ -859,7 +859,7 @@ class GitHubCopilotProvider(BaseProvider):
         model_name = model or self.default_model
         
         # Build input array from messages (Responses API format)
-        input_messages = []
+        input_items = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -905,12 +905,12 @@ class GitHubCopilotProvider(BaseProvider):
                             converted_content.append(item)
                     else:
                         converted_content.append({"type": "input_text", "text": str(item)})
-                input_messages.append({
+                input_items.append({
                     "role": role,
                     "content": converted_content
                 })
             else:
-                input_messages.append({
+                input_items.append({
                     "role": role,
                     "content": content
                 })
@@ -919,7 +919,7 @@ class GitHubCopilotProvider(BaseProvider):
         payload = {
             "model": model_name,
             "instructions": system_prompt or "",
-            "input": input_messages,
+            "input": input_items,
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
         }
         
