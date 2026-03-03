@@ -488,11 +488,18 @@ You have access to the following tools. When a user asks you to do something tha
             # Find the last user message and add images to it
             for i in range(len(messages) - 1, -1, -1):
                 if messages[i].get("role") == "user":
-                    # Replace with content + images
+                    # Get existing content - could be string or list (for vision)
                     user_content = messages[i].get("content", "")
+                    
                     # Build vision content - use "input_image" for Responses API
                     # IMPORTANT: image_url must be a STRING (URL or base64 data URL), not an object
-                    msg_content = [{"type": "text", "text": user_content}]
+                    if isinstance(user_content, list):
+                        # Already a list (e.g., from previous vision content) - append to it
+                        msg_content = list(user_content)
+                    else:
+                        # Plain text - wrap in text block
+                        msg_content = [{"type": "text", "text": str(user_content)}]
+                    
                     for img in attached_images[:1]:  # Limit to 1 image
                         # Use "input_image" for Responses API with string URL (not object)
                         msg_content.append({"type": "input_image", "image_url": img})
