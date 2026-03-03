@@ -441,6 +441,32 @@ class OpenAIProvider(BaseProvider):
             role = msg.get("role", "user")
             content = msg.get("content", "")
             
+            # Handle tool role messages - preserve tool_calls for Responses API
+            if role == "assistant" and msg.get("tool_calls"):
+                # Convert tool_calls to Responses API format
+                tool_calls_output = []
+                for tc in msg.get("tool_calls", []):
+                    tool_calls_output.append({
+                        "type": "function_call",
+                        "call_id": tc.get("id", ""),
+                        "name": tc.get("function", {}).get("name", ""),
+                        "arguments": tc.get("function", {}).get("arguments", "")
+                    })
+                input_messages.append({
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": tool_calls_output
+                })
+                continue
+            elif role == "tool":
+                # Tool result message - convert to Responses API format
+                input_messages.append({
+                    "role": "tool",
+                    "content": content,
+                    "tool_call_id": msg.get("tool_call_id", "")
+                })
+                continue
+            
             # Handle content as string or array (for vision)
             if isinstance(content, list):
                 # Already in vision format - convert to Responses API format
@@ -837,6 +863,32 @@ class GitHubCopilotProvider(BaseProvider):
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
+            
+            # Handle tool role messages - preserve tool_calls for Responses API
+            if role == "assistant" and msg.get("tool_calls"):
+                # Convert tool_calls to Responses API format
+                tool_calls_output = []
+                for tc in msg.get("tool_calls", []):
+                    tool_calls_output.append({
+                        "type": "function_call",
+                        "call_id": tc.get("id", ""),
+                        "name": tc.get("function", {}).get("name", ""),
+                        "arguments": tc.get("function", {}).get("arguments", "")
+                    })
+                input_messages.append({
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": tool_calls_output
+                })
+                continue
+            elif role == "tool":
+                # Tool result message - convert to Responses API format
+                input_messages.append({
+                    "role": "tool",
+                    "content": content,
+                    "tool_call_id": msg.get("tool_call_id", "")
+                })
+                continue
             
             # Handle content as string or array (for vision)
             if isinstance(content, list):
