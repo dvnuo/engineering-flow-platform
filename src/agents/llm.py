@@ -288,12 +288,16 @@ class OpenAIProvider(BaseProvider):
         else:
             max_tokens_key = "max_tokens"
         
+        # GPT-5 models don't support temperature parameter
+        include_temperature = not model_name.startswith("gpt-5")
+        
         payload = {
             "model": model or self.default_model,
             "messages": all_messages,
-            "temperature": temperature,
-            max_tokens_key: max_tokens or config.llm.get('max_tokens', 1000),
         }
+        if include_temperature:
+            payload["temperature"] = temperature
+        payload[max_tokens_key] = max_tokens or config.llm.get('max_tokens', 1000)
         
         # Add reasoning_replay if enabled (for o1/o3 style reasoning)
         # Only supported by specific models: o1, o3, o1-mini, o1-pro, etc.
