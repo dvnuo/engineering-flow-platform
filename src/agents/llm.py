@@ -519,9 +519,10 @@ class OpenAIProvider(BaseProvider):
                     "content": converted_content
                 })
             else:
+                # Convert plain string to input_text format for Responses API
                 input_messages.append({
                     "role": role,
-                    "content": content
+                    "content": [{"type": "input_text", "text": content}]
                 })
         
         # Build payload for Responses API
@@ -939,9 +940,10 @@ class GitHubCopilotProvider(BaseProvider):
                     "content": converted_content
                 })
             else:
+                # Convert plain string to input_text format for Responses API
                 input_messages.append({
                     "role": role,
-                    "content": content
+                    "content": [{"type": "input_text", "text": content}]
                 })
         
         # Build payload for Responses API
