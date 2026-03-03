@@ -512,6 +512,38 @@ You have access to the following tools. When a user asks you to do something tha
                     break
         # ===== END IMAGE INJECTION =====
 
+        # Convert messages to input_items for Responses API
+        def _to_input_items(msgs):
+            items = []
+            for msg in msgs:
+                role = msg.get("role", "user")
+                if role == "tool":
+                    continue
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    conv = []
+                    for item in content:
+                        if isinstance(item, dict):
+                            t = item.get("type", "")
+                            if t in ("text", "input_text"):
+                                conv.append({"type": "input_text", "text": item.get("text", "")})
+                            elif t in ("image_url", "input_image"):
+                                img = item.get("image_url", {})
+                                img_url = img.get("url") if isinstance(img, dict) else str(img)
+                                if img_url:
+                                    conv.append({"type": "input_image", "image_url": img_url})
+                            else:
+                                conv.append(item)
+                        else:
+                            conv.append({"type": "input_text", "text": str(item)})
+                    if conv:
+                        items.append({"role": role, "content": conv})
+                elif content:
+                    items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
+            return items
+        
+        input_items = _to_input_items(messages)
+        
         while iteration < max_tool_iterations:
             iteration += 1
             
@@ -522,17 +554,7 @@ You have access to the following tools. When a user asks you to do something tha
             logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM")
             send_event("llm_thinking", {"message": "LLM is thinking..."})
             
-            # DEBUG: Log messages being sent to LLM
-            logger.debug(f"[Tool Loop] Messages to LLM: {len(messages)}")
-            for i, msg in enumerate(messages):
-                if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                    tc_ids = [tc.get("id") for tc in msg["tool_calls"]]
-                    logger.debug(f"  Msg {i}: assistant with tool_calls: {tc_ids}")
-                elif msg.get("role") == "tool":
-                    logger.debug(f"  Msg {i}: tool (tool_call_id={msg.get('tool_call_id')})")
-                else:
-                    content = truncate(msg.get("content", ""), 50)
-                    logger.debug(f"  Msg {i}: {msg.get('role')}: {content}")
+            logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM with {len(input_items)} input_items")
             
             llm_result = await llm_client.responses(
                 input_items=input_items,
