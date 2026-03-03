@@ -615,9 +615,21 @@ class OpenAIProvider(BaseProvider):
             if tool_type == "function":
                 func = tool.get("function", {})
                 params = func.get("parameters", {})
+                
                 # Ensure additionalProperties: false
                 if "additionalProperties" not in params:
                     params["additionalProperties"] = False
+                
+                # With strict: true, required must include ALL properties
+                if "properties" in params and isinstance(params["properties"], dict):
+                    required = params.get("required", [])
+                    if isinstance(required, list):
+                        # Add any missing properties to required
+                        for prop in params["properties"]:
+                            if prop not in required:
+                                required.append(prop)
+                        params["required"] = required
+                
                 converted.append({
                     "type": "function",
                     "name": func.get("name", ""),
