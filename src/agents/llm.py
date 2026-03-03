@@ -433,7 +433,13 @@ class OpenAIProvider(BaseProvider):
             "instructions": system_prompt or "",
             "input": input_items,
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+            "text": {"format": {"type": "text"}},
         }
+        
+        # Add tools if provided (Responses API format)
+        if converted_tools:
+            payload["tools"] = converted_tools
+            payload["tool_choice"] = "auto"
         
         # Debug: Log request details (before calling _call_api)
         if _is_debug_enabled():
@@ -683,6 +689,7 @@ class GitHubCopilotProvider(BaseProvider):
         # Add tools support (similar to OpenAI)
         if tools:
             payload["tools"] = tools
+            payload["tool_choice"] = "auto"
         
         # Debug: Log request
         if _is_debug_enabled():
