@@ -526,7 +526,12 @@ You have access to the following tools. When a user asks you to do something tha
                         if isinstance(item, dict):
                             t = item.get("type", "")
                             if t in ("text", "input_text"):
-                                conv.append({"type": "input_text", "text": item.get("text", "")})
+                                # Only use input_text for user messages
+                                if role == "user":
+                                    conv.append({"type": "input_text", "text": item.get("text", "")})
+                                else:
+                                    # Assistant messages - use plain text
+                                    conv.append(item.get("text", ""))
                             elif t in ("image_url", "input_image"):
                                 img = item.get("image_url", {})
                                 img_url = img.get("url") if isinstance(img, dict) else str(img)
@@ -535,11 +540,19 @@ You have access to the following tools. When a user asks you to do something tha
                             else:
                                 conv.append(item)
                         else:
-                            conv.append({"type": "input_text", "text": str(item)})
+                            # Plain text item
+                            if role == "user":
+                                conv.append({"type": "input_text", "text": str(item)})
+                            else:
+                                conv.append(str(item))
                     if conv:
                         items.append({"role": role, "content": conv})
                 elif content:
-                    items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
+                    # Plain text content - no wrapper for assistant
+                    if role == "user":
+                        items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
+                    else:
+                        items.append({"role": role, "content": str(content)})
             return items
         
         input_items = _to_input_items(messages)
