@@ -149,22 +149,29 @@ def _create_chunks_from_text(
             last_period = chunk_text.rfind('. ')
             split_pos = last_period + 1 if last_period > max_chars // 2 else max_chars
             
-            if len(chunk_text[:split_pos]) >= min_chars:
-                chunk_id = _generate_chunk_id(source_name, heading, section_index, chunk_index, kind)
-                meta = {
-                    "source": source_name,
-                    "heading": heading,
-                    "kind": kind,
-                }
-                if date:
-                    meta["date"] = date
-                
-                chunks.append(Chunk(
-                    id=chunk_id,
-                    text=chunk_text[:split_pos].strip(),
-                    meta=meta,
-                ))
-                chunk_index += 1
+            # If sentence-boundary split would be too small, fall back to hard cut
+            candidate_text = chunk_text[:split_pos]
+            if len(candidate_text) < min_chars and split_pos != max_chars:
+                # Fall back to hard cut at max_chars to avoid dropping text
+                split_pos = max_chars
+                candidate_text = chunk_text
+            
+            # Always emit the chunk (or fall back to hard cut)
+            chunk_id = _generate_chunk_id(source_name, heading, section_index, chunk_index, kind)
+            meta = {
+                "source": source_name,
+                "heading": heading,
+                "kind": kind,
+            }
+            if date:
+                meta["date"] = date
+            
+            chunks.append(Chunk(
+                id=chunk_id,
+                text=candidate_text.strip(),
+                meta=meta,
+            ))
+            chunk_index += 1
             
             para = para[split_pos:]
         
