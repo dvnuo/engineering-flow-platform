@@ -372,7 +372,7 @@ class JiraFormatAdapter:
         
         return f"Error updating issue {issue_key}"
     
-    def _convert_description(self, text: str, format: str) -> str:
+    def _convert_description(self, text: str, format: str) -> Union[str, Dict[str, Any]]:
         """Convert description/comment body to appropriate format.
         
         Args:
