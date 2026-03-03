@@ -513,7 +513,7 @@ class OpenAIProvider(BaseProvider):
         # Use _call_api for centralized retry/backoff behavior
         data = await self._call_api("/responses", payload)
         
-        # Check._call_api("/ for error in response
+        # _call_api may return {"error": ...} (e.g., when API key is missing); propagate that directly
         if isinstance(data, dict) and data.get("error"):
             return data
         
