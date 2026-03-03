@@ -251,10 +251,6 @@ async def jira_update_issue(
 
 
 # Re-export original functions for compatibility
-from .api import jira_get_issue as _original_get_issue
-from .api import jira_add_comment as _original_add_comment
-from .api import jira_create_issue as _original_create_issue
-from .api import jira_update_issue as _original_update_issue
 from .api import jira_get_comments
 from .api import get_tools_schemas as _get_api_schemas
 
