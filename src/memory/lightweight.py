@@ -6,6 +6,8 @@ Uses TF-IDF inspired scoring with keyword matching.
 
 import json
 import logging
+import math
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -14,6 +16,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Schema version for migration support
+SCHEMA_VERSION = 2
 
 # Common English stop words (filtered from search results)
 STOP_WORDS = {
@@ -46,6 +51,7 @@ class MemoryEntry:
     content: str
     metadata: Dict[str, Any]
     created_at: str
+    mtime: Optional[float] = None  # Modification time for auto-refresh
 
 
 class LightweightMemory:
@@ -219,6 +225,99 @@ class LightweightMemory:
         self._invalidate_idf_cache()
         self._save_index()
     
+    def upsert(
+        self,
+        entry_id: str,
+        content: str,
+        metadata: Optional[Dict] = None,
+        mtime: Optional[float] = None,
+    ) -> None:
+        """Insert or update a memory entry.
+        
+        If the entry_id exists, replaces content and metadata.
+        If it doesn't exist, creates a new entry.
+        
+        Args:
+            entry_id: Unique entry identifier
+            content: Text content
+            metadata: Optional metadata
+            mtime: Optional modification time (for auto-refresh tracking)
+        """
+        existing = self.entries.get(entry_id)
+        created_at = existing.created_at if existing else datetime.utcnow().isoformat()
+        
+        entry = MemoryEntry(
+            key=entry_id,
+            content=content,
+            metadata=metadata or {},
+            created_at=created_at,
+            mtime=mtime,
+        )
+        self.entries[entry_id] = entry
+        self._invalidate_idf_cache()
+        self._save_index()
+    
+    def delete(self, entry_id: str) -> bool:
+        """Delete a memory entry.
+        
+        Args:
+            entry_id: Entry identifier to delete
+            
+        Returns:
+            True if entry was deleted, False if not found
+        """
+        if entry_id in self.entries:
+            del self.entries[entry_id]
+            self._invalidate_idf_cache()
+            self._save_index()
+            return True
+        return False
+    
+    def get_entry(self, entry_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single entry by ID.
+        
+        Args:
+            entry_id: Entry identifier
+            
+        Returns:
+            Entry dict with id, content, meta, mtime, or None if not found
+        """
+        entry = self.entries.get(entry_id)
+        if not entry:
+            return None
+        return {
+            "id": entry.key,
+            "content": entry.content,
+            "meta": entry.metadata,
+            "mtime": entry.mtime,
+            "created_at": entry.created_at,
+        }
+    
+    def delete_by_source(self, source: str) -> int:
+        """Delete all entries with matching source in metadata.
+        
+        Useful for removing all chunks from a removed file.
+        
+        Args:
+            source: Source file path to match
+            
+        Returns:
+            Number of entries deleted
+        """
+        to_delete = [
+            entry_id
+            for entry_id, entry in self.entries.items()
+            if entry.metadata.get("source") == source
+        ]
+        for entry_id in to_delete:
+            del self.entries[entry_id]
+        
+        if to_delete:
+            self._invalidate_idf_cache()
+            self._save_index()
+        
+        return len(to_delete)
+    
     def search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Search memories using TF-IDF scoring.
         
@@ -227,7 +326,11 @@ class LightweightMemory:
             limit: Maximum results
             
         Returns:
-            List of matching entries with scores
+            List of matching entries with scores, each containing:
+            - id: Entry identifier
+            - score: Similarity score
+            - content: The chunk content (not just preview)
+            - meta: Entry metadata
         """
         if not self.entries:
             return []
@@ -251,10 +354,10 @@ class LightweightMemory:
             
             if score >= self.score_threshold:
                 results.append({
-                    "key": entry.key,
-                    "content": entry.content[:self.preview_length],  # Configurable preview
+                    "id": entry.key,
                     "score": score,
-                    "metadata": entry.metadata,
+                    "content": entry.content,  # Return full chunk content
+                    "meta": entry.metadata,
                 })
         
         # Sort by score and limit
@@ -262,56 +365,81 @@ class LightweightMemory:
         return results[:limit]
     
     def _load_index(self) -> None:
-        """Load index from disk."""
+        """Load index from disk with schema migration support."""
         index_file = self.storage_dir / "index.json"
         if index_file.exists():
             try:
                 with open(index_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
+                
+                # Check for schema version
+                version = data.get("version", 1)
+                
+                if version == 1:
+                    # Old schema: {key: content} or {key: {"content": ...}}
+                    # Migrate to v2
+                    logger.info("Migrating index from v1 to v2")
                     for key, entry_data in data.items():
+                        # Handle both string content and dict content
+                        if isinstance(entry_data, str):
+                            # Old format: {key: "content"}
+                            content = entry_data
+                            metadata = {}
+                        elif isinstance(entry_data, dict):
+                            # Intermediate format: {key: {"content": ..., "metadata": ...}}
+                            content = entry_data.get("content", "")
+                            metadata = entry_data.get("metadata", {})
+                        else:
+                            continue  # Skip invalid entries
+                        
                         self.entries[key] = MemoryEntry(
-                            key=entry_data["key"],
-                            content=entry_data["content"],
-                            metadata=entry_data.get("metadata", {}),
-                            created_at=entry_data.get("created_at", ""),
+                            key=key,
+                            content=content,
+                            metadata=metadata,
+                            created_at="",
+                            mtime=None,
                         )
+                else:
+                    # Schema v2: {version, entries: {key: {...}}}
+                    entries_data = data.get("entries", data)
+                    for key, entry_data in entries_data.items():
+                        self.entries[key] = MemoryEntry(
+                            key=entry_data.get("key", key),
+                            content=entry_data.get("content", ""),
+                            metadata=entry_data.get("meta", entry_data.get("metadata", {})),
+                            created_at=entry_data.get("created_at", ""),
+                            mtime=entry_data.get("mtime"),
+                        )
+                    
             except Exception as e:
-                logger.debug(f"Failed to load index: {e}")
+                logger.warning(f"Failed to load index, will rebuild: {e}")
+                # If load fails, we'll rebuild from sources
+                self.entries.clear()
+        
         self._invalidate_idf_cache()
     
     def _save_index(self) -> None:
-        """Save index to disk."""
+        """Save index to disk in schema v2 format."""
         index_file = self.storage_dir / "index.json"
         try:
             data = {
-                key: {
-                    "key": entry.key,
-                    "content": entry.content,
-                    "metadata": entry.metadata,
-                    "created_at": entry.created_at,
+                "version": SCHEMA_VERSION,
+                "saved_at": datetime.utcnow().isoformat(),
+                "entries": {
+                    key: {
+                        "key": entry.key,
+                        "content": entry.content,
+                        "meta": entry.metadata,
+                        "created_at": entry.created_at,
+                        "mtime": entry.mtime,
+                    }
+                    for key, entry in self.entries.items()
                 }
-                for key, entry in self.entries.items()
             }
             with open(index_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False)
         except Exception as e:
             logger.debug(f"Failed to save index: {e}")
-    
-    def delete(self, key: str) -> bool:
-        """Delete an entry.
-        
-        Args:
-            key: Key to delete
-            
-        Returns:
-            True if deleted, False if not found
-        """
-        if key in self.entries:
-            del self.entries[key]
-            self._invalidate_idf_cache()
-            self._save_index()
-            return True
-        return False
     
     def clear(self) -> None:
         """Clear all entries."""
