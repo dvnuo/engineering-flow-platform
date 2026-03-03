@@ -573,8 +573,13 @@ class OpenAIProvider(BaseProvider):
                 for item in content:
                     if isinstance(item, dict):
                         t = item.get("type", "")
-                        if t == "text":
-                            conv.append({"type": "input_text", "text": item.get("text", "")})
+                        if t in ("text", "input_text"):
+                            # Only use input_text for user messages
+                            if role == "user":
+                                conv.append({"type": "input_text", "text": item.get("text", "")})
+                            else:
+                                # Assistant messages - use plain text
+                                conv.append(item.get("text", ""))
                         elif t == "image_url":
                             img = item.get("image_url", {})
                             img_url = img.get("url") if isinstance(img, dict) else str(img)
@@ -590,11 +595,19 @@ class OpenAIProvider(BaseProvider):
                         else:
                             conv.append(item)
                     else:
-                        conv.append({"type": "input_text", "text": str(item)})
+                        # Plain text item - use input_text only for user
+                        if role == "user":
+                            conv.append({"type": "input_text", "text": str(item)})
+                        else:
+                            conv.append(str(item))
                 if conv:
                     items.append({"role": role, "content": conv})
             elif content:
-                items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
+                # Plain text content - no wrapper for assistant
+                if role == "user":
+                    items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
+                else:
+                    items.append({"role": role, "content": str(content)})
         return items
 
     def _convert_tools_schema(self, tools: List[Dict]) -> List[Dict]:
