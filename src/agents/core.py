@@ -392,18 +392,6 @@ You have access to the following tools. When a user asks you to do something tha
             logger.debug(f"Tools count: {len(self.tools)}")
             logger.debug(f"History messages: {len(messages)}")
 
-        # Inject attached images
-        if attached_images and messages:
-            for i in range(len(messages) - 1, -1, -1):
-                if messages[i].get("role") == "user":
-                    user_content = messages[i].get("content", "")
-                    msg_content = [{"type": "text", "text": user_content}]
-                    for img in attached_images[:1]:
-                        msg_content.append({"type": "image_url", "image_url": {"url": img}})
-                    messages[i] = {"role": "user", "content": msg_content}
-                    logger.info(f"[Agent] Attached {len(attached_images)} image(s)")
-                    break
-
         # ===== REACT PATTERN =====
 
         # Log thinking level for subagent tracking
@@ -495,6 +483,32 @@ You have access to the following tools. When a user asks you to do something tha
         if matched_skills:
             send_event("skill_matched", {"skill": matched_skills[0].name})
         
+        # ===== INJECT ATTACHED IMAGES =====
+        if attached_images and len(messages) > 0:
+            # Find the last user message and add images to it
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].get("role") == "user":
+                    # Get existing content - could be string or list (for vision)
+                    user_content = messages[i].get("content", "")
+                    
+                    # Build vision content for Chat Completions API
+                    # Text blocks use {"type": "text", "text": "..."}
+                    # Image blocks use {"type": "image_url", "image_url": {"url": "..."}}
+                    if isinstance(user_content, list):
+                        # Already a list (e.g., from previous vision content) - append to it
+                        msg_content = list(user_content)
+                    else:
+                        # Plain text - wrap in text block
+                        msg_content = [{"type": "text", "text": str(user_content)}]
+                    
+                    for img in attached_images[:1]:  # Limit to 1 image
+                        # Use Chat Completions vision format with image_url object
+                        msg_content.append({"type": "image_url", "image_url": {"url": img}})
+                    messages[i] = {"role": "user", "content": msg_content}
+                    logger.info(f"[Agent] Attached {min(len(attached_images), 1)} image(s) to user message")
+                    break
+        # ===== END IMAGE INJECTION =====
+
         while iteration < max_tool_iterations:
             iteration += 1
             
@@ -517,6 +531,10 @@ You have access to the following tools. When a user asks you to do something tha
                     content = truncate(msg.get("content", ""), 50)
                     logger.debug(f"  Msg {i}: {msg.get('role')}: {content}")
             
+            # Note: Responses API (/responses) does not fully support tool calling for all models.
+            # We keep using chat() (/chat/completions) for the main agent loop to ensure
+            # reliable tool execution. The responses() method is available for sub-agents
+            # that don't need tools (e.g., vision-only tasks, simple text generation).
             llm_result = await llm_client.chat(
                 messages=messages,
                 system_prompt=effective_system_prompt,

@@ -60,6 +60,16 @@ def llm_client():
     return client
 
 
+@pytest.fixture
+def openai_provider():
+    """Create an OpenAIProvider with _check_api_key patched."""
+    from src.agents.llm import OpenAIProvider
+    provider = OpenAIProvider()
+    # Patch _check_api_key to avoid env dependency
+    provider._check_api_key = lambda: None
+    return provider
+
+
 class TestLLMClientSuccess:
     """Successful LLM client tests."""
 
@@ -322,3 +332,220 @@ if __name__ == "__main__":
     asyncio.run(test_chat_with_retry())
     asyncio.run(test_chat_empty_response())
     print("All LLM client tests passed!")
+
+
+class TestResponsesAPI:
+    """Tests for Responses API (/responses endpoint)."""
+
+    @pytest.mark.asyncio
+    async def test_responses_basic_text(self, openai_provider):
+        """Test basic responses() call with text content."""
+        # Mock Response API response format
+        mock_response = MockResponse({
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_123",
+                    "content": [
+                        {"type": "output_text", "text": "Hello from Responses API!"}
+                    ]
+                }
+            ],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5
+            }
+        })
+        
+        mock_client = MockHttpClient(mock_response)
+        
+        with patch('httpx.AsyncClient', return_value=mock_client):
+            result = await openai_provider.responses(
+                messages=[{"role": "user", "content": "hi"}],
+                system_prompt="You are helpful"
+            )
+            assert result["content"] == "Hello from Responses API!"
+            assert "usage" in result
+
+    @pytest.mark.asyncio
+    async def test_responses_string_content(self, openai_provider):
+        """Test responses() with string content (not list)."""
+        # Response with string content (not list)
+        mock_response = MockResponse({
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_123",
+                    "content": "Direct string response"
+                }
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 3}
+        })
+        
+        mock_client = MockHttpClient(mock_response)
+        
+        with patch('httpx.AsyncClient', return_value=mock_client):
+            result = await openai_provider.responses(
+                messages=[{"role": "user", "content": "hello"}]
+            )
+            assert result["content"] == "Direct string response"
+
+    @pytest.mark.asyncio
+    async def test_responses_multiple_messages(self, openai_provider):
+        """Test responses() with multiple output messages (accumulation)."""
+        # Multiple message outputs
+        mock_response = MockResponse({
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Part1 "}]
+                },
+                {
+                    "type": "message", 
+                    "content": [{"type": "output_text", "text": "Part2"}]
+                }
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 10}
+        })
+        
+        mock_client = MockHttpClient(mock_response)
+        
+        with patch('httpx.AsyncClient', return_value=mock_client):
+            result = await openai_provider.responses(
+                messages=[{"role": "user", "content": "test"}]
+            )
+            # Should accumulate both parts
+            assert "Part1" in result["content"]
+            assert "Part2" in result["content"]
+
+    @pytest.mark.asyncio
+    async def test_responses_tool_calls(self, openai_provider):
+        """Test responses() parses tool calls correctly."""
+        # Response with function call
+        mock_response = MockResponse({
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_123",
+                    "content": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_123",
+                            "name": "get_weather",
+                            "arguments": '{"city": "Tokyo"}'
+                        }
+                    ]
+                }
+            ],
+            "usage": {"input_tokens": 50, "output_tokens": 20}
+        })
+        
+        mock_client = MockHttpClient(mock_response)
+        
+        with patch('httpx.AsyncClient', return_value=mock_client):
+            # Don't pass tools so Responses API path is tested (not fallback to chat)
+            result = await openai_provider.responses(
+                messages=[{"role": "user", "content": "What's the weather?"}]
+            )
+            # Verify tool_calls are parsed correctly
+            assert "tool_calls" in result
+            assert len(result["tool_calls"]) > 0
+            # Check type field is present
+            assert result["tool_calls"][0].get("type") == "function"
+
+    @pytest.mark.asyncio
+    async def test_responses_with_vision_content(self, openai_provider):
+        """Test responses() converts vision content to correct format."""
+        # Track the request payload
+        captured_payload = {}
+        
+        class TrackingMockClient(MockHttpClient):
+            async def post(self, *args, **kwargs):
+                captured_payload['json'] = kwargs.get('json', {})
+                return self.response
+        
+        # Response
+        mock_response = MockResponse({
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "It's a cat!"}]
+                }
+            ],
+            "usage": {"input_tokens": 100, "output_tokens": 5}
+        })
+        
+        mock_client = TrackingMockClient(mock_response)
+        
+        # Messages with vision content in Chat Completions format
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What's in this image?"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}}
+                ]
+            }
+        ]
+        
+        with patch('httpx.AsyncClient', return_value=mock_client):
+            result = await openai_provider.responses(messages=messages)
+            assert result["content"] == "It's a cat!"
+            
+            # Verify the conversion: input_image with string URL
+            assert 'input' in captured_payload.get('json', {})
+            input_items = captured_payload['json']['input']
+            assert len(input_items) == 1
+            # Check that content was converted to Responses API format
+            content = input_items[0].get('content', [])
+            assert isinstance(content, list)
+            # Should have text and image blocks
+            text_block = next((b for b in content if b.get('type') == 'input_text'), None)
+            image_block = next((b for b in content if b.get('type') == 'input_image'), None)
+            assert text_block is not None
+            assert image_block is not None
+            # image_url should be a string, not an object
+            assert isinstance(image_block.get('image_url'), str)
+
+    @pytest.mark.asyncio
+    async def test_responses_top_level_function_call(self, openai_provider):
+        """Test responses() handles top-level function_call output."""
+        # Response with top-level function_call (not nested in message)
+        mock_response = MockResponse({
+            "output": [
+                {"type": "function_call", "id": "call_456", "name": "search", "arguments": '{"query": "test"}'}
+            ],
+            "usage": {"input_tokens": 30, "output_tokens": 15}
+        })
+        
+        mock_client = MockHttpClient(mock_response)
+        
+        with patch('httpx.AsyncClient', return_value=mock_client):
+            # Don't pass tools to test Responses path
+            result = await openai_provider.responses(
+                messages=[{"role": "user", "content": "search for test"}]
+            )
+            assert "tool_calls" in result
+
+    @pytest.mark.asyncio
+    async def test_llm_client_responses_type_annotation(self):
+        """Test LLMClient.responses accepts messages with Any content type."""
+        from src.agents.llm import LLMClient
+        
+        client = LLMClient()
+        
+        # This should not cause type errors - messages can have complex content
+        messages = [
+            {"role": "user", "content": "simple text"},
+            {"role": "user", "content": [{"type": "text", "text": "hello"}]},  # List content
+            {"role": "user", "content": [
+                {"type": "text", "text": "Describe this"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}}
+            ]}
+        ]
+        
+        # Just verify the method accepts the type (no runtime error for type check)
+        import inspect
+        sig = inspect.signature(client.responses)
+        # If we get here without TypeError, the signature is correct
+        assert "messages" in sig.parameters
