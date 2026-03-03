@@ -2,11 +2,13 @@
 
 Loads SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, and daily notes.
 Integrates with LightweightMemory for TF-IDF search.
+Supports chunk-level indexing with auto-refresh on file changes.
 """
 
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -20,9 +22,18 @@ from src.utils.truncate import truncate
 # Default workspace paths
 DEFAULT_WORKSPACE = Path.home() / ".efp" / "workspace"
 
+# Core memory files to index
+CORE_MEMORY_FILES = ["SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md", "MEMORY.md"]
+
 
 class MemorySystem:
     """Manages loading and access to workspace memory files."""
+    
+    # Source registry - defines which files to index
+    SOURCE_REGISTRY = {
+        "core": CORE_MEMORY_FILES,
+        "daily": "memory/*.md",  # Glob pattern for daily notes
+    }
     
     def __init__(
         self,
@@ -30,6 +41,8 @@ class MemorySystem:
         cache_ttl_seconds: int = 60,
         search_enabled: bool = True,
         search_config: Optional[Dict] = None,
+        daily_notes_index_days: int = 14,
+        daily_notes_inject_days: int = 2,
     ):
         """Initialize memory system.
         
@@ -38,11 +51,20 @@ class MemorySystem:
             cache_ttl_seconds: Cache TTL in seconds (default: 60)
             search_enabled: Whether to enable memory search
             search_config: Configuration for memory search
+            daily_notes_index_days: Number of days to index for daily notes (default: 14)
+            daily_notes_inject_days: Number of days to inject in prompt (default: 2)
         """
         self.workspace = Path(workspace_path) if workspace_path else DEFAULT_WORKSPACE
         self._cache: Dict[str, Any] = {}
         self._cache_time: Optional[datetime] = None
         self._cache_ttl_seconds = cache_ttl_seconds
+        
+        # Daily notes configuration
+        self.daily_notes_index_days = daily_notes_index_days
+        self.daily_notes_inject_days = daily_notes_inject_days
+        
+        # Source mtimes for auto-refresh tracking
+        self._source_mtimes: Dict[str, float] = {}
         
         # Initialize lightweight search
         self.search_enabled = search_enabled
@@ -74,25 +96,175 @@ class MemorySystem:
             self.search_memory = None
     
     def _index_memory_files(self) -> None:
-        """Index memory files into search."""
+        """Index memory files into search using chunking."""
         if not self.search_memory:
             return
         
-        files = ["SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md", "MEMORY.md"]
+        try:
+            from src.memory.chunking import chunk_markdown
+        except ImportError:
+            logger.warning("chunking module not available, using whole-file indexing")
+            chunk_markdown = None
         
-        for filename in files:
+        # Index core memory files
+        for filename in CORE_MEMORY_FILES:
+            filepath = self.workspace / filename
+            if filepath.exists():
+                self._index_file(filepath, filename, chunk_markdown)
+        
+        # Index daily notes
+        self._index_daily_notes(chunk_markdown)
+        
+        logger.info(f"Indexed memory files: {len(self._source_mtimes)} sources")
+    
+    def _index_file(
+        self,
+        filepath: Path,
+        source_name: str,
+        chunk_markdown=None,
+        kind: str = "core",
+    ) -> None:
+        """Index a single file, optionally using chunking.
+        
+        Args:
+            filepath: Path to the file
+            source_name: Name for the source (e.g., "MEMORY.md")
+            chunk_markdown: Optional chunking function
+            kind: Type of file ("core" or "daily")
+        """
+        if not self.search_memory:
+            return
+        
+        try:
+            mtime = os.path.getmtime(filepath)
+            content = filepath.read_text(encoding='utf-8')
+            
+            if chunk_markdown:
+                # Use chunking for better retrieval
+                chunks = chunk_markdown(
+                    text=content,
+                    source_name=source_name,
+                    kind=kind,
+                    max_chars=1200,
+                    min_chars=200,
+                )
+                
+                # Delete old chunks for this source
+                self.search_memory.delete_by_source(source_name)
+                
+                # Add new chunks
+                for chunk in chunks:
+                    self.search_memory.upsert(
+                        entry_id=chunk.id,
+                        content=chunk.text,
+                        metadata=chunk.meta,
+                        mtime=mtime,
+                    )
+            else:
+                # Fallback to whole-file indexing
+                key = f"mem:{source_name}"
+                self.search_memory.upsert(
+                    entry_id=key,
+                    content=content,
+                    metadata={"source": source_name, "kind": kind},
+                    mtime=mtime,
+                )
+            
+            # Track mtime
+            self._source_mtimes[source_name] = mtime
+            
+        except Exception as e:
+            logger.debug(f"Failed to index {source_name}: {e}")
+    
+    def _index_daily_notes(self, chunk_markdown=None) -> None:
+        """Index daily notes from workspace/memory/*.md.
+        
+        Args:
+            chunk_markdown: Optional chunking function
+        """
+        if not self.search_memory:
+            return
+        
+        memory_dir = self.workspace / "memory"
+        if not memory_dir.exists():
+            return
+        
+        # Get date range (include today)
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=self.daily_notes_index_days - 1)
+        
+        # Find daily note files
+        for i in range(self.daily_notes_index_days):
+            date = start_date + timedelta(days=i)
+            date_str = date.strftime("%Y-%m-%d")
+            filename = f"{date_str}.md"
+            filepath = memory_dir / filename
+            
+            if filepath.exists():
+                source_name = filepath.name  # e.g., "2026-03-03.md"
+                self._index_file(filepath, source_name, chunk_markdown, kind="daily")
+    
+    def refresh_index_if_needed(self) -> bool:
+        """Refresh index if any source files have changed.
+        
+        Returns:
+            True if any files were refreshed, False otherwise
+        """
+        if not self.search_memory:
+            return False
+        
+        refreshed = False
+        
+        # Check core files
+        for filename in CORE_MEMORY_FILES:
             filepath = self.workspace / filename
             if filepath.exists():
                 try:
-                    content = filepath.read_text(encoding='utf-8')
-                    key = f"memory:{filename}"
-                    self.search_memory.add(
-                        key=key,
-                        content=content,
-                        metadata={"source": filename, "type": "memory_file"},
-                    )
+                    mtime = os.path.getmtime(filepath)
+                    stored_mtime = self._source_mtimes.get(filename)
+                    
+                    if stored_mtime is None or mtime > stored_mtime:
+                        logger.info(f"Refreshing index for {filename} (mtime changed)")
+                        try:
+                            from src.memory.chunking import chunk_markdown
+                        except ImportError:
+                            chunk_markdown = None
+                        
+                        self._index_file(filepath, filename, chunk_markdown, kind="core")
+                        refreshed = True
                 except Exception as e:
-                    logger.debug(f"Failed to index {filename}: {e}")
+                    logger.debug(f"Error checking {filename}: {e}")
+        
+        # Check daily notes
+        memory_dir = self.workspace / "memory"
+        if memory_dir.exists():
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=self.daily_notes_index_days - 1)
+            
+            for i in range(self.daily_notes_index_days):
+                date = start_date + timedelta(days=i)
+                date_str = date.strftime("%Y-%m-%d")
+                filename = f"{date_str}.md"
+                filepath = memory_dir / filename
+                
+                if filepath.exists():
+                    try:
+                        mtime = os.path.getmtime(filepath)
+                        stored_mtime = self._source_mtimes.get(filename)
+                        
+                        if stored_mtime is None or mtime > stored_mtime:
+                            logger.info(f"Refreshing daily note: {filename}")
+                            try:
+                                from src.memory.chunking import chunk_markdown
+                            except ImportError:
+                                chunk_markdown = None
+                            
+                            self._index_file(filepath, filename, chunk_markdown, kind="daily")
+                            refreshed = True
+                    except Exception as e:
+                        logger.debug(f"Error checking {filename}: {e}")
+        
+        return refreshed
     
     def search(
         self,
@@ -112,6 +284,9 @@ class MemorySystem:
         """
         if not self.search_memory:
             return []
+        
+        # Auto-refresh index if needed
+        self.refresh_index_if_needed()
         
         try:
             threshold = score_threshold or self.search_config.get("score_threshold", 0.1)
@@ -138,7 +313,12 @@ class MemorySystem:
             return
         
         try:
-            self.search_memory.add(key=key, content=content, metadata=metadata)
+            self.search_memory.upsert(
+                entry_id=key,
+                content=content,
+                metadata=metadata,
+                mtime=time.time(),
+            )
         except Exception as e:
             logger.error(f"Failed to add memory: {e}")
     
