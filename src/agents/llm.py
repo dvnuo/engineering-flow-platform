@@ -241,6 +241,13 @@ class BaseProvider:
                 if attempt < max_retries - 1:
                     delay = retry_delay * (2 ** attempt)
                     logger.warning(f"API error, retrying in {delay}s: {e}")
+                    # Log error response body for debugging
+                    if hasattr(e, 'response') and e.response is not None:
+                        try:
+                            error_body = e.response.text
+                            logger.warning(f"Error response: {error_body[:500]}")
+                        except:
+                            pass
                     await asyncio.sleep(delay)
 
         raise last_error
@@ -400,113 +407,46 @@ class OpenAIProvider(BaseProvider):
 
     async def responses(
         self,
-        messages: List[Dict],
+        messages: Optional[List[Dict]] = None,
+        input_items: Optional[List[Dict]] = None,
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
         reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """Call OpenAI Responses API (/responses endpoint).
-        
-        Note: The Responses API has different payload format than Chat Completions:
-        - System prompt goes to 'instructions' field
-        - Messages go to 'input' array
-        - max_tokens -> max_output_tokens
-        - temperature not supported with gpt-5-mini
-        - tools not fully supported in Responses API
-        - reasoning_replay not supported in Responses API
-        
-        When tools or reasoning are needed, fall back to chat() for reliable support.
-        Uses _call_api() for centralized retry/backoff behavior.
-        """
-        # Fall back to chat() when tools or reasoning_replay are needed
-        if tools or reasoning_replay:
-            if tools:
-                logger.info(f"[OpenAI] Tools provided, falling back to chat() for tool support")
-            if reasoning_replay:
-                logger.info(f"[OpenAI] reasoning_replay enabled, falling back to chat()")
-            return await self.chat(
-                messages=messages,
-                system_prompt=system_prompt,
-                tools=tools,
-                model=model,
-                max_tokens=max_tokens,
-                reasoning_replay=reasoning_replay,
-            )
-        
-        # Note: API key check is done in _call_api() to avoid duplication
+        """Call OpenAI Responses API (/responses endpoint)."""
+        # Fall back to chat() when reasoning_replay is needed (not supported)
+        if reasoning_replay:
+            return await self.chat(messages=messages, system_prompt=system_prompt, tools=tools, model=model, max_tokens=max_tokens, reasoning_replay=reasoning_replay)
         
         model_name = model or self.default_model
         
-        # Build input array from messages ( Responses API format)
-        # System prompt goes to 'instructions', user messages to 'input'
-        input_messages = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            # Handle content as string or array (for vision)
-            if isinstance(content, list):
-                # Already in vision format - convert to Responses API format
-                # "type": "image_url" -> "type": "input_image"
-                # IMPORTANT: image_url must be a STRING (URL or base64 data URL), not an object
-                converted_content = []
-                for item in content:
-                    if isinstance(item, dict):
-                        item_type = item.get("type", "")
-                        if item_type == "text":
-                            converted_content.append({
-                                "type": "input_text",
-                                "text": item.get("text", "")
-                            })
-                        elif item_type == "image_url":
-                            # Extract the URL from image_url object
-                            img_url_obj = item.get("image_url", {})
-                            # Get the actual URL string - could be direct URL or base64
-                            img_url = img_url_obj.get("url") if isinstance(img_url_obj, dict) else str(img_url_obj)
-                            if img_url:
-                                converted_content.append({
-                                    "type": "input_image",
-                                    "image_url": img_url  # Must be STRING, not object!
-                                })
-                            else:
-                                logger.warning(f"[LLM] Skipping image: no valid URL in image_url")
-                        elif item_type == "input_image":
-                            # Already in correct format, ensure image_url is string
-                            img_url_obj = item.get("image_url")
-                            if isinstance(img_url_obj, dict):
-                                img_url = img_url_obj.get("url", "")
-                                if img_url:
-                                    converted_content.append({
-                                        "type": "input_image",
-                                        "image_url": img_url
-                                    })
-                                else:
-                                    logger.warning("[LLM] Skipping image: no valid URL in existing input_image block")
-                            else:
-                                converted_content.append(item)
-                        else:
-                            converted_content.append(item)
-                    else:
-                        converted_content.append({"type": "input_text", "text": str(item)})
-                input_messages.append({
-                    "role": role,
-                    "content": converted_content
-                })
-            else:
-                input_messages.append({
-                    "role": role,
-                    "content": content
-                })
+        # Convert messages to input_items if provided
+        if input_items is None and messages is not None:
+            input_items = self._convert_messages_to_input_items(messages)
+        elif input_items is None:
+            input_items = []
+        
+        # Convert tools from Chat format to Responses format
+        converted_tools = None
+        if tools:
+            converted_tools = self._convert_tools_schema(tools)
+        # Note: messages are already converted to input_items above
         
         # Build payload for Responses API
         payload = {
             "model": model_name,
             "instructions": system_prompt or "",
-            "input": input_messages,
+            "input": input_items,
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+            "text": {"format": {"type": "text"}},
         }
+        
+        # Add tools if provided (Responses API format)
+        if converted_tools:
+            payload["tools"] = converted_tools
+            payload["tool_choice"] = "auto"
         
         # Debug: Log request details (before calling _call_api)
         if _is_debug_enabled():
@@ -514,15 +454,7 @@ class OpenAIProvider(BaseProvider):
             logger.debug(f"Provider: {self.name}")
             logger.debug(f"Model: {model_name}")
             logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
-            logger.debug(f"Input messages count: {len(input_messages)}")
-            for i, msg in enumerate(input_messages[:3]):
-                role = msg.get("role", "unknown")
-                content = msg.get("content", "")
-                if isinstance(content, list):
-                    content_preview = f"[array with {len(content)} items]"
-                else:
-                    content_preview = truncate(content, 100)
-                logger.debug(f"  [{i}] {role}: {content_preview}")
+            logger.debug(f"Input items count: {len(input_items)}")
         
         # Use _call_api for centralized retry/backoff behavior
         data = await self._call_api("/responses", payload)
@@ -538,48 +470,31 @@ class OpenAIProvider(BaseProvider):
         # Parse response - Responses API uses 'output' array instead of 'choices'
         output_items = data.get("output", [])
         content = ""
-        tool_calls = []
+        function_calls = []
         
         for item in output_items:
             item_type = item.get("type", "")
             
             if item_type == "message":
-                # Content in message type
                 msg_content = item.get("content", [])
-                # Handle content as array or string
                 if isinstance(msg_content, list):
                     for msg_item in msg_content:
                         if msg_item.get("type") == "output_text":
                             content += msg_item.get("text", "")
                         elif msg_item.get("type") == "function_call":
-                            # Handle function calls inside message content
-                            # Avoid double-encoding: if arguments is already a string, don't json.dumps it
-                            args = msg_item.get("arguments", {})
-                            arguments = args if isinstance(args, str) else json.dumps(args)
-                            tool_calls.append({
-                                "id": msg_item.get("call_id", f"call_{len(tool_calls)}"),
-                                "type": "function",
-                                "function": {
-                                    "name": msg_item.get("name", ""),
-                                    "arguments": arguments
-                                }
+                            function_calls.append({
+                                "call_id": msg_item.get("call_id", ""),
+                                "name": msg_item.get("name", ""),
+                                "arguments": msg_item.get("arguments", {}),
                             })
                 elif isinstance(msg_content, str):
-                    # Append string content instead of overwriting
                     content += msg_content
             
             elif item_type == "function_call":
-                # Handle function_call as top-level output item (Responses API can emit this)
-                # Avoid double-encoding: if arguments is already a string, don't json.dumps it
-                args = item.get("arguments", {})
-                arguments = args if isinstance(args, str) else json.dumps(args)
-                tool_calls.append({
-                    "id": item.get("id", item.get("call_id", f"call_{len(tool_calls)}")),
-                    "type": "function",
-                    "function": {
-                        "name": item.get("name", ""),
-                        "arguments": arguments
-                    }
+                function_calls.append({
+                    "call_id": item.get("call_id", ""),
+                    "name": item.get("name", ""),
+                    "arguments": item.get("arguments", {}),
                 })
         
         # Calculate usage
@@ -589,13 +504,39 @@ class OpenAIProvider(BaseProvider):
         
         # Estimate if not provided
         if prompt_tokens == 0:
-            prompt_tokens = sum(len(str(m).split()) * 4 for m in input_messages)
+            prompt_tokens = sum(len(str(m).split()) * 4 for m in input_items)
         if completion_tokens == 0:
             completion_tokens = len(content.split()) * 4
         
+        # Build function_calls (Responses API format)
+        function_calls_result = []
+        for fc in function_calls:
+            args = fc.get("arguments", {})
+            arguments = json.dumps(args) if isinstance(args, dict) else args
+            function_calls_result.append({
+                "call_id": fc.get("call_id", ""),
+                "name": fc.get("name", ""),
+                "arguments": arguments,
+            })
+        
+        # Also include tool_calls for backward compatibility
+        tool_calls_compat = []
+        for fc in function_calls:
+            args = fc.get("arguments", {})
+            arguments = json.dumps(args) if isinstance(args, dict) else args
+            tool_calls_compat.append({
+                "id": fc.get("call_id", ""),
+                "type": "function",
+                "function": {
+                    "name": fc.get("name", ""),
+                    "arguments": arguments
+                }
+            })
+        
         result = {
             "content": content,
-            "tool_calls": tool_calls,
+            "function_calls": function_calls_result,
+            "tool_calls": tool_calls_compat,
             "usage": {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
@@ -618,6 +559,94 @@ class OpenAIProvider(BaseProvider):
         )
         
         return result
+
+    def _convert_messages_to_input_items(self, messages: List[Dict]) -> List[Dict]:
+        """Convert Chat-style messages to Responses API input_items format."""
+        items = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            if role == "tool":
+                continue
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                conv = []
+                for item in content:
+                    if isinstance(item, dict):
+                        t = item.get("type", "")
+                        if t in ("text", "input_text"):
+                            # Only use input_text for user messages
+                            if role == "user":
+                                conv.append({"type": "input_text", "text": item.get("text", "")})
+                            else:
+                                # Assistant messages - use plain text
+                                conv.append(item.get("text", ""))
+                        elif t == "image_url":
+                            img = item.get("image_url", {})
+                            img_url = img.get("url") if isinstance(img, dict) else str(img)
+                            if img_url:
+                                conv.append({"type": "input_image", "image_url": img_url})
+                        elif t == "input_image":
+                            img = item.get("image_url", {})
+                            img_url = img.get("url") if isinstance(img, dict) else str(img) if img else ""
+                            if img_url:
+                                conv.append({"type": "input_image", "image_url": img_url})
+                            else:
+                                conv.append(item)
+                        else:
+                            conv.append(item)
+                    else:
+                        # Plain text item - use input_text only for user
+                        if role == "user":
+                            conv.append({"type": "input_text", "text": str(item)})
+                        else:
+                            conv.append(str(item))
+                if conv:
+                    items.append({"role": role, "content": conv})
+            elif content:
+                # Plain text content - no wrapper for assistant
+                if role == "user":
+                    items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
+                else:
+                    items.append({"role": role, "content": str(content)})
+        return items
+
+    def _convert_tools_schema(self, tools: List[Dict]) -> List[Dict]:
+        """Convert Chat-style tools to Responses API format."""
+        import copy
+        converted = []
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            tool_type = tool.get("type", "")
+            if tool_type == "function":
+                func = tool.get("function", {})
+                # Deep copy parameters to avoid mutating the original
+                params = copy.deepcopy(func.get("parameters", {}))
+                
+                # Ensure additionalProperties: false
+                if "additionalProperties" not in params:
+                    params["additionalProperties"] = False
+                
+                # With strict: true, required must include ALL properties
+                if "properties" in params and isinstance(params["properties"], dict):
+                    required = params.get("required", [])
+                    if isinstance(required, list):
+                        # Add any missing properties to required
+                        for prop in params["properties"]:
+                            if prop not in required:
+                                required.append(prop)
+                        params["required"] = required
+                
+                converted.append({
+                    "type": "function",
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                    "parameters": params,
+                    "strict": True,
+                })
+            else:
+                converted.append(tool)
+        return converted
     
     def list_models(self) -> List[str]:
         return [
@@ -686,6 +715,7 @@ class GitHubCopilotProvider(BaseProvider):
         # Add tools support (similar to OpenAI)
         if tools:
             payload["tools"] = tools
+            payload["tool_choice"] = "auto"
         
         # Debug: Log request
         if _is_debug_enabled():
@@ -750,9 +780,35 @@ class GitHubCopilotProvider(BaseProvider):
         prompt_tokens = sum(len(str(m).split()) for m in all_messages) * 4  # Rough estimate
         completion_tokens = len(content.split()) * 4  # Rough estimate
         
+        # Build function_calls (Responses API format)
+        function_calls_result = []
+        for fc in function_calls:
+            args = fc.get("arguments", {})
+            arguments = json.dumps(args) if isinstance(args, dict) else args
+            function_calls_result.append({
+                "call_id": fc.get("call_id", ""),
+                "name": fc.get("name", ""),
+                "arguments": arguments,
+            })
+        
+        # Also include tool_calls for backward compatibility
+        tool_calls_compat = []
+        for fc in function_calls:
+            args = fc.get("arguments", {})
+            arguments = json.dumps(args) if isinstance(args, dict) else args
+            tool_calls_compat.append({
+                "id": fc.get("call_id", ""),
+                "type": "function",
+                "function": {
+                    "name": fc.get("name", ""),
+                    "arguments": arguments
+                }
+            })
+        
         result = {
             "content": content,
-            "tool_calls": tool_calls,
+            "function_calls": function_calls_result,
+            "tool_calls": tool_calls_compat,
             "usage": {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
@@ -836,7 +892,7 @@ class GitHubCopilotProvider(BaseProvider):
         model_name = model or self.default_model
         
         # Build input array from messages (Responses API format)
-        input_messages = []
+        input_items = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -882,12 +938,12 @@ class GitHubCopilotProvider(BaseProvider):
                             converted_content.append(item)
                     else:
                         converted_content.append({"type": "input_text", "text": str(item)})
-                input_messages.append({
+                input_items.append({
                     "role": role,
                     "content": converted_content
                 })
             else:
-                input_messages.append({
+                input_items.append({
                     "role": role,
                     "content": content
                 })
@@ -896,7 +952,7 @@ class GitHubCopilotProvider(BaseProvider):
         payload = {
             "model": model_name,
             "instructions": system_prompt or "",
-            "input": input_messages,
+            "input": input_items,
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
         }
         
@@ -905,7 +961,7 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"=== [GITHUB COPILOT] RESPONSES API REQUEST ===")
             logger.debug(f"Model: {model_name}")
             logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
-            logger.debug(f"Input messages count: {len(input_messages)}")
+            logger.debug(f"Input messages count: {len(input_items)}")
         
         # Make API call
         try:
@@ -985,13 +1041,39 @@ class GitHubCopilotProvider(BaseProvider):
         
         # Estimate if not provided
         if prompt_tokens == 0:
-            prompt_tokens = sum(len(str(m).split()) * 4 for m in input_messages)
+            prompt_tokens = sum(len(str(m).split()) * 4 for m in input_items)
         if completion_tokens == 0:
             completion_tokens = len(content.split()) * 4
         
+        # Build function_calls (Responses API format)
+        function_calls_result = []
+        for fc in function_calls:
+            args = fc.get("arguments", {})
+            arguments = json.dumps(args) if isinstance(args, dict) else args
+            function_calls_result.append({
+                "call_id": fc.get("call_id", ""),
+                "name": fc.get("name", ""),
+                "arguments": arguments,
+            })
+        
+        # Also include tool_calls for backward compatibility
+        tool_calls_compat = []
+        for fc in function_calls:
+            args = fc.get("arguments", {})
+            arguments = json.dumps(args) if isinstance(args, dict) else args
+            tool_calls_compat.append({
+                "id": fc.get("call_id", ""),
+                "type": "function",
+                "function": {
+                    "name": fc.get("name", ""),
+                    "arguments": arguments
+                }
+            })
+        
         result = {
             "content": content,
-            "tool_calls": tool_calls,
+            "function_calls": function_calls_result,
+            "tool_calls": tool_calls_compat,
             "usage": {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
@@ -1463,7 +1545,8 @@ class LLMClient:
     
     async def responses(
         self,
-        messages: List[Dict[str, Any]],
+        messages: Optional[List[Dict[str, Any]]] = None,
+        input_items: Optional[List[Dict]] = None,
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
@@ -1471,16 +1554,7 @@ class LLMClient:
         provider: Optional[str] = None,
         reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """Call LLM using Responses API (/responses endpoint).
-        
-        Note: The Responses API does not support reasoning_replay or tools for all models.
-        When tools or reasoning_replay are provided, this method falls back to chat().
-        
-        This uses the new OpenAI Responses API which has different:
-        - Payload format (instructions, input instead of messages)
-        - Response format (output array instead of choices)
-        - Parameter names (max_output_tokens instead of max_tokens)
-        """
+        """Call LLM using Responses API (/responses endpoint)."""
         provider = provider or self.default_provider or 'openai'
         
         if provider not in self.providers:
@@ -1504,6 +1578,7 @@ class LLMClient:
         
         return await client.responses(
             messages=messages,
+            input_items=input_items,
             system_prompt=system_prompt,
             tools=tools,
             model=model,

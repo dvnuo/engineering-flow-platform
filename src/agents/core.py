@@ -488,27 +488,75 @@ You have access to the following tools. When a user asks you to do something tha
             # Find the last user message and add images to it
             for i in range(len(messages) - 1, -1, -1):
                 if messages[i].get("role") == "user":
-                    # Get existing content - could be string or list (for vision)
                     user_content = messages[i].get("content", "")
-                    
-                    # Build vision content for Chat Completions API
-                    # Text blocks use {"type": "text", "text": "..."}
-                    # Image blocks use {"type": "image_url", "image_url": {"url": "..."}}
+                    # Build vision content for Responses API (input_image format)
                     if isinstance(user_content, list):
-                        # Already a list (e.g., from previous vision content) - append to it
-                        msg_content = list(user_content)
+                        msg_content = []
+                        for item in user_content:
+                            if isinstance(item, dict):
+                                if item.get("type") == "text":
+                                    msg_content.append({"type": "input_text", "text": item.get("text", "")})
+                                elif item.get("type") == "image_url":
+                                    img_url = item.get("image_url", {}).get("url") if isinstance(item.get("image_url"), dict) else str(item.get("image_url", ""))
+                                    if img_url:
+                                        msg_content.append({"type": "input_image", "image_url": img_url})
+                                else:
+                                    msg_content.append(item)
                     else:
-                        # Plain text - wrap in text block
-                        msg_content = [{"type": "text", "text": str(user_content)}]
+                        msg_content = [{"type": "input_text", "text": str(user_content)}]
                     
-                    for img in attached_images[:1]:  # Limit to 1 image
-                        # Use Chat Completions vision format with image_url object
-                        msg_content.append({"type": "image_url", "image_url": {"url": img}})
+                    for img in attached_images[:1]:
+                        msg_content.append({"type": "input_image", "image_url": img})
                     messages[i] = {"role": "user", "content": msg_content}
-                    logger.info(f"[Agent] Attached {min(len(attached_images), 1)} image(s) to user message")
+                    logger.info(f"[Agent] Attached {min(len(attached_images), 1)} image(s) to user message (Responses format)")
                     break
         # ===== END IMAGE INJECTION =====
 
+        # Convert messages to input_items for Responses API
+        def _to_input_items(msgs):
+            items = []
+            for msg in msgs:
+                role = msg.get("role", "user")
+                if role == "tool":
+                    continue
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    conv = []
+                    for item in content:
+                        if isinstance(item, dict):
+                            t = item.get("type", "")
+                            if t in ("text", "input_text"):
+                                # Only use input_text for user messages
+                                if role == "user":
+                                    conv.append({"type": "input_text", "text": item.get("text", "")})
+                                else:
+                                    # Assistant messages - use plain text
+                                    conv.append(item.get("text", ""))
+                            elif t in ("image_url", "input_image"):
+                                img = item.get("image_url", {})
+                                img_url = img.get("url") if isinstance(img, dict) else str(img)
+                                if img_url:
+                                    conv.append({"type": "input_image", "image_url": img_url})
+                            else:
+                                conv.append(item)
+                        else:
+                            # Plain text item
+                            if role == "user":
+                                conv.append({"type": "input_text", "text": str(item)})
+                            else:
+                                conv.append(str(item))
+                    if conv:
+                        items.append({"role": role, "content": conv})
+                elif content:
+                    # Plain text content - no wrapper for assistant
+                    if role == "user":
+                        items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
+                    else:
+                        items.append({"role": role, "content": str(content)})
+            return items
+        
+        input_items = _to_input_items(messages)
+        
         while iteration < max_tool_iterations:
             iteration += 1
             
@@ -519,24 +567,10 @@ You have access to the following tools. When a user asks you to do something tha
             logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM")
             send_event("llm_thinking", {"message": "LLM is thinking..."})
             
-            # DEBUG: Log messages being sent to LLM
-            logger.debug(f"[Tool Loop] Messages to LLM: {len(messages)}")
-            for i, msg in enumerate(messages):
-                if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                    tc_ids = [tc.get("id") for tc in msg["tool_calls"]]
-                    logger.debug(f"  Msg {i}: assistant with tool_calls: {tc_ids}")
-                elif msg.get("role") == "tool":
-                    logger.debug(f"  Msg {i}: tool (tool_call_id={msg.get('tool_call_id')})")
-                else:
-                    content = truncate(msg.get("content", ""), 50)
-                    logger.debug(f"  Msg {i}: {msg.get('role')}: {content}")
+            logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM with {len(input_items)} input_items")
             
-            # Note: Responses API (/responses) does not fully support tool calling for all models.
-            # We keep using chat() (/chat/completions) for the main agent loop to ensure
-            # reliable tool execution. The responses() method is available for sub-agents
-            # that don't need tools (e.g., vision-only tasks, simple text generation).
-            llm_result = await llm_client.chat(
-                messages=messages,
+            llm_result = await llm_client.responses(
+                input_items=input_items,
                 system_prompt=effective_system_prompt,
                 tools=self.tools,
                 reasoning_replay=enable_reasoning,
@@ -578,9 +612,10 @@ You have access to the following tools. When a user asks you to do something tha
                     usage_data = iter_usage
             
             content = (llm_result.get("content") or "").strip()
-            tool_calls = llm_result.get("tool_calls", [])
+            function_calls = llm_result.get("function_calls", [])
+            tool_calls = function_calls  # alias
             
-            # If no tool calls, we're done - return the response
+            # If no function calls, we're done - return the response
             if not tool_calls:
                 await session_manager.add_message(session_id, "assistant", content)
                 result = {"response": content, "usage": usage_data}
@@ -606,19 +641,19 @@ You have access to the following tools. When a user asks you to do something tha
             
             logger.info(f"[Tool Loop] Iteration {iteration}: LLM requested {len(tool_calls)} tool calls")
             
-            # Step 2: Execute each tool and collect results
-            # IMPORTANT: assistant message must contain tool_calls for OpenAI API
-            assistant_msg = {"role": "assistant"}
-            if tool_calls:
-                assistant_msg["tool_calls"] = tool_calls
-                # IMPORTANT: content must be empty string, not None for GitHub Copilot API
-                assistant_msg["content"] = content if content else ""
+            # Add function_call to input_items for Responses API
+            if function_calls:
+                fc = function_calls[0]
+                args = fc.get("arguments", {})
+                args_str = args if isinstance(args, str) else json.dumps(args)
+                input_items.append({
+                    "type": "function_call",
+                    "call_id": fc.get("call_id", ""),
+                    "name": fc.get("name", ""),
+                    "arguments": args_str,
+                })
             
-            messages.append(assistant_msg)
-            
-            # Save assistant message with tool_calls to history BEFORE executing tools
-            # This ensures tool messages can reference the correct tool_call_id
-            # Save for ALL iterations (not just iteration 1) so history is complete
+            # Save assistant message with tool_calls to history
             if tool_calls:
                 await session_manager.add_message(
                     session_id, "assistant", 
@@ -626,17 +661,19 @@ You have access to the following tools. When a user asks you to do something tha
                     extra={"tool_calls": tool_calls}
                 )
             
-            # Execute each tool call
-            for tool_call in tool_calls:
-                tool_call_id = tool_call.get("id", "unknown")
-                function = tool_call.get("function", {})
-                tool_name = function.get("name", "")
-                
-                # Parse arguments
-                try:
-                    args = json.loads(function.get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    args = {}
+            # Execute each function call
+            for fc in function_calls:
+                call_id = fc.get("call_id", "")
+                tool_name = fc.get("name", "")
+                # Arguments can be dict or string - keep as string for API
+                args_raw = fc.get("arguments", "{}")
+                if isinstance(args_raw, str):
+                    try:
+                        args = json.loads(args_raw)
+                    except json.JSONDecodeError:
+                        args = {}
+                else:
+                    args = args_raw or {}
                 
                 # Send tool call start event
                 send_event("tool_call", {
@@ -679,18 +716,13 @@ You have access to the following tools. When a user asks you to do something tha
                     "success": tool_result.success
                 })
                 
-                # Add tool result - MUST follow the assistant message with tool_calls
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": str(tool_result),
+                # Add function_call_output to input_items (Responses API)
+                input_items.append({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": str(tool_result),
                 })
-                
-                # Save tool result to history so it can be restored properly
-                await session_manager.add_message(
-                    session_id, "tool", str(tool_result),
-                    extra={"tool_call_id": tool_call_id}
-                )
+                await session_manager.add_message(session_id, "assistant", f"[Tool {tool_name} result] {str(tool_result)}", extra={"tool_name": tool_name, "call_id": call_id})
                 
                 logger.info(f"Tool result: {truncate_with_count(str(tool_result), 200)}")
             
