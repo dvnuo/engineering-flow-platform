@@ -95,7 +95,7 @@ class TestWorkspacePaths:
             assert (workspace / "memory").exists()
     
     def test_write_long_term_memory(self):
-        """Should write MEMORY.md to correct workspace."""
+        """Should write MEMORY.md to correct workspace (append by default)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             
@@ -103,7 +103,8 @@ class TestWorkspacePaths:
             
             assert filepath == workspace / "MEMORY.md"
             assert filepath.exists()
-            assert filepath.read_text() == "Long-term memory content"
+            # Default append mode adds newline
+            assert filepath.read_text().rstrip("\n") == "Long-term memory content"
     
     def test_write_to_different_workspaces(self):
         """Two workspaces should not conflict."""
@@ -120,8 +121,8 @@ class TestWorkspacePaths:
                 write_daily_memory(ws2, "Workspace 2 note", "2026-03-03")
                 write_long_term_memory(ws2, "Workspace 2 memory")
                 
-                # Verify isolation (strip trailing newline from daily notes)
+                # Verify isolation (strip trailing newline from daily notes and MEMORY.md)
                 assert (ws1 / "memory" / "2026-03-03.md").read_text().rstrip("\n") == "Workspace 1 note"
                 assert (ws2 / "memory" / "2026-03-03.md").read_text().rstrip("\n") == "Workspace 2 note"
-                assert (ws1 / "MEMORY.md").read_text() == "Workspace 1 memory"
-                assert (ws2 / "MEMORY.md").read_text() == "Workspace 2 memory"
+                assert (ws1 / "MEMORY.md").read_text().rstrip("\n") == "Workspace 1 memory"
+                assert (ws2 / "MEMORY.md").read_text().rstrip("\n") == "Workspace 2 memory"

@@ -69,7 +69,7 @@ def chunk_markdown(
     # If no headings, treat entire text as one section
     if not headings:
         return _create_chunks_from_text(
-            text, source_name, "", max_chars, min_chars, kind, date
+            text, source_name, "", max_chars, min_chars, kind, date, section_index=0
         )
     
     # Split text by headings
@@ -78,13 +78,13 @@ def chunk_markdown(
         end = headings[i + 1][0] if i + 1 < len(headings) else len(text)
         section_text = text[start:end].strip()
         if section_text:
-            sections.append((heading_text, section_text))
+            sections.append((i, heading_text, section_text))
     
     # Process each section into chunks
     chunks = []
-    for heading_text, section_text in sections:
+    for section_index, heading_text, section_text in sections:
         section_chunks = _create_chunks_from_text(
-            section_text, source_name, heading_text, max_chars, min_chars, kind, date
+            section_text, source_name, heading_text, max_chars, min_chars, kind, date, section_index
         )
         chunks.extend(section_chunks)
     
@@ -99,6 +99,7 @@ def _create_chunks_from_text(
     min_chars: int,
     kind: str,
     date: Optional[str],
+    section_index: int = 0,
 ) -> List[Chunk]:
     """Create chunks from a section of text.
     
@@ -114,7 +115,7 @@ def _create_chunks_from_text(
     
     # If content fits in one chunk
     if len(content) <= max_chars:
-        chunk_id = _generate_chunk_id(source_name, heading, len(chunks) + 1, kind)
+        chunk_id = _generate_chunk_id(source_name, heading, section_index, len(chunks) + 1, kind)
         meta = {
             "source": source_name,
             "heading": heading,
@@ -149,7 +150,7 @@ def _create_chunks_from_text(
             split_pos = last_period + 1 if last_period > max_chars // 2 else max_chars
             
             if len(chunk_text[:split_pos]) >= min_chars:
-                chunk_id = _generate_chunk_id(source_name, heading, chunk_index, kind)
+                chunk_id = _generate_chunk_id(source_name, heading, section_index, chunk_index, kind)
                 meta = {
                     "source": source_name,
                     "heading": heading,
@@ -171,7 +172,7 @@ def _create_chunks_from_text(
         if len(current_chunk_text) + len(para) + 1 > max_chars:
             # Save current chunk if it has enough content
             if len(current_chunk_text) >= min_chars:
-                chunk_id = _generate_chunk_id(source_name, heading, chunk_index, kind)
+                chunk_id = _generate_chunk_id(source_name, heading, section_index, chunk_index, kind)
                 meta = {
                     "source": source_name,
                     "heading": heading,
@@ -198,7 +199,7 @@ def _create_chunks_from_text(
     
     # Don't forget the last chunk
     if current_chunk_text.strip() and len(current_chunk_text.strip()) >= min_chars:
-        chunk_id = _generate_chunk_id(source_name, heading, chunk_index, kind)
+        chunk_id = _generate_chunk_id(source_name, heading, section_index, chunk_index, kind)
         meta = {
             "source": source_name,
             "heading": heading,
@@ -219,14 +220,15 @@ def _create_chunks_from_text(
 def _generate_chunk_id(
     source_name: str,
     heading: str,
+    section_index: int,
     chunk_num: int,
     kind: str,
 ) -> str:
     """Generate a stable chunk ID.
     
     Format:
-    - Core: mem:MEMORY.md#heading-slug-01
-    - Daily: daily:2026-03-02.md#heading-slug-01
+    - Core: mem:MEMORY.md#section-01-chunk-01
+    - Daily: daily:2026-03-02.md#section-01-chunk-01
     
     If heading is empty, uses "-" as slug.
     """
@@ -238,11 +240,12 @@ def _generate_chunk_id(
     if len(heading_slug) > 20:
         heading_slug = heading_slug[:20]
     
+    # Include section index to avoid collisions for same heading in different sections
     if kind == "daily":
-        return f"daily:{source_name}#{heading_slug}-{chunk_num:02d}"
+        return f"daily:{source_name}#sec-{section_index:02d}-{heading_slug}-{chunk_num:02d}"
     else:
         # For core files, use mem: prefix
-        return f"mem:{source_name}#{heading_slug}-{chunk_num:02d}"
+        return f"mem:{source_name}#sec-{section_index:02d}-{heading_slug}-{chunk_num:02d}"
 
 
 def extract_heading(text: str) -> str:

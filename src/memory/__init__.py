@@ -190,19 +190,26 @@ def write_daily_memory(workspace_dir: Path, content: str, date_str: str = None, 
     return filepath
 
 
-def write_long_term_memory(workspace_dir: Path, content: str) -> Path:
+def write_long_term_memory(workspace_dir: Path, content: str, append: bool = True) -> Path:
     """Write content to long-term memory file.
     
     Args:
         workspace_dir: Workspace directory (required - no default)
         content: Content to write
+        append: If True (default), append content; if False, overwrite.
         
     Returns:
         Path to the written file.
     """
     filepath = get_long_term_memory_path(workspace_dir)
     filepath.parent.mkdir(parents=True, exist_ok=True)
-    filepath.write_text(content, encoding='utf-8')
+    
+    if append:
+        with filepath.open("a", encoding="utf-8") as f:
+            f.write(content + "\n")
+    else:
+        filepath.write_text(content, encoding='utf-8')
+    
     return filepath
 
 
