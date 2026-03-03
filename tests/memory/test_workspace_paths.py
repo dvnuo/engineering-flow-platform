@@ -20,6 +20,11 @@ class TestWorkspacePaths:
         """Should use DEFAULT_WORKSPACE if not specified."""
         from src.memory import DEFAULT_WORKSPACE
         
+<<<<<<< HEAD
+=======
+        # Test that the function returns DEFAULT_WORKSPACE / "memory"
+        # without actually creating it
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
         result = get_memory_dir()
         
         assert result == DEFAULT_WORKSPACE / "memory"
@@ -34,6 +39,7 @@ class TestWorkspacePaths:
             assert result == workspace / "memory"
             assert result.exists()
     
+<<<<<<< HEAD
     def test_get_memory_path_default(self):
         """Should use DEFAULT_WORKSPACE and today's date."""
         from src.memory import DEFAULT_WORKSPACE
@@ -44,6 +50,9 @@ class TestWorkspacePaths:
         assert result == expected
     
     def test_get_memory_path_custom_workspace_and_date(self):
+=======
+    def test_get_memory_path_with_custom_workspace(self):
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
         """Should use custom workspace and date."""
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
@@ -52,6 +61,7 @@ class TestWorkspacePaths:
             
             assert result == workspace / "memory" / "2026-01-15.md"
     
+<<<<<<< HEAD
     def test_get_long_term_memory_path_default(self):
         """Should use DEFAULT_WORKSPACE for MEMORY.md."""
         from src.memory import DEFAULT_WORKSPACE
@@ -59,6 +69,16 @@ class TestWorkspacePaths:
         result = get_long_term_memory_path()
         
         assert result == DEFAULT_WORKSPACE / "MEMORY.md"
+=======
+    def test_get_long_term_memory_path_with_custom_workspace(self):
+        """Should use custom workspace for MEMORY.md."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            
+            result = get_long_term_memory_path(workspace)
+            
+            assert result == workspace / "MEMORY.md"
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
     
     def test_get_long_term_memory_path_custom_workspace(self):
         """Should use custom workspace for MEMORY.md."""
@@ -70,7 +90,11 @@ class TestWorkspacePaths:
             assert result == workspace / "MEMORY.md"
     
     def test_write_daily_memory(self):
+<<<<<<< HEAD
         """Should write to correct workspace."""
+=======
+        """Should write to correct workspace (append mode by default)."""
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             
@@ -82,7 +106,12 @@ class TestWorkspacePaths:
             
             assert filepath == workspace / "memory" / "2026-03-03.md"
             assert filepath.exists()
+<<<<<<< HEAD
             assert filepath.read_text() == "Test daily note content"
+=======
+            # Default append mode adds newline
+            assert filepath.read_text().rstrip("\n") == "Test daily note content"
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
     
     def test_write_daily_memory_creates_dir(self):
         """Should create memory directory if needed."""
@@ -94,7 +123,11 @@ class TestWorkspacePaths:
             assert (workspace / "memory").exists()
     
     def test_write_long_term_memory(self):
+<<<<<<< HEAD
         """Should write MEMORY.md to correct workspace."""
+=======
+        """Should write MEMORY.md to correct workspace (append by default)."""
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             
@@ -102,7 +135,12 @@ class TestWorkspacePaths:
             
             assert filepath == workspace / "MEMORY.md"
             assert filepath.exists()
+<<<<<<< HEAD
             assert filepath.read_text() == "Long-term memory content"
+=======
+            # Default append mode adds newline
+            assert filepath.read_text().rstrip("\n") == "Long-term memory content"
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
     
     def test_write_to_different_workspaces(self):
         """Two workspaces should not conflict."""
@@ -119,8 +157,16 @@ class TestWorkspacePaths:
                 write_daily_memory(ws2, "Workspace 2 note", "2026-03-03")
                 write_long_term_memory(ws2, "Workspace 2 memory")
                 
+<<<<<<< HEAD
                 # Verify isolation
                 assert (ws1 / "memory" / "2026-03-03.md").read_text() == "Workspace 1 note"
                 assert (ws2 / "memory" / "2026-03-03.md").read_text() == "Workspace 2 note"
                 assert (ws1 / "MEMORY.md").read_text() == "Workspace 1 memory"
                 assert (ws2 / "MEMORY.md").read_text() == "Workspace 2 memory"
+=======
+                # Verify isolation (strip trailing newline from daily notes and MEMORY.md)
+                assert (ws1 / "memory" / "2026-03-03.md").read_text().rstrip("\n") == "Workspace 1 note"
+                assert (ws2 / "memory" / "2026-03-03.md").read_text().rstrip("\n") == "Workspace 2 note"
+                assert (ws1 / "MEMORY.md").read_text().rstrip("\n") == "Workspace 1 memory"
+                assert (ws2 / "MEMORY.md").read_text().rstrip("\n") == "Workspace 2 memory"
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e

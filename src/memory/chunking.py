@@ -69,7 +69,11 @@ def chunk_markdown(
     # If no headings, treat entire text as one section
     if not headings:
         return _create_chunks_from_text(
+<<<<<<< HEAD
             text, source_name, "", max_chars, min_chars, kind, date
+=======
+            text, source_name, "", max_chars, min_chars, kind, date, section_index=0
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
         )
     
     # Split text by headings
@@ -78,6 +82,7 @@ def chunk_markdown(
         end = headings[i + 1][0] if i + 1 < len(headings) else len(text)
         section_text = text[start:end].strip()
         if section_text:
+<<<<<<< HEAD
             sections.append((heading_text, section_text))
     
     # Process each section into chunks
@@ -85,6 +90,15 @@ def chunk_markdown(
     for heading_text, section_text in sections:
         section_chunks = _create_chunks_from_text(
             section_text, source_name, heading_text, max_chars, min_chars, kind, date
+=======
+            sections.append((i, heading_text, section_text))
+    
+    # Process each section into chunks
+    chunks = []
+    for section_index, heading_text, section_text in sections:
+        section_chunks = _create_chunks_from_text(
+            section_text, source_name, heading_text, max_chars, min_chars, kind, date, section_index
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
         )
         chunks.extend(section_chunks)
     
@@ -99,6 +113,10 @@ def _create_chunks_from_text(
     min_chars: int,
     kind: str,
     date: Optional[str],
+<<<<<<< HEAD
+=======
+    section_index: int = 0,
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
 ) -> List[Chunk]:
     """Create chunks from a section of text.
     
@@ -107,15 +125,23 @@ def _create_chunks_from_text(
     if not text.strip():
         return []
     
+<<<<<<< HEAD
     # Remove the heading from the text for content (it's in the heading)
     # but keep it for context
+=======
+    # Get the full content (heading markup is kept in the text for context)
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
     content = text.strip()
     
     chunks = []
     
     # If content fits in one chunk
     if len(content) <= max_chars:
+<<<<<<< HEAD
         chunk_id = _generate_chunk_id(source_name, heading, len(chunks) + 1, kind)
+=======
+        chunk_id = _generate_chunk_id(source_name, heading, section_index, len(chunks) + 1, kind)
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
         meta = {
             "source": source_name,
             "heading": heading,
@@ -149,6 +175,7 @@ def _create_chunks_from_text(
             last_period = chunk_text.rfind('. ')
             split_pos = last_period + 1 if last_period > max_chars // 2 else max_chars
             
+<<<<<<< HEAD
             if len(chunk_text[:split_pos]) >= min_chars:
                 chunk_id = _generate_chunk_id(source_name, heading, chunk_index, kind)
                 meta = {
@@ -165,6 +192,31 @@ def _create_chunks_from_text(
                     meta=meta,
                 ))
                 chunk_index += 1
+=======
+            # If sentence-boundary split would be too small, fall back to hard cut
+            candidate_text = chunk_text[:split_pos]
+            if len(candidate_text) < min_chars and split_pos != max_chars:
+                # Fall back to hard cut at max_chars to avoid dropping text
+                split_pos = max_chars
+                candidate_text = chunk_text
+            
+            # Always emit the chunk (or fall back to hard cut)
+            chunk_id = _generate_chunk_id(source_name, heading, section_index, chunk_index, kind)
+            meta = {
+                "source": source_name,
+                "heading": heading,
+                "kind": kind,
+            }
+            if date:
+                meta["date"] = date
+            
+            chunks.append(Chunk(
+                id=chunk_id,
+                text=candidate_text.strip(),
+                meta=meta,
+            ))
+            chunk_index += 1
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
             
             para = para[split_pos:]
         
@@ -172,7 +224,11 @@ def _create_chunks_from_text(
         if len(current_chunk_text) + len(para) + 1 > max_chars:
             # Save current chunk if it has enough content
             if len(current_chunk_text) >= min_chars:
+<<<<<<< HEAD
                 chunk_id = _generate_chunk_id(source_name, heading, chunk_index, kind)
+=======
+                chunk_id = _generate_chunk_id(source_name, heading, section_index, chunk_index, kind)
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
                 meta = {
                     "source": source_name,
                     "heading": heading,
@@ -187,8 +243,17 @@ def _create_chunks_from_text(
                     meta=meta,
                 ))
                 chunk_index += 1
+<<<<<<< HEAD
             
             # Start new chunk
+=======
+            else:
+                # Content too small for standalone chunk - merge with next paragraph
+                # (don't start new chunk yet, combine with para)
+                para = current_chunk_text + "\n\n" + para if current_chunk_text else para
+            
+            # Start new chunk with current paragraph
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
             current_chunk_text = para
         else:
             # Add to current chunk
@@ -197,9 +262,15 @@ def _create_chunks_from_text(
             else:
                 current_chunk_text = para
     
+<<<<<<< HEAD
     # Don't forget the last chunk
     if current_chunk_text.strip() and len(current_chunk_text.strip()) >= min_chars:
         chunk_id = _generate_chunk_id(source_name, heading, chunk_index, kind)
+=======
+    # Don't forget the last chunk - always emit if non-empty (it's the final remainder)
+    if current_chunk_text.strip():
+        chunk_id = _generate_chunk_id(source_name, heading, section_index, chunk_index, kind)
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
         meta = {
             "source": source_name,
             "heading": heading,
@@ -220,18 +291,30 @@ def _create_chunks_from_text(
 def _generate_chunk_id(
     source_name: str,
     heading: str,
+<<<<<<< HEAD
+=======
+    section_index: int,
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
     chunk_num: int,
     kind: str,
 ) -> str:
     """Generate a stable chunk ID.
     
     Format:
+<<<<<<< HEAD
     - Core: mem:MEMORY.md#h1-01:chunk-01
     - Daily: daily:2026-03-02#chunk-01
+=======
+    - Core: mem:MEMORY.md#section-01-chunk-01
+    - Daily: daily:2026-03-02.md#section-01-chunk-01
+    
+    If heading is empty, uses "-" as slug.
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
     """
     # Create heading slug (alphanumeric, limited length)
     heading_slug = re.sub(r'[^a-zA-Z0-9]', '-', heading.lower())
     heading_slug = re.sub(r'-+', '-', heading_slug).strip('-')
+<<<<<<< HEAD
     if len(heading_slug) > 20:
         heading_slug = heading_slug[:20]
     
@@ -240,6 +323,19 @@ def _generate_chunk_id(
     else:
         # For core files, use mem: prefix
         return f"mem:{source_name}#{heading_slug}-{chunk_num:02d}"
+=======
+    if not heading_slug:
+        heading_slug = "-"
+    if len(heading_slug) > 20:
+        heading_slug = heading_slug[:20]
+    
+    # Include section index to avoid collisions for same heading in different sections
+    if kind == "daily":
+        return f"daily:{source_name}#sec-{section_index:02d}-{heading_slug}-{chunk_num:02d}"
+    else:
+        # For core files, use mem: prefix
+        return f"mem:{source_name}#sec-{section_index:02d}-{heading_slug}-{chunk_num:02d}"
+>>>>>>> 49a741babf70e025068eebffee9e3386ca1bf39e
 
 
 def extract_heading(text: str) -> str:

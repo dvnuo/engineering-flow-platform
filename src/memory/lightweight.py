@@ -6,8 +6,6 @@ Uses TF-IDF inspired scoring with keyword matching.
 
 import json
 import logging
-import math
-import os
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -354,10 +352,12 @@ class LightweightMemory:
             
             if score >= self.score_threshold:
                 results.append({
-                    "id": entry.key,
+                    "id": entry.key,  # New key name
+                    "key": entry.key,  # Backward compatibility
                     "score": score,
                     "content": entry.content,  # Return full chunk content
-                    "meta": entry.metadata,
+                    "meta": entry.metadata,  # New key name
+                    "metadata": entry.metadata,  # Backward compatibility
                 })
         
         # Sort by score and limit
