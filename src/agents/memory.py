@@ -407,18 +407,21 @@ class MemorySystem:
         """
         return self._get_cached("memory", lambda: self._load_file("MEMORY.md") or "")
     
-    def load_daily_notes(self, days: int = 2) -> str:
+    def load_daily_notes(self, days: Optional[int] = None) -> str:
         """Load recent daily notes from memory/ directory.
         
         Args:
-            days: Number of days to include (default: 2)
+            days: Number of days to include (default: self.daily_notes_inject_days)
             
         Returns:
-            Combined daily notes content
+            Combined daily notes content with date labels
         """
         memory_dir = self.workspace / "memory"
         if not memory_dir.exists():
             return ""
+        
+        # Use config days if not specified
+        days = days if days is not None else self.daily_notes_inject_days
         
         notes = []
         today = datetime.now()
@@ -428,8 +431,12 @@ class MemorySystem:
             note_file = memory_dir / f"{date.strftime('%Y-%m-%d')}.md"
             if note_file.exists():
                 try:
-                    with open(note_file, 'r', encoding='utf-8') as f:
-                        notes.append(f"=== {date.strftime('%Y-%m-%d')} ===\n{f.read()}")
+                    content = note_file.read_text(encoding='utf-8')
+                    # Limit per-day content to avoid too long prompts
+                    if len(content) > 1500:
+                        content = content[:1500] + "..."
+                    date_str = date.strftime('%Y-%m-%d')
+                    notes.append(f"=== {date_str} ===\n{content}")
                 except Exception:
                     pass
         
