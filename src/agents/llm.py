@@ -1459,6 +1459,9 @@ class LLMClient:
     ) -> Dict[str, Any]:
         """Call LLM using Responses API (/responses endpoint).
         
+        Note: The Responses API does not support reasoning_replay or tools for all models.
+        When tools or reasoning_replay are provided, this method falls back to chat().
+        
         This uses the new OpenAI Responses API which has different:
         - Payload format (instructions, input instead of messages)
         - Response format (output array instead of choices)
