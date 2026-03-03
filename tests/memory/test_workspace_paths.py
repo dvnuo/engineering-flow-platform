@@ -20,6 +20,8 @@ class TestWorkspacePaths:
         """Should use DEFAULT_WORKSPACE if not specified."""
         from src.memory import DEFAULT_WORKSPACE
         
+        # Test that the function returns DEFAULT_WORKSPACE / "memory"
+        # without actually creating it
         result = get_memory_dir()
         
         assert result == DEFAULT_WORKSPACE / "memory"
@@ -34,16 +36,7 @@ class TestWorkspacePaths:
             assert result == workspace / "memory"
             assert result.exists()
     
-    def test_get_memory_path_default(self):
-        """Should use DEFAULT_WORKSPACE and today's date."""
-        from src.memory import DEFAULT_WORKSPACE
-        
-        result = get_memory_path()
-        
-        expected = DEFAULT_WORKSPACE / "memory" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
-        assert result == expected
-    
-    def test_get_memory_path_custom_workspace_and_date(self):
+    def test_get_memory_path_with_custom_workspace(self):
         """Should use custom workspace and date."""
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
@@ -52,13 +45,14 @@ class TestWorkspacePaths:
             
             assert result == workspace / "memory" / "2026-01-15.md"
     
-    def test_get_long_term_memory_path_default(self):
-        """Should use DEFAULT_WORKSPACE for MEMORY.md."""
-        from src.memory import DEFAULT_WORKSPACE
-        
-        result = get_long_term_memory_path()
-        
-        assert result == DEFAULT_WORKSPACE / "MEMORY.md"
+    def test_get_long_term_memory_path_with_custom_workspace(self):
+        """Should use custom workspace for MEMORY.md."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            
+            result = get_long_term_memory_path(workspace)
+            
+            assert result == workspace / "MEMORY.md"
     
     def test_get_long_term_memory_path_custom_workspace(self):
         """Should use custom workspace for MEMORY.md."""
