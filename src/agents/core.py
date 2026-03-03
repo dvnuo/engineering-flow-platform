@@ -628,19 +628,19 @@ You have access to the following tools. When a user asks you to do something tha
             
             logger.info(f"[Tool Loop] Iteration {iteration}: LLM requested {len(tool_calls)} tool calls")
             
-            # Step 2: Execute each tool and collect results
-            # IMPORTANT: assistant message must contain tool_calls for OpenAI API
-            assistant_msg = {"role": "assistant"}
-            if tool_calls:
-                assistant_msg["tool_calls"] = tool_calls
-                # IMPORTANT: content must be empty string, not None for GitHub Copilot API
-                assistant_msg["content"] = content if content else ""
+            # Add function_call to input_items for Responses API
+            if function_calls:
+                fc = function_calls[0]
+                args = fc.get("arguments", {})
+                args_str = args if isinstance(args, str) else json.dumps(args)
+                input_items.append({
+                    "type": "function_call",
+                    "call_id": fc.get("call_id", ""),
+                    "name": fc.get("name", ""),
+                    "arguments": args_str,
+                })
             
-            messages.append(assistant_msg)
-            
-            # Save assistant message with tool_calls to history BEFORE executing tools
-            # This ensures tool messages can reference the correct tool_call_id
-            # Save for ALL iterations (not just iteration 1) so history is complete
+            # Save assistant message with tool_calls to history
             if tool_calls:
                 await session_manager.add_message(
                     session_id, "assistant", 
@@ -652,12 +652,15 @@ You have access to the following tools. When a user asks you to do something tha
             for fc in function_calls:
                 call_id = fc.get("call_id", "")
                 tool_name = fc.get("name", "")
-                args = fc.get("arguments", {})
-                if isinstance(args, str):
+                # Arguments can be dict or string - keep as string for API
+                args_raw = fc.get("arguments", "{}")
+                if isinstance(args_raw, str):
                     try:
-                        args = json.loads(args)
+                        args = json.loads(args_raw)
                     except json.JSONDecodeError:
                         args = {}
+                else:
+                    args = args_raw or {}
                 
                 # Send tool call start event
                 send_event("tool_call", {
