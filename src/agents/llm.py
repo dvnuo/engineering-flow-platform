@@ -1485,6 +1485,7 @@ class LLMClient:
                 model=model,
                 max_tokens=max_tokens,
                 provider=provider,
+                reasoning_replay=reasoning_replay,
             )
         
         return await client.responses(
