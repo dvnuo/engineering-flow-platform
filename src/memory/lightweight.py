@@ -352,10 +352,12 @@ class LightweightMemory:
             
             if score >= self.score_threshold:
                 results.append({
-                    "id": entry.key,
+                    "id": entry.key,  # New key name
+                    "key": entry.key,  # Backward compatibility
                     "score": score,
                     "content": entry.content,  # Return full chunk content
-                    "meta": entry.metadata,
+                    "meta": entry.metadata,  # New key name
+                    "metadata": entry.metadata,  # Backward compatibility
                 })
         
         # Sort by score and limit
