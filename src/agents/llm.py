@@ -534,10 +534,22 @@ class OpenAIProvider(BaseProvider):
         }
         
         # Add tools to payload if provided
+        # Convert from Chat Completions format to Responses API format
         if tools:
-            payload["tools"] = tools
+            converted_tools = []
+            for tool in tools:
+                if tool.get("type") == "function":
+                    func = tool.get("function", {})
+                    converted_tools.append({
+                        "name": func.get("name", ""),
+                        "description": func.get("description", ""),
+                        "parameters": func.get("parameters", {})
+                    })
+                else:
+                    converted_tools.append(tool)
+            payload["tools"] = converted_tools
             if _is_debug_enabled():
-                logger.debug(f"Tools count: {len(tools)}")
+                logger.debug(f"Tools count: {len(converted_tools)}")
         
         # Debug: Log request details (before calling _call_api)
         if _is_debug_enabled():
