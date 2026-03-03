@@ -70,7 +70,7 @@ class TestWorkspacePaths:
             assert result == workspace / "MEMORY.md"
     
     def test_write_daily_memory(self):
-        """Should write to correct workspace."""
+        """Should write to correct workspace (append mode by default)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             
@@ -82,7 +82,8 @@ class TestWorkspacePaths:
             
             assert filepath == workspace / "memory" / "2026-03-03.md"
             assert filepath.exists()
-            assert filepath.read_text() == "Test daily note content"
+            # Default append mode adds newline
+            assert filepath.read_text().rstrip("\n") == "Test daily note content"
     
     def test_write_daily_memory_creates_dir(self):
         """Should create memory directory if needed."""
@@ -119,8 +120,8 @@ class TestWorkspacePaths:
                 write_daily_memory(ws2, "Workspace 2 note", "2026-03-03")
                 write_long_term_memory(ws2, "Workspace 2 memory")
                 
-                # Verify isolation
-                assert (ws1 / "memory" / "2026-03-03.md").read_text() == "Workspace 1 note"
-                assert (ws2 / "memory" / "2026-03-03.md").read_text() == "Workspace 2 note"
+                # Verify isolation (strip trailing newline from daily notes)
+                assert (ws1 / "memory" / "2026-03-03.md").read_text().rstrip("\n") == "Workspace 1 note"
+                assert (ws2 / "memory" / "2026-03-03.md").read_text().rstrip("\n") == "Workspace 2 note"
                 assert (ws1 / "MEMORY.md").read_text() == "Workspace 1 memory"
                 assert (ws2 / "MEMORY.md").read_text() == "Workspace 2 memory"
