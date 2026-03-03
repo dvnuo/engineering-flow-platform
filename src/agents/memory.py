@@ -268,6 +268,13 @@ class MemorySystem:
                             refreshed = True
                     except Exception as e:
                         logger.debug(f"Error checking {filename}: {e}")
+                else:
+                    # Daily note file was deleted - cleanup if it was previously indexed
+                    if filename in self._source_mtimes:
+                        logger.info(f"Removing index for deleted daily note: {filename}")
+                        self.search_memory.delete_by_source(filename)
+                        del self._source_mtimes[filename]
+                        refreshed = True
         
         # Cleanup: remove chunks for deleted core files
         for filename in CORE_MEMORY_FILES:
