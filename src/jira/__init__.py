@@ -22,6 +22,7 @@ from .adapter import JiraFormatAdapter
 __all__ = [
     "JiraChannel", 
     "jira_channel",
+    "JiraFormatAdapter",
     "jira_get_issue",
     "jira_get_issue_by_url",
     "jira_search",
@@ -157,7 +158,7 @@ async def jira_add_comment(
         Success message
     """
     # Support both "body" and "comment" parameter names
-    body = body or comment or ""
+    body = body if body is not None else (comment or "")
     try:
         if not jira_channel.is_configured():
             return "Error: Jira is not configured."
@@ -173,7 +174,7 @@ async def jira_create_issue(
     summary: str,
     description: str = "",
     description_format: str = "markdown",
-    issue_type: str = "Bug",
+    issue_type: str = "Task",
     priority: str = None,
     assignee: str = None,
     labels: List[str] = None
@@ -273,12 +274,20 @@ def get_tools_schemas() -> list:
     
     # Replace enhanced tools, keep others from base
     result = []
+    seen_names = set()
     for tool in base_tools:
         name = tool.get("function", {}).get("name", "")
+        if name:
+            seen_names.add(name)
         if name in enhanced_schemas:
             result.append(enhanced_schemas[name])
         else:
             result.append(tool)
+    
+    # Append any enhanced tools that aren't in base (e.g., jira_get_issue_by_url)
+    for name, schema in enhanced_schemas.items():
+        if name not in seen_names:
+            result.append(schema)
     
     return result
 
@@ -366,7 +375,7 @@ def _get_all_schemas() -> list:
                             "default": "markdown",
                             "description": "Input format: markdown, wiki, or raw"
                         },
-                        "issue_type": {"type": "string", "description": "Issue type", "default": "Bug"},
+                        "issue_type": {"type": "string", "description": "Issue type", "default": "Task"},
                         "priority": {"type": "string", "description": "Priority name"},
                         "labels": {"type": "array", "items": {"type": "string"}, "description": "List of labels"}
                     },

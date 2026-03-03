@@ -2,7 +2,7 @@
 Jira Format Adapter - Unified interface for Markdown/wiki/raw formats.
 
 Provides:
-- Query: get_issue, get_comments (default: Markdown)
+- Query: get_issue (includes comments; default: Markdown)
 - Write: create_issue, update_issue, add_comment (default: Markdown)
 """
 
