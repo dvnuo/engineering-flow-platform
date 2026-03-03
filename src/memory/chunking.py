@@ -201,8 +201,8 @@ def _create_chunks_from_text(
             else:
                 current_chunk_text = para
     
-    # Don't forget the last chunk
-    if current_chunk_text.strip() and len(current_chunk_text.strip()) >= min_chars:
+    # Don't forget the last chunk - always emit if non-empty (it's the final remainder)
+    if current_chunk_text.strip():
         chunk_id = _generate_chunk_id(source_name, heading, section_index, chunk_index, kind)
         meta = {
             "source": source_name,
