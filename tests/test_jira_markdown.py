@@ -210,8 +210,10 @@ class TestAdapter:
         call_args = mock_channel.create_issue.call_args
         desc = call_args.args[2] if len(call_args.args) > 2 else call_args.kwargs.get("description", "")
         
-        # For Server/DC (api_version="2"), should be converted to wiki
-        assert "h1." in desc or "Description" in str(type(desc))
+        # For Server/DC (api_version="2"), description should be converted
+        # from Markdown "# Description" to Jira wiki "h1. Description"
+        assert isinstance(desc, str), f"Expected str, got {type(desc)}"
+        assert "h1." in desc, f"Expected wiki header, got: {desc}"
     
     @pytest.mark.asyncio
     async def test_create_issue_markdown_cloud(self, mock_channel):
@@ -233,7 +235,7 @@ class TestAdapter:
         desc = call_args.args[2] if len(call_args.args) > 2 else call_args.kwargs.get("description", "")
         
         # For Cloud (api_version="3"), should be ADF dict
-        assert isinstance(desc, dict) or "h1." in str(desc)
+        assert isinstance(desc, dict), f"Expected dict, got {type(desc)}"
     
     @pytest.mark.asyncio
     async def test_add_comment_markdown(self, mock_channel):
@@ -249,8 +251,9 @@ class TestAdapter:
         call_args = mock_channel.add_comment.call_args
         body = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("comment", "")
         
-        # For Server/DC, should be wiki format
-        assert "*bold*" in body or "Description" in str(type(body))
+        # For Server/DC, should be converted to wiki (bold ** → *)
+        assert isinstance(body, str), f"Expected str, got {type(body)}"
+        assert "*bold*" in body, f"Expected wiki bold, got: {body}"
     
     @pytest.mark.asyncio
     async def test_add_comment_markdown_cloud(self, mock_channel):
@@ -269,7 +272,7 @@ class TestAdapter:
         body = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("comment", "")
         
         # For Cloud, should be ADF dict
-        assert isinstance(body, dict) or "h1." in str(body)
+        assert isinstance(body, dict), f"Expected dict, got {type(body)}"
 
 
 class TestToolFunctions:

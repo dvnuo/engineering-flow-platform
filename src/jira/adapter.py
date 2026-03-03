@@ -196,7 +196,15 @@ class JiraFormatAdapter:
         include_comments: bool = True,
         max_comments: int = 5
     ) -> dict:
-        """Return raw issue dict with filtered fields."""
+        """Return raw issue dict with filtered fields.
+        
+        When include_fields is provided, returns a flattened dict with:
+        - key: issue key
+        - requested fields from fields (promoted to top-level)
+        - comments: list (if requested)
+        
+        When include_fields is None, returns the original Jira dict.
+        """
         if include_fields:
             filtered = {"key": issue.get("key")}
             fields = issue.get("fields", {})
