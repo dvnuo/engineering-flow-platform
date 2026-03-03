@@ -455,7 +455,6 @@ class OpenAIProvider(BaseProvider):
             logger.debug(f"Model: {model_name}")
             logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
             logger.debug(f"Input items count: {len(input_items)}")
-            logger.debug(f"FULL INPUT_ITEMS: {json.dumps(input_items, indent=2)[:2000]}")
         
         # Use _call_api for centralized retry/backoff behavior
         data = await self._call_api("/responses", payload)

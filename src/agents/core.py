@@ -556,7 +556,6 @@ You have access to the following tools. When a user asks you to do something tha
             return items
         
         input_items = _to_input_items(messages)
-        logger.debug(f"[{session_id}] input_items from history: {input_items}")
         
         while iteration < max_tool_iterations:
             iteration += 1
