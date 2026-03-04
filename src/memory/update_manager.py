@@ -50,7 +50,7 @@ class MemoryUpdateManager:
         self.memory_dir = self.workspace / "memory"
         self.memory_dir.mkdir(exist_ok=True)
 
-    def on_turn_completed(
+    async def on_turn_completed(
         self,
         session_id: str,
         turn_id: int,
@@ -72,7 +72,7 @@ class MemoryUpdateManager:
 
         try:
             # Generate memory ops from turn context
-            ops = self._generate_memory_ops(
+            ops = await self._generate_memory_ops(
                 session_id, turn_id, user_text, assistant_text, tool_calls
             )
 
@@ -86,15 +86,15 @@ class MemoryUpdateManager:
             ops = sanitize_memory_ops(ops)
 
             # Apply ops to daily note
-            if ops:
-                self._apply_ops(session_id, turn_id, ops)
+            if ops and ops[0].get("op") != "NOOP":
+                await self._apply_ops(session_id, turn_id, ops)
                 # Refresh index to make new content searchable
-                self._refresh_memory_index()
+                await self._refresh_memory_index()
 
         except Exception as e:
             logger.error(f"Error in on_turn_completed: {e}")
 
-    def _generate_memory_ops(
+    async def _generate_memory_ops(
         self,
         session_id: str,
         turn_id: int,
@@ -127,7 +127,7 @@ class MemoryUpdateManager:
         prompt = self._build_memory_ops_prompt(context)
 
         try:
-            response = self.llm_client.chat(
+            response = await self.llm_client.chat(
                 messages=[{"role": "user", "content": prompt}],
                 system_prompt="You are a memory analysis assistant. Output ONLY valid JSON.",
             )
@@ -213,7 +213,7 @@ Remember: Only extract what was explicitly said. Do not invent information.
                 return text[:end]
         return None
 
-    def _apply_ops(
+    async def _apply_ops(
         self, session_id: str, turn_id: int, ops: List[Dict[str, Any]]
     ) -> None:
         """Apply memory operations to daily note.
@@ -256,7 +256,7 @@ Remember: Only extract what was explicitly said. Do not invent information.
 
         logger.info(f"Wrote {len(ops)} memory ops to {daily_note_path}")
 
-    def _refresh_memory_index(self) -> None:
+    async def _refresh_memory_index(self) -> None:
         """Refresh memory index to make new content searchable."""
         if self.memory_system:
             try:

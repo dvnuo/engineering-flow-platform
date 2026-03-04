@@ -647,7 +647,7 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 # Trigger memory update (async, fire and forget)
                 # We need to get the last user message and assistant response
-                recent_messages = await session_manager.get_messages(session_id, limit=4)
+                recent_messages = await session_manager.get_history(session_id)
                 user_text = ""
                 assistant_text = content
                 for msg in reversed(recent_messages):
@@ -658,7 +658,7 @@ You have access to the following tools. When a user asks you to do something tha
                 # Schedule memory update (don't await - it's not critical)
                 if user_text and self.memory_update_manager:
                     try:
-                        self.memory_update_manager.on_turn_completed(
+                        await self.memory_update_manager.on_turn_completed(
                             session_id=session_id,
                             turn_id=iteration,
                             user_text=user_text,
