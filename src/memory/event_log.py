@@ -2,12 +2,10 @@
 
 Logs all conversation events to JSONL files for traceability and replay.
 """
-
-import json
-import os
-from datetime import datetime
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+import json
 from typing import Any, Dict, Optional
 
 
