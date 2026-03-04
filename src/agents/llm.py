@@ -142,6 +142,94 @@ def _truncate_text(text: str, max_length: int = 200) -> str:
     return truncate_with_count(text, max_length)
 
 
+def _convert_messages_to_input_items(messages: List[Dict]) -> List[Dict]:
+    """Convert Chat-style messages to Responses API input_items format."""
+    items = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        if role == "tool":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            conv = []
+            for item in content:
+                if isinstance(item, dict):
+                    t = item.get("type", "")
+                    if t in ("text", "input_text"):
+                        # Only use input_text for user messages
+                        if role == "user":
+                            conv.append({"type": "input_text", "text": item.get("text", "")})
+                        else:
+                            # Assistant messages - use plain text
+                            conv.append(item.get("text", ""))
+                    elif t == "image_url":
+                        img = item.get("image_url", {})
+                        img_url = img.get("url") if isinstance(img, dict) else str(img)
+                        if img_url:
+                            conv.append({"type": "input_image", "image_url": img_url})
+                    elif t == "input_image":
+                        img = item.get("image_url", {})
+                        img_url = img.get("url") if isinstance(img, dict) else str(img) if img else ""
+                        if img_url:
+                            conv.append({"type": "input_image", "image_url": img_url})
+                        else:
+                            conv.append(item)
+                    else:
+                        conv.append(item)
+                else:
+                    # Plain text item - use input_text only for user
+                    if role == "user":
+                        conv.append({"type": "input_text", "text": str(item)})
+                    else:
+                        conv.append(str(item))
+            if conv:
+                items.append({"role": role, "content": conv})
+        elif content:
+            # Plain text content - no wrapper for assistant
+            if role == "user":
+                items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
+            else:
+                items.append({"role": role, "content": str(content)})
+    return items
+
+def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
+    """Convert Chat-style tools to Responses API format."""
+    import copy
+    converted = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        tool_type = tool.get("type", "")
+        if tool_type == "function":
+            func = tool.get("function", {})
+            # Deep copy parameters to avoid mutating the original
+            params = copy.deepcopy(func.get("parameters", {}))
+            
+            # Ensure additionalProperties: false
+            if "additionalProperties" not in params:
+                params["additionalProperties"] = False
+            
+            # With strict: true, required must include ALL properties
+            if "properties" in params and isinstance(params["properties"], dict):
+                required = params.get("required", [])
+                if isinstance(required, list):
+                    # Add any missing properties to required
+                    for prop in params["properties"]:
+                        if prop not in required:
+                            required.append(prop)
+                    params["required"] = required
+            
+            converted.append({
+                "type": "function",
+                "name": func.get("name", ""),
+                "description": func.get("description", ""),
+                "parameters": params,
+                "strict": True,
+            })
+        else:
+            converted.append(tool)
+    return converted
+
 class BaseProvider:
     """Base class for LLM providers."""
 
@@ -424,14 +512,14 @@ class OpenAIProvider(BaseProvider):
         
         # Convert messages to input_items if provided
         if input_items is None and messages is not None:
-            input_items = self._convert_messages_to_input_items(messages)
+            input_items = _convert_messages_to_input_items(messages)
         elif input_items is None:
             input_items = []
         
         # Convert tools from Chat format to Responses format
         converted_tools = None
         if tools:
-            converted_tools = self._convert_tools_schema(tools)
+            converted_tools = _convert_tools_schema(tools)
         # Note: messages are already converted to input_items above
         
         # Build payload for Responses API
@@ -510,7 +598,7 @@ class OpenAIProvider(BaseProvider):
         
         # Build function_calls (Responses API format)
         function_calls_result = []
-        for fc in (function_calls or []):
+        for fc in function_calls:
             args = fc.get("arguments", {})
             arguments = json.dumps(args) if isinstance(args, dict) else args
             function_calls_result.append({
@@ -521,7 +609,7 @@ class OpenAIProvider(BaseProvider):
         
         # Also include tool_calls for backward compatibility
         tool_calls_compat = []
-        for fc in (function_calls or []):
+        for fc in function_calls:
             args = fc.get("arguments", {})
             arguments = json.dumps(args) if isinstance(args, dict) else args
             tool_calls_compat.append({
@@ -560,94 +648,6 @@ class OpenAIProvider(BaseProvider):
         
         return result
 
-    def _convert_messages_to_input_items(self, messages: List[Dict]) -> List[Dict]:
-        """Convert Chat-style messages to Responses API input_items format."""
-        items = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            if role == "tool":
-                continue
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                conv = []
-                for item in content:
-                    if isinstance(item, dict):
-                        t = item.get("type", "")
-                        if t in ("text", "input_text"):
-                            # Only use input_text for user messages
-                            if role == "user":
-                                conv.append({"type": "input_text", "text": item.get("text", "")})
-                            else:
-                                # Assistant messages - use plain text
-                                conv.append(item.get("text", ""))
-                        elif t == "image_url":
-                            img = item.get("image_url", {})
-                            img_url = img.get("url") if isinstance(img, dict) else str(img)
-                            if img_url:
-                                conv.append({"type": "input_image", "image_url": img_url})
-                        elif t == "input_image":
-                            img = item.get("image_url", {})
-                            img_url = img.get("url") if isinstance(img, dict) else str(img) if img else ""
-                            if img_url:
-                                conv.append({"type": "input_image", "image_url": img_url})
-                            else:
-                                conv.append(item)
-                        else:
-                            conv.append(item)
-                    else:
-                        # Plain text item - use input_text only for user
-                        if role == "user":
-                            conv.append({"type": "input_text", "text": str(item)})
-                        else:
-                            conv.append(str(item))
-                if conv:
-                    items.append({"role": role, "content": conv})
-            elif content:
-                # Plain text content - no wrapper for assistant
-                if role == "user":
-                    items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
-                else:
-                    items.append({"role": role, "content": str(content)})
-        return items
-
-    def _convert_tools_schema(self, tools: List[Dict]) -> List[Dict]:
-        """Convert Chat-style tools to Responses API format."""
-        import copy
-        converted = []
-        for tool in tools:
-            if not isinstance(tool, dict):
-                continue
-            tool_type = tool.get("type", "")
-            if tool_type == "function":
-                func = tool.get("function", {})
-                # Deep copy parameters to avoid mutating the original
-                params = copy.deepcopy(func.get("parameters", {}))
-                
-                # Ensure additionalProperties: false
-                if "additionalProperties" not in params:
-                    params["additionalProperties"] = False
-                
-                # With strict: true, required must include ALL properties
-                if "properties" in params and isinstance(params["properties"], dict):
-                    required = params.get("required", [])
-                    if isinstance(required, list):
-                        # Add any missing properties to required
-                        for prop in params["properties"]:
-                            if prop not in required:
-                                required.append(prop)
-                        params["required"] = required
-                
-                converted.append({
-                    "type": "function",
-                    "name": func.get("name", ""),
-                    "description": func.get("description", ""),
-                    "parameters": params,
-                    "strict": True,
-                })
-            else:
-                converted.append(tool)
-        return converted
-    
     def list_models(self) -> List[str]:
         return [
             "gpt-3.5-turbo",
@@ -708,8 +708,8 @@ class GitHubCopilotProvider(BaseProvider):
         all_messages.extend(messages)
         
         payload = {
-            "messages": all_messages,
             "model": model or self.default_model,
+            "messages": all_messages,
         }
         
         # Add tools support (similar to OpenAI)
@@ -722,17 +722,22 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"=== [{self.name.upper()}] REQUEST ===")
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(all_messages)}")
-            # Log message structure for debugging tool_calls
-            for i, msg in enumerate(all_messages):
-                msg_summary = {"role": msg.get("role")}
-                if msg.get("tool_calls"):
-                    msg_summary["tool_calls"] = [{"id": tc.get("id"), "function": tc.get("function", {}).get("name")} for tc in msg["tool_calls"]]
-                if msg.get("tool_call_id"):
-                    msg_summary["tool_call_id"] = msg.get("tool_call_id")
-                if msg.get("content"):
-                    content = msg.get("content", "")
-                    msg_summary["content"] = truncate(content, 3000)
-                logger.debug(f"  Message {i}: {msg_summary}")
+            if system_prompt:
+                logger.debug(f"System prompt: {truncate(system_prompt, 200)}")
+            logger.debug(f"Messages preview:")
+            for i, msg in enumerate(all_messages[:5]):
+                role = msg.get("role", "unknown")
+                content = truncate(msg.get("content") or "", 100)
+                logger.debug(f"  [{i}] {role}: {content}")
+            if len(all_messages) > 5:
+                logger.debug(f"  ... [{len(all_messages) - 5} more messages]")
+            
+            if tools:
+                logger.debug(f"Tools count: {len(tools)}")
+                for i, tool in enumerate(tools):
+                    tool_name = tool.get("function", {}).get("name", f"tool_{i}")
+                    logger.debug(f"  Tool {i}: {tool_name}")
+
         
         # Make API call with proper error handling
         endpoint = "/chat/completions"
@@ -759,73 +764,51 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
             logger.debug(f"Status: {response.status_code}")
         
-        # Parse response - check for tool calls and reasoning
-        message_data = data.get("choices", [{}])[0].get("message", {})
-        content = message_data.get("content", "")
-        reasoning = message_data.get("reasoning", "")
+        choice = data["choices"][0]
+        message = choice["message"]
         
-        # GitHub Copilot may return tool_calls
-        tool_calls = message_data.get("tool_calls", [])
-        
-        # Debug: Log content and tool calls
+        # Debug: Log response details
         if _is_debug_enabled():
+            logger.debug(f"=== [{self.name.upper()}] CHAT RESPONSE ===")
+            logger.debug(f"Finish reason: {choice.get('finish_reason', 'unknown')}")
+            content = message.get("content") or ""
             logger.debug(f"Content length: {len(content)} chars")
-            logger.debug(f"Content preview: {_truncate_text(content, 200)}")
+            if content:
+                logger.debug(f"Content preview: {truncate(content, 200)}")
+            else:
+                logger.debug("Content: (empty - tool call response)")
+            # Log reasoning if present
+            reasoning = message.get("reasoning")
+            if reasoning:
+                logger.debug(f"Reasoning length: {len(reasoning)} chars")
+                logger.debug(f"Reasoning preview: {truncate(reasoning, 200)}")
+            tool_calls = message.get("tool_calls", [])
             logger.debug(f"Tool calls: {len(tool_calls)}")
             for tc in tool_calls:
+                tc_id = tc.get("id", "unknown")
                 tc_name = tc.get("function", {}).get("name", "unknown")
-                logger.debug(f"  - {tc_name}")
+                logger.debug(f"  - {tc_name} (id={tc_id})")
         
-        # Calculate usage (approximate)
-        prompt_tokens = sum(len(str(m).split()) for m in all_messages) * 4  # Rough estimate
-        completion_tokens = len(content.split()) * 4  # Rough estimate
-        
-        # Build function_calls (Responses API format)
-        function_calls_result = []
-        for fc in (tool_calls or []):
-            args = fc.get("arguments", {})
-            arguments = json.dumps(args) if isinstance(args, dict) else args
-            function_calls_result.append({
-                "call_id": fc.get("call_id", ""),
-                "name": fc.get("name", ""),
-                "arguments": arguments,
-            })
-        
-        # Also include tool_calls for backward compatibility
-        tool_calls_compat = []
-        for fc in (tool_calls or []):
-            args = fc.get("arguments", {})
-            arguments = json.dumps(args) if isinstance(args, dict) else args
-            tool_calls_compat.append({
-                "id": fc.get("call_id", ""),
-                "type": "function",
-                "function": {
-                    "name": fc.get("name", ""),
-                    "arguments": arguments
-                }
-            })
-        
+        # Build result with reasoning if available
         result = {
-            "content": content,
-            "function_calls": function_calls_result,
-            "tool_calls": tool_calls_compat,
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            }
+            "content": message.get("content", ""),
+            "tool_calls": message.get("tool_calls", []),
+            "usage": data.get("usage", {}),
         }
         
         # Include reasoning if present
-        if reasoning:
-            result["reasoning"] = reasoning
+        if message.get("reasoning"):
+            result["reasoning"] = message.get("reasoning")
         
-        # Calculate cost and record usage
-        input_tokens = prompt_tokens
-        output_tokens = completion_tokens
+        # Calculate cost using centralized pricing
+        usage = result["usage"]
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+        model_name = data.get("model", self.default_model)
         cost = estimate_cost(self.default_model, input_tokens, output_tokens)
-        result["usage"]["cost_usd"] = cost
+        usage["cost_usd"] = cost
         
+        # Record usage for tracking
         usage_tracker.record_usage(
             provider=self.name,
             model=self.default_model,
@@ -856,14 +839,12 @@ class GitHubCopilotProvider(BaseProvider):
         - tools not fully supported in Responses API
         - reasoning_replay not supported in Responses API
         
-        When tools or reasoning are needed, fall back to chat() for reliable support.
+        When reasoning is needed, fall back to chat() for reliable support.
         """
-        # Fall back to chat() when tools or reasoning_replay are needed
-        if tools or reasoning_replay:
-            if tools:
-                logger.info(f"[GitHubCopilot] Tools provided, falling back to chat() for tool support")
-            if reasoning_replay:
-                logger.info(f"[GitHubCopilot] reasoning_replay enabled, falling back to chat()")
+        # Fall back to chat() when reasoning_replay is needed (not supported)
+
+        if reasoning_replay:
+            logger.info(f"[GitHubCopilot] reasoning_replay enabled, falling back to chat()")
             return await self.chat(
                 messages=messages,
                 system_prompt=system_prompt,
@@ -892,9 +873,17 @@ class GitHubCopilotProvider(BaseProvider):
         
         model_name = model or self.default_model
         
-        # Use parent class method to convert messages to input_items
-        if input_items is None:
-            input_items = self._convert_messages_to_input_items(messages or [])
+        # Convert messages to input_items if provided
+        if input_items is None and messages is not None:
+            input_items = _convert_messages_to_input_items(messages)
+        elif input_items is None:
+            input_items = []
+        
+        # Convert tools from Chat format to Responses format
+        converted_tools = None
+        if tools:
+            converted_tools = _convert_tools_schema(tools)
+        # Note: messages are already converted to input_items above
         
         # Build payload for Responses API
         payload = {
@@ -902,9 +891,15 @@ class GitHubCopilotProvider(BaseProvider):
             "instructions": system_prompt or "",
             "input": input_items,
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+            "text": {"format": {"type": "text"}},
         }
         
-        # Debug: Log request details
+        # Add tools if provided (Responses API format)
+        if converted_tools:
+            payload["tools"] = converted_tools
+            payload["tool_choice"] = "auto"
+        
+        # Debug: Log request details (before calling _call_api)
         if _is_debug_enabled():
             logger.debug(f"=== [GITHUB COPILOT] RESPONSES API REQUEST ===")
             logger.debug(f"Model: {model_name}")
@@ -936,50 +931,33 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"Status: {response.status_code}")
         
         # Parse response - Responses API uses 'output' array instead of 'choices'
-        # Handle both nested function_call in message content AND top-level function_call
         output_items = data.get("output", [])
         content = ""
-        tool_calls = []
+        function_calls = []
         
         for item in output_items:
             item_type = item.get("type", "")
             
             if item_type == "message":
                 msg_content = item.get("content", [])
-                # Handle content as array or string
                 if isinstance(msg_content, list):
                     for msg_item in msg_content:
                         if msg_item.get("type") == "output_text":
                             content += msg_item.get("text", "")
                         elif msg_item.get("type") == "function_call":
-                            # Handle function calls inside message content
-                            # Avoid double-encoding: if arguments is already a string, don't json.dumps it
-                            args = msg_item.get("arguments", {})
-                            arguments = args if isinstance(args, str) else json.dumps(args)
-                            tool_calls.append({
-                                "id": msg_item.get("call_id", f"call_{len(tool_calls)}"),
-                                "type": "function",
-                                "function": {
-                                    "name": msg_item.get("name", ""),
-                                    "arguments": arguments
-                                }
+                            function_calls.append({
+                                "call_id": msg_item.get("call_id", ""),
+                                "name": msg_item.get("name", ""),
+                                "arguments": msg_item.get("arguments", {}),
                             })
                 elif isinstance(msg_content, str):
-                    # Append string content instead of overwriting
                     content += msg_content
             
             elif item_type == "function_call":
-                # Handle function_call as top-level output item (Responses API can emit this)
-                # Avoid double-encoding: if arguments is already a string, don't json.dumps it
-                args = item.get("arguments", {})
-                arguments = args if isinstance(args, str) else json.dumps(args)
-                tool_calls.append({
-                    "id": item.get("id", item.get("call_id", f"call_{len(tool_calls)}")),
-                    "type": "function",
-                    "function": {
-                        "name": item.get("name", ""),
-                        "arguments": arguments
-                    }
+                function_calls.append({
+                    "call_id": item.get("call_id", ""),
+                    "name": item.get("name", ""),
+                    "arguments": item.get("arguments", {}),
                 })
         
         # Calculate usage
@@ -995,7 +973,7 @@ class GitHubCopilotProvider(BaseProvider):
         
         # Build function_calls (Responses API format)
         function_calls_result = []
-        for fc in (tool_calls or []):
+        for fc in function_calls:
             args = fc.get("arguments", {})
             arguments = json.dumps(args) if isinstance(args, dict) else args
             function_calls_result.append({
@@ -1006,7 +984,7 @@ class GitHubCopilotProvider(BaseProvider):
         
         # Also include tool_calls for backward compatibility
         tool_calls_compat = []
-        for fc in (tool_calls or []):
+        for fc in function_calls:
             args = fc.get("arguments", {})
             arguments = json.dumps(args) if isinstance(args, dict) else args
             tool_calls_compat.append({
@@ -1033,6 +1011,7 @@ class GitHubCopilotProvider(BaseProvider):
         cost = estimate_cost(model_name, prompt_tokens, completion_tokens)
         result["usage"]["cost_usd"] = cost
         
+        # Record usage for tracking
         usage_tracker.record_usage(
             provider=self.name,
             model=model_name,
