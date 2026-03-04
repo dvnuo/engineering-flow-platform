@@ -853,11 +853,14 @@
             }
         }
 
-        // Show skill selector on / (insert / first)
+        // Show skill selector on / (insert / first if not already present)
         if (e.key === '/' && messageInput.selectionStart === 0) {
             e.preventDefault();
-            messageInput.value = '/' + messageInput.value;
-            messageInput.setSelectionRange(1, 1);
+            // Only insert a leading / if it is not already there
+            if (messageInput.value.charAt(0) !== '/') {
+                messageInput.value = '/' + messageInput.value;
+                messageInput.setSelectionRange(1, 1);
+            }
             showSkillSelector();
             return;
         }
