@@ -476,7 +476,6 @@ class Gateway:
         CHECK_INTERVAL = 3600  # 1 hour in seconds
         sessions_dir = Path(workspace) / ".sessions"
         
-        last_check_time = time.time()
         last_mtime = 0
         
         # Get initial file modification times
