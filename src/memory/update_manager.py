@@ -76,14 +76,13 @@ class MemoryUpdateManager:
                 session_id, turn_id, user_text, assistant_text, tool_calls
             )
 
-            # Validate and sanitize ops
+            # Sanitize first, then validate
+            ops = sanitize_memory_ops(ops)
             is_valid, error_msg = validate_memory_ops(ops)
             if not is_valid:
                 logger.warning(f"Invalid memory ops: {error_msg}")
                 self._log_error_event(session_id, turn_id, error_msg)
                 return
-
-            ops = sanitize_memory_ops(ops)
             # Filter out NOOP operations before applying
             non_noop_ops = [op for op in ops if op.get("op") != "NOOP"]
 

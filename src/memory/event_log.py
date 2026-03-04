@@ -157,6 +157,13 @@ class EventLogger:
         for e in self.iter_all_events():
             ts = e.get("ts", "")
             day = ts[:10] if len(ts) >= 10 else "unknown"
+            if day != "unknown":
+                try:
+                    day_date = datetime.strptime(day, "%Y-%m-%d").date()
+                    if day_date < cutoff:
+                        continue
+                except ValueError:
+                    pass
             groups.setdefault(day, []).append(e)
         
         # Also read from legacy sessions/ directory

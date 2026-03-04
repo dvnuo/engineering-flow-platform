@@ -183,7 +183,8 @@ class TestMemoryUpdateManager:
             (workspace / "memory").mkdir()
             yield str(workspace)
 
-    def test_apply_ops_to_daily_note(self, temp_workspace):
+    @pytest.mark.asyncio
+    async def test_apply_ops_to_daily_note(self, temp_workspace):
         """Test applying ops to daily note."""
         from src.memory.update_manager import MemoryUpdateManager
 
@@ -199,7 +200,7 @@ class TestMemoryUpdateManager:
             }
         ]
 
-        manager._apply_ops("session123", 1, ops)
+        await manager._apply_ops("session123", 1, ops)
 
         # Check daily note was created
         today = datetime.now().strftime("%Y-%m-%d")
