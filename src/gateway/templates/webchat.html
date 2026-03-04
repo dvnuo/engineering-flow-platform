@@ -552,6 +552,24 @@
             modal.style.alignItems = "center";
         }
     }
+    function showTextModal(text, filename) {
+        var modal = document.getElementById("imageModal");
+        var modalImg = document.getElementById("modalImage");
+        if (!modal || !modalImg) return;
+        
+        modalImg.style.display = 'none';
+        
+        let textContainer = modal.querySelector('.modal-text-content');
+        if (!textContainer) {
+            textContainer = document.createElement('div');
+            textContainer.className = 'modal-text-content';
+            modal.insertBefore(textContainer, modalImg);
+        }
+        textContainer.innerHTML = '<pre style="color: white; max-width: 80vw; max-height: 80vh; overflow: auto; white-space: pre-wrap; word-wrap: break-word;">' + escapeHtml(text) + '</pre>';
+        
+        modal.style.display = 'flex';
+    }
+    
     function closeImageModal() {
         var modal = document.getElementById("imageModal");
         if (modal) {
