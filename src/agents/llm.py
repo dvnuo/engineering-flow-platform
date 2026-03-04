@@ -142,6 +142,94 @@ def _truncate_text(text: str, max_length: int = 200) -> str:
     return truncate_with_count(text, max_length)
 
 
+def _convert_messages_to_input_items(self, messages: List[Dict]) -> List[Dict]:
+    """Convert Chat-style messages to Responses API input_items format."""
+    items = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        if role == "tool":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            conv = []
+            for item in content:
+                if isinstance(item, dict):
+                    t = item.get("type", "")
+                    if t in ("text", "input_text"):
+                        # Only use input_text for user messages
+                        if role == "user":
+                            conv.append({"type": "input_text", "text": item.get("text", "")})
+                        else:
+                            # Assistant messages - use plain text
+                            conv.append(item.get("text", ""))
+                    elif t == "image_url":
+                        img = item.get("image_url", {})
+                        img_url = img.get("url") if isinstance(img, dict) else str(img)
+                        if img_url:
+                            conv.append({"type": "input_image", "image_url": img_url})
+                    elif t == "input_image":
+                        img = item.get("image_url", {})
+                        img_url = img.get("url") if isinstance(img, dict) else str(img) if img else ""
+                        if img_url:
+                            conv.append({"type": "input_image", "image_url": img_url})
+                        else:
+                            conv.append(item)
+                    else:
+                        conv.append(item)
+                else:
+                    # Plain text item - use input_text only for user
+                    if role == "user":
+                        conv.append({"type": "input_text", "text": str(item)})
+                    else:
+                        conv.append(str(item))
+            if conv:
+                items.append({"role": role, "content": conv})
+        elif content:
+            # Plain text content - no wrapper for assistant
+            if role == "user":
+                items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
+            else:
+                items.append({"role": role, "content": str(content)})
+    return items
+
+def _convert_tools_schema(self, tools: List[Dict]) -> List[Dict]:
+    """Convert Chat-style tools to Responses API format."""
+    import copy
+    converted = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        tool_type = tool.get("type", "")
+        if tool_type == "function":
+            func = tool.get("function", {})
+            # Deep copy parameters to avoid mutating the original
+            params = copy.deepcopy(func.get("parameters", {}))
+            
+            # Ensure additionalProperties: false
+            if "additionalProperties" not in params:
+                params["additionalProperties"] = False
+            
+            # With strict: true, required must include ALL properties
+            if "properties" in params and isinstance(params["properties"], dict):
+                required = params.get("required", [])
+                if isinstance(required, list):
+                    # Add any missing properties to required
+                    for prop in params["properties"]:
+                        if prop not in required:
+                            required.append(prop)
+                    params["required"] = required
+            
+            converted.append({
+                "type": "function",
+                "name": func.get("name", ""),
+                "description": func.get("description", ""),
+                "parameters": params,
+                "strict": True,
+            })
+        else:
+            converted.append(tool)
+    return converted
+
 class BaseProvider:
     """Base class for LLM providers."""
 
@@ -424,14 +512,14 @@ class OpenAIProvider(BaseProvider):
         
         # Convert messages to input_items if provided
         if input_items is None and messages is not None:
-            input_items = self._convert_messages_to_input_items(messages)
+            input_items = _convert_messages_to_input_items(messages)
         elif input_items is None:
             input_items = []
         
         # Convert tools from Chat format to Responses format
         converted_tools = None
         if tools:
-            converted_tools = self._convert_tools_schema(tools)
+            converted_tools = _convert_tools_schema(tools)
         # Note: messages are already converted to input_items above
         
         # Build payload for Responses API
@@ -560,94 +648,6 @@ class OpenAIProvider(BaseProvider):
         
         return result
 
-    def _convert_messages_to_input_items(self, messages: List[Dict]) -> List[Dict]:
-        """Convert Chat-style messages to Responses API input_items format."""
-        items = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            if role == "tool":
-                continue
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                conv = []
-                for item in content:
-                    if isinstance(item, dict):
-                        t = item.get("type", "")
-                        if t in ("text", "input_text"):
-                            # Only use input_text for user messages
-                            if role == "user":
-                                conv.append({"type": "input_text", "text": item.get("text", "")})
-                            else:
-                                # Assistant messages - use plain text
-                                conv.append(item.get("text", ""))
-                        elif t == "image_url":
-                            img = item.get("image_url", {})
-                            img_url = img.get("url") if isinstance(img, dict) else str(img)
-                            if img_url:
-                                conv.append({"type": "input_image", "image_url": img_url})
-                        elif t == "input_image":
-                            img = item.get("image_url", {})
-                            img_url = img.get("url") if isinstance(img, dict) else str(img) if img else ""
-                            if img_url:
-                                conv.append({"type": "input_image", "image_url": img_url})
-                            else:
-                                conv.append(item)
-                        else:
-                            conv.append(item)
-                    else:
-                        # Plain text item - use input_text only for user
-                        if role == "user":
-                            conv.append({"type": "input_text", "text": str(item)})
-                        else:
-                            conv.append(str(item))
-                if conv:
-                    items.append({"role": role, "content": conv})
-            elif content:
-                # Plain text content - no wrapper for assistant
-                if role == "user":
-                    items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
-                else:
-                    items.append({"role": role, "content": str(content)})
-        return items
-
-    def _convert_tools_schema(self, tools: List[Dict]) -> List[Dict]:
-        """Convert Chat-style tools to Responses API format."""
-        import copy
-        converted = []
-        for tool in tools:
-            if not isinstance(tool, dict):
-                continue
-            tool_type = tool.get("type", "")
-            if tool_type == "function":
-                func = tool.get("function", {})
-                # Deep copy parameters to avoid mutating the original
-                params = copy.deepcopy(func.get("parameters", {}))
-                
-                # Ensure additionalProperties: false
-                if "additionalProperties" not in params:
-                    params["additionalProperties"] = False
-                
-                # With strict: true, required must include ALL properties
-                if "properties" in params and isinstance(params["properties"], dict):
-                    required = params.get("required", [])
-                    if isinstance(required, list):
-                        # Add any missing properties to required
-                        for prop in params["properties"]:
-                            if prop not in required:
-                                required.append(prop)
-                        params["required"] = required
-                
-                converted.append({
-                    "type": "function",
-                    "name": func.get("name", ""),
-                    "description": func.get("description", ""),
-                    "parameters": params,
-                    "strict": True,
-                })
-            else:
-                converted.append(tool)
-        return converted
-    
     def list_models(self) -> List[str]:
         return [
             "gpt-3.5-turbo",
@@ -708,8 +708,8 @@ class GitHubCopilotProvider(BaseProvider):
         all_messages.extend(messages)
         
         payload = {
-            "messages": all_messages,
             "model": model or self.default_model,
+            "messages": all_messages,
         }
         
         # Add tools support (similar to OpenAI)
@@ -722,7 +722,9 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"=== [{self.name.upper()}] REQUEST ===")
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(all_messages)}")
-            # Log message structure for debugging tool_calls
+            if system_prompt:
+                logger.debug(f"System prompt: {truncate(system_prompt, 200)}")
+            logger.debug(f"Messages preview:")
             for i, msg in enumerate(all_messages):
                 msg_summary = {"role": msg.get("role")}
                 if msg.get("tool_calls"):
@@ -769,12 +771,25 @@ class GitHubCopilotProvider(BaseProvider):
         
         # Debug: Log content and tool calls
         if _is_debug_enabled():
+            logger.debug(f"=== [{self.name.upper()}] CHAT RESPONSE ===")
+            logger.debug(f"Finish reason: {choice.get('finish_reason', 'unknown')}")
+            content = message.get("content") or ""
             logger.debug(f"Content length: {len(content)} chars")
-            logger.debug(f"Content preview: {_truncate_text(content, 200)}")
+            if content:
+                logger.debug(f"Content preview: {truncate(content, 200)}")
+            else:
+                logger.debug("Content: (empty - tool call response)")
+            # Log reasoning if present
+            reasoning = message.get("reasoning")
+            if reasoning:
+                logger.debug(f"Reasoning length: {len(reasoning)} chars")
+                logger.debug(f"Reasoning preview: {truncate(reasoning, 200)}")
+            tool_calls = message.get("tool_calls", [])
             logger.debug(f"Tool calls: {len(tool_calls)}")
             for tc in tool_calls:
+                tc_id = tc.get("id", "unknown")
                 tc_name = tc.get("function", {}).get("name", "unknown")
-                logger.debug(f"  - {tc_name}")
+                logger.debug(f"  - {tc_name} (id={tc_id})")
         
         # Calculate usage (approximate)
         prompt_tokens = sum(len(str(m).split()) for m in all_messages) * 4  # Rough estimate
@@ -892,62 +907,17 @@ class GitHubCopilotProvider(BaseProvider):
         
         model_name = model or self.default_model
         
-        # Build input array from messages (Responses API format)
-        input_items = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            # Handle content as string or array (for vision)
-            if isinstance(content, list):
-                # Convert vision format to Responses API format
-                # IMPORTANT: image_url must be a STRING (URL or base64 data URL), not an object
-                converted_content = []
-                for item in content:
-                    if isinstance(item, dict):
-                        item_type = item.get("type", "")
-                        if item_type == "text":
-                            converted_content.append({
-                                "type": "input_text",
-                                "text": item.get("text", "")
-                            })
-                        elif item_type == "image_url":
-                            # Extract the URL from image_url object
-                            img_url_obj = item.get("image_url", {})
-                            img_url = img_url_obj.get("url") if isinstance(img_url_obj, dict) else str(img_url_obj)
-                            if img_url:
-                                converted_content.append({
-                                    "type": "input_image",
-                                    "image_url": img_url  # Must be STRING, not object!
-                                })
-                            else:
-                                logger.warning(f"[Copilot] Skipping image: no valid URL")
-                        elif item_type == "input_image":
-                            img_url_obj = item.get("image_url")
-                            if isinstance(img_url_obj, dict):
-                                img_url = img_url_obj.get("url", "")
-                                if img_url:
-                                    converted_content.append({
-                                        "type": "input_image",
-                                        "image_url": img_url
-                                    })
-                                else:
-                                    logger.warning("[Copilot] Skipping image: no valid URL in existing input_image block")
-                            else:
-                                converted_content.append(item)
-                        else:
-                            converted_content.append(item)
-                    else:
-                        converted_content.append({"type": "input_text", "text": str(item)})
-                input_items.append({
-                    "role": role,
-                    "content": converted_content
-                })
-            else:
-                input_items.append({
-                    "role": role,
-                    "content": content
-                })
+        # Convert messages to input_items if provided
+        if input_items is None and messages is not None:
+            input_items = _convert_messages_to_input_items(messages)
+        elif input_items is None:
+            input_items = []
+        
+        # Convert tools from Chat format to Responses format
+        converted_tools = None
+        if tools:
+            converted_tools = _convert_tools_schema(tools)
+        # Note: messages are already converted to input_items above
         
         # Build payload for Responses API
         payload = {
@@ -955,9 +925,15 @@ class GitHubCopilotProvider(BaseProvider):
             "instructions": system_prompt or "",
             "input": input_items,
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+            "text": {"format": {"type": "text"}},
         }
         
-        # Debug: Log request details
+        # Add tools if provided (Responses API format)
+        if converted_tools:
+            payload["tools"] = converted_tools
+            payload["tool_choice"] = "auto"
+        
+        # Debug: Log request details (before calling _call_api)
         if _is_debug_enabled():
             logger.debug(f"=== [GITHUB COPILOT] RESPONSES API REQUEST ===")
             logger.debug(f"Model: {model_name}")
@@ -989,50 +965,33 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"Status: {response.status_code}")
         
         # Parse response - Responses API uses 'output' array instead of 'choices'
-        # Handle both nested function_call in message content AND top-level function_call
         output_items = data.get("output", [])
         content = ""
-        tool_calls = []
+        function_calls = []
         
         for item in output_items:
             item_type = item.get("type", "")
             
             if item_type == "message":
                 msg_content = item.get("content", [])
-                # Handle content as array or string
                 if isinstance(msg_content, list):
                     for msg_item in msg_content:
                         if msg_item.get("type") == "output_text":
                             content += msg_item.get("text", "")
                         elif msg_item.get("type") == "function_call":
-                            # Handle function calls inside message content
-                            # Avoid double-encoding: if arguments is already a string, don't json.dumps it
-                            args = msg_item.get("arguments", {})
-                            arguments = args if isinstance(args, str) else json.dumps(args)
-                            tool_calls.append({
-                                "id": msg_item.get("call_id", f"call_{len(tool_calls)}"),
-                                "type": "function",
-                                "function": {
-                                    "name": msg_item.get("name", ""),
-                                    "arguments": arguments
-                                }
+                            function_calls.append({
+                                "call_id": msg_item.get("call_id", ""),
+                                "name": msg_item.get("name", ""),
+                                "arguments": msg_item.get("arguments", {}),
                             })
                 elif isinstance(msg_content, str):
-                    # Append string content instead of overwriting
                     content += msg_content
             
             elif item_type == "function_call":
-                # Handle function_call as top-level output item (Responses API can emit this)
-                # Avoid double-encoding: if arguments is already a string, don't json.dumps it
-                args = item.get("arguments", {})
-                arguments = args if isinstance(args, str) else json.dumps(args)
-                tool_calls.append({
-                    "id": item.get("id", item.get("call_id", f"call_{len(tool_calls)}")),
-                    "type": "function",
-                    "function": {
-                        "name": item.get("name", ""),
-                        "arguments": arguments
-                    }
+                function_calls.append({
+                    "call_id": item.get("call_id", ""),
+                    "name": item.get("name", ""),
+                    "arguments": item.get("arguments", {}),
                 })
         
         # Calculate usage
@@ -1086,6 +1045,7 @@ class GitHubCopilotProvider(BaseProvider):
         cost = estimate_cost(model_name, prompt_tokens, completion_tokens)
         result["usage"]["cost_usd"] = cost
         
+        # Record usage for tracking
         usage_tracker.record_usage(
             provider=self.name,
             model=model_name,
