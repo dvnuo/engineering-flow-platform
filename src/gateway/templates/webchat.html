@@ -546,6 +546,13 @@
         var modal = document.getElementById("imageModal");
         var modalImg = document.getElementById("modalImage");
         if (modal && modalImg) {
+            // Reset state - hide text container, show image
+            var textContainer = modal.querySelector('.modal-text-content');
+            if (textContainer) {
+                textContainer.innerHTML = '';
+            }
+            modalImg.style.display = '';
+            
             modalImg.src = src;
             modal.style.display = "flex";
             modal.style.justifyContent = "center";
