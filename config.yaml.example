@@ -167,7 +167,7 @@ confluence:
   instances:
     - name: "Default"  # Display name for this instance
       url: "https://your-domain.atlassian.net/wiki"
-      username: "your-email@company.com"
+      username: ""
       password: "${CONFLUENCE_PASSWORD}"  # Use env var for security
       # token: "${CONFLUENCE_TOKEN}"  # Alternative: Bearer Token
       space: "DEV"  # Default space key
