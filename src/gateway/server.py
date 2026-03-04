@@ -63,7 +63,10 @@ async def handle_jira_message(
         response = result["response"]
         logger.info(f"Jira message processed successfully | issue_key={issue_key}")
         return response
-    except Exception as e:
+    except asyncio.CancelledError:
+                    logger.info("[Memory] Periodic check cancelled")
+                    raise
+                except Exception as e:
         tb_str = get_traceback_str()
         logger.error(f"Error processing Jira comment | issue_key={issue_key} | error={e}", exc_info=True)
         return f"Sorry, I encountered an error: {str(e)}"
@@ -74,7 +77,10 @@ async def handle_jira_message(
         # Confirmation
         return f"Test cases for {issue_key} have been generated and added to the issue comments."
         
-    except Exception as e:
+    except asyncio.CancelledError:
+                    logger.info("[Memory] Periodic check cancelled")
+                    raise
+                except Exception as e:
         logger.error(f"Error generating test cases: {e}")
         return f"Error generating test cases: {str(e)}"
 
@@ -117,7 +123,10 @@ class Gateway:
         try:
             from .events import setup_event_routes
             setup_event_routes(self.app)
-        except Exception as e:
+        except asyncio.CancelledError:
+                    logger.info("[Memory] Periodic check cancelled")
+                    raise
+                except Exception as e:
             logger.warning(f"Could not setup event routes: {e}")
             logger.info("WebChat UI enabled at /")
 
@@ -210,7 +219,10 @@ class Gateway:
                 'has_more': has_more,
                 'total': total_count
             })
-        except Exception as e:
+        except asyncio.CancelledError:
+                    logger.info("[Memory] Periodic check cancelled")
+                    raise
+                except Exception as e:
             logger.error(f"[handle_list_sessions] ERROR: {e}", exc_info=True)
             return web.json_response({'error': str(e)}, status=500)
 
@@ -260,7 +272,10 @@ class Gateway:
                 if "provider" in llm and llm["provider"] not in ["openai", "github_copilot", "claude", "ollama"]:
                     return web.json_response({"status": "error", "message": "Invalid provider"}, status=400)
             return web.json_response({"status": "ok", "message": "Settings validated. Restart required to apply."})
-        except Exception as e:
+        except asyncio.CancelledError:
+                    logger.info("[Memory] Periodic check cancelled")
+                    raise
+                except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 
     async def handle_settings_providers(self, request: Request) -> web.Response:
@@ -299,7 +314,10 @@ class Gateway:
             
             result = await llm_client.providers['ollama'].pull_model(model)
             return web.json_response({"status": "success", "result": result})
-        except Exception as e:
+        except asyncio.CancelledError:
+                    logger.info("[Memory] Periodic check cancelled")
+                    raise
+                except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def handle_config_reload(self, request: Request) -> web.Response:
@@ -330,7 +348,10 @@ class Gateway:
                 "queues": queues,
                 "active_sessions": execution_queue.get_active_sessions(),
             })
-        except Exception as e:
+        except asyncio.CancelledError:
+                    logger.info("[Memory] Periodic check cancelled")
+                    raise
+                except Exception as e:
             logger.error(f"Queue status error: {e}")
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
@@ -377,7 +398,10 @@ class Gateway:
             
             return web.json_response(response_data)
             
-        except Exception as e:
+        except asyncio.CancelledError:
+                    logger.info("[Memory] Periodic check cancelled")
+                    raise
+                except Exception as e:
             import traceback
             tb = traceback.format_exc()
             logger.error(f"Test message error: {e}\nTraceback:\n{tb}")
@@ -420,7 +444,10 @@ class Gateway:
                 "comment_id": comment_id,
             })
 
-        except Exception as e:
+        except asyncio.CancelledError:
+                    logger.info("[Memory] Periodic check cancelled")
+                    raise
+                except Exception as e:
             tb_str = get_traceback_str()
             logger.error(f"Jira webhook error | error={e} | traceback={truncate(tb_str, 200)}", exc_info=True)
             return web.json_response({"status": "error", "message": str(e)}, status=500)
@@ -464,7 +491,10 @@ class Gateway:
             # Start periodic check for session changes
             await self._start_periodic_memory_check(workspace)
             
-        except Exception as e:
+        except asyncio.CancelledError:
+                    logger.info("[Memory] Periodic check cancelled")
+                    raise
+                except Exception as e:
             logger.error(f"[Memory] Bootstrap failed: {e}")
     
     async def _start_periodic_memory_check(self, workspace: str):
@@ -508,7 +538,10 @@ class Gateway:
                 else:
                     logger.debug("[Memory] No session changes detected")
                     
-            except Exception as e:
+            except asyncio.CancelledError:
+                    logger.info("[Memory] Periodic check cancelled")
+                    raise
+                except Exception as e:
                 logger.error(f"[Memory] Periodic check failed: {e}")
 
     async def stop(self) -> None:
@@ -518,7 +551,10 @@ class Gateway:
             try:
                 await jira_channel.close()
                 logger.info("Jira channel closed")
-            except Exception as e:
+            except asyncio.CancelledError:
+                    logger.info("[Memory] Periodic check cancelled")
+                    raise
+                except Exception as e:
                 logger.warning(f"Error closing Jira channel: {e}")
         
         if self.runner:
