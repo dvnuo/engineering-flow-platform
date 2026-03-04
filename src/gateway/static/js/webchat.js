@@ -729,10 +729,25 @@
         }
     }
 
-    // Auto-resize textarea
+    // Auto-resize textarea and handle selector close on input change
     messageInput.addEventListener('input', function() {
+        // Auto-resize
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        
+        // Handle selector close on value change
+        const value = this.value;
+        const cursorPos = this.selectionStart;
+        
+        // Close skill selector when deleting the /
+        if (skillSelector.classList.contains('active') && !value.includes('/')) {
+            hideSkillSelector();
+        }
+        
+        // Close file selector when @ is deleted
+        if (fileSelector.classList.contains('active') && !value.includes('@')) {
+            hideFileSelector();
+        }
     });
 
     // Upload file function
@@ -825,20 +840,25 @@
             }
         }
 
-        // Show skill selector on /
+        // Show skill selector on / (insert / first)
         if (e.key === '/' && messageInput.selectionStart === 0) {
             e.preventDefault();
+            messageInput.value = '/' + messageInput.value;
+            messageInput.setSelectionRange(1, 1);
             showSkillSelector();
             return;
         }
 
-        // Show file selector on @
+        // Show file selector on @ (insert @ first)
         if (e.key === '@') {
             const cursorPos = messageInput.selectionStart;
             const textBefore = messageInput.value.slice(0, cursorPos);
             // Only show if @ is at start or after space
             if (cursorPos === 0 || textBefore.endsWith(' ') || textBefore.endsWith('\n')) {
                 e.preventDefault();
+                // Insert @ first
+                messageInput.value = messageInput.value.slice(0, cursorPos) + '@' + messageInput.value.slice(cursorPos);
+                messageInput.setSelectionRange(cursorPos + 1, cursorPos + 1);
                 showFileSelector();
                 return;
             }
@@ -861,8 +881,12 @@
                 const selected = fileList.querySelector('.skill-item.selected');
                 if (selected) {
                     const fileId = selected.dataset.fileId;
-                    const atIndex = messageInput.value.lastIndexOf('@');
-                    messageInput.value = messageInput.value.slice(0, atIndex) + '@file_' + fileId.slice(0, 8) + ' ';
+                    // Fix: use cursor position to find nearest @
+                    const cursorPos = messageInput.selectionStart;
+                    const atIndex = messageInput.value.lastIndexOf('@', cursorPos - 1);
+                    if (atIndex !== -1) {
+                        messageInput.value = messageInput.value.slice(0, atIndex) + '@file_' + fileId.slice(0, 8) + ' ';
+                    }
                     messageInput.focus();
                     hideFileSelector();
                 }
@@ -874,20 +898,9 @@
             }
         }
 
-        // Close skill selector when deleting the /
-        if (e.key === 'Backspace' || e.key === 'Delete') {
-            if (messageInput.value === '/' && skillSelector.classList.contains('active')) {
-                hideSkillSelector();
-            }
-            // Close file selector when deleting @
-            const atIndex = messageInput.value.lastIndexOf('@');
-            if (atIndex === -1 && fileSelector.classList.contains('active')) {
-                hideFileSelector();
-            }
-        }
-
-        // Send message
-        if (e.key === 'Enter' && !e.shiftKey && !skillSelector.classList.contains('active') && !fileSelector.classList.contains('active')) {
+        // Send message (with IME protection)
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 
+            && !skillSelector.classList.contains('active') && !fileSelector.classList.contains('active')) {
             e.preventDefault();
             sendMessage();
         }
