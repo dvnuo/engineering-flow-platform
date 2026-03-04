@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 from src.agents.heartbeat import get_heartbeat, start_heartbeat, stop_heartbeat
 from src.agents.llm import llm_client
 from src.agents.memory import memory_system
+from src.memory.update_manager import MemoryUpdateManager
 from src.agents.thinking import ThinkLevel, normalize_think_level, format_runtime_info
 from src.config import config
 from src.utils.truncate import truncate, truncate_with_count
@@ -94,6 +95,13 @@ class Agent:
             # Set the check interval from config
             self._heartbeat.check_interval = check_interval
             logger.info(f"Heartbeat enabled - think_level={self.think_level.value}, interval={check_interval}s")
+        
+        # Initialize Memory Update Manager for auto-memory
+        self.memory_update_manager = MemoryUpdateManager(
+            workspace=str(memory_system.workspace),
+            llm_client=llm_client,
+            memory_system=memory_system,
+        )
         
         # Build Engineering Flow Platform-style system prompt
         # NOTE: get_tools_schema() already includes INTEGRATION_TOOLS (JIRA + Confluence + GitHub tools)
@@ -636,6 +644,28 @@ You have access to the following tools. When a user asks you to do something tha
                 tracer_instance = get_tracer()
                 events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
                 result["events"] = events
+                
+                # Trigger memory update (async, fire and forget)
+                # We need to get the last user message and assistant response
+                recent_messages = await session_manager.get_messages(session_id, limit=4)
+                user_text = ""
+                assistant_text = content
+                for msg in reversed(recent_messages):
+                    if msg.get("role") == "user":
+                        user_text = msg.get("content", "")
+                        break
+                
+                # Schedule memory update (don't await - it's not critical)
+                if user_text and self.memory_update_manager:
+                    try:
+                        self.memory_update_manager.on_turn_completed(
+                            session_id=session_id,
+                            turn_id=iteration,
+                            user_text=user_text,
+                            assistant_text=assistant_text,
+                        )
+                    except Exception as e:
+                        logger.debug(f"Memory update failed: {e}")
                 
                 return result
             

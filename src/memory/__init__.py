@@ -249,6 +249,12 @@ def get_memory_store() -> Optional[MemoryStore]:
 # Lightweight Memory exports
 from src.memory.lightweight import LightweightMemory, MemoryEntry
 
+
+
+# New for Issue #290
+from src.memory.event_log import EventLogger
+from src.memory.update_manager import MemoryUpdateManager
+from src.memory.validators import validate_memory_ops, sanitize_memory_ops
 __all__ = [
     'LightweightMemory',
     'MemoryEntry',
@@ -261,4 +267,9 @@ __all__ = [
     'get_memory_store',
     'write_daily_memory',
     'write_long_term_memory',
+    # New for Issue #290
+    'EventLogger',
+    'MemoryUpdateManager',
+    'validate_memory_ops',
+    'sanitize_memory_ops',
 ]
