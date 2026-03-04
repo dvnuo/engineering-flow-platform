@@ -339,7 +339,10 @@ class MemorySystem:
         
         try:
             threshold = score_threshold or self.search_config.get("score_threshold", 0.1)
-            results = self.search_memory.search(query, limit)
+            
+            # Over-fetch when filtering MEMORY.md to ensure we have enough results
+            search_limit = limit * 3 if not include_memory else limit
+            results = self.search_memory.search(query, search_limit)
             
             # Filter results based on include_memory flag
             filtered = []
@@ -351,7 +354,9 @@ class MemorySystem:
                 if not include_memory and source.endswith("MEMORY.md"):
                     continue
                 filtered.append(r)
-            return filtered
+            
+            # Return up to original limit
+            return filtered[:limit]
         except Exception as e:
             logger.debug(f"Search failed: {e}")
             return []
