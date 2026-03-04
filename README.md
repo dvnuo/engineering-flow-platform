@@ -460,9 +460,22 @@ Workspace files loaded from `~/.efp/workspace/`:
 ├── USER.md        # User preferences
 ├── AGENTS.md      # Workspace conventions
 ├── TOOLS.md       # Tool configurations
-├── MEMORY.md      # Long-term memory
+├── MEMORY.md      # Long-term memory (consolidated from daily memories)
 └── memory/
-    └── YYYY-MM-DD.md
+    └── YYYY-MM-DD.md  # Daily memory files
+```
+
+### Memory Generation Logic
+
+- **Startup**: On server start, daily memory files are generated from session events (including today)
+- **Periodic Check**: Every 1 hour, checks if session files have changed; if so, regenerates today's daily memory
+- **Daily Memory**: Generated from session events in `.sessions/` directory
+- **Long-term Memory**: Consolidates last 3 days of daily memory with existing MEMORY.md
+
+```
+Trigger: Server startup (async background task)
+  └── ensure_daily_memories() → generates daily memory files
+       └── update_long_term_memory_from_daily() → consolidates to MEMORY.md
 ```
 
 ---
