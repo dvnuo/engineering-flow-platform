@@ -519,7 +519,7 @@ class OpenAIProvider(BaseProvider):
         # Convert tools from Chat format to Responses format
         converted_tools = None
         if tools:
-            converted_tools = _convert_tools_schema(tools)
+            converted_tools = self._convert_tools_schema(tools)
         # Note: messages are already converted to input_items above
         
         # Build payload for Responses API
@@ -916,7 +916,7 @@ class GitHubCopilotProvider(BaseProvider):
         # Convert tools from Chat format to Responses format
         converted_tools = None
         if tools:
-            converted_tools = _convert_tools_schema(tools)
+            converted_tools = self._convert_tools_schema(tools)
         # Note: messages are already converted to input_items above
         
         # Build payload for Responses API
