@@ -24,7 +24,7 @@ def _build_consolidation_prompt(current_memory: str, daily_reports: List[Dict[st
         "",
         "You are to produce a NEW version of MEMORY.md by consolidating:",
         "1. The current MEMORY.md (existing long-term memories)",
-        "2. Recent daily reports (new information from the last 2 days)",
+        "2. Recent daily reports (new information from the last 3 days)",
         "",
         "## Rules:",
         "- Keep stable, durable information from current MEMORY.md",
@@ -87,7 +87,7 @@ async def update_long_term_memory_from_daily(
         [p for p in daily_paths if Path(p).exists()],
         key=lambda p: Path(p).stem,
         reverse=True
-    )[:2]  # Last 2 days
+    )[:3]  # Last 3 days
     
     for p in daily_files:
         day = Path(p).stem
