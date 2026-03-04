@@ -725,16 +725,19 @@ class GitHubCopilotProvider(BaseProvider):
             if system_prompt:
                 logger.debug(f"System prompt: {truncate(system_prompt, 200)}")
             logger.debug(f"Messages preview:")
-            for i, msg in enumerate(all_messages):
-                msg_summary = {"role": msg.get("role")}
-                if msg.get("tool_calls"):
-                    msg_summary["tool_calls"] = [{"id": tc.get("id"), "function": tc.get("function", {}).get("name")} for tc in msg["tool_calls"]]
-                if msg.get("tool_call_id"):
-                    msg_summary["tool_call_id"] = msg.get("tool_call_id")
-                if msg.get("content"):
-                    content = msg.get("content", "")
-                    msg_summary["content"] = truncate(content, 3000)
-                logger.debug(f"  Message {i}: {msg_summary}")
+            for i, msg in enumerate(all_messages[:5]):
+                role = msg.get("role", "unknown")
+                content = truncate(msg.get("content") or "", 100)
+                logger.debug(f"  [{i}] {role}: {content}")
+            if len(all_messages) > 5:
+                logger.debug(f"  ... [{len(all_messages) - 5} more messages]")
+            
+            if tools:
+                logger.debug(f"Tools count: {len(tools)}")
+                for i, tool in enumerate(tools):
+                    tool_name = tool.get("function", {}).get("name", f"tool_{i}")
+                    logger.debug(f"  Tool {i}: {tool_name}")
+
         
         # Make API call with proper error handling
         endpoint = "/chat/completions"
@@ -761,15 +764,10 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
             logger.debug(f"Status: {response.status_code}")
         
-        # Parse response - check for tool calls and reasoning
-        message_data = data.get("choices", [{}])[0].get("message", {})
-        content = message_data.get("content", "")
-        reasoning = message_data.get("reasoning", "")
+        choice = data["choices"][0]
+        message = choice["message"]
         
-        # GitHub Copilot may return tool_calls
-        tool_calls = message_data.get("tool_calls", [])
-        
-        # Debug: Log content and tool calls
+        # Debug: Log response details
         if _is_debug_enabled():
             logger.debug(f"=== [{self.name.upper()}] CHAT RESPONSE ===")
             logger.debug(f"Finish reason: {choice.get('finish_reason', 'unknown')}")
@@ -791,56 +789,26 @@ class GitHubCopilotProvider(BaseProvider):
                 tc_name = tc.get("function", {}).get("name", "unknown")
                 logger.debug(f"  - {tc_name} (id={tc_id})")
         
-        # Calculate usage (approximate)
-        prompt_tokens = sum(len(str(m).split()) for m in all_messages) * 4  # Rough estimate
-        completion_tokens = len(content.split()) * 4  # Rough estimate
-        
-        # Build function_calls (Responses API format)
-        function_calls_result = []
-        for fc in function_calls:
-            args = fc.get("arguments", {})
-            arguments = json.dumps(args) if isinstance(args, dict) else args
-            function_calls_result.append({
-                "call_id": fc.get("call_id", ""),
-                "name": fc.get("name", ""),
-                "arguments": arguments,
-            })
-        
-        # Also include tool_calls for backward compatibility
-        tool_calls_compat = []
-        for fc in function_calls:
-            args = fc.get("arguments", {})
-            arguments = json.dumps(args) if isinstance(args, dict) else args
-            tool_calls_compat.append({
-                "id": fc.get("call_id", ""),
-                "type": "function",
-                "function": {
-                    "name": fc.get("name", ""),
-                    "arguments": arguments
-                }
-            })
-        
+        # Build result with reasoning if available
         result = {
-            "content": content,
-            "function_calls": function_calls_result,
-            "tool_calls": tool_calls_compat,
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            }
+            "content": message.get("content", ""),
+            "tool_calls": message.get("tool_calls", []),
+            "usage": data.get("usage", {}),
         }
         
         # Include reasoning if present
-        if reasoning:
-            result["reasoning"] = reasoning
+        if message.get("reasoning"):
+            result["reasoning"] = message.get("reasoning")
         
-        # Calculate cost and record usage
-        input_tokens = prompt_tokens
-        output_tokens = completion_tokens
+        # Calculate cost using centralized pricing
+        usage = result["usage"]
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+        model_name = data.get("model", self.default_model)
         cost = estimate_cost(self.default_model, input_tokens, output_tokens)
-        result["usage"]["cost_usd"] = cost
+        usage["cost_usd"] = cost
         
+        # Record usage for tracking
         usage_tracker.record_usage(
             provider=self.name,
             model=self.default_model,
@@ -871,14 +839,12 @@ class GitHubCopilotProvider(BaseProvider):
         - tools not fully supported in Responses API
         - reasoning_replay not supported in Responses API
         
-        When tools or reasoning are needed, fall back to chat() for reliable support.
+        When reasoning is needed, fall back to chat() for reliable support.
         """
-        # Fall back to chat() when tools or reasoning_replay are needed
-        if tools or reasoning_replay:
-            if tools:
-                logger.info(f"[GitHubCopilot] Tools provided, falling back to chat() for tool support")
-            if reasoning_replay:
-                logger.info(f"[GitHubCopilot] reasoning_replay enabled, falling back to chat()")
+        # Fall back to chat() when reasoning_replay is needed (not supported)
+
+        if reasoning_replay:
+            logger.info(f"[GitHubCopilot] reasoning_replay enabled, falling back to chat()")
             return await self.chat(
                 messages=messages,
                 system_prompt=system_prompt,
