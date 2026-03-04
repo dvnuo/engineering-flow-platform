@@ -142,7 +142,7 @@ def _truncate_text(text: str, max_length: int = 200) -> str:
     return truncate_with_count(text, max_length)
 
 
-def _convert_messages_to_input_items(self, messages: List[Dict]) -> List[Dict]:
+def _convert_messages_to_input_items(messages: List[Dict]) -> List[Dict]:
     """Convert Chat-style messages to Responses API input_items format."""
     items = []
     for msg in messages:
