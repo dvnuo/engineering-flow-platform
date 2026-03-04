@@ -6,6 +6,7 @@ Logs all conversation events to JSONL files for traceability and replay.
 import json
 import os
 from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -142,11 +143,16 @@ class EventLogger:
                     if line:
                         yield json.loads(line)
 
-    def get_events_grouped_by_day(self) -> dict:
+    def get_events_grouped_by_day(self, max_days_back: int = 30) -> dict:
         """Get events grouped by day (YYYY-MM-DD), including legacy sessions.
         
         Each event is tagged with its session_id for proper attribution.
+        Only returns events from the last max_days_back days.
         """
+        # Calculate cutoff date
+        today = date.today()
+        cutoff = today - timedelta(days=max_days_back)
+        
         groups = {}
         
         # Read from current .sessions/ directory
@@ -165,6 +171,14 @@ class EventLogger:
                         ts = msg.get("timestamp", "")
                         day = ts[:10] if len(ts) >= 10 else "unknown"
                         if day != "unknown":
+                            # Skip events older than max_days_back
+                            try:
+                                day_date = datetime.strptime(day, "%Y-%m-%d").date()
+                                if day_date < cutoff:
+                                    continue
+                            except ValueError:
+                                pass
+                            
                             # Use turn_id as message index for ordering
                             groups.setdefault(day, []).append({
                                 "ts": ts,
