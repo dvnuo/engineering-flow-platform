@@ -128,6 +128,29 @@ class TestMemorySystem:
             assert memory.load_daily_notes() == ""
 
 
+    def test_search_include_memory_filter(self, memory_with_files):
+        """Test that search respects include_memory flag to filter MEMORY.md."""
+        # Force index rebuild to ensure MEMORY.md is indexed
+        memory_with_files.refresh_index_if_needed()
+        
+        # Search with include_memory=True (should include MEMORY.md)
+        results_with = memory_with_files.search("memory", limit=5, include_memory=True)
+        
+        # Search with include_memory=False (should exclude MEMORY.md)
+        results_without = memory_with_files.search("memory", limit=5, include_memory=False)
+        
+        # Verify MEMORY.md is included when flag is True
+        sources_with = [r.get("metadata", {}).get("source", "") for r in results_with]
+        has_memory_with = any("MEMORY.md" in s for s in sources_with)
+        
+        # Verify MEMORY.md is excluded when flag is False
+        sources_without = [r.get("metadata", {}).get("source", "") for r in results_without]
+        has_memory_without = any("MEMORY.md" in s for s in sources_without)
+        
+        assert has_memory_with or not sources_with, "MEMORY.md should be included when include_memory=True"
+        assert not has_memory_without, "MEMORY.md should be excluded when include_memory=False"
+
+
 class TestMemorySystemIntegration:
     """Integration tests for memory system."""
     
@@ -148,6 +171,8 @@ class TestMemorySystemIntegration:
             assert memory.load_soul() == ""
             assert memory.load_user() == ""
     
+
+
     def test_memory_with_special_characters(self):
         """Test loading files with special characters."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -174,3 +199,4 @@ class TestMemorySystemIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
