@@ -578,15 +578,21 @@
     /**
      * Render file list in dropdown
      */
+    // Helper: find nearest @ before cursor position
+    function getAtIndexNearCursor() {
+        const cursorPos = messageInput.selectionStart;
+        return messageInput.value.lastIndexOf('@', cursorPos - 1);
+    }
+
     function renderFileList() {
         if (!uploadedFiles.length) {
             fileList.innerHTML = '<div class="skill-item"><span class="skill-desc">No files uploaded</span></div>';
             return;
         }
 
-        // Get query after @
+        // Get query after @ (use cursor position)
+        const atIndex = getAtIndexNearCursor();
         const inputVal = messageInput.value;
-        const atIndex = inputVal.lastIndexOf('@');
         const query = atIndex >= 0 ? inputVal.slice(atIndex + 1).toLowerCase() : '';
 
         let filteredFiles = uploadedFiles;
@@ -612,7 +618,7 @@
         fileList.querySelectorAll('.skill-item').forEach(item => {
             item.addEventListener('click', () => {
                 const fileId = item.dataset.fileId;
-                const atIndex = messageInput.value.lastIndexOf('@');
+                const atIndex = getAtIndexNearCursor();
                 messageInput.value = messageInput.value.slice(0, atIndex) + '@file_' + fileId.slice(0, 8) + ' ';
                 messageInput.focus();
                 hideFileSelector();
@@ -729,10 +735,32 @@
         }
     }
 
-    // Auto-resize textarea
+    // Auto-resize textarea and handle selector close on input change
     messageInput.addEventListener('input', function() {
+        // Auto-resize
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        
+        // Handle selector close on value change
+        const value = this.value;
+        
+        // Close skill selector when / is deleted or not at position 0
+        if (skillSelector.classList.contains('active') && !value.startsWith('/')) {
+            hideSkillSelector();
+        }
+        
+        // Close file selector when @ is deleted or not valid (not at start or after whitespace)
+        if (fileSelector.classList.contains('active')) {
+            const cursorPos = this.selectionStart;
+            const textBefore = value.slice(0, cursorPos);
+            const lastAtBeforeCursor = textBefore.lastIndexOf('@');
+            // Check if there's a valid @ trigger before cursor
+            const hasValidAtTrigger = lastAtBeforeCursor >= 0 && 
+                (lastAtBeforeCursor === 0 || /\s$/.test(textBefore.slice(0, lastAtBeforeCursor)));
+            if (!hasValidAtTrigger) {
+                hideFileSelector();
+            }
+        }
     });
 
     // Upload file function
@@ -825,20 +853,28 @@
             }
         }
 
-        // Show skill selector on /
+        // Show skill selector on / (insert / first if not already present)
         if (e.key === '/' && messageInput.selectionStart === 0) {
             e.preventDefault();
+            // Only insert a leading / if it is not already there
+            if (messageInput.value.charAt(0) !== '/') {
+                messageInput.value = '/' + messageInput.value;
+                messageInput.setSelectionRange(1, 1);
+            }
             showSkillSelector();
             return;
         }
 
-        // Show file selector on @
+        // Show file selector on @ (insert @ first)
         if (e.key === '@') {
             const cursorPos = messageInput.selectionStart;
             const textBefore = messageInput.value.slice(0, cursorPos);
             // Only show if @ is at start or after space
             if (cursorPos === 0 || textBefore.endsWith(' ') || textBefore.endsWith('\n')) {
                 e.preventDefault();
+                // Insert @ first
+                messageInput.value = messageInput.value.slice(0, cursorPos) + '@' + messageInput.value.slice(cursorPos);
+                messageInput.setSelectionRange(cursorPos + 1, cursorPos + 1);
                 showFileSelector();
                 return;
             }
@@ -861,8 +897,14 @@
                 const selected = fileList.querySelector('.skill-item.selected');
                 if (selected) {
                     const fileId = selected.dataset.fileId;
-                    const atIndex = messageInput.value.lastIndexOf('@');
-                    messageInput.value = messageInput.value.slice(0, atIndex) + '@file_' + fileId.slice(0, 8) + ' ';
+                    // Fix: use cursor position to find nearest @
+                    const cursorPos = messageInput.selectionStart;
+                    const atIndex = messageInput.value.lastIndexOf('@', cursorPos - 1);
+                    if (atIndex !== -1) {
+                        const textBefore = messageInput.value.slice(0, atIndex);
+                        const textAfter = messageInput.value.slice(cursorPos);
+                        messageInput.value = textBefore + '@file_' + fileId.slice(0, 8) + ' ' + textAfter;
+                    }
                     messageInput.focus();
                     hideFileSelector();
                 }
@@ -874,20 +916,9 @@
             }
         }
 
-        // Close skill selector when deleting the /
-        if (e.key === 'Backspace' || e.key === 'Delete') {
-            if (messageInput.value === '/' && skillSelector.classList.contains('active')) {
-                hideSkillSelector();
-            }
-            // Close file selector when deleting @
-            const atIndex = messageInput.value.lastIndexOf('@');
-            if (atIndex === -1 && fileSelector.classList.contains('active')) {
-                hideFileSelector();
-            }
-        }
-
-        // Send message
-        if (e.key === 'Enter' && !e.shiftKey && !skillSelector.classList.contains('active') && !fileSelector.classList.contains('active')) {
+        // Send message (with IME protection)
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 
+            && !skillSelector.classList.contains('active') && !fileSelector.classList.contains('active')) {
             e.preventDefault();
             sendMessage();
         }
