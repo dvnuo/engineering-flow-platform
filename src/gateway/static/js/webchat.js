@@ -901,7 +901,9 @@
                     const cursorPos = messageInput.selectionStart;
                     const atIndex = messageInput.value.lastIndexOf('@', cursorPos - 1);
                     if (atIndex !== -1) {
-                        messageInput.value = messageInput.value.slice(0, atIndex) + '@file_' + fileId.slice(0, 8) + ' ';
+                        const textBefore = messageInput.value.slice(0, atIndex);
+                        const textAfter = messageInput.value.slice(cursorPos);
+                        messageInput.value = textBefore + '@file_' + fileId.slice(0, 8) + ' ' + textAfter;
                     }
                     messageInput.focus();
                     hideFileSelector();
