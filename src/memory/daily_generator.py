@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -73,9 +74,20 @@ async def ensure_daily_memories(
     event_logger = EventLogger(str(ws))
     groups = event_logger.get_events_grouped_by_day()
     
+    # Only backfill historical days (not today)
+    today = date.today()
+    
     created = []
     for day, events in sorted(groups.items()):
         if day == "unknown":
+            continue
+        
+        # Skip today - only backfill historical days
+        try:
+            day_date = datetime.strptime(day, "%Y-%m-%d").date()
+            if day_date >= today:
+                continue
+        except ValueError:
             continue
             
         path = mem_dir / f"{day}.md"
