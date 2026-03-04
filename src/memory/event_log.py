@@ -126,3 +126,24 @@ class EventLogger:
         """
         all_events = self.get_session_events(session_id)
         return [e for e in all_events if e.get("turn_id") == turn_id]
+    def list_sessions(self) -> list:
+        """List all session IDs that have event logs."""
+        return [p.stem for p in self.sessions_dir.glob("*.jsonl")]
+
+    def iter_all_events(self):
+        """Iterate over all events from all session logs."""
+        for p in sorted(self.sessions_dir.glob("*.jsonl")):
+            with open(p, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        yield json.loads(line)
+
+    def get_events_grouped_by_day(self) -> dict:
+        """Get events grouped by day (YYYY-MM-DD)."""
+        groups = {}
+        for e in self.iter_all_events():
+            ts = e.get("ts", "")
+            day = ts[:10] if len(ts) >= 10 else "unknown"
+            groups.setdefault(day, []).append(e)
+        return groups
