@@ -2512,3 +2512,7 @@ input:checked + .slider:before {
     padding: 20px;
     border-radius: 8px;
 }
+
+.message-image-container {
+    margin-right: 52px;
+}
