@@ -115,7 +115,7 @@ class Agent:
         # For main session (includes memory), include MEMORY.md
         # For other sessions, exclude memory for security
         self.include_memory = (session_id == "main" or session_id.startswith("main") or 
-                         session_id == "webchat")
+                         session_id.startswith("webchat"))
         
         memory_prompt = memory_system.build_system_prompt(include_memory=self.include_memory)
         
