@@ -22,6 +22,9 @@ class EventLogger:
         self.workspace = Path(workspace)
         self.sessions_dir = self.workspace / ".sessions"
         self.sessions_dir.mkdir(exist_ok=True)
+        
+        # Also check legacy sessions directory
+        self.legacy_sessions_dir = self.workspace / "sessions"
 
     def _get_session_log_path(self, session_id: str) -> Path:
         """Get the log file path for a session."""
@@ -140,10 +143,37 @@ class EventLogger:
                         yield json.loads(line)
 
     def get_events_grouped_by_day(self) -> dict:
-        """Get events grouped by day (YYYY-MM-DD)."""
+        """Get events grouped by day (YYYY-MM-DD), including legacy sessions.
+        
+        Each event is tagged with its session_id for proper attribution.
+        """
         groups = {}
+        
+        # Read from current .sessions/ directory
         for e in self.iter_all_events():
             ts = e.get("ts", "")
             day = ts[:10] if len(ts) >= 10 else "unknown"
             groups.setdefault(day, []).append(e)
+        
+        # Also read from legacy sessions/ directory
+        if self.legacy_sessions_dir.exists():
+            for p in sorted(self.legacy_sessions_dir.glob("*.jsonl")):
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                    messages = data.get("messages", [])
+                    for i, msg in enumerate(messages):
+                        ts = msg.get("timestamp", "")
+                        day = ts[:10] if len(ts) >= 10 else "unknown"
+                        if day != "unknown":
+                            # Use turn_id as message index for ordering
+                            groups.setdefault(day, []).append({
+                                "ts": ts,
+                                "session_id": data.get("session_id", p.stem),
+                                "turn_id": i,
+                                "type": msg.get("role", "message"),
+                                "content": msg.get("content", ""),
+                            })
+                except Exception:
+                    pass
+        
         return groups
