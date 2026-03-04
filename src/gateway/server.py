@@ -531,7 +531,7 @@ class Gateway:
                     created_daily = await ensure_daily_memories(
                         workspace=workspace,
                         llm_client=None,
-                        backfill_only_missing=False,  # Always regenerate today
+                        backfill_only_missing=True,  # Always regenerate today
                     )
                     logger.info(f"[Memory] Updated: {len(created_daily) if created_daily else 0} daily files")
                     last_mtime = current_mtime
