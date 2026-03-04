@@ -84,10 +84,12 @@ class MemoryUpdateManager:
                 return
 
             ops = sanitize_memory_ops(ops)
+            # Filter out NOOP operations before applying
+            non_noop_ops = [op for op in ops if op.get("op") != "NOOP"]
 
-            # Apply ops to daily note
-            if ops and ops[0].get("op") != "NOOP":
-                await self._apply_ops(session_id, turn_id, ops)
+            # Apply ops to daily note if any non-NOOP operations remain
+            if non_noop_ops:
+                await self._apply_ops(session_id, turn_id, non_noop_ops)
                 # Refresh index to make new content searchable
                 await self._refresh_memory_index()
 
