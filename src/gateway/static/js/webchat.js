@@ -887,7 +887,7 @@
                 const formData = new FormData();
                 formData.append('file', file, 'pasted-image.png');
 
-                const sessionId = window.currentSessionId || 'default';
+                const sessionId = currentSessionId || 'default';
                 try {
                     const response = await fetch(`/api/files/upload?session_id=${sessionId}`, {
                         method: 'POST',
