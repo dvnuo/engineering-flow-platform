@@ -460,8 +460,57 @@ class Gateway:
             )
             
             logger.info(f"[Memory] Bootstrap complete: {len(created_daily) if created_daily else 0} daily files")
+            
+            # Start periodic check for session changes
+            await self._start_periodic_memory_check(workspace)
+            
         except Exception as e:
             logger.error(f"[Memory] Bootstrap failed: {e}")
+    
+    async def _start_periodic_memory_check(self, workspace: str):
+        """Periodically check for session changes and update daily memory."""
+        import time
+        from pathlib import Path
+        from src.memory.daily_generator import ensure_daily_memories
+        
+        CHECK_INTERVAL = 3600  # 1 hour in seconds
+        sessions_dir = Path(workspace) / ".sessions"
+        
+        last_check_time = time.time()
+        last_mtime = 0
+        
+        # Get initial file modification times
+        if sessions_dir.exists():
+            for f in sessions_dir.glob("*.jsonl"):
+                last_mtime = max(last_mtime, f.stat().st_mtime)
+        
+        logger.info("[Memory] Starting periodic session check...")
+        
+        while True:
+            await asyncio.sleep(CHECK_INTERVAL)
+            
+            try:
+                # Check if any session file has been modified
+                current_mtime = 0
+                if sessions_dir.exists():
+                    for f in sessions_dir.glob("*.jsonl"):
+                        current_mtime = max(current_mtime, f.stat().st_mtime)
+                
+                # If new activity, regenerate today's memory
+                if current_mtime > last_mtime:
+                    logger.info("[Memory] Session changes detected, updating daily memory...")
+                    created_daily = await ensure_daily_memories(
+                        workspace=workspace,
+                        llm_client=None,
+                        backfill_only_missing=False,  # Always regenerate today
+                    )
+                    logger.info(f"[Memory] Updated: {len(created_daily) if created_daily else 0} daily files")
+                    last_mtime = current_mtime
+                else:
+                    logger.debug("[Memory] No session changes detected")
+                    
+            except Exception as e:
+                logger.error(f"[Memory] Periodic check failed: {e}")
 
     async def stop(self) -> None:
         """Stop the gateway server."""
