@@ -532,5 +532,68 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     
     <script src="/static/js/webchat.js"></script>
+
+    <!-- Image Modal -->
+    <div id="imageModal" class="image-modal" onclick="closeImageModal()">
+        <span class="modal-close">&times;</span>
+        <img class="modal-content" id="modalImage">
+    </div>
+
+
+    <script>
+    // Image modal functions
+    function showImageModal(src) {
+        var modal = document.getElementById("imageModal");
+        var modalImg = document.getElementById("modalImage");
+        if (modal && modalImg) {
+            // Reset state - hide text container, show image
+            var textContainer = modal.querySelector('.modal-text-content');
+            if (textContainer) {
+                textContainer.innerHTML = '';
+            }
+            modalImg.style.display = '';
+            
+            modalImg.src = src;
+            modal.style.display = "flex";
+            modal.style.justifyContent = "center";
+            modal.style.alignItems = "center";
+        }
+    }
+    function escapeHtml(text) {
+        if (!text) return '';
+        return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
+    
+    function showTextModal(text, filename) {
+        var modal = document.getElementById("imageModal");
+        var modalImg = document.getElementById("modalImage");
+        if (!modal || !modalImg) return;
+        
+        modalImg.style.display = 'none';
+        
+        let textContainer = modal.querySelector('.modal-text-content');
+        if (!textContainer) {
+            textContainer = document.createElement('div');
+            textContainer.className = 'modal-text-content';
+            modal.insertBefore(textContainer, modalImg);
+        }
+        textContainer.innerHTML = '<pre style="color: white; max-width: 80vw; max-height: 80vh; overflow: auto; white-space: pre-wrap; word-wrap: break-word;">' + escapeHtml(text) + '</pre>';
+        
+        modal.style.display = 'flex';
+    }
+    
+    function closeImageModal() {
+        var modal = document.getElementById("imageModal");
+        if (modal) {
+            modal.style.display = "none";
+        }
+    }
+    document.addEventListener("keydown", function(e) {
+        if (e.key === "Escape") {
+            closeImageModal();
+        }
+    });
+    </script>
+
 </body>
 </html>
