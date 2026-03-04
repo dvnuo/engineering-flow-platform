@@ -293,7 +293,7 @@ Remember: Only extract what was explicitly said. Do not invent information.
         entry_text = "\n".join(entries)
 
         # Append to daily note
-        with open(daily_note_path, "a") as f:
+        with open(daily_note_path, "a", encoding="utf-8") as f:
             f.write(entry_text + "\n")
 
         logger.info(f"Wrote {len(ops)} memory ops to {daily_note_path}")
