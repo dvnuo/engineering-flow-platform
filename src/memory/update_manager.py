@@ -93,6 +93,20 @@ class MemoryUpdateManager:
 
         except Exception as e:
             logger.error(f"Error in on_turn_completed: {e}")
+            # Also write an error event to the raw event log to preserve traceability
+            try:
+                # Pass session and turn identifiers along with exception details
+                self._log_error_event(
+                    session_id,
+                    turn_id,
+                    f"on_turn_completed exception: {e}",
+                )
+            except Exception:
+                # Ensure failures in error-event logging do not interfere with main flow
+                logger.debug(
+                    "Failed to log error event for on_turn_completed",
+                    exc_info=True,
+                )
 
     async def _generate_memory_ops(
         self,
