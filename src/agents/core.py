@@ -114,10 +114,10 @@ class Agent:
         # Load memory files for system prompt
         # For main session (includes memory), include MEMORY.md
         # For other sessions, exclude memory for security
-        include_memory = (session_id == "main" or session_id.startswith("main") or 
+        self.include_memory = (session_id == "main" or session_id.startswith("main") or 
                          session_id == "webchat")
         
-        memory_prompt = memory_system.build_system_prompt(include_memory=include_memory)
+        memory_prompt = memory_system.build_system_prompt(include_memory=self.include_memory)
         
         # Current date/time for the prompt
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -183,7 +183,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Debug logging for system prompt construction
         logger.debug(f"System prompt constructed: session={session_id}, "
-                    f"include_memory={include_memory}, source={prompt_source}, "
+                    f"include_memory={self.include_memory}, source={prompt_source}, "
                     f"length={len(self.system_prompt)}, tools={len(self.tools)}, "
                     f"think_level={self.think_level.value}")
 
@@ -414,7 +414,7 @@ You have access to the following tools. When a user asks you to do something tha
         try:
             semantic_context = memory_system.build_context_with_search(
                 query=message,
-                include_memory=include_memory,
+                include_memory=self.include_memory,
                 limit=3,
                 score_threshold=0.3,
             )
