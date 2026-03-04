@@ -99,15 +99,36 @@ def validate_memory_ops(ops: List[Dict[str, Any]]) -> Tuple[bool, str]:
 
 def filter_noise_ops(ops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Filter out noisy operations."""
-    filtered = []
+    filtered: List[Dict[str, Any]] = []
+    # Be defensive: ops may contain non-dicts or malformed fields from LLM output
     for op in ops:
-        content = op.get("content", "").lower()
+        if not isinstance(op, dict):
+            # Skip non-dict entries to avoid attribute errors
+            continue
+
+        # Safely normalize content to lowercase string
+        raw_content = op.get("content", "")
+        if not isinstance(raw_content, str):
+            raw_content = str(raw_content) if raw_content is not None else ""
+        content = raw_content.lower()
+
         # Skip if content matches noise patterns
         if any(p in content for p in NOISE_PATTERNS):
             continue
+
+        # Safely normalize tags to a list of lowercase strings
+        raw_tags = op.get("tags", [])
+        if not isinstance(raw_tags, list):
+            raw_tags = [raw_tags]
+        tags = [t.lower() for t in raw_tags if isinstance(t, str)]
+
         # Skip if tags contain personal_information with fact/preference
-        tags = [t.lower() for t in op.get("tags", [])]
-        if "personal_information" in tags and op.get("type") in ("fact", "preference"):
+        op_type = op.get("type")
+        if (
+            "personal_information" in tags
+            and isinstance(op_type, str)
+            and op_type in ("fact", "preference")
+        ):
             continue
         filtered.append(op)
     return filtered
