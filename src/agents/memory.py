@@ -318,6 +318,7 @@ class MemorySystem:
         query: str,
         limit: int = 5,
         score_threshold: Optional[float] = None,
+        include_memory: bool = True,
     ) -> List[Dict[str, Any]]:
         """Search memories using TF-IDF scoring.
         
@@ -325,6 +326,7 @@ class MemorySystem:
             query: Search query
             limit: Maximum results
             score_threshold: Minimum score
+            include_memory: Whether to include MEMORY.md in results
             
         Returns:
             List of matching entries with scores
@@ -338,7 +340,18 @@ class MemorySystem:
         try:
             threshold = score_threshold or self.search_config.get("score_threshold", 0.1)
             results = self.search_memory.search(query, limit)
-            return [r for r in results if r["score"] >= threshold]
+            
+            # Filter results based on include_memory flag
+            filtered = []
+            for r in results:
+                if r["score"] < threshold:
+                    continue
+                source = r.get("metadata", {}).get("source", "")
+                # Exclude MEMORY.md if include_memory is False
+                if not include_memory and source.endswith("MEMORY.md"):
+                    continue
+                filtered.append(r)
+            return filtered
         except Exception as e:
             logger.debug(f"Search failed: {e}")
             return []
@@ -549,8 +562,8 @@ class MemorySystem:
         """
         parts = []
         
-        # Perform search
-        search_results = self.search(query, limit, score_threshold)
+        # Perform search (pass include_memory to filter MEMORY.md if needed)
+        search_results = self.search(query, limit, score_threshold, include_memory)
         
         if search_results:
             context_parts = []
