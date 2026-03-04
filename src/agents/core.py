@@ -11,6 +11,9 @@ from typing import Any, Callable, Dict, List, Optional
 from src.agents.heartbeat import get_heartbeat, start_heartbeat, stop_heartbeat
 from src.agents.llm import llm_client
 from src.agents.memory import memory_system
+from src.memory.update_manager import MemoryUpdateManager
+from src.memory.daily_generator import ensure_daily_memories
+from src.memory.long_term_generator import update_long_term_memory_from_daily
 from src.agents.thinking import ThinkLevel, normalize_think_level, format_runtime_info
 from src.config import config
 from src.utils.truncate import truncate, truncate_with_count
@@ -94,6 +97,16 @@ class Agent:
             # Set the check interval from config
             self._heartbeat.check_interval = check_interval
             logger.info(f"Heartbeat enabled - think_level={self.think_level.value}, interval={check_interval}s")
+        
+        # Memory bootstrap flag (for backfill)
+        self._memory_bootstrapped = False
+        
+        # Initialize Memory Update Manager for auto-memory
+        self.memory_update_manager = MemoryUpdateManager(
+            workspace=str(memory_system.workspace),
+            llm_client=llm_client,
+            memory_system=memory_system,
+        )
         
         # Build Engineering Flow Platform-style system prompt
         # NOTE: get_tools_schema() already includes INTEGRATION_TOOLS (JIRA + Confluence + GitHub tools)
@@ -380,6 +393,34 @@ You have access to the following tools. When a user asks you to do something tha
             )
         # ===== END MESSAGE COMPACTION =====
 
+        # Bootstrap: ensure daily memories exist from session logs
+        if not self._memory_bootstrapped:
+            try:
+                logger.info("[Memory] Running bootstrap: checking for missing daily memories...")
+                created_daily = await ensure_daily_memories(
+                    workspace=str(memory_system.workspace),
+                    llm_client=llm_client,
+                    backfill_only_missing=True,
+                )
+                
+                # Generate long-term memory from newly created dailies
+                if created_daily and llm_client:
+                    logger.info(f"[Memory] Generating long-term memory from {len(created_daily)} daily files...")
+                    await update_long_term_memory_from_daily(
+                        workspace=str(memory_system.workspace),
+                        llm_client=llm_client,
+                        daily_paths=created_daily,
+                    )
+                
+                # Refresh index
+                memory_system.refresh_index_if_needed()
+                
+                self._memory_bootstrapped = True
+                logger.info("[Memory] Bootstrap complete")
+            except Exception as e:
+                logger.error(f"[Memory] Bootstrap failed: {e}")
+                self._memory_bootstrapped = True  # Don't retry
+        
         # Debug logging for message received
         if _is_debug_enabled():
             logger.debug(f"=== [AGENT] MESSAGE RECEIVED ===")
@@ -636,6 +677,28 @@ You have access to the following tools. When a user asks you to do something tha
                 tracer_instance = get_tracer()
                 events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
                 result["events"] = events
+                
+                # Trigger memory update (async, fire and forget)
+                # We need to get the last user message and assistant response
+                recent_messages = await session_manager.get_history(session_id)
+                user_text = ""
+                assistant_text = content
+                for msg in reversed(recent_messages):
+                    if msg.get("role") == "user":
+                        user_text = msg.get("content", "")
+                        break
+                
+                # Disabled: Turn-based memory writing (only backfill at startup)
+                # if user_text and self.memory_update_manager:
+                #     try:
+                #         await self.memory_update_manager.on_turn_completed(
+                #             session_id=session_id,
+                #             turn_id=sum(1 for m in recent_messages if m.get("role") == "user"),
+                #             user_text=user_text,
+                #             assistant_text=assistant_text,
+                #         )
+                #     except Exception as e:
+                #         logger.debug(f"Memory update failed: {e}")
                 
                 return result
             
