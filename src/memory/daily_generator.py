@@ -34,16 +34,16 @@ def _build_daily_prompt(day: str, events: List[Dict[str, Any]]) -> str:
     ]
     
     # Limit to most recent 50 events to avoid huge prompts
-    for e in events[-50:]:
+    for e in events[-20:]:
         t = e.get("type")
         sid = e.get("session_id", "unknown")
         tid = e.get("turn_id", 0)
-        content = (e.get("content") or "")[:400]
+        content = (e.get("content") or "")[:100]
         
         if t == "tool":
             tool_name = e.get("tool_name", "unknown")
-            tool_args = json.dumps(e.get("tool_args") or {})[:200]
-            tool_res = (e.get("tool_result") or "")[:400]
+            tool_args = json.dumps(e.get("tool_args") or {})[:100]
+            tool_res = (e.get("tool_result") or "")[:100]
             lines.append(f"- [{t}] s={sid} turn={tid} tool={tool_name} args={tool_args} result={tool_res}")
         else:
             lines.append(f"- [{t}] s={sid} turn={tid} {content}")
@@ -119,7 +119,7 @@ async def ensure_daily_memories(
             md = f"# {day}\n\n"
             for e in events[-20:]:
                 t = e.get("type", "unknown")
-                content = (e.get("content") or "")[:200]
+                content = (e.get("content") or "")[:100]
                 md += f"- [{t}] {content}\n"
         
         path.write_text(md + "\n", encoding="utf-8")
