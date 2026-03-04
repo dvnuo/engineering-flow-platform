@@ -2516,3 +2516,7 @@ input:checked + .slider:before {
 .message-image-container {
     margin-right: 52px;
 }
+
+.file-item {
+    cursor: pointer;
+}
