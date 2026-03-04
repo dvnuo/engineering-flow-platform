@@ -1030,23 +1030,33 @@
                     const file = data.files?.find(f => f.file_id.startsWith(fileId));
                     
                     if (file && file.content_type?.startsWith('image/')) {
-                        // Create image element
+                        // Create image element - use FULL file_id from file object
+                        const fullFileId = file.file_id;
                         const img = document.createElement('img');
-                        img.src = `/api/files/${fileId}`;
+                        img.src = `/api/files/${fullFileId}`;
                         img.alt = file.filename || 'image';
                         img.className = 'message-image';
-                        img.dataset.fileId = fileId;
+                        img.dataset.fileId = fullFileId;
                         img.loading = 'lazy';
                         img.style.cssText = 'max-width: 300px; max-height: 200px; border-radius: 8px; margin: 8px 0; cursor: pointer;';
                         img.title = file.filename || 'image';
-                        img.onclick = () => window.open(`/api/files/${fileId}`, '_blank');
+                        img.onclick = () => showImageModal(`/api/files/${fullFileId}`);
                         
-                        // Find and replace the text
+                        // Remove @file_xxx from text and insert image as SEPARATE message div
                         const textNode = [...bubble.childNodes].find(n => n.textContent?.includes(fullMatch));
                         if (textNode) {
-                            const span = document.createElement('span');
-                            span.innerHTML = textNode.textContent.replace(fullMatch, img.outerHTML);
-                            textNode.replaceWith(span);
+                            textNode.textContent = textNode.textContent.replace(fullMatch, '').trim();
+                            
+                            // Create a new message div for the image (separate from user message)
+                            const imageDiv = document.createElement('div');
+                            imageDiv.className = 'message user message-image-container';
+                            imageDiv.appendChild(img);
+                            
+                            // Insert before the current message div
+                            const messageDiv = bubble.closest('.message');
+                            if (messageDiv && messageDiv.parentNode) {
+                                messageDiv.parentNode.insertBefore(imageDiv, messageDiv);
+                            }
                         }
                     }
                 } catch (e) {

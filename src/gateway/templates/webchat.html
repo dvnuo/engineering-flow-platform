@@ -532,5 +532,38 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     
     <script src="/static/js/webchat.js"></script>
+
+    <!-- Image Modal -->
+    <div id="imageModal" class="image-modal" onclick="closeImageModal()">
+        <span class="modal-close">&times;</span>
+        <img class="modal-content" id="modalImage">
+    </div>
+
+
+    <script>
+    // Image modal functions
+    function showImageModal(src) {
+        var modal = document.getElementById("imageModal");
+        var modalImg = document.getElementById("modalImage");
+        if (modal && modalImg) {
+            modalImg.src = src;
+            modal.style.display = "flex";
+            modal.style.justifyContent = "center";
+            modal.style.alignItems = "center";
+        }
+    }
+    function closeImageModal() {
+        var modal = document.getElementById("imageModal");
+        if (modal) {
+            modal.style.display = "none";
+        }
+    }
+    document.addEventListener("keydown", function(e) {
+        if (e.key === "Escape") {
+            closeImageModal();
+        }
+    });
+    </script>
+
 </body>
 </html>
