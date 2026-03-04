@@ -578,15 +578,21 @@
     /**
      * Render file list in dropdown
      */
+    // Helper: find nearest @ before cursor position
+    function getAtIndexNearCursor() {
+        const cursorPos = messageInput.selectionStart;
+        return messageInput.value.lastIndexOf('@', cursorPos - 1);
+    }
+
     function renderFileList() {
         if (!uploadedFiles.length) {
             fileList.innerHTML = '<div class="skill-item"><span class="skill-desc">No files uploaded</span></div>';
             return;
         }
 
-        // Get query after @
+        // Get query after @ (use cursor position)
+        const atIndex = getAtIndexNearCursor();
         const inputVal = messageInput.value;
-        const atIndex = inputVal.lastIndexOf('@');
         const query = atIndex >= 0 ? inputVal.slice(atIndex + 1).toLowerCase() : '';
 
         let filteredFiles = uploadedFiles;
@@ -612,7 +618,7 @@
         fileList.querySelectorAll('.skill-item').forEach(item => {
             item.addEventListener('click', () => {
                 const fileId = item.dataset.fileId;
-                const atIndex = messageInput.value.lastIndexOf('@');
+                const atIndex = getAtIndexNearCursor();
                 messageInput.value = messageInput.value.slice(0, atIndex) + '@file_' + fileId.slice(0, 8) + ' ';
                 messageInput.focus();
                 hideFileSelector();
