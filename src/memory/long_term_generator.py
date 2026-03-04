@@ -105,6 +105,7 @@ async def update_long_term_memory_from_daily(
         resp = await llm_client.chat(
             messages=[{"role": "user", "content": prompt}],
             system_prompt=SYSTEM,
+            max_tokens=4000,
         )
         new_memory = (resp.get("content") or "").strip()
         
