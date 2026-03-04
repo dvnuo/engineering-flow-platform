@@ -541,7 +541,10 @@ class Gateway:
             except asyncio.CancelledError:
                     logger.info("[Memory] Periodic check cancelled")
                     raise
-                except Exception as e:
+                except asyncio.CancelledError:
+                logger.info("[Memory] Periodic check cancelled")
+                raise
+            except Exception as e:
                 logger.error(f"[Memory] Periodic check failed: {e}")
 
     async def stop(self) -> None:
