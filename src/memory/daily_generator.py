@@ -13,11 +13,26 @@ logger = logging.getLogger(__name__)
 DAILY_TEMPLATE_SYSTEM = "You are a technical daily report generator. Output ONLY markdown."
 
 
-def _build_daily_prompt(day: str, events: List[Dict[str, Any]]) -> str:
-    """Build prompt for generating daily report from events."""
+def _build_daily_prompt(day: str, events: List[Dict[str, Any]], batch_num: int = 0, total_batches: int = 1) -> str:
+    """Build prompt for generating daily report from events.
+    
+    Args:
+        day: Date string (YYYY-MM-DD)
+        events: List of events to include
+        batch_num: Current batch number (0-indexed)
+        total_batches: Total number of batches
+    """
     lines = [
         f"# {day}",
         "",
+    ]
+    
+    # Add batch context if multiple batches
+    if total_batches > 1:
+        lines.append(f"[Part {batch_num + 1}/{total_batches}]")
+        lines.append("")
+    
+    lines.extend([
         "You will generate a concise engineering daily report from these events.",
         "Rules:",
         "- Focus on completed work, code/config changes, tests, tool outputs, decisions, risks.",
@@ -26,24 +41,24 @@ def _build_daily_prompt(day: str, events: List[Dict[str, Any]]) -> str:
         "- Use this structure if possible:",
         " ## <Topic> (Completed/In Progress)",
         " ### Changes Made",
-        " ### Testing Results",
+        " ### Testing Results", 
         " ### Notes",
         " ### Git Status",
         "",
         "Events:",
-    ]
+    ])
     
-    # Limit to most recent 50 events to avoid huge prompts
-    for e in events[-20:]:
+    # Process all events (no limit)
+    for e in events:
         t = e.get("type")
         sid = e.get("session_id", "unknown")
         tid = e.get("turn_id", 0)
-        content = (e.get("content") or "")[:100]
+        content = (e.get("content") or "")[:50]
         
         if t == "tool":
             tool_name = e.get("tool_name", "unknown")
             tool_args = json.dumps(e.get("tool_args") or {})[:100]
-            tool_res = (e.get("tool_result") or "")[:100]
+            tool_res = (e.get("tool_result") or "")[:50]
             lines.append(f"- [{t}] s={sid} turn={tid} tool={tool_name} args={tool_args} result={tool_res}")
         else:
             lines.append(f"- [{t}] s={sid} turn={tid} {content}")
@@ -95,29 +110,44 @@ async def ensure_daily_memories(
         if backfill_only_missing and path.exists():
             continue
             
-        # Skip if no meaningful events (less than 3)
+        # Skip if no meaningful events
         if len(events) < 3:
             logger.debug(f"Skipping {day}: only {len(events)} events")
             continue
             
         if llm_client:
-            # Generate daily report using LLM
-            prompt = _build_daily_prompt(day, events)
-            try:
-                resp = await llm_client.chat(
-                    messages=[{"role": "user", "content": prompt}],
-                    system_prompt=DAILY_TEMPLATE_SYSTEM,
-                )
-                md = (resp.get("content") or "").strip()
-                if not md.startswith("#"):
-                    md = f"# {day}\n\n" + md
-            except Exception as e:
-                logger.error(f"Failed to generate daily for {day}: {e}")
-                md = f"# {day}\n\n(No events summary available)"
+            # Use batching: split events into chunks of 40
+            BATCH_SIZE = 20
+            total_batches = (len(events) + BATCH_SIZE - 1) // BATCH_SIZE
+            all_sections = []
+            
+            for batch_idx in range(total_batches):
+                batch_start = batch_idx * BATCH_SIZE
+                batch_end = min(batch_start + BATCH_SIZE, len(events))
+                batch = events[batch_start:batch_end]
+                
+                prompt = _build_daily_prompt(day, batch, batch_idx, total_batches)
+                
+                try:
+                    resp = await llm_client.chat(
+                        messages=[{"role": "user", "content": prompt}],
+                        system_prompt=DAILY_TEMPLATE_SYSTEM,
+                    )
+                    section = (resp.get("content") or "").strip()
+                    if section:
+                        all_sections.append(section)
+                except Exception as e:
+                    logger.error(f"Failed to generate daily for {day} batch {batch_idx}: {e}")
+            
+            # Combine all sections
+            if all_sections:
+                md = f"# {day}\n\n" + "\n\n".join(all_sections)
+            else:
+                md = f"# {day}\n\n(No summary available)"
         else:
             # Simple fallback without LLM
             md = f"# {day}\n\n"
-            for e in events[-20:]:
+            for e in events[:50]:
                 t = e.get("type", "unknown")
                 content = (e.get("content") or "")[:100]
                 md += f"- [{t}] {content}\n"
