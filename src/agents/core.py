@@ -698,7 +698,7 @@ You have access to the following tools. When a user asks you to do something tha
                 #             assistant_text=assistant_text,
                 #         )
                 #     except Exception as e:
-                        logger.debug(f"Memory update failed: {e}")
+                #         logger.debug(f"Memory update failed: {e}")
                 
                 return result
             
