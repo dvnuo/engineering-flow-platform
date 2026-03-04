@@ -33,8 +33,8 @@ def _build_daily_prompt(day: str, events: List[Dict[str, Any]]) -> str:
         "Events:",
     ]
     
-    # Limit to most recent 200 events to avoid huge prompts
-    for e in events[-200:]:
+    # Limit to most recent 50 events to avoid huge prompts
+    for e in events[-50:]:
         t = e.get("type")
         sid = e.get("session_id", "unknown")
         tid = e.get("turn_id", 0)
