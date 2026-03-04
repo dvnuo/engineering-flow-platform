@@ -135,11 +135,17 @@ def sanitize_memory_ops(ops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             continue
 
         # Normalize op
+        raw_confidence = op.get("confidence", 0.5)
+        try:
+            numeric_confidence = float(raw_confidence)
+        except (TypeError, ValueError):
+            numeric_confidence = 0.5
+        bounded_confidence = min(1.0, max(0.0, numeric_confidence))
         normalized = {
             "op": op.get("op", "NOOP"),
             "type": op.get("type", "summary"),
             "content": op.get("content", "")[:MAX_CONTENT_LENGTH],
-            "confidence": min(1.0, max(0.0, float(op.get("confidence", 0.5)))),
+            "confidence": bounded_confidence,
             "tags": list(op.get("tags", []))[:MAX_TAGS],
         }
         
