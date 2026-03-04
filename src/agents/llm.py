@@ -843,16 +843,16 @@ class GitHubCopilotProvider(BaseProvider):
         """
         # Fall back to chat() when reasoning_replay is needed (not supported)
 
-	    if reasoning_replay:
-	        logger.info(f"[GitHubCopilot] reasoning_replay enabled, falling back to chat()")
-	    return await self.chat(
-	        messages=messages,
-	        system_prompt=system_prompt,
-	        tools=tools,
-	        model=model,
-	        max_tokens=max_tokens,
-	        reasoning_replay=reasoning_replay,
-	    )
+        if reasoning_replay:
+            logger.info(f"[GitHubCopilot] reasoning_replay enabled, falling back to chat()")
+            return await self.chat(
+                messages=messages,
+                system_prompt=system_prompt,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+                reasoning_replay=reasoning_replay,
+            )
         
         # Check if API key is configured
         api_key = os.environ.get('GITHUB_COPILOT_TOKEN') or config.llm.get('api_key', '')
