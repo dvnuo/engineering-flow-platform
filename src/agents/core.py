@@ -688,16 +688,16 @@ You have access to the following tools. When a user asks you to do something tha
                         user_text = msg.get("content", "")
                         break
                 
-                # Schedule memory update (don't await - it's not critical)
-                if user_text and self.memory_update_manager:
-                    try:
-                        await self.memory_update_manager.on_turn_completed(
-                            session_id=session_id,
-                            turn_id=sum(1 for m in recent_messages if m.get("role") == "user"),
-                            user_text=user_text,
-                            assistant_text=assistant_text,
-                        )
-                    except Exception as e:
+                # Disabled: Turn-based memory writing (only backfill at startup)
+                # if user_text and self.memory_update_manager:
+                #     try:
+                #         await self.memory_update_manager.on_turn_completed(
+                #             session_id=session_id,
+                #             turn_id=sum(1 for m in recent_messages if m.get("role") == "user"),
+                #             user_text=user_text,
+                #             assistant_text=assistant_text,
+                #         )
+                #     except Exception as e:
                         logger.debug(f"Memory update failed: {e}")
                 
                 return result
