@@ -743,16 +743,23 @@
         
         // Handle selector close on value change
         const value = this.value;
-        const cursorPos = this.selectionStart;
         
-        // Close skill selector when deleting the /
-        if (skillSelector.classList.contains('active') && !value.includes('/')) {
+        // Close skill selector when / is deleted or not at position 0
+        if (skillSelector.classList.contains('active') && !value.startsWith('/')) {
             hideSkillSelector();
         }
         
-        // Close file selector when @ is deleted
-        if (fileSelector.classList.contains('active') && !value.includes('@')) {
-            hideFileSelector();
+        // Close file selector when @ is deleted or not valid (not at start or after whitespace)
+        if (fileSelector.classList.contains('active')) {
+            const cursorPos = this.selectionStart;
+            const textBefore = value.slice(0, cursorPos);
+            const lastAtBeforeCursor = textBefore.lastIndexOf('@');
+            // Check if there's a valid @ trigger before cursor
+            const hasValidAtTrigger = lastAtBeforeCursor >= 0 && 
+                (lastAtBeforeCursor === 0 || /\s$/.test(textBefore.slice(0, lastAtBeforeCursor)));
+            if (!hasValidAtTrigger) {
+                hideFileSelector();
+            }
         }
     });
 
