@@ -660,7 +660,7 @@ You have access to the following tools. When a user asks you to do something tha
                     try:
                         await self.memory_update_manager.on_turn_completed(
                             session_id=session_id,
-                            turn_id=iteration,
+                            turn_id=sum(1 for m in recent_messages if m.get("role") == "user"),
                             user_text=user_text,
                             assistant_text=assistant_text,
                         )

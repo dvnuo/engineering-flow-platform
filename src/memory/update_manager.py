@@ -230,10 +230,25 @@ Remember: Only extract what was explicitly said. Do not invent information.
         today = datetime.now().strftime("%Y-%m-%d")
         daily_note_path = self.memory_dir / f"{today}.md"
 
-        # Build entry
-        timestamp = datetime.utcnow().isoformat() + "Z"
-        entries = [f"\n## Turn {turn_id} ({timestamp}) [session {session_id}]"]
+        # Idempotency check - marker for this session/turn
+        marker = f"<!-- mem_turn:session_id={session_id};turn_id={turn_id} -->"
+        
+        # Check if already written
+        if daily_note_path.exists():
+            existing = daily_note_path.read_text(encoding="utf-8", errors="ignore")
+            if marker in existing:
+                logger.info(f"Skip memory write (idempotent): session={session_id}, turn={turn_id}")
+                return
 
+        # Build entry with marker
+        timestamp = datetime.utcnow().isoformat() + "Z"
+        entries = [f"\n## Turn {turn_id} ({timestamp}) [session {session_id}]\n{marker}"]
+
+        # Check existing content for deduplication
+        existing_content = ""
+        if daily_note_path.exists():
+            existing_content = daily_note_path.read_text(encoding="utf-8", errors="ignore")
+        
         for op in ops:
             if op.get("op") == "NOOP":
                 continue
@@ -244,9 +259,14 @@ Remember: Only extract what was explicitly said. Do not invent information.
             tags = op.get("tags", [])
 
             tag_str = f"|tags={','.join(tags)}" if tags else ""
-            entries.append(
-                f"- [{mem_type}|c={confidence:.1f}{tag_str}] {content}"
-            )
+            line = f"- [{mem_type}|c={confidence:.1f}{tag_str}] {content}"
+            
+            # Deduplication: skip if this exact line already exists
+            if line in existing_content:
+                logger.debug(f"Skip duplicate: {line[:50]}...")
+                continue
+                
+            entries.append(line)
 
         entry_text = "\n".join(entries)
 

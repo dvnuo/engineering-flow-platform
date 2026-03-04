@@ -14,6 +14,20 @@ MAX_OPS_COUNT = 5
 MAX_CONTENT_LENGTH = 600
 MAX_TAGS = 5
 
+# Noise patterns to filter out
+NOISE_PATTERNS = [
+    "assistant saved",
+    "assistant remembers", 
+    "assistant will call",
+    "saved in the user's profile",
+    "i will call you",
+    "i've saved",
+    "i've noted",
+    "i will remember",
+    "assistant decided",
+    "as an AI",
+]
+
 
 def validate_memory_ops(ops: List[Dict[str, Any]]) -> Tuple[bool, str]:
     """Validate MemoryOps list.
@@ -83,6 +97,22 @@ def validate_memory_ops(ops: List[Dict[str, Any]]) -> Tuple[bool, str]:
     return True, ""
 
 
+def filter_noise_ops(ops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filter out noisy operations."""
+    filtered = []
+    for op in ops:
+        content = op.get("content", "").lower()
+        # Skip if content matches noise patterns
+        if any(p in content for p in NOISE_PATTERNS):
+            continue
+        # Skip if tags contain personal_information with fact/preference
+        tags = [t.lower() for t in op.get("tags", [])]
+        if "personal_information" in tags and op.get("type") in ("fact", "preference"):
+            continue
+        filtered.append(op)
+    return filtered
+
+
 def sanitize_memory_ops(ops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Sanitize and normalize MemoryOps.
     
@@ -92,6 +122,9 @@ def sanitize_memory_ops(ops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     Returns:
         Sanitized list of ops
     """
+    # First filter noise
+    ops = filter_noise_ops(ops)
+    
     sanitized = []
     for op in ops:
         if not isinstance(op, dict):
@@ -108,8 +141,11 @@ def sanitize_memory_ops(ops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "content": op.get("content", "")[:MAX_CONTENT_LENGTH],
             "confidence": min(1.0, max(0.0, float(op.get("confidence", 0.5)))),
             "tags": list(op.get("tags", []))[:MAX_TAGS],
-            "source": op.get("source"),
         }
+        
+        # Ensure source exists (use placeholder if not set)
+        if "source" in op:
+            normalized["source"] = op["source"]
 
         # Remove None values
         normalized = {k: v for k, v in normalized.items() if v is not None}
