@@ -285,6 +285,11 @@ Remember: Only extract what was explicitly said. Do not invent information.
                 
             entries.append(line)
 
+        # Skip writing if no actual content (all were duplicates)
+        if len(entries) <= 1:  # Only header, no content lines
+            logger.info(f"Skip memory write (all duplicates): session={session_id}, turn={turn_id}")
+            return
+
         entry_text = "\n".join(entries)
 
         # Append to daily note
