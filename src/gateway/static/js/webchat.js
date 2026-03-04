@@ -112,6 +112,28 @@
                 fileExplorerContent.innerHTML = html;
 
                 // Add cite button handlers
+
+                // Add click handler for file items to show modal
+                fileExplorerContent.querySelectorAll('.file-item').forEach(item => {
+                    item.addEventListener('click', (e) => {
+                        // Don't trigger if clicking on buttons
+                        if (e.target.tagName === 'BUTTON') return;
+                        
+                        const fileId = item.dataset.fileId;
+                        const file = files.find(f => f.file_id.startsWith(fileId));
+                        if (!file) return;
+                        
+                        if (file.content_type && file.content_type.startsWith('image/')) {
+                            showImageModal(`/api/files/${file.file_id}`);
+                        } else {
+                            fetch(`/api/files/${file.file_id}`)
+                                .then(res => res.text())
+                                .then(text => showTextModal(text, file.filename))
+                                .catch(err => console.error('Failed to load file:', err));
+                        }
+                    });
+                });
+
                 fileExplorerContent.querySelectorAll('.cite-btn').forEach(btn => {
                     btn.addEventListener('click', (e) => {
                         const fileRef = e.target.dataset.fileId;
