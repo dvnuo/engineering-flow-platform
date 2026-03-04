@@ -445,39 +445,19 @@ class Gateway:
     async def _run_memory_bootstrap(self) -> None:
         """Run memory bootstrap in background."""
         try:
-            from src.agents.core import Agent
             from src.memory.daily_generator import ensure_daily_memories
-            from src.memory.long_term_generator import update_long_term_memory_from_daily
+            from src.config import config
             
             logger.info("[Memory] Starting background bootstrap...")
             
-            # Get LLM client from config
-            from src.config import config
-            llm_config = config.llm
-            from src.agents.llm import create_llm_client
-            llm_client = create_llm_client(
-                provider=llm_config.get('provider', 'openai'),
-                api_key=llm_config.get('api_key', ''),
-                api_base=llm_config.get('api_base'),
-                model=llm_config.get('model', 'gpt-5-mini'),
-            )
-            
             workspace = config.session.get('workspace', '/root/.efp/workspace')
             
-            # Create daily memories
+            # Create daily memories (without LLM for now)
             created_daily = await ensure_daily_memories(
                 workspace=workspace,
-                llm_client=llm_client,
+                llm_client=None,
                 backfill_only_missing=True,
             )
-            
-            # Generate long-term memory
-            if created_daily and llm_client:
-                await update_long_term_memory_from_daily(
-                    workspace=workspace,
-                    llm_client=llm_client,
-                    daily_paths=created_daily,
-                )
             
             logger.info(f"[Memory] Bootstrap complete: {len(created_daily) if created_daily else 0} daily files")
         except Exception as e:
