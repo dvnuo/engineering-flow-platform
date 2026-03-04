@@ -48,7 +48,7 @@ def _build_daily_prompt(day: str, events: List[Dict[str, Any]]) -> str:
         else:
             lines.append(f"- [{t}] s={sid} turn={tid} {content}")
     
-    return " ".join(lines)
+    return "\n".join(lines)
 
 
 async def ensure_daily_memories(
