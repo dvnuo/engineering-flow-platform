@@ -95,17 +95,12 @@ async def ensure_daily_memories(
         if day == "unknown":
             continue
         
-        # Skip today - only backfill historical days
-        try:
-            day_date = datetime.strptime(day, "%Y-%m-%d").date()
-            if day_date >= today:
-                continue
-        except ValueError:
-            continue
+        # Process all days including today
             
         path = mem_dir / f"{day}.md"
         
-        if backfill_only_missing and path.exists():
+        # Always regenerate for today, skip only historical if backfill_only_missing
+        if backfill_only_missing and path.exists() and day != today.strftime("%Y-%m-%d"):
             continue
             
         # Skip if no meaningful events
