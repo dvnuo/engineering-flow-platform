@@ -11,57 +11,52 @@ from src.memory.event_log import EventLogger
 logger = logging.getLogger(__name__)
 
 DAILY_TEMPLATE_SYSTEM = "You are a technical daily report generator. Output ONLY markdown."
+MERGE_TEMPLATE_SYSTEM = "You are a technical daily report merger. Output ONLY markdown."
 
 
-def _build_daily_prompt(day: str, events: List[Dict[str, Any]], batch_num: int = 0, total_batches: int = 1) -> str:
-    """Build prompt for generating daily report from events.
-    
-    Args:
-        day: Date string (YYYY-MM-DD)
-        events: List of events to include
-        batch_num: Current batch number (0-indexed)
-        total_batches: Total number of batches
-    """
+def _build_partial_prompt(day: str, events: List[Dict[str, Any]], chunk_idx: int, total_chunks: int) -> str:
+    """Build prompt for generating partial summary from a chunk of events."""
     lines = [
-        f"# {day}",
+        f"# {day} - Part {chunk_idx + 1}/{total_chunks}",
         "",
-    ]
-    
-    # Add batch context if multiple batches
-    if total_batches > 1:
-        lines.append(f"[Part {batch_num + 1}/{total_batches}]")
-        lines.append("")
-    
-    lines.extend([
-        "You will generate a concise engineering daily report from these events.",
-        "Rules:",
-        "- Focus on completed work, code/config changes, tests, tool outputs, decisions, risks.",
-        "- Do NOT write 'assistant saved/remembered'.",
-        "- If there is no meaningful engineering work, write a short 'Notes' only.",
-        "- Use this structure if possible:",
-        " ## <Topic> (Completed/In Progress)",
-        " ### Changes Made",
-        " ### Testing Results", 
-        " ### Notes",
-        " ### Git Status",
+        "Generate a brief summary (2-4 bullet points) of these events.",
+        "Focus on: completed work, code changes, decisions, notable interactions.",
         "",
         "Events:",
-    ])
+    ]
     
-    # Process all events (no limit)
+    # Shorter content for partial summaries
     for e in events:
         t = e.get("type")
         sid = e.get("session_id", "unknown")
-        tid = e.get("turn_id", 0)
-        content = (e.get("content") or "")[:50]
+        content = (e.get("content") or "")[:60]
         
         if t == "tool":
             tool_name = e.get("tool_name", "unknown")
-            tool_args = json.dumps(e.get("tool_args") or {})[:100]
-            tool_res = (e.get("tool_result") or "")[:50]
-            lines.append(f"- [{t}] s={sid} turn={tid} tool={tool_name} args={tool_args} result={tool_res}")
+            lines.append(f"- [tool] {sid}: {tool_name}")
         else:
-            lines.append(f"- [{t}] s={sid} turn={tid} {content}")
+            lines.append(f"- [{t}] {sid}: {content[:50]}")
+    
+    return "\n".join(lines)
+
+
+def _build_merge_prompt(day: str, partial_summaries: List[str]) -> str:
+    """Build prompt for merging partial summaries into final daily report."""
+    lines = [
+        f"# {day}",
+        "",
+        "Merge the following partial summaries into a single concise daily report.",
+        "Rules:",
+        "- Combine related items, remove duplicates",
+        "- Focus on meaningful engineering work, not trivial interactions",
+        "- Do NOT write 'assistant saved/remembered'",
+        "- Use structure: ## <Topic> with bullet points",
+        "",
+        "Partial Summaries:",
+    ]
+    
+    for i, summary in enumerate(partial_summaries):
+        lines.append(f"\n--- Part {i + 1} ---\n{summary}")
     
     return "\n".join(lines)
 
@@ -92,6 +87,9 @@ async def ensure_daily_memories(
     # Only backfill historical days (not today)
     today = date.today()
     
+    # CHUNK_SIZE: number of events per partial summary
+    CHUNK_SIZE = 150
+    
     created = []
     for day, events in sorted(groups.items()):
         if day == "unknown":
@@ -116,32 +114,45 @@ async def ensure_daily_memories(
             continue
             
         if llm_client:
-            # Use batching: split events into chunks of 40
-            BATCH_SIZE = 20
-            total_batches = (len(events) + BATCH_SIZE - 1) // BATCH_SIZE
-            all_sections = []
+            # Split events into chunks
+            chunks = []
+            for i in range(0, len(events), CHUNK_SIZE):
+                chunks.append(events[i:i + CHUNK_SIZE])
             
-            for batch_idx in range(total_batches):
-                batch_start = batch_idx * BATCH_SIZE
-                batch_end = min(batch_start + BATCH_SIZE, len(events))
-                batch = events[batch_start:batch_end]
-                
-                prompt = _build_daily_prompt(day, batch, batch_idx, total_batches)
+            logger.info(f"Generating daily for {day}: {len(events)} events split into {len(chunks)} chunks")
+            
+            # Generate partial summaries for each chunk
+            partial_summaries = []
+            for chunk_idx, chunk in enumerate(chunks):
+                prompt = _build_partial_prompt(day, chunk, chunk_idx, len(chunks))
                 
                 try:
                     resp = await llm_client.chat(
                         messages=[{"role": "user", "content": prompt}],
                         system_prompt=DAILY_TEMPLATE_SYSTEM,
                     )
-                    section = (resp.get("content") or "").strip()
-                    if section:
-                        all_sections.append(section)
+                    summary = (resp.get("content") or "").strip()
+                    if summary:
+                        partial_summaries.append(summary)
                 except Exception as e:
-                    logger.error(f"Failed to generate daily for {day} batch {batch_idx}: {e}")
+                    logger.error(f"Failed to generate partial for {day} chunk {chunk_idx}: {e}")
             
-            # Combine all sections
-            if all_sections:
-                md = f"# {day}\n\n" + "\n\n".join(all_sections)
+            # Merge all partial summaries
+            if len(partial_summaries) == 1:
+                md = f"# {day}\n\n{partial_summaries[0]}"
+            elif len(partial_summaries) > 1:
+                merge_prompt = _build_merge_prompt(day, partial_summaries)
+                try:
+                    resp = await llm_client.chat(
+                        messages=[{"role": "user", "content": merge_prompt}],
+                        system_prompt=MERGE_TEMPLATE_SYSTEM,
+                    )
+                    md = (resp.get("content") or "").strip()
+                    if not md.startswith("#"):
+                        md = f"# {day}\n\n{md}"
+                except Exception as e:
+                    logger.error(f"Failed to merge summaries for {day}: {e}")
+                    md = f"# {day}\n\n" + "\n\n".join(partial_summaries)
             else:
                 md = f"# {day}\n\n(No summary available)"
         else:
