@@ -445,7 +445,7 @@ class Gateway:
     async def _run_memory_bootstrap(self) -> None:
         """Run memory bootstrap in background."""
         try:
-            from src.agents.core import AgentCore
+            from src.agents.core import Agent
             from src.memory.daily_generator import ensure_daily_memories
             from src.memory.long_term_generator import update_long_term_memory_from_daily
             
