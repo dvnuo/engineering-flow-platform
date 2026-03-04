@@ -238,7 +238,9 @@ Remember: Only extract what was explicitly said. Do not invent information.
             turn_id: Turn number
             ops: List of memory operations
         """
-        if not ops or ops[0].get("op") == "NOOP":
+        # Filter out NOOP entries and check if any actionable ops remain
+        actionable_ops = [op for op in ops if op.get("op") != "NOOP"]
+        if not actionable_ops:
             return
 
         # Get today's daily note path
