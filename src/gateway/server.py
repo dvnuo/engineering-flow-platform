@@ -70,6 +70,7 @@ async def handle_jira_message(
 
 
 
+        
         # Confirmation
         return f"Test cases for {issue_key} have been generated and added to the issue comments."
         
@@ -116,9 +117,6 @@ class Gateway:
         try:
             from .events import setup_event_routes
             setup_event_routes(self.app)
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
         except Exception as e:
             logger.warning(f"Could not setup event routes: {e}")
             logger.info("WebChat UI enabled at /")
@@ -212,9 +210,6 @@ class Gateway:
                 'has_more': has_more,
                 'total': total_count
             })
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
         except Exception as e:
             logger.error(f"[handle_list_sessions] ERROR: {e}", exc_info=True)
             return web.json_response({'error': str(e)}, status=500)
@@ -265,9 +260,6 @@ class Gateway:
                 if "provider" in llm and llm["provider"] not in ["openai", "github_copilot", "claude", "ollama"]:
                     return web.json_response({"status": "error", "message": "Invalid provider"}, status=400)
             return web.json_response({"status": "ok", "message": "Settings validated. Restart required to apply."})
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 
@@ -307,9 +299,6 @@ class Gateway:
             
             result = await llm_client.providers['ollama'].pull_model(model)
             return web.json_response({"status": "success", "result": result})
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
@@ -446,87 +435,9 @@ class Gateway:
 
         logger.info(f"Gateway started on http://{self.host}:{self.port}")
 
-        # Run memory bootstrap in background after server starts
-        asyncio.create_task(self._run_memory_bootstrap())
-
         # Jira channel is initialized in __init__ with HTTP client ready
         if self.jira_enabled and jira_channel.is_configured():
             logger.info("Jira channel enabled and ready")
-
-    async def _run_memory_bootstrap(self) -> None:
-        """Run memory bootstrap in background."""
-        try:
-            from src.memory.daily_generator import ensure_daily_memories
-            from src.config import config
-            
-            logger.info("[Memory] Starting background bootstrap...")
-            
-            workspace = config.session.get('workspace', '/root/.efp/workspace')
-            
-            # Create daily memories (without LLM for now)
-            created_daily = await ensure_daily_memories(
-                workspace=workspace,
-                llm_client=None,
-                backfill_only_missing=True,
-            )
-            
-            logger.info(f"[Memory] Bootstrap complete: {len(created_daily) if created_daily else 0} daily files")
-            
-            # Start periodic check for session changes
-            await self._start_periodic_memory_check(workspace)
-            
-        except asyncio.CancelledError:
-            logger.info("[Memory] Periodic check cancelled")
-            raise
-        except Exception as e:
-            logger.error(f"[Memory] Bootstrap failed: {e}")
-    
-    async def _start_periodic_memory_check(self, workspace: str):
-        """Periodically check for session changes and update daily memory."""
-        import time
-        from pathlib import Path
-        from src.memory.daily_generator import ensure_daily_memories
-        
-        CHECK_INTERVAL = 3600  # 1 hour in seconds
-        sessions_dir = Path(workspace) / ".sessions"
-        
-        last_mtime = 0
-        
-        # Get initial file modification times
-        if sessions_dir.exists():
-            for f in sessions_dir.glob("*.jsonl"):
-                last_mtime = max(last_mtime, f.stat().st_mtime)
-        
-        logger.info("[Memory] Starting periodic session check...")
-        
-        while True:
-            await asyncio.sleep(CHECK_INTERVAL)
-            
-            try:
-                # Check if any session file has been modified
-                current_mtime = 0
-                if sessions_dir.exists():
-                    for f in sessions_dir.glob("*.jsonl"):
-                        current_mtime = max(current_mtime, f.stat().st_mtime)
-                
-                # If new activity, regenerate today's memory
-                if current_mtime > last_mtime:
-                    logger.info("[Memory] Session changes detected, updating daily memory...")
-                    created_daily = await ensure_daily_memories(
-                        workspace=workspace,
-                        llm_client=None,
-                        backfill_only_missing=True,
-                    )
-                    logger.info(f"[Memory] Updated: {len(created_daily) if created_daily else 0} daily files")
-                    last_mtime = current_mtime
-                else:
-                    logger.debug("[Memory] No session changes detected")
-                    
-            except asyncio.CancelledError:
-                logger.info("[Memory] Periodic check cancelled")
-                raise
-            except Exception as e:
-                logger.error(f"[Memory] Periodic check failed: {e}")
 
     async def stop(self) -> None:
         """Stop the gateway server."""
@@ -535,9 +446,6 @@ class Gateway:
             try:
                 await jira_channel.close()
                 logger.info("Jira channel closed")
-            except asyncio.CancelledError:
-                logger.info("[Memory] Periodic check cancelled")
-                raise
             except Exception as e:
                 logger.warning(f"Error closing Jira channel: {e}")
         
