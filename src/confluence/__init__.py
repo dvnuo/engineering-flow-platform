@@ -1,10 +1,11 @@
 """Confluence Integration - Single source of truth for Confluence operations."""
 
 import logging
+from typing import Optional
+
+from src.utils.attachment import download_and_process_attachment
 
 logger = logging.getLogger(__name__)
-from src.utils.attachment import download_and_process_attachment
-from typing import Optional
 
 from .api import (
     ConfluenceChannel, 

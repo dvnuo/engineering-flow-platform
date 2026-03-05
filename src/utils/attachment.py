@@ -5,6 +5,8 @@ and processes them for LLM consumption.
 """
 
 import asyncio
+import re
+import logging
 import httpx
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +25,6 @@ from .file_parser import (
 # Configure logging
 import logging
 logger = logging.getLogger(__name__)
-_DEBUG_MODE = False
 
 
 @dataclass
@@ -87,7 +88,7 @@ async def download_and_process_attachment(
         # Extract text
         try:
             result = await parse_file(metadata.file_id)
-            content = result.text[:max_text_chars] if result.text else ""
+            content = result.markdown[:max_text_chars] if result.markdown else ""
             content_format = "text"
         except Exception as e:
             logger.warning(f"Failed to parse text: {e}")
@@ -151,8 +152,7 @@ def _extract_filename(header: str) -> str:
     if not header:
         return ""
     
-    import re
-    match = re.search(r'filename[^;=\n]*=(([\'"]).*?\2|[^;\n]*)', header)
+        match = re.search(r'filename[^;=\n]*=(([\'"]).*?\2|[^;\n]*)', header)
     if match:
         filename = match.group(1).strip('"\'')
         return filename
