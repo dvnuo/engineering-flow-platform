@@ -1383,6 +1383,10 @@
                     // Render all messages from session history
                     sessionData.messages.forEach(msg => {
                         const role = msg.role || 'user';
+                        // Skip tool messages if debug is disabled
+                        if (role === 'tool' && !(debugEnabled && debugEnabled.checked)) {
+                            return;
+                        }
                         const content = msg.content || '';
                         const timestamp = msg.timestamp || msg.created_at;
                         addMessage(role, content, timestamp, msg.tool_calls);
@@ -1737,6 +1741,10 @@
             } else {
                 messages.forEach(msg => {
                     const role = msg.role || 'user';
+                    // Skip tool messages if debug is disabled
+                    if (role === 'tool' && !(debugEnabled && debugEnabled.checked)) {
+                        return;
+                    }
                     addMessage(role, msg.content || '', msg.timestamp || msg.created_at, msg.tool_calls);
                 });
             }
