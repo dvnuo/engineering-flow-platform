@@ -1388,10 +1388,9 @@
                             if (role === 'tool') {
                                 return;
                             }
-                            // Skip messages with placeholder tool content
-                            const skipPhrases = ['[Tool call]', '[Tool exec result]', '[Tool run_command result]', 'Tool Call', 'Tool Exec Result', 'Tool run_command result'];
+                            // Skip messages with placeholder tool content using regex
                             const msgContent = msg.content || '';
-                            if (skipPhrases.some(phrase => msgContent.includes(phrase))) {
+                            if (/\[Tool\s+.*\s+result\]/.test(msgContent) || /Tool\s+.*\s+Result/.test(msgContent)) {
                                 return;
                             }
                         }
