@@ -5,8 +5,6 @@ from typing import Optional
 
 from src.utils.attachment import download_and_process_attachment
 
-logger = logging.getLogger(__name__)
-
 from .api import (
     ConfluenceChannel, 
     confluence_channel,
@@ -125,7 +123,7 @@ async def confluence_get_page(
         # Process attachments
         attachment_info = await _process_confluence_attachments(page_id)
         
-        return attachment_info + page_content if attachment_info else page_content
+        return page_content + ("\n" + attachment_info if attachment_info else "") if attachment_info else page_content
     except Exception as e:
         return f"Error getting page: {e}"
 

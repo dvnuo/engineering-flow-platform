@@ -136,8 +136,12 @@ async def jira_get_issue(
         except Exception as e:
             logger.warning(f"Failed to process attachments: {e}")
         
-        if attachment_info and isinstance(result, str):
-            result = result + "\n" + attachment_info
+        if attachment_info:
+            if isinstance(result, str):
+                result = result + "\n" + attachment_info
+            elif isinstance(result, dict):
+                # Add attachment info as a field in the dict
+                result["attachment_info"] = attachment_info
         
         return result
     except Exception as e:

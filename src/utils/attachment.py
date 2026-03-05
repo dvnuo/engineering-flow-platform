@@ -9,17 +9,13 @@ import logging
 import logging
 import httpx
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional, Dict, Any
 
 from .file_parser import (
     save_uploaded_file,
     parse_file,
     get_file_path,
-    get_image_for_llm,
     compress_image_for_llm,
-    is_image_file,
-    FileMetadata,
 )
 
 # Configure logging
@@ -172,10 +168,13 @@ def _is_text_type(content_type: str) -> bool:
 
 def _detect_content_type(filename: str, content: bytes) -> str:
     """Detect content type from filename or content."""
-    import magic
     try:
+        import magic
         mime = magic.Magic(mime=True)
         return mime.from_buffer(content)
+    except ImportError:
+        # magic not installed, fall back to extension-based
+        pass
     except Exception:
         pass
     
