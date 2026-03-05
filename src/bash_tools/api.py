@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 WORKSPACE_ROOT = Path.home() / ".efp" / "workspace"
 DEFAULT_TIMEOUT_MS = 15000
 MAX_OUTPUT_BYTES = 200000
-MAX_LINES = 4000
 
 # Common commands to prioritize (for default discovery)
 COMMON_COMMANDS = [
