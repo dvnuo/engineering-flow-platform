@@ -1010,12 +1010,17 @@
         let messageContent = content || '';
 
         if (role === 'tool') {
-            badge = '<span class="tool-badge">🔧 Tool Result</span>';
+            // Only show tool result badge in debug mode
+            if (debugEnabled && debugEnabled.checked) {
+                badge = '<span class="tool-badge">🔧 Tool Result</span>';
+            }
         } else if (role === 'assistant' && toolCalls && toolCalls.length > 0) {
-            // Assistant message with tool calls but no content (pending tool execution)
-            badge = '<span class="tool-calls-badge">⚙️ Calling Tools</span>';
-            const toolNames = toolCalls.map(tc => tc.function?.name || tc.name).join(', ');
-            messageContent = `_Calling: ${toolNames}_`;
+            // Only show tool call badge in debug mode
+            if (debugEnabled && debugEnabled.checked) {
+                badge = '<span class="tool-calls-badge">⚙️ Calling Tools</span>';
+                const toolNames = toolCalls.map(tc => tc.function?.name || tc.name).join(', ');
+                messageContent = `_Calling: ${toolNames}_`;
+            }
         }
 
         // Process @file_xxx references for inline images
@@ -2863,14 +2868,22 @@
                 message = data.message || 'LLM is thinking...';
                 break;
             case 'tool_call':
-                // Show tool name and arguments in debug mode
-                const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '';
-                message = `🔧 ${data.tool || 'Unknown tool'}\n📝 Args: ${argsStr || 'none'}`;
+                // Only show in debug mode
+                if (debugEnabled && debugEnabled.checked) {
+                    const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '';
+                    message = `🔧 ${data.tool || 'Unknown tool'}\n📝 Args: ${argsStr || 'none'}`;
+                } else {
+                    message = '';
+                }
                 break;
             case 'tool_result':
-                // Show tool result or error
-                const statusIcon = data.success ? '✅' : '❌';
-                message = `${statusIcon} ${data.tool || 'Tool'} Result:\n${data.result || '(no result)'}`;
+                // Only show in debug mode
+                if (debugEnabled && debugEnabled.checked) {
+                    const statusIcon = data.success ? '✅' : '❌';
+                    message = `${statusIcon} ${data.tool || 'Tool'} Result:\n${data.result || '(no result)'}`;
+                } else {
+                    message = '';
+                }
                 break;
             case 'confirmation':
                 message = data.message || 'Confirmation required';
