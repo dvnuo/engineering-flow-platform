@@ -1021,11 +1021,16 @@
         // Process @file_xxx references for inline images
         const processedContent = messageContent;
 
+        // Render markdown only for non-user, non-error roles; user and error messages are escaped/plain text
+        const contentHtml = (role === 'assistant' || role === 'tool')
+            ? renderMarkdown(processedContent)
+            : escapeHtml(processedContent).replace(/\n/g, '<br>');
+
         div.innerHTML = `
             <div class="avatar" aria-hidden="true">${avatar}</div>
             <div>
                 ${badge}
-                <div class="message-bubble">${renderMarkdown(processedContent)}</div>
+                <div class="message-bubble">${contentHtml}</div>
                 <div class="message-timestamp" aria-label="Message time">${time}</div>
             </div>
         `;

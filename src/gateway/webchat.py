@@ -1656,6 +1656,14 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/files/{file_id}/preview', api_files_preview)
     app.router.add_get('/api/files/{file_id}', api_files_get)
     app.router.add_delete('/api/files/{file_id}', api_files_delete)
+
+    # Basic sanity check to ensure the GET /api/files/{file_id} route stays registered.
+    # This helps catch regressions if the route is removed or renamed without updating tests.
+    assert any(
+        route.method == 'GET'
+        and getattr(route.resource, 'canonical', None) == '/api/files/{file_id}'
+        for route in app.router.routes()
+    ), "Expected GET /api/files/{file_id} route to be registered"
     
     # File context API endpoints
     app.router.add_get('/api/context/files', api_context_files)
