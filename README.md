@@ -348,56 +348,36 @@ server:
 
 ## Shell Tools (bash_tools)
 
-The platform includes shell tools for file operations and secure command execution.
+The platform includes shell tools for secure command execution.
 
 ### Available Tools
 
 | Tool | Description |
 |------|-------------|
-| `read` | Read file contents |
-| `write` | Create or overwrite files |
-| `edit` | Edit files by replacing text |
-| `list_dir` | List directory contents |
-| `exec` | Execute shell commands with security controls |
+| `discover_commands` | Discover available commands on the system |
+| `run_command` | Execute shell commands with security controls |
 
-### Security Modes
+### Security Features
 
-The `exec` tool supports three security modes:
+The tools have built-in security:
 
-| Mode | Behavior |
-|------|----------|
-| `deny` | Block all commands by default (safest) |
-| `allowlist` | Only allow commands in safe_bins or allowlist |
-| `full` | Allow all commands (use with caution) |
+- Working directory limited to `~/.efp/workspace`
+- Dangerous commands blocked (rm, sudo, bash, etc.)
+- Shell wrapper execution blocked
+- Output size limited to 200KB
+- Environment PATH override blocked
 
-### Approval Modes
+### Usage
 
-| Mode | Behavior |
-|------|----------|
-| `off` | No approval needed |
-| `on-miss` | Request approval when command not in allowlist |
-| `always` | Always request approval |
+```python
+# Discover available commands
+result = await discover_commands(prefix="git")
 
-### Configuration
+# Run a command
+result = await run_command(cmd="ls", args=["-la"])
+```
 
-Edit `config.yaml`:
-
-```yaml
-bash_tools:
-  # Security mode: deny, allowlist, full
-  security: "deny"
-
-  # Approval mode: off, on-miss, always
-  ask: "on-miss"
-
-  # Safe binaries (always allowed in allowlist mode)
-  safe_bins:
-    - "jq"
-    - "grep"
-    - "cut"
-    - "sort"
-    - "uniq"
-    - "head"
+See `src/bash_tools/README.md` for more details.
     - "tail"
     - "tr"
     - "wc"
