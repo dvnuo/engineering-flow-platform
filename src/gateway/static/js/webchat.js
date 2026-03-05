@@ -1136,76 +1136,32 @@
             text = text.substring(0, MAX_INPUT_LENGTH);
         }
 
-        // Escape HTML first to prevent XSS
-        let html = escapeHtml(text);
+        // Use marked.js for proper markdown rendering
+        try {
+            // Configure marked options
+            marked.setOptions({
+                breaks: true,        // Convert \n to <br>
+                gfm: true,          // GitHub Flavored Markdown
+                highlight: function(code, lang) {
+                    if (lang && hljs) {
+                        try {
+                            return hljs.highlight(code, { language: lang }).value;
+                        } catch (e) {
+                            return code;
+                        }
+                    }
+                    return code;
+                }
+            });
 
-        // Code blocks with language class (```lang ... ```)
-        html = html.replace(/```(\w*)\s*([\s\S]*?)```/g, function(match, lang, code) {
-            const langClass = lang ? `language-${lang}` : '';
-            const escapedCode = escapeHtml(code.trim());
-            return `<pre><code class="${langClass}">${escapedCode}</code></pre>`;
-        });
-
-        // Inline code (`...`)
-        html = html.replace(/`([^`]+)`/g, function(match, code) {
-            return '<code>' + escapeHtml(code) + '</code>';
-        });
-
-        // Bold (**...** or __...__)
-        html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-        html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-
-        // Italic (*...* or _..._)
-        html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-        html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
-
-        // Strikethrough (~~...~~)
-        html = html.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-
-        // Spoiler (||...||) - collapsible content
-        html = html.replace(/\|\|([^|]+)\|\|/g, '<span class="spoiler">$1</span>');
-
-        // Headers (# ## ### ####)
-        html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
-        html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-        html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-        html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-
-        // Blockquotes (> ...)
-        html = html.replace(/^&gt;\s*(.+)$/gm, '<blockquote>$1</blockquote>');
-        html = html.replace(/^>\s*(.+)$/gm, '<blockquote>$1</blockquote>');
-
-        // Unordered lists (- or * or +)
-        html = html.replace(/^[\-\*\+]\s+(.+)$/gm, '<li>$1</li>');
-
-        // Ordered lists (1. 2. etc.)
-        html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
-
-        // Wrap consecutive list items in <ul> or <ol>
-        html = html.replace(/(<li>.*<\/li>)+/g, function(match) {
-            // Check if any item starts with a digit pattern (ordered list)
-            const hasOrdered = /<li>\s*\d+\./.test(match);
-            if (hasOrdered) {
-                return '<ol>' + match + '</ol>';
-            }
-            return '<ul>' + match + '</ul>';
-        });
-
-        // Links ([text](url))
-        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="link">$1</a>');
-
-        // Horizontal rules (--- or ***)
-        html = html.replace(/^[\-\*]{3,}$/gm, '<hr class="divider">');
-
-        // Convert newlines to <br> for proper line breaks
-        // But preserve newlines inside <pre> tags (code blocks)
-        // Strategy: replace <pre> content temporarily, convert newlines, restore
-        html = html.replace(/(<pre>[\s\S]*?<\/pre>)/g, function(match) {
-            return match.replace(/<br>/g, '\n');
-        });
-        html = html.replace(/\n/g, '<br>');
-
-        return html;
+            // Parse markdown and return
+            let html = marked.parse(text);
+            return html;
+        } catch (e) {
+            // Fallback to simple rendering
+            console.warn('Markdown rendering failed:', e);
+            return escapeHtml(text).replace(/\n/g, '<br>');
+        }
     }
 
     // Close skill and file selector when clicking outside
