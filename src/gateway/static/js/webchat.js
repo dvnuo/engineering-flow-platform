@@ -1185,16 +1185,6 @@
                 return preBlocks[Number(index)];
             });
 
-            // Additional newline to <br> conversion for non-pre content
-            // But skip content inside <pre> tags
-            const parts = html.split(/(<pre[\s\S]*?<\/pre>)/g);
-            html = parts.map(part => {
-                if (part.startsWith('<pre')) {
-                    return part; // Don't convert newlines inside <pre>
-                }
-                return part.replace(/\n/g, '<br>');
-            }).join('');
-
             return html;
         } catch (e) {
             // Fallback to simple rendering with XSS protection
