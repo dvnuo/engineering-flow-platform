@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Bash Tools module provides shell command execution capabilities for the agent. It implements a security model with ALLOWLIST mode to control which commands can be executed.
+The Bash Tools module provides shell command execution capabilities for the agent using a discover + run pattern.
 
 ## Structure
 
@@ -16,67 +16,101 @@ bash_tools/
 ## Components
 
 ### Shell Execution (`api.py`)
-- Single `exec` tool for agent to run any Linux CLI command
-- Security model: ALLOWLIST mode (default) with configurable bins
-- Supports timeout, cwd override, and async execution
+Two tools for the agent:
+- `discover_commands` - Discover available commands on the system
+- `run_command` - Execute shell commands with security restrictions
 
-### Bash Tools (`bash_tools.py`)
-- Built-in bash utility tools (cat, echo, ls, etc.)
-- Sandboxed execution with security checks
+### Security Features
+- Working directory limited to `~/.efp/workspace`
+- Dangerous commands blocked (rm, mkfs, dd, fdisk, etc.)
+- Absolute path execution blocked
+- Environment variable allowlist (no PATH override)
+- Output size limits (200KB max)
 
 ## Quick Start
 
 ```python
-from src.bash_tools.api import exec
+from src.bash_tools.api import discover_commands, run_command
 
-# Execute a simple command
-result = await exec("pwd")
-print(result)  # Shows current working directory
+# Discover available commands
+result = await discover_commands(prefix="git")
+print(result)
+
+# Run a command
+result = await run_command(cmd="ls", args=["-la"])
+print(result)
 ```
+
+## Tools
+
+### discover_commands
+
+Discover available commands on the system.
+
+```python
+await discover_commands(
+    prefix="gi",        # Filter by prefix (e.g., git, gist)
+    contains="docker",  # Filter by name contains
+    limit=200,          # Max results
+)
+```
+
+### run_command
+
+Execute a shell command with security restrictions.
+
+```python
+await run_command(
+    cmd="git",
+    args=["status"],
+    cwd="~/.efp/workspace",  # Must be in workspace
+    timeout_ms=15000,
+)
+```
+
+## Response Format
+
+### discover_commands response:
+```json
+{
+  "env": {"os": "linux", "shell": "bash", "path": [...]},
+  "result": {
+    "total_estimate": 7,
+    "returned": 7,
+    "commands": [
+      {"name": "git", "type": "path"},
+      {"name": "git-receive-pack", "type": "path"}
+    ]
+  }
+}
+```
+
+### run_command response:
+```json
+{
+  "ok": true,
+  "exit_code": 0,
+  "stdout": "...",
+  "stderr": "",
+  "duration_ms": 123,
+  "truncated": {"stdout": false, "stderr": false}
+}
+```
+
+## Error Codes
+
+| Code | Description |
+|------|-------------|
+| E_POLICY_DENY | Command blocked by security policy |
+| E_NOT_FOUND | Command not found |
+| E_TIMEOUT | Command timed out |
+| E_EXEC_FAILED | Execution failed |
 
 ## Configuration
 
-```yaml
-# In config.yaml
-bash_tools:
-  security: "allowlist"  # or "full" for unrestricted
-  safe_bins:
-    - cat
-    - echo
-    - ls
-    - grep
-    - find
-```
+No configuration required - security is built into the tools.
 
 ## Dependencies
 
 - Standard library: `asyncio`, `os`, `pathlib`, `logging`
 - No external dependencies
-
-## Development Guide
-
-### Adding New Safe Commands
-
-Edit `safe_bins` in bash_tools configuration or add to `DEFAULT_SAFE_BINS`:
-
-```python
-DEFAULT_SAFE_BINS = {
-    'cat', 'echo', 'ls', 'grep', 'find', 'sed', 'awk',
-    'head', 'tail', 'wc', 'sort', 'uniq', 'cut',
-    # Add new commands here
-}
-```
-
-### Security Modes
-
-| Mode | Description |
-|------|-------------|
-| `allowlist` | Only commands in safe_bins (default) |
-| `full` | Allow all commands (not recommended) |
-
-### Best Practices
-
-- Keep ALLOWLIST mode enabled in production
-- Add only necessary commands to safe_bins
-- Use skill-specific workdir for file operations
-- Set appropriate timeouts for long-running commands
