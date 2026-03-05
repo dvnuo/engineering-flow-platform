@@ -1021,7 +1021,7 @@
         // Process @file_xxx references for inline images
         const processedContent = messageContent;
 
-        // Only render markdown for assistant/tool messages, not user messages
+        // Render markdown only for non-user, non-error roles; user and error messages are escaped/plain text
         const contentHtml = (role === 'assistant' || role === 'tool')
             ? renderMarkdown(processedContent)
             : escapeHtml(processedContent).replace(/\n/g, '<br>');
