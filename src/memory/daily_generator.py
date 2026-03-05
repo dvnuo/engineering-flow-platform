@@ -10,55 +10,103 @@ from src.memory.event_log import EventLogger
 
 logger = logging.getLogger(__name__)
 
-DAILY_TEMPLATE_SYSTEM = "You are a technical daily report generator. Output ONLY markdown."
+DAILY_TEMPLATE_SYSTEM = """You are generating a concise engineering daily report from raw session events.
+
+STRICT RULES:
+- Use ONLY information present in the events. Do NOT infer or invent.
+- Do NOT write "assistant saved/remembered/decided". Those are NOT memories.
+- Prefer tool evidence (git, test outputs) over conversational statements.
+- De-duplicate repeated items.
+- Keep the report short and clean.
+- Output format: Markdown with ## sections only.
+
+OUTPUT STRUCTURE:
+# <DATE>
+## <Topic 1> (Completed|In Progress)
+### Changes
+- ...
+### Testing
+- ...
+### Notes
+- ...
+## <Topic 2> ...
+(Max 5 topics)"""
 MERGE_TEMPLATE_SYSTEM = "You are a technical daily report merger. Output ONLY markdown."
 
 
 def _build_partial_prompt(day: str, events: List[Dict[str, Any]], chunk_idx: int, total_chunks: int) -> str:
     """Build prompt for generating partial summary from a chunk of events."""
-    lines = [
-        f"# {day} - Part {chunk_idx + 1}/{total_chunks}",
-        "",
-        "Generate a brief summary (2-4 bullet points) of these events.",
-        "Focus on: completed work, code changes, decisions, notable interactions.",
-        "",
-        "Events:",
-    ]
-    
-    # Shorter content for partial summaries
+    # Extract event summary for LLM
+    event_summary = []
     for e in events:
         t = e.get("type")
-        sid = e.get("session_id", "unknown")
-        content = (e.get("content") or "")[:60]
         
         if t == "tool":
             tool_name = e.get("tool_name", "unknown")
-            lines.append(f"- [tool] {sid}: {tool_name}")
-        else:
-            lines.append(f"- [{t}] {sid}: {content[:50]}")
+            # Use tool_result (from EventLogger) with fallback to result
+            # Truncate to avoid multi-line issues in prompt
+            tool_output = (e.get("tool_result") or e.get("result", "") or "")[:80]
+            tool_output = tool_output.replace("\n", " ").replace("\r", "")
+            event_summary.append(f"[tool] {tool_name}: {tool_output}")
+        elif t == "user":
+            msg = (e.get("content", "") or "")[:80].replace("\n", " ").replace("\r", "")
+            event_summary.append(f"[user] {msg}")
+        elif t == "assistant":
+            msg = (e.get("content", "") or "")[:80].replace("\n", " ").replace("\r", "")
+            event_summary.append(f"[assistant] {msg}")
     
-    return "\n".join(lines)
+    events_text = "\n".join(f"- {e}" for e in event_summary)
+    
+    prompt = f"""## Part {chunk_idx + 1}/{total_chunks}
+
+Generate a structured summary from these events. Focus on:
+- Code changes (git commit, branch, file edits)
+- Test results and debugging
+- Technical decisions and implementations
+- Errors and resolutions
+
+Events:
+{events_text}
+
+Output format:
+## <Topic Name> (Completed|In Progress)
+### Changes
+### Testing
+### Notes
+
+Keep it concise - max 3 bullet points per section."""
+    return prompt
 
 
 def _build_merge_prompt(day: str, partial_summaries: List[str]) -> str:
     """Build prompt for merging partial summaries into final daily report."""
-    lines = [
-        f"# {day}",
-        "",
-        "Merge the following partial summaries into a single concise daily report.",
-        "Rules:",
-        "- Combine related items, remove duplicates",
-        "- Focus on meaningful engineering work, not trivial interactions",
-        "- Do NOT write 'assistant saved/remembered'",
-        "- Use structure: ## <Topic> with bullet points",
-        "",
-        "Partial Summaries:",
-    ]
+    summaries_text = "\n\n".join(
+        f"### Part {i + 1}\n{s}" 
+        for i, s in enumerate(partial_summaries)
+    )
     
-    for i, summary in enumerate(partial_summaries):
-        lines.append(f"\n--- Part {i + 1} ---\n{summary}")
-    
-    return "\n".join(lines)
+    prompt = f"""# {day}
+
+Merge these partial summaries into a single daily report.
+
+STRICT RULES:
+- Use ONLY the information from the summaries
+- Remove duplicates and merge related items
+- Do NOT include trivial conversations or "assistant" actions
+- Focus on: code changes, tests, deployments, bugs fixed, features added
+- Max 5 topics total
+- Output ONLY markdown
+
+{summaries_text}
+
+Output:
+# {day}
+## <Topic 1> (Completed|In Progress)
+### Changes
+### Testing
+### Notes
+## <Topic 2>..."""
+    return prompt
 
 
 async def ensure_daily_memories(
