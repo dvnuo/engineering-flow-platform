@@ -1011,12 +1011,12 @@
 
         if (role === 'tool') {
             // Only show tool result badge in debug mode
-            if (debugEnabled && debugEnabled.checked) {
+            if (isDebugEnabled()) {
                 badge = '<span class="tool-badge">🔧 Tool Result</span>';
             }
         } else if (role === 'assistant' && toolCalls && toolCalls.length > 0) {
             // Only show tool call badge in debug mode
-            if (debugEnabled && debugEnabled.checked) {
+            if (isDebugEnabled()) {
                 badge = '<span class="tool-calls-badge">⚙️ Calling Tools</span>';
                 const toolNames = toolCalls.map(tc => tc.function?.name || tc.name).join(', ');
                 messageContent = `_Calling: ${toolNames}_`;
@@ -1384,7 +1384,7 @@
                     sessionData.messages.forEach(msg => {
                         const role = msg.role || 'user';
                         // Skip tool messages if debug is disabled
-                        if (role === 'tool' && !(debugEnabled && debugEnabled.checked)) {
+                        if (role === 'tool' && !(isDebugEnabled())) {
                             return;
                         }
                         const content = msg.content || '';
@@ -1742,7 +1742,7 @@
                 messages.forEach(msg => {
                     const role = msg.role || 'user';
                     // Skip tool messages if debug is disabled
-                    if (role === 'tool' && !(debugEnabled && debugEnabled.checked)) {
+                    if (role === 'tool' && !(isDebugEnabled())) {
                         return;
                     }
                     addMessage(role, msg.content || '', msg.timestamp || msg.created_at, msg.tool_calls);
@@ -2112,6 +2112,11 @@
     const sshEnabled = document.getElementById('sshEnabled');
     const sshKeyPath = document.getElementById('sshKeyPath');
     const debugEnabled = document.getElementById('debugEnabled');
+
+// Helper to check if debug mode is on
+function isDebugEnabled() {
+    return isDebugEnabled();
+}
 
     // Provider to Model mapping
     const providerModels = {
@@ -2780,14 +2785,14 @@
 
             case 'tool_call':
                 // Only show tool calls when debug is enabled
-                if (debugEnabled && debugEnabled.checked) {
+                if (isDebugEnabled()) {
                     showAgentEvent('tool-call', `🔧 Calling: ${eventData.tool || 'Unknown tool'}`);
                 }
                 break;
 
             case 'tool_result':
                 // Only show tool results when debug is enabled
-                if (debugEnabled && debugEnabled.checked) {
+                if (isDebugEnabled()) {
                     // Show detailed result or error
                     const success = eventData.success;
                     const tool = eventData.tool || 'Unknown tool';
@@ -2877,7 +2882,7 @@
                 break;
             case 'tool_call':
                 // Only show in debug mode
-                if (debugEnabled && debugEnabled.checked) {
+                if (isDebugEnabled()) {
                     const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '';
                     message = `🔧 ${data.tool || 'Unknown tool'}\n📝 Args: ${argsStr || 'none'}`;
                 } else {
@@ -2886,7 +2891,7 @@
                 break;
             case 'tool_result':
                 // Only show in debug mode
-                if (debugEnabled && debugEnabled.checked) {
+                if (isDebugEnabled()) {
                     const statusIcon = data.success ? '✅' : '❌';
                     message = `${statusIcon} ${data.tool || 'Tool'} Result:\n${data.result || '(no result)'}`;
                 } else {
