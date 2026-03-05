@@ -176,6 +176,10 @@ def _validate_cwd(cwd: str = None) -> str:
     if cwd is None:
         cwd = get_workspace_dir()
     
+    # Expand ~ to home directory
+    if cwd.startswith("~"):
+        cwd = str(Path.home() / cwd[2:].lstrip("/"))
+    
     # Resolve path
     resolved = Path(cwd).resolve()
     workspace_resolved = WORKSPACE_ROOT.resolve()
@@ -258,39 +262,20 @@ async def run_command(
             "duration_ms": 0,
             "truncated": {"stdout": False, "stderr": False},
         }
-    # Block commands with shell injection potential
-    dangerous_args = ["-c", "-i", "-l", "--login"]
-    if any(d in (args or []) for d in dangerous_args):
-        return {
-            "ok": False,
-            "error": "E_POLICY_DENY",
-            "exit_code": 1,
-            "stdout": "",
-            "stderr": "Shell interaction flags are not allowed",
-            "duration_ms": 0,
-            "truncated": {"stdout": False, "stderr": False},
-        }
-    # Also check first arg for -c (e.g., bash -c "rm -rf /")
-    if args and args[0] == "-c":
-        return {
-            "ok": False,
-            "error": "E_POLICY_DENY",
-            "exit_code": 1,
-            "stdout": "",
-            "stderr": "Shell -c execution is not allowed",
-            "duration_ms": 0,
-            "truncated": {"stdout": False, "stderr": False},
-        }
-    if cmd in dangerous_cmds:
-        return {
-            "ok": False,
-            "error": "E_POLICY_DENY",
-            "exit_code": 1,
-            "stdout": "",
-            "stderr": f"Command '{cmd}' is blocked for safety",
-            "duration_ms": 0,
-            "truncated": {"stdout": False, "stderr": False},
-        }
+    # Block shell wrappers - only check when args[0] is a shell flag
+    # This allows common commands like "grep -i pattern" but blocks "bash -c"
+    shell_wrapper_cmds = {"bash", "sh", "zsh", "dash", "sudo", "su"}
+    if cmd in shell_wrapper_cmds and args:
+        if args[0] in ("-c", "-i", "-l", "--login"):
+            return {
+                "ok": False,
+                "error": "E_POLICY_DENY",
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "Shell wrapper execution is not allowed",
+                "duration_ms": 0,
+                "truncated": {"stdout": False, "stderr": False},
+            }
     
     # Block absolute paths
     import os
