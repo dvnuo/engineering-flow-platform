@@ -2935,6 +2935,11 @@
      * Show agent event in chat
      */
     function showAgentEvent(eventClass, message) {
+        // Skip if message is empty (e.g., tool events disabled in non-debug mode)
+        if (!message) {
+            return;
+        }
+        
         // Remove welcome message if present
         const welcome = messagesContainer.querySelector('.welcome-message');
         if (welcome) {
