@@ -3,6 +3,8 @@
 import logging
 from typing import Optional
 
+from src.utils.attachment import download_and_process_attachment
+
 from .api import (
     ConfluenceChannel, 
     confluence_channel,
@@ -47,6 +49,57 @@ def _get_adapter() -> ConfluenceFormatAdapter:
 
 # ========== Tool Functions ==========
 
+
+
+async def _process_confluence_attachments(page_id: str) -> str:
+    """Process page attachments and return for LLM."""
+    try:
+        attachments = await confluence_channel.get_attachments(page_id)
+    except Exception as e:
+        logger.debug(f"No attachments for page {page_id}: {e}")
+        return ""
+    
+    if not attachments:
+        return ""
+    
+    logger.info(f"Processing {len(attachments)} attachments for page {page_id}")
+    
+    results = []
+    for att in attachments[:5]:  # Max 5
+        filename = att.get("title", "unknown")
+        size = att.get("extensions", {}).get("fileSize", 0)
+        
+        link = att.get("_links", {}).get("download", "")
+        if link:
+            base_url = confluence_channel.base_url.rstrip("/")
+            download_url = f"{base_url}{link}"
+            
+            try:
+                result = await download_and_process_attachment(
+                    url=download_url,
+                    session_id=f"confluence-{page_id}",
+                    options={"include_image_data": True}
+                )
+                
+                if result.content_format == "base64":
+                    results.append(f"- **{filename}** (image, {size} bytes)")
+                    results.append(f"  {result.content}")
+                elif result.content_format == "text" and result.content:
+                    preview = result.content[:500]
+                    results.append(f"- **{filename}** (text, {size} bytes)")
+                    results.append(f"  {preview}")
+                else:
+                    results.append(f"- **{filename}** ({size} bytes)")
+            except Exception as e:
+                logger.warning(f"Failed to process {filename}: {e}")
+                results.append(f"- **{filename}** ({size} bytes) - [processing failed]")
+        else:
+            results.append(f"- **{filename}** ({size} bytes)")
+    
+    if results:
+        return "**Attachments:**\n" + "\n".join(results) + "\n"
+    return ""
+
 async def confluence_get_page(
     page_id: str,
     format: str = "markdown",
@@ -64,7 +117,13 @@ async def confluence_get_page(
             return "Confluence is not configured. Please check your settings."
         
         adapter = _get_adapter()
-        return await adapter.get_page(page_id, format=format, max_chars=max_chars)
+        # Get page content
+        page_content = await adapter.get_page(page_id, format=format, max_chars=max_chars)
+        
+        # Process attachments
+        attachment_info = await _process_confluence_attachments(page_id)
+        
+        return page_content + ("\n" + attachment_info if attachment_info else "") if attachment_info else page_content
     except Exception as e:
         return f"Error getting page: {e}"
 
