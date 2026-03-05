@@ -2130,7 +2130,7 @@
 
 // Helper to check if debug mode is on
 function isDebugEnabled() {
-    return isDebugEnabled();
+    return debugEnabled && debugEnabled.checked;
 }
 
     // Provider to Model mapping
