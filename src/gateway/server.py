@@ -68,7 +68,6 @@ async def handle_jira_message(
         return response
 
     except asyncio.CancelledError:
-        # 原文件里这条日志被“复制粘贴”到了很多地方；这里保持不改语义，只修正缩进/结构
         logger.info("[Memory] Periodic check cancelled")
         raise
 
@@ -532,7 +531,7 @@ class Gateway:
                     created_daily = await ensure_daily_memories(
                         workspace=workspace,
                         llm_client=None,
-                        backfill_only_missing=True,  # Always regenerate today (原注释保持不变)
+                        backfill_only_missing=True,  # Always regenerate today
                     )
                     logger.info(f"[Memory] Updated: {len(created_daily) if created_daily else 0} daily files")
                     last_mtime = current_mtime
