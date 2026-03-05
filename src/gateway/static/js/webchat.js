@@ -1396,15 +1396,39 @@
                             const lastAssistant = assistantMessages[assistantMessages.length - 1];
                             if (!lastAssistant.classList.contains('has-thinking')) {
                                 // Create events snapshot from stored events
-                                const eventsSnapshot = thinkingEvents.map(event => ({
-                                    type: event.type,
-                                    data: event.data || {},
-                                    display: event.display || {
-                                        icon: '📌',
-                                        name: event.type,
-                                        message: JSON.stringify(event.data || {}).substring(0, 50)
+                                const eventsSnapshot = thinkingEvents.map(event => {
+                                    // Format tool events with full details
+                                    let display;
+                                    if (event.type === 'tool_call') {
+                                        const tool = event.data?.tool || 'Unknown';
+                                        const args = JSON.stringify(event.data?.args || {}, null, 2);
+                                        display = {
+                                            icon: '🔧',
+                                            name: 'Tool Call',
+                                            message: `Calling: ${tool}\n\`\`\`\n${args}\n\`\`\``
+                                        };
+                                    } else if (event.type === 'tool_result') {
+                                        const tool = event.data?.tool || 'Unknown';
+                                        const result = event.data?.result || '';
+                                        const success = event.data?.success;
+                                        display = {
+                                            icon: success ? '✅' : '❌',
+                                            name: 'Tool Result',
+                                            message: `${tool}: ${result}`
+                                        };
+                                    } else {
+                                        display = event.display || {
+                                            icon: '📌',
+                                            name: event.type,
+                                            message: JSON.stringify(event.data || {}, null, 2)
+                                        };
                                     }
-                                }));
+                                    return {
+                                        type: event.type,
+                                        data: event.data || {},
+                                        display: display
+                                    };
+                                });
 
                                 // Manually add thinking process button
                                 lastAssistant.classList.add('has-thinking');
