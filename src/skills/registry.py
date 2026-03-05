@@ -328,9 +328,6 @@ class SkillRegistry:
         prompt_parts.extend([
             "",
             f"Output format: {skill.output_format}",
-            "",
-            f"Allowed tools: {', '.join(skill.tools)}",
-            "You MUST only use tools from this list.",
         ])
         
         return "\n".join(prompt_parts)

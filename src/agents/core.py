@@ -280,7 +280,6 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Build skill prompt if matched (FR-3: Dynamic Skill Injection)
         skill_prompt = ""
-        allowed_tools = set()  # Tool whitelist per skill (FR-5)
         
         if matched_skills:
             # Use the best match
@@ -293,8 +292,6 @@ You have access to the following tools. When a user asks you to do something tha
                 logger.info(f"[Skill] Workdir: {best_skill.path}")
             
             skill_prompt = skill_registry.get_skill_prompt(best_skill)
-            allowed_tools = set(best_skill.tools)
-            
             # Log matched skill
             tracer.log_tool_call(
                 tool_name="skill_matched",
