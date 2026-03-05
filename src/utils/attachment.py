@@ -6,7 +6,6 @@ and processes them for LLM consumption.
 
 import re
 import logging
-import logging
 import httpx
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
@@ -19,7 +18,6 @@ from .file_parser import (
 )
 
 # Configure logging
-import logging
 logger = logging.getLogger(__name__)
 
 
