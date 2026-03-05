@@ -107,8 +107,6 @@ Output:
 ### Notes
 ## <Topic 2>..."""
     return prompt
-    
-    return "\n".join(lines)
 
 
 async def ensure_daily_memories(
