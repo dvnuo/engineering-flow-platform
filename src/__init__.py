@@ -145,7 +145,9 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         if stderr:
             output += "\n[stderr: " + stderr + "]"
         if truncated.get("stdout"):
-            output += "\n[output truncated]"
+            output += "\n[stdout truncated]"
+        if truncated.get("stderr"):
+            output += "\n[stderr truncated]"
         if exit_code != 0:
             output += "\n[exit code: " + str(exit_code) + "]"
         

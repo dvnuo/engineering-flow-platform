@@ -10,7 +10,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -133,13 +133,17 @@ async def discover_commands(
         c["name"]
     ))
     
+    # Capture total before limiting
+    total_estimate = len(commands)
+    
     # Apply limit
     commands = commands[:limit]
     
     # Get version for selected commands (if requested)
     if include_version and commands:
-        for cmd in commands[:10]:  # Only first 10 to avoid slow
-            name = cmd["name"]
+        for cmd_info in commands[:10]:  # Only first 10 to avoid slow
+            name = cmd_info["name"]
+            cmd_info["version"] = None  # Default
             try:
                 result = await asyncio.to_thread(subprocess.run,
                     [name, "--version"],
@@ -148,9 +152,9 @@ async def discover_commands(
                 if result.returncode == 0:
                     # Take first line as version
                     version = result.stdout.strip().split("\n")[0][:100]
-                    cmd["version"] = version
-            except:
-                cmd["version"] = None
+                    cmd_info["version"] = version
+            except Exception:
+                cmd_info["version"] = None
     
     # Build response
     return {
@@ -160,7 +164,7 @@ async def discover_commands(
             "path": [str(p) for p in _get_path_dirs()],
         },
         "result": {
-            "total_estimate": len(commands),
+            "total_estimate": total_estimate,
             "returned": len(commands),
             "commands": commands
         }
@@ -182,6 +186,18 @@ def _validate_cwd(cwd: str = None) -> str:
     except ValueError:
         # Not in workspace, use workspace root
         logger.warning(f"cwd {cwd} not in workspace, using {WORKSPACE_ROOT}")
+        cwd = str(workspace_resolved)
+        resolved = Path(cwd).resolve()
+    
+    # Check if directory exists
+    if not resolved.exists():
+        try:
+            resolved.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"cwd {cwd} cannot be created, using {WORKSPACE_ROOT}")
+            cwd = str(workspace_resolved)
+    elif not resolved.is_dir():
+        logger.warning(f"cwd {cwd} is not a directory, using {WORKSPACE_ROOT}")
         cwd = str(workspace_resolved)
     
     return cwd
@@ -208,13 +224,63 @@ async def run_command(
     Returns:
         Dict with exit_code, stdout, stderr, duration_ms, truncated
     """
+    # Validate args is a list of strings
+    if args is not None and not isinstance(args, list):
+        return {
+            "ok": False,
+            "error": "E_BAD_ARGS",
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "args must be a list of strings",
+            "duration_ms": 0,
+            "truncated": {"stdout": False, "stderr": False},
+        }
     args = args or []
     
     # Validate working directory
     cwd = _validate_cwd(cwd)
     
     # Security: Block dangerous commands
-    dangerous_cmds = {"rm", "mkfs", "dd", "fdisk", "parted", "shutdown", "reboot", "halt", "poweroff", "init"}
+    # Block dangerous commands (direct and via shell wrappers)
+    dangerous_cmds = {
+        "rm", "rmdir", "mkfs", "dd", "fdisk", "parted", "shutdown", "reboot", 
+        "halt", "poweroff", "init", "bash", "sh", "zsh", "dash", "sudo", "su",
+        "chmod", "chown", "chgrp",  # File permissions
+    }
+    # Block shell wrappers that can bypass restrictions
+    if cmd in dangerous_cmds:
+        return {
+            "ok": False,
+            "error": "E_POLICY_DENY",
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": f"Command '{cmd}' is blocked for safety",
+            "duration_ms": 0,
+            "truncated": {"stdout": False, "stderr": False},
+        }
+    # Block commands with shell injection potential
+    dangerous_args = ["-c", "-i", "-l", "--login"]
+    if any(d in (args or []) for d in dangerous_args):
+        return {
+            "ok": False,
+            "error": "E_POLICY_DENY",
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "Shell interaction flags are not allowed",
+            "duration_ms": 0,
+            "truncated": {"stdout": False, "stderr": False},
+        }
+    # Also check first arg for -c (e.g., bash -c "rm -rf /")
+    if args and args[0] == "-c":
+        return {
+            "ok": False,
+            "error": "E_POLICY_DENY",
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "Shell -c execution is not allowed",
+            "duration_ms": 0,
+            "truncated": {"stdout": False, "stderr": False},
+        }
     if cmd in dangerous_cmds:
         return {
             "ok": False,
@@ -227,7 +293,8 @@ async def run_command(
         }
     
     # Block absolute paths
-    if "/" in cmd:
+    import os
+    if os.path.isabs(cmd):
         return {
             "ok": False,
             "error": "E_POLICY_DENY",
