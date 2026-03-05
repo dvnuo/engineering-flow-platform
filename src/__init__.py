@@ -128,14 +128,22 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = bash_tools_module.list_dir(path)
         return ToolResult(success="Error" not in result, content=result)
     
-    elif name == "exec":
-        command = kwargs.get("command", "")
-        args = kwargs.get("args")  # Array args for safe execution
-        timeout = kwargs.get("timeout", 60)
-        result = await bash_tools_module.exec(command, args, timeout)
-        # Check for success (not blocked, no error)
-        is_success = "Error" not in result and "blocked" not in result.lower() and "requires approval" not in result.lower()
-        return ToolResult(success=is_success, content=result)
+    elif name == "run_command":
+        cmd = kwargs.get("cmd", "")
+        args = kwargs.get("args") or []
+        cwd = kwargs.get("cwd")
+        timeout_ms = kwargs.get("timeout_ms", 15000)
+        result = await bash_tools_module.run_command(cmd, args, cwd, timeout_ms)
+        is_success = result.get("ok", False)
+        output = result.get("stdout", "") or result.get("stderr", "")
+        return ToolResult(success=is_success, content=output)
+    
+    elif name == "discover_commands":
+        prefix = kwargs.get("prefix")
+        contains = kwargs.get("contains")
+        limit = kwargs.get("limit", 200)
+        result = await bash_tools_module.discover_commands(prefix, contains, limit=limit)
+        return ToolResult(success=True, content=str(result))
     
     # Git tools
     elif name == "git_status":

@@ -1,34 +1,32 @@
 """Tools module - Shell execution via Linux CLI."""
 
 from .api import (
-    exec,
-    exec_sync,
+    discover_commands,
+    run_command,
     get_tools_schemas,
-    set_security_config,
-    get_security_config,
-    DEFAULT_SAFE_BINS,
+    get_workspace_dir,
 )
 
 
 def execute_tool(name: str, **kwargs) -> str:
     """Execute a tool by name."""
-    if name == "exec":
-        command = kwargs.get("command", "")
-        args = kwargs.get("args")
-        timeout = kwargs.get("timeout", 60)
-        
-        if args:
-            return exec_sync(command, args, timeout)
-        return exec_sync(command, timeout=timeout)
+    import asyncio
+    
+    if name == "discover_commands":
+        result = asyncio.run(discover_commands(**kwargs))
+        return str(result)
+    
+    if name == "run_command":
+        result = asyncio.run(run_command(**kwargs))
+        return str(result)
+    
     return f"Error: Unknown tool: {name}"
 
 
 __all__ = [
-    "exec",
-    "exec_sync",
+    "discover_commands",
+    "run_command",
     "get_tools_schemas",
     "execute_tool",
-    "set_security_config",
-    "get_security_config",
-    "DEFAULT_SAFE_BINS",
+    "get_workspace_dir",
 ]
