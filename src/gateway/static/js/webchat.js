@@ -1010,15 +1010,15 @@
         let messageContent = content || '';
 
         if (role === 'tool') {
-            // Only show tool result badge in debug mode
-            const isDebugTool = typeof config !== 'undefined' && config.debug && config.debug.enabled;
-            if (isDebugTool) {
+            // Only show tool result badge in debug mode (check localStorage for reliability)
+            const debugEnabled = localStorage.getItem('debugEnabled') === 'true' || (typeof config !== 'undefined' && config.debug && config.debug.enabled);
+            if (debugEnabled) {
                 badge = '<span class="tool-badge">🔧 Tool Result</span>';
             }
         } else if (role === 'assistant' && toolCalls && toolCalls.length > 0) {
             // Assistant message with tool calls - only show in debug mode
-            const isDebugTool = typeof config !== 'undefined' && config.debug && config.debug.enabled;
-            if (isDebugTool) {
+            const debugEnabled = localStorage.getItem('debugEnabled') === 'true' || (typeof config !== 'undefined' && config.debug && config.debug.enabled);
+            if (debugEnabled) {
                 badge = '<span class="tool-calls-badge">⚙️ Calling Tools</span>';
                 const toolNames = toolCalls.map(tc => tc.function?.name || tc.name).join(', ');
                 messageContent = `_Calling: ${toolNames}_`;
