@@ -134,8 +134,22 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         cwd = kwargs.get("cwd")
         timeout_ms = kwargs.get("timeout_ms", 15000)
         result = await bash_tools_module.run_command(cmd, args, cwd, timeout_ms)
+        
+        # Include more info: exit_code, stderr, truncated
+        exit_code = result.get("exit_code", 0)
+        stdout = result.get("stdout", "")
+        stderr = result.get("stderr", "")
+        truncated = result.get("truncated", {})
+        
+        output = stdout
+        if stderr:
+            output += "\n[stderr: " + stderr + "]"
+        if truncated.get("stdout"):
+            output += "\n[output truncated]"
+        if exit_code != 0:
+            output += "\n[exit code: " + str(exit_code) + "]"
+        
         is_success = result.get("ok", False)
-        output = result.get("stdout", "") or result.get("stderr", "")
         return ToolResult(success=is_success, content=output)
     
     elif name == "discover_commands":

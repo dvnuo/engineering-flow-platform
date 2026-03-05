@@ -72,11 +72,11 @@ async def discover_commands(
     """
     sources = sources or ["path"]
     commands = []
+    seen = set()  # Track seen commands across all sources
     
     # A) PATH commands (primary source)
     if "path" in sources:
         path_dirs = _get_path_dirs()
-        seen = set()
         
         for path_dir in path_dirs:
             if not path_dir.is_dir():
@@ -108,7 +108,7 @@ async def discover_commands(
     # B) Builtins (optional)
     if "builtin" in sources:
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(subprocess.run,
                 ["bash", "-lc", "compgen -b"],
                 capture_output=True, text=True, timeout=5
             )
@@ -141,7 +141,7 @@ async def discover_commands(
         for cmd in commands[:10]:  # Only first 10 to avoid slow
             name = cmd["name"]
             try:
-                result = subprocess.run(
+                result = await asyncio.to_thread(subprocess.run,
                     [name, "--version"],
                     capture_output=True, text=True, timeout=1
                 )
@@ -213,10 +213,35 @@ async def run_command(
     # Validate working directory
     cwd = _validate_cwd(cwd)
     
-    # Build environment (allowlist)
+    # Security: Block dangerous commands
+    dangerous_cmds = {"rm", "mkfs", "dd", "fdisk", "parted", "shutdown", "reboot", "halt", "poweroff", "init"}
+    if cmd in dangerous_cmds:
+        return {
+            "ok": False,
+            "error": "E_POLICY_DENY",
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": f"Command '{cmd}' is blocked for safety",
+            "duration_ms": 0,
+            "truncated": {"stdout": False, "stderr": False},
+        }
+    
+    # Block absolute paths
+    if "/" in cmd:
+        return {
+            "ok": False,
+            "error": "E_POLICY_DENY",
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "Absolute paths are not allowed",
+            "duration_ms": 0,
+            "truncated": {"stdout": False, "stderr": False},
+        }
+    
+    # Security: Block env PATH override
+    allowed_keys = {"LC_ALL", "LANG", "HOME", "USER"}  # No PATH!
     safe_env = os.environ.copy()
     if env:
-        allowed_keys = {"LC_ALL", "LANG", "PATH", "HOME", "USER"}
         for k, v in env.items():
             if k in allowed_keys:
                 safe_env[k] = v
@@ -261,8 +286,9 @@ async def run_command(
         stdout_text = stdout_bytes.decode("utf-8", errors="replace")
         stderr_text = stderr_bytes.decode("utf-8", errors="replace")
         
+        is_success = process.returncode == 0
         return {
-            "ok": True,
+            "ok": is_success,
             "exit_code": process.returncode,
             "stdout": stdout_text,
             "stderr": stderr_text,

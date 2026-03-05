@@ -8,16 +8,14 @@ from .api import (
 )
 
 
-def execute_tool(name: str, **kwargs) -> str:
-    """Execute a tool by name."""
-    import asyncio
-    
+async def execute_tool(name: str, **kwargs) -> str:
+    """Execute a tool by name (async)."""
     if name == "discover_commands":
-        result = asyncio.run(discover_commands(**kwargs))
+        result = await discover_commands(**kwargs)
         return str(result)
     
     if name == "run_command":
-        result = asyncio.run(run_command(**kwargs))
+        result = await run_command(**kwargs)
         return str(result)
     
     return f"Error: Unknown tool: {name}"
