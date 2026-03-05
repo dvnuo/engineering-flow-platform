@@ -2766,23 +2766,25 @@
                 break;
 
             case 'tool_call':
-                showAgentEvent('tool-call', `🔧 Calling: ${eventData.tool || 'Unknown tool'}`);
+                // Show tool name and arguments
+                const toolName = eventData.tool || 'Unknown tool';
+                const toolArgs = eventData.args || {};
+                const argsStr = JSON.stringify(toolArgs, null, 2);
+                showAgentEvent('tool-call', `🔧 Calling: ${toolName}\n\`\`\`\n${argsStr}\n\`\`\``);
                 break;
 
             case 'tool_result':
-                // Show detailed result or error - ALWAYS show the result field
+                // Show detailed result with full result
                 const success = eventData.success;
                 const tool = eventData.tool || 'Unknown tool';
                 const result = eventData.result;
 
                 if (success) {
-                    // Success: show brief result preview
-                    const preview = result ? (result.length > 100 ? result.substring(0, 100) + '...' : result) : '(no result)';
-                    showAgentEvent('tool-result', `✅ ${tool}\nResult: ${preview}`);
+                    // Success: show full result
+                    showAgentEvent('tool-result', `✅ ${tool}\nResult:\n\`\`\`\n${result}\n\`\`\``);
                 } else {
-                    // Error: result already contains "Error:" prefix from __str__, don't duplicate
-                    const errorMsg = result || 'Unknown error (no details)';
-                    showAgentEvent('tool-result', `❌ ${tool}\n${errorMsg}`);
+                    // Error
+                    showAgentEvent('tool-result', `❌ ${tool}\nError:\n\`\`\`\n${result}\n\`\`\``);
                 }
                 break;
 
