@@ -2794,25 +2794,32 @@
                 break;
 
             case 'tool_call':
-                // Show tool name and arguments
-                const toolName = eventData.tool || 'Unknown tool';
-                const toolArgs = eventData.args || {};
-                const argsStr = JSON.stringify(toolArgs, null, 2);
-                showAgentEvent('tool-call', `🔧 Calling: ${toolName}\n\`\`\`\n${argsStr}\n\`\`\``);
+                // Only show tool call events in debug mode
+                const isDebug1 = typeof config !== 'undefined' && config.debug && config.debug.enabled;
+                if (isDebug1) {
+                    const toolName = eventData.tool || 'Unknown tool';
+                    const toolArgs = eventData.args || {};
+                    const argsStr = JSON.stringify(toolArgs, null, 2);
+                    showAgentEvent('tool-call', `🔧 Calling: ${toolName}\n\`\`\`\n${argsStr}\n\`\`\``);
+                }
                 break;
 
             case 'tool_result':
-                // Show detailed result with full result
-                const success = eventData.success;
-                const tool = eventData.tool || 'Unknown tool';
-                const result = eventData.result;
+                // Only show tool result events in debug mode
+                const isDebug2 = typeof config !== 'undefined' && config.debug && config.debug.enabled;
+                if (isDebug2) {
+                    // Show detailed result with full result
+                    const success = eventData.success;
+                    const tool = eventData.tool || 'Unknown tool';
+                    const result = eventData.result;
 
-                if (success) {
-                    // Success: show full result
-                    showAgentEvent('tool-result', `✅ ${tool}\nResult:\n\`\`\`\n${result}\n\`\`\``);
-                } else {
-                    // Error
-                    showAgentEvent('tool-result', `❌ ${tool}\nError:\n\`\`\`\n${result}\n\`\`\``);
+                    if (success) {
+                        // Success: show full result
+                        showAgentEvent('tool-result', `✅ ${tool}\nResult:\n\`\`\`\n${result}\n\`\`\``);
+                    } else {
+                        // Error
+                        showAgentEvent('tool-result', `❌ ${tool}\nError:\n\`\`\`\n${result}\n\`\`\``);
+                    }
                 }
                 break;
 
