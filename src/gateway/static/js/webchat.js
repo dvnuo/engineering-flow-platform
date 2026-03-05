@@ -1389,7 +1389,9 @@
                     // Show thinking events from session metadata
                     const metadata = sessionData.metadata || {};
                     const thinkingEvents = metadata.thinking_events || [];
-                    if (thinkingEvents.length > 0) {
+                    // Only show thinking process in debug mode
+                    const isDebug = typeof config !== 'undefined' && config.debug && config.debug.enabled;
+                    if (thinkingEvents.length > 0 && isDebug) {
                         // Get the last assistant message
                         const assistantMessages = messagesContainer.querySelectorAll('.message.assistant');
                         if (assistantMessages.length > 0) {
@@ -1760,10 +1762,12 @@
                 });
             }
 
-            // Show thinking events from session metadata
+            // Show thinking events from session metadata (debug mode only)
             const metadata = data.metadata || {};
             const thinkingEvents = metadata.thinking_events || [];
-            if (thinkingEvents.length > 0) {
+            // Only show thinking process in debug mode
+            const isDebug = typeof config !== 'undefined' && config.debug && config.debug.enabled;
+            if (thinkingEvents.length > 0 && isDebug) {
                 // Get the last assistant message
                 const assistantMessages = messagesContainer.querySelectorAll('.message.assistant');
                 if (assistantMessages.length > 0) {
