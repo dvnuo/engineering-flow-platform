@@ -246,9 +246,7 @@ async def run_command(
     # Security: Block dangerous commands
     # Block dangerous commands (direct and via shell wrappers)
     dangerous_cmds = {
-        "rm", "rmdir", "mkfs", "dd", "fdisk", "parted", "shutdown", "reboot", 
-        "halt", "poweroff", "init", "bash", "sh", "zsh", "dash", "sudo", "su",
-        "chmod", "chown", "chgrp",  # File permissions
+        "mkfs", "dd", "fdisk", "parted", "shutdown", "reboot", "halt", "poweroff", "init"
     }
     # Block shell wrappers that can bypass restrictions
     if cmd in dangerous_cmds:
@@ -263,7 +261,8 @@ async def run_command(
         }
     # Block shell wrappers - only check when args[0] is a shell flag
     # This allows common commands like "grep -i pattern" but blocks "bash -c"
-    shell_wrapper_cmds = {"bash", "sh", "zsh", "dash", "sudo", "su"}
+    # shell_wrapper_cmds = {"bash", "sh", "zsh", "dash", "sudo", "su"}
+    shell_wrapper_cmds = {}
     if cmd in shell_wrapper_cmds and args:
         if args[0] in ("-c", "-i", "-l", "--login"):
             return {

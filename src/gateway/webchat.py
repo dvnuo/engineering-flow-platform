@@ -1519,6 +1519,62 @@ async def api_chunks_search(request: web.Request) -> web.Response:
         }, status=500)
 
 
+async def api_files_get(request: web.Request) -> web.Response:
+    """Get a file (for direct display in img, etc).
+    
+    GET /api/files/{file_id}
+    
+    Returns:
+        200: File content with appropriate Content-Type
+        404: File not found
+    """
+    try:
+        from src.utils.file_parser import get_file_path, get_metadata, StoredFileNotFoundError
+        
+        file_id = request.match_info.get('file_id')
+        
+        if not file_id:
+            return web.json_response({
+                'success': False,
+                'error': 'file_id is required'
+            }, status=400)
+        
+        try:
+            metadata = get_metadata(file_id)
+        except StoredFileNotFoundError:
+            return web.json_response({
+                'success': False,
+                'error': 'File not found'
+            }, status=404)
+        
+        try:
+            file_path = get_file_path(file_id)
+        except StoredFileNotFoundError:
+            return web.json_response({
+                'success': False,
+                'error': 'File not found'
+            }, status=404)
+        
+        # Determine content type
+        content_type = metadata.content_type or 'application/octet-stream'
+        
+        # Stream file using FileResponse to avoid blocking the event loop
+        return web.FileResponse(
+            path=file_path,
+            content_type=content_type,
+            headers={
+                'Content-Disposition': f'inline; filename="{metadata.original_filename}"'
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"File get error: {e}")
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
 async def api_files_delete(request: web.Request) -> web.Response:
     """Delete a file.
     
@@ -1595,7 +1651,16 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/files/parse', api_files_parse)
     app.router.add_get('/api/files/list', api_files_list)
     app.router.add_get('/api/files/{file_id}/preview', api_files_preview)
+    app.router.add_get('/api/files/{file_id}', api_files_get)
     app.router.add_delete('/api/files/{file_id}', api_files_delete)
+
+    # Basic sanity check to ensure the GET /api/files/{file_id} route stays registered.
+    # This helps catch regressions if the route is removed or renamed without updating tests.
+    assert any(
+        route.method == 'GET'
+        and getattr(route.resource, 'canonical', None) == '/api/files/{file_id}'
+        for route in app.router.routes()
+    ), "Expected GET /api/files/{file_id} route to be registered"
     
     # File context API endpoints
     app.router.add_get('/api/context/files', api_context_files)
