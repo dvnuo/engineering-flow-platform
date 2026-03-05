@@ -1580,7 +1580,6 @@ async def api_files_get(request: web.Request) -> web.Response:
 
 
 
-async def api_files_get(request: web.Request) -> web.Response:
     """Get a file by ID.
     
     GET /api/files/{file_id}
@@ -1712,7 +1711,6 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/files/parse', api_files_parse)
     app.router.add_get('/api/files/list', api_files_list)
     app.router.add_get('/api/files/{file_id}/preview', api_files_preview)
-    app.router.add_get('/api/files/{file_id}', api_files_get)
     app.router.add_get('/api/files/{file_id}', api_files_get)
     app.router.add_delete('/api/files/{file_id}', api_files_delete)
 
