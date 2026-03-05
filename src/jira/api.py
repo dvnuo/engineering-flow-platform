@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.utils.truncate import truncate, truncate_json
 
 from src.config import config
+from src.utils.attachment import download_and_process_attachment
 
 logger = logging.getLogger(__name__)
 
@@ -661,6 +662,50 @@ service_reload_manager.register('jira', jira_channel.reinit)
 
 # ========== Tool Functions for Agent ==========
 
+
+async def _process_issue_attachments(issue_key: str, fields: dict) -> str:
+    """Process issue attachments and return them for LLM."""
+    attachments = fields.get("attachment", [])
+    if not attachments:
+        return ""
+    
+    logger.info(f"Processing {len(attachments)} attachments for {issue_key}")
+    
+    results = []
+    for i, att in enumerate(attachments[:5]):  # Max 5 attachments
+        filename = att.get("filename", "unknown")
+        mime_type = att.get("mimeType", "application/octet-stream")
+        size = att.get("size", 0)
+        
+        content_url = att.get("content", "")
+        
+        if content_url:
+            try:
+                result = await download_and_process_attachment(
+                    url=content_url,
+                    session_id=f"jira-{issue_key}",
+                    options={"include_image_data": True}
+                )
+                
+                if result.content_format == "base64":
+                    results.append(f"- **{filename}** (image, {size} bytes)")
+                    results.append(f"  {result.content}")
+                elif result.content_format == "text" and result.content:
+                    preview = result.content[:500]
+                    results.append(f"- **{filename}** (text, {size} bytes)")
+                    results.append(f"  {preview}")
+                else:
+                    results.append(f"- **{filename}** ({mime_type}, {size} bytes)")
+            except Exception as e:
+                logger.warning(f"Failed to process attachment {filename}: {e}")
+                results.append(f"- **{filename}** ({mime_type}, {size} bytes) - [processing failed]")
+        else:
+            results.append(f"- **{filename}** ({mime_type}, {size} bytes)")
+    
+    if results:
+        return "**Attachments:**\n" + "\n".join(results) + "\n"
+    return ""
+
 async def jira_get_issue(issue_key: str) -> str:
     """Get details for a Jira issue."""
     logger.debug(f"jira_get_issue called: {issue_key}")
@@ -682,6 +727,9 @@ async def jira_get_issue(issue_key: str) -> str:
         
         logger.debug(f"jira_get_issue: {issue_key} found, status={status}")
         
+        # Process attachments
+        attachment_info = await _process_issue_attachments(issue_key, fields)
+        
         return f"""**{issue_key}: {summary}**
 
 **Status:** {status}
@@ -690,7 +738,7 @@ async def jira_get_issue(issue_key: str) -> str:
 **Type:** {fields.get("issuetype", {}).get("name", "Task")}
 **Created:** {fields.get("created", "")[:10]}
 **Updated:** {fields.get("updated", "")[:10]}
-
+{attachment_info}
 **Description:**
 {description}"""
     except httpx.HTTPStatusError as e:
