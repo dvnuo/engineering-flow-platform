@@ -1197,6 +1197,14 @@
         // Horizontal rules (--- or ***)
         html = html.replace(/^[\-\*]{3,}$/gm, '<hr class="divider">');
 
+        // Convert newlines to <br> for proper line breaks
+        // But preserve newlines inside <pre> tags (code blocks)
+        // Strategy: replace <pre> content temporarily, convert newlines, restore
+        html = html.replace(/(<pre>[\s\S]*?<\/pre>)/g, function(match) {
+            return match.replace(/<br>/g, '\n');
+        });
+        html = html.replace(/\n/g, '<br>');
+
         return html;
     }
 
