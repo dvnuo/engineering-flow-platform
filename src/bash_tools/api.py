@@ -1,359 +1,447 @@
-"""Shell execution tools for LLM agent.
+"""Shell execution tools for LLM agent - discover + run pattern.
 
-Only one tool: exec - Agent can use any Linux CLI command directly.
+Two tools:
+- discover_commands: Find available commands on the system
+- run_command: Execute a command with workspace restrictions
 """
 
 import asyncio
 import logging
 import os
+import subprocess
 from pathlib import Path
-from typing import Optional
-
-from .bash_tools import (
-    ExecSecurity,
-    ExecSecurityConfig,
-    evaluate_command,
-    validate_environment,
-    create_default_config,
-    DEFAULT_SAFE_BINS,
-    DANGEROUS_ENV_VARS,
-    DANGEROUS_ENV_PREFIXES,
-)
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TIMEOUT = 60
+# Constants
+WORKSPACE_ROOT = Path.home() / ".efp" / "workspace"
+DEFAULT_TIMEOUT_MS = 15000
+MAX_OUTPUT_BYTES = 200000
 
-# Cache for skill workdir getter (lazy import to avoid circular imports)
-_skill_workdir_getter = None
+# Common commands to prioritize (for default discovery)
+COMMON_COMMANDS = [
+    "ls", "cat", "grep", "rg", "find", "tree", "head", "tail", "wc",
+    "git", "gh", "curl", "wget", "ps", "df", "du", "free", "top",
+    "sed", "awk", "jq", "yq", "python", "python3", "pip", "npm",
+    "cd", "pwd", "mkdir", "rm", "cp", "mv", "chmod", "chown",
+    "ssh", "scp", "rsync", "tar", "zip", "unzip",
+    "docker", "kubectl", "helm", "terraform",
+    "vi", "vim", "nano", "code",
+    "echo", "printf", "date", "whoami", "id",
+]
 
 
 def get_workspace_dir() -> str:
-    """Get the workspace directory, ensuring it exists.
-    
-    Returns:
-        Path to the workspace directory (~/.efp/workspace)
-    """
-    workspace_path = Path.home() / ".efp" / "workspace"
+    """Get the workspace directory."""
     try:
-        workspace_path.mkdir(parents=True, exist_ok=True)
-        return str(workspace_path)
+        WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
+        return str(WORKSPACE_ROOT)
     except Exception as e:
-        logger.warning(f"Failed to create workspace directory {workspace_path}: {e}; falling back to current directory")
+        logger.warning(f"Failed to create workspace: {e}")
         return os.getcwd()
 
 
-def _get_skill_workdir_getter():
-    """Get the skill workdir getter function (lazy import to avoid circular imports)."""
-    global _skill_workdir_getter
-    if _skill_workdir_getter is None:
-        try:
-            from src.agents.core import get_skill_workdir
-            _skill_workdir_getter = get_skill_workdir
-        except ImportError:
-            _skill_workdir_getter = lambda: None
-    return _skill_workdir_getter
+def _get_path_dirs() -> List[Path]:
+    """Get list of directories in PATH."""
+    path_env = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    return [Path(p) for p in path_env.split(":") if p]
 
 
-# ============ Security Configuration ============
-
-_security_config: Optional[ExecSecurityConfig] = None
-
-
-def set_security_config(config: ExecSecurityConfig) -> None:
-    """Set the global security configuration."""
-    global _security_config
-    _security_config = config
-    logger.info(f"Security config: {config.security.value}")
-
-
-def get_security_config() -> ExecSecurityConfig:
-    """Get the current security configuration."""
-    global _security_config
-    return _security_config if _security_config is not None else create_default_config()
-
-
-# ============ Shell Execution ============
-
-async def exec(command: str, args: list = None, timeout: int = DEFAULT_TIMEOUT) -> str:
-    """Execute a shell command.
+async def discover_commands(
+    prefix: str = None,
+    contains: str = None,
+    sources: List[str] = None,
+    include_paths: bool = False,
+    include_version: bool = False,
+    limit: int = 200,
+) -> Dict[str, Any]:
+    """Discover available commands on the system.
     
     Args:
-        command: Shell command to execute (or command name if args provided)
-        args: Optional list of arguments for safe execution (recommended)
-              Example: command="gh", args=["pr", "edit", "235", "--body", "new description"]
-        timeout: Timeout in seconds (default: 60)
+        prefix: Filter by command prefix (e.g., "gi" -> git, gist)
+        contains: Filter by command name contains
+        sources: ["path", "builtin", "alias"] - what to search
+        include_paths: Include full paths in response
+        include_version: Try to get version info (slower)
+        limit: Maximum commands to return
     
     Returns:
-        Command output or error message
+        Dict with env info and list of commands
     """
-    if not command or not command.strip():
-        return "Error: Empty command"
+    sources = sources or ["path"]
+    commands = []
+    seen = set()  # Track seen commands across all sources
     
-    config = get_security_config()
-    
-    # Default working directory: ~/.efp/workspace (with auto-creation)
-    default_cwd = get_workspace_dir()
-    
-    # Get working directory - prefer skill workdir if set (async-safe via contextvars)
-    actual_cwd = default_cwd
-    skill_workdir_getter = _get_skill_workdir_getter()
-    if skill_workdir_getter:
-        skill_workdir = skill_workdir_getter()
-        if skill_workdir:
-            skill_path = Path(skill_workdir)
-            if skill_path.exists() and skill_path.is_dir():
-                actual_cwd = skill_workdir
-                logger.debug(f"[exec] Using skill dir: {actual_cwd}")
-            else:
-                logger.debug(f"[exec] Skill dir not found: {skill_workdir}")
-    
-    # Use args array if provided (safer)
-    if args and isinstance(args, list):
-        # Build command from command + args
-        full_command = [command] + args
-        command_str = " ".join(f'"{arg}"' if " " in arg else arg for arg in full_command)
+    # A) PATH commands (primary source)
+    if "path" in sources:
+        path_dirs = _get_path_dirs()
         
-        allowed, reason = evaluate_command(command_str, config, actual_cwd)
-        if not allowed:
-            return f"Blocked: {reason}\n\nTo allow: security=full"
-        
-        merged_env = os.environ.copy()
-        
+        for path_dir in path_dirs:
+            if not path_dir.is_dir():
+                continue
+            try:
+                for entry in path_dir.iterdir():
+                    name = entry.name
+                    if name in seen:
+                        continue
+                    if not entry.is_file() or not os.access(entry, os.X_OK):
+                        continue
+                    
+                    # Apply filters
+                    if prefix and not name.startswith(prefix):
+                        continue
+                    if contains and contains not in name:
+                        continue
+                    
+                    seen.add(name)
+                    cmd_info = {"name": name, "type": "path"}
+                    
+                    if include_paths:
+                        cmd_info["paths"] = [str(entry)]
+                    
+                    commands.append(cmd_info)
+            except PermissionError:
+                continue
+    
+    # B) Builtins (optional)
+    if "builtin" in sources:
         try:
-            process = await asyncio.create_subprocess_exec(
-                *full_command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=actual_cwd,
-                env=merged_env
+            result = await asyncio.to_thread(subprocess.run,
+                ["bash", "-lc", "compgen -b"],
+                capture_output=True, text=True, timeout=5
             )
-        except FileNotFoundError:
-            return f"Error: Command not found: {command}"
+            if result.returncode == 0:
+                for name in result.stdout.strip().split("\n"):
+                    if name and name not in seen:
+                        if prefix and not name.startswith(prefix):
+                            continue
+                        if contains and contains not in name:
+                            continue
+                        commands.append({"name": name, "type": "builtin"})
         except Exception as e:
-            return f"Error: {e}"
-        
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=timeout
-            )
-        except asyncio.TimeoutError:
-            process.kill()
-            return f"Error: Timeout after {timeout}s"
-        
-        output = []
-        if stdout:
-            output.append(stdout.decode('utf-8', errors='replace').strip())
-        if stderr:
-            stderr_text = stderr.decode('utf-8', errors='replace').strip()
-            if stderr_text and "Warning:" not in stderr_text:
-                output.append(f"STDERR:\n{stderr_text}")
-        
-        result = '\n'.join(output)
-        
-        if process.returncode != 0:
-            result = f"Exit: {process.returncode}\n\n{result}"
-        
-        return result if result else "(no output)"
+            logger.debug(f"Failed to get builtins: {e}")
     
-    # Fallback: use shell command string
-    allowed, reason = evaluate_command(command, config, actual_cwd)
+    # C) Aliases (optional, usually skipped)
+    # Skipped by default to avoid leaking personal aliases
     
-    if not allowed:
-        return f"Blocked: {reason}\n\nTo allow: security=full"
+    # Sort: common commands first, then alphabetical
+    common_set = set(COMMON_COMMANDS)
+    commands.sort(key=lambda c: (
+        0 if c["name"] in common_set else 1,
+        c["name"]
+    ))
     
-    merged_env = os.environ.copy()
+    # Capture total before limiting
+    total_estimate = len(commands)
     
+    # Apply limit
+    commands = commands[:limit]
+    
+    # Get version for selected commands (if requested)
+    if include_version and commands:
+        for cmd_info in commands[:10]:  # Only first 10 to avoid slow
+            name = cmd_info["name"]
+            cmd_info["version"] = None  # Default
+            try:
+                result = await asyncio.to_thread(subprocess.run,
+                    [name, "--version"],
+                    capture_output=True, text=True, timeout=1
+                )
+                if result.returncode == 0:
+                    # Take first line as version
+                    version = result.stdout.strip().split("\n")[0][:100]
+                    cmd_info["version"] = version
+            except Exception:
+                cmd_info["version"] = None
+    
+    # Build response
+    return {
+        "env": {
+            "os": "linux",
+            "shell": "bash",
+            "path": [str(p) for p in _get_path_dirs()],
+        },
+        "result": {
+            "total_estimate": total_estimate,
+            "returned": len(commands),
+            "commands": commands
+        }
+    }
+
+
+def _validate_cwd(cwd: str = None) -> str:
+    """Validate and resolve working directory."""
+    if cwd is None:
+        cwd = get_workspace_dir()
+    
+    # Expand ~ to home directory
+    if cwd.startswith("~"):
+        cwd = str(Path.home() / cwd[2:].lstrip("/"))
+    
+    # Resolve path
+    resolved = Path(cwd).resolve()
+    workspace_resolved = WORKSPACE_ROOT.resolve()
+    
+    # Check if within workspace
     try:
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=actual_cwd,
-            env=merged_env
-        )
-        
+        resolved.relative_to(workspace_resolved)
+    except ValueError:
+        # Not in workspace, use workspace root
+        logger.warning(f"cwd {cwd} not in workspace, using {WORKSPACE_ROOT}")
+        cwd = str(workspace_resolved)
+        resolved = Path(cwd).resolve()
+    
+    # Check if directory exists
+    if not resolved.exists():
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=timeout
-            )
-        except asyncio.TimeoutError:
-            process.kill()
-            return f"Error: Timeout after {timeout}s"
-        
-        output = []
-        if stdout:
-            output.append(stdout.decode('utf-8', errors='replace').strip())
-        if stderr:
-            stderr_text = stderr.decode('utf-8', errors='replace').strip()
-            if stderr_text and "Warning:" not in stderr_text:
-                output.append(f"STDERR:\n{stderr_text}")
-        
-        result = '\n'.join(output)
-        
-        if process.returncode != 0:
-            result = f"Exit: {process.returncode}\n\n{result}"
-        
-        return result if result else "(no output)"
-        
-    except Exception as e:
-        return f"Error: {e}"
+            resolved.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"cwd {cwd} cannot be created, using {WORKSPACE_ROOT}")
+            cwd = str(workspace_resolved)
+    elif not resolved.is_dir():
+        logger.warning(f"cwd {cwd} is not a directory, using {WORKSPACE_ROOT}")
+        cwd = str(workspace_resolved)
+    
+    return cwd
 
 
-def exec_sync(command: str, args: list = None, timeout: int = DEFAULT_TIMEOUT) -> str:
-    """Synchronous exec wrapper.
+async def run_command(
+    cmd: str,
+    args: List[str] = None,
+    cwd: str = None,
+    timeout_ms: int = DEFAULT_TIMEOUT_MS,
+    max_output_bytes: int = MAX_OUTPUT_BYTES,
+    env: Dict[str, str] = None,
+) -> Dict[str, Any]:
+    """Execute a shell command with security restrictions.
     
     Args:
-        command: Shell command to execute (or command name if args provided)
-        args: Optional list of arguments for safe execution (recommended)
-        timeout: Timeout in seconds
+        cmd: Command to execute
+        args: Command arguments as array (recommended)
+        cwd: Working directory (must be in workspace)
+        timeout_ms: Timeout in milliseconds
+        max_output_bytes: Limit output size
+        env: Environment variables (allowlist)
+    
+    Returns:
+        Dict with exit_code, stdout, stderr, duration_ms, truncated
     """
-    import subprocess
+    # Validate args is a list of strings
+    if args is not None and not isinstance(args, list):
+        return {
+            "ok": False,
+            "error": "E_BAD_ARGS",
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "args must be a list of strings",
+            "duration_ms": 0,
+            "truncated": {"stdout": False, "stderr": False},
+        }
+    args = args or []
     
-    if not command or not command.strip():
-        return "Error: Empty command"
+    # Validate working directory
+    cwd = _validate_cwd(cwd)
     
-    config = get_security_config()
-    default_cwd = get_workspace_dir()
-    actual_cwd = default_cwd
+    # Security: Block dangerous commands
+    # Block dangerous commands (direct and via shell wrappers)
+    dangerous_cmds = {
+        "mkfs", "dd", "fdisk", "parted", "shutdown", "reboot", "halt", "poweroff", "init"
+    }
+    # Block shell wrappers that can bypass restrictions
+    if cmd in dangerous_cmds:
+        return {
+            "ok": False,
+            "error": "E_POLICY_DENY",
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": f"Command '{cmd}' is blocked for safety",
+            "duration_ms": 0,
+            "truncated": {"stdout": False, "stderr": False},
+        }
+    # Block shell wrappers - only check when args[0] is a shell flag
+    # This allows common commands like "grep -i pattern" but blocks "bash -c"
+    # shell_wrapper_cmds = {"bash", "sh", "zsh", "dash", "sudo", "su"}
+    shell_wrapper_cmds = {}
+    if cmd in shell_wrapper_cmds and args:
+        if args[0] in ("-c", "-i", "-l", "--login"):
+            return {
+                "ok": False,
+                "error": "E_POLICY_DENY",
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "Shell wrapper execution is not allowed",
+                "duration_ms": 0,
+                "truncated": {"stdout": False, "stderr": False},
+            }
     
-    # Use args array if provided (safer)
-    if args and isinstance(args, list):
-        # Build command from command + args
-        full_command = [command] + args
-        command_str = " ".join(f'"{arg}"' if " " in arg else arg for arg in full_command)
-        
-        allowed, reason = evaluate_command(command_str, config, actual_cwd)
-        if not allowed:
-            return f"Blocked: {reason}"
-        
-        merged_env = os.environ.copy()
-        
-        try:
-            result = subprocess.run(
-                full_command,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=actual_cwd,
-                env=merged_env
-            )
-        except FileNotFoundError:
-            return f"Error: Command not found: {command}"
-        except subprocess.TimeoutExpired:
-            return f"Error: Timeout after {timeout}s"
-        except Exception as e:
-            return f"Error: {e}"
-        
-        output = []
-        if result.stdout:
-            output.append(result.stdout.strip())
-        if result.stderr:
-            output.append(f"STDERR:\n{result.stderr.strip()}")
-        
-        if result.returncode != 0:
-            output.insert(0, f"Exit: {result.returncode}")
-        
-        return '\n'.join(output) if output else "(no output)"
+    # Block absolute paths
+    import os
+    if os.path.isabs(cmd):
+        return {
+            "ok": False,
+            "error": "E_POLICY_DENY",
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "Absolute paths are not allowed",
+            "duration_ms": 0,
+            "truncated": {"stdout": False, "stderr": False},
+        }
     
-    # Fallback: use shell command string
-    allowed, reason = evaluate_command(command, config, actual_cwd)
+    # Security: Block env PATH override
+    allowed_keys = {"LC_ALL", "LANG", "HOME", "USER"}  # No PATH!
+    safe_env = os.environ.copy()
+    if env:
+        for k, v in env.items():
+            if k in allowed_keys:
+                safe_env[k] = v
     
-    if not allowed:
-        return f"Blocked: {reason}"
-    
-    merged_env = os.environ.copy()
+    # Execute
+    start_time = asyncio.get_event_loop().time()
     
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=actual_cwd,
-            env=merged_env
+        process = await asyncio.create_subprocess_exec(
+            cmd, *args,
+            cwd=cwd,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=safe_env,
         )
         
-        output = []
-        if result.stdout:
-            output.append(result.stdout.strip())
-        if result.stderr:
-            output.append(f"STDERR:\n{result.stderr.strip()}")
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout_ms / 1000
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return {
+                "ok": False,
+                "error": "E_TIMEOUT",
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": "Command timed out",
+                "duration_ms": timeout_ms,
+                "truncated": {"stdout": False, "stderr": False},
+            }
         
-        if result.returncode != 0:
-            output.insert(0, f"Exit: {result.returncode}")
+        duration_ms = int((asyncio.get_running_loop().time() - start_time) * 1000)
         
-        return '\n'.join(output) if output else "(no output)"
+        # Truncate if needed
+        stdout_bytes = stdout[:max_output_bytes]
+        stderr_bytes = stderr[:max_output_bytes]
         
-    except subprocess.TimeoutExpired:
-        return f"Error: Timeout after {timeout}s"
+        stdout_text = stdout_bytes.decode("utf-8", errors="replace")
+        stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+        
+        is_success = process.returncode == 0
+        return {
+            "ok": is_success,
+            "exit_code": process.returncode,
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+            "duration_ms": duration_ms,
+            "truncated": {
+                "stdout": len(stdout) > max_output_bytes,
+                "stderr": len(stderr) > max_output_bytes,
+            },
+            "meta": {
+                "cmd": cmd,
+                "args": args,
+                "cwd": cwd,
+            }
+        }
+        
+    except FileNotFoundError:
+        return {
+            "ok": False,
+            "error": "E_NOT_FOUND",
+            "exit_code": 127,
+            "stdout": "",
+            "stderr": f"Command not found: {cmd}",
+            "duration_ms": 0,
+            "truncated": {"stdout": False, "stderr": False},
+        }
     except Exception as e:
-        return f"Error: {e}"
+        logger.exception(f"run_command failed: {cmd}")
+        return {
+            "ok": False,
+            "error": "E_EXEC_FAILED",
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": str(e),
+            "duration_ms": 0,
+            "truncated": {"stdout": False, "stderr": False},
+        }
 
-
-# ============ Tool Schema ============
 
 def get_tools_schemas() -> list:
-    """Return tool schema for LLM.
-    
-    Only one tool: exec - Agent uses Linux CLI directly.
-    
-    Use 'args' array for safe execution (recommended):
-      exec(command="gh", args=["pr", "edit", "235", "--body", "new description"])
-    """
+    """Return tool schemas for LLM."""
     return [
         {
             "type": "function",
             "function": {
-                "name": "exec",
-                "description": """Execute a Linux shell command.
+                "name": "discover_commands",
+                "description": """Discover available commands on the system.
 
-**Safe Execution (Recommended):** Use command + args array
-- exec(command="gh", args=["pr", "edit", "235", "--body", "new description"])
-- exec(command="git", args=["commit", "-m", "fix: bug fix"])
-- exec(command="python", args=["-m", "http.server", "8080"])
+Use this BEFORE running a command if you're unsure what commands exist or their exact names.
 
-**Legacy (shell string):**
-- exec(command="gh pr edit 235 --body 'new description'")
+**Filters:**
+- prefix: Filter by command prefix (e.g., "gi" -> git, gist)
+- contains: Filter by name contains (e.g., "docker")
+- limit: Max results (default 200)
 
-**File:**
-- cat file, head -n 20 file, tail -n 10 file
-- echo "text" > file, cat > file <<EOF
-- sed -i 's/old/new/g' file, awk '{print $1}' file
-
-**Dir:**
-- ls -la, find . -name "*.py", tree
-- cd dir, pwd, mkdir -p dir, rm -rf dir
-
-**Git:**
-- git status, git add ., git commit -m "msg", git push
-- git log --oneline -10, git diff, git checkout -b branch
-
-**GitHub (gh):** (Enterprise only - uses config from ~/gh/hosts.yml)
-- gh repo view, gh issue list, gh pr list
-- gh pr view 123, gh pr checkout 123
-
-**Search:**
-- grep -r "pattern" ., rg "pattern" --type py
-- jq '.key' file.json, yq '.key' file.yaml
-
-**System:**
-- ps aux, df -h, free -h, curl, wget""",
+**Examples:**
+- discover_commands(prefix="gi")  # Find git, gist
+- discover_commands(contains="docker")  # All docker commands
+- discover_commands()  # Get common commands""",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "command": {"type": "string", "description": "Command to execute (e.g., gh, git, python)"},
+                        "prefix": {"type": "string", "description": "Command prefix filter"},
+                        "contains": {"type": "string", "description": "Command name contains filter"},
+                        "limit": {"type": "integer", "description": "Max results (default 200)"}
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "run_command",
+                "description": """Execute a Linux shell command.
+
+**IMPORTANT:** First use discover_commands if you're unsure what command to use!
+
+**Usage:**
+- run_command(cmd="git", args=["status"])
+- run_command(cmd="ls", args=["-la"])
+- run_command(cmd="grep", args=["-r", "pattern", "."])
+
+**Restrictions:**
+- cwd must be within ~/.efp/workspace
+- stdin is disabled (no interactive commands)
+- Output truncated at 200KB
+
+**Best Practices:**
+- Use args array (not shell strings) for safety
+- Filter output with head/tail/wc when large
+- Check exit_code in response""",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "cmd": {"type": "string", "description": "Command to execute"},
                         "args": {
-                            "type": "array", 
+                            "type": "array",
                             "items": {"type": "string"},
-                            "description": "Command arguments as array (recommended for safety)"
+                            "description": "Command arguments as array"
                         },
-                        "timeout": {"type": "integer", "description": "Timeout in seconds (default: 60)"}
+                        "cwd": {"type": "string", "description": "Working directory (default: workspace)"},
+                        "timeout_ms": {"type": "integer", "description": "Timeout in ms (default 15000)"}
                     },
-                    "required": ["command"]
+                    "required": ["cmd"]
                 }
             }
         },
@@ -361,10 +449,8 @@ def get_tools_schemas() -> list:
 
 
 __all__ = [
-    "exec",
-    "exec_sync",
+    "discover_commands",
+    "run_command",
     "get_tools_schemas",
-    "set_security_config",
-    "get_security_config",
-    "DEFAULT_SAFE_BINS",
+    "get_workspace_dir",
 ]

@@ -544,7 +544,7 @@ body {
 }
 
 .message-bubble a {
-    color: var(--color-accent);
+    color: #d2e5ff;
     text-decoration: none;
 }
 

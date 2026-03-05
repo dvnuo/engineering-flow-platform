@@ -68,7 +68,6 @@ async def handle_jira_message(
         return response
 
     except asyncio.CancelledError:
-        # 原文件里这条日志被“复制粘贴”到了很多地方；这里保持不改语义，只修正缩进/结构
         logger.info("[Memory] Periodic check cancelled")
         raise
 
@@ -475,6 +474,7 @@ class Gateway:
         """Run memory bootstrap in background."""
         try:
             from src.memory.daily_generator import ensure_daily_memories
+            from src.memory.long_term_generator import update_long_term_memory_from_daily
             from src.config import config as runtime_config
 
             logger.info("[Memory] Starting background bootstrap...")
@@ -489,6 +489,21 @@ class Gateway:
             )
 
             logger.info(f"[Memory] Bootstrap complete: {len(created_daily) if created_daily else 0} daily files")
+
+            # Generate long-term memory from recent dailies
+            try:
+                from src.agents.llm import llm_client as runtime_llm_client
+                if runtime_llm_client and created_daily:
+                    logger.info("[Memory] Generating long-term memory from daily files...")
+                    await update_long_term_memory_from_daily(
+                        workspace=workspace,
+                        llm_client=runtime_llm_client,
+                        daily_paths=created_daily,
+                    )
+                    logger.info("[Memory] Long-term memory updated")
+            except Exception as e:
+                logger.warning(f"[Memory] Long-term memory update skipped: {e}")
+
 
             # Start periodic check for session changes
             await self._start_periodic_memory_check(workspace)
@@ -532,9 +547,24 @@ class Gateway:
                     created_daily = await ensure_daily_memories(
                         workspace=workspace,
                         llm_client=None,
-                        backfill_only_missing=True,  # Always regenerate today (原注释保持不变)
+                        backfill_only_missing=True,  # Always regenerate today
                     )
                     logger.info(f"[Memory] Updated: {len(created_daily) if created_daily else 0} daily files")
+
+                    # Also update long-term memory
+                    try:
+                        from src.agents.llm import llm_client as runtime_llm_client
+                        if runtime_llm_client:
+                            logger.info("[Memory] Updating long-term memory...")
+                            await update_long_term_memory_from_daily(
+                                workspace=workspace,
+                                llm_client=runtime_llm_client,
+                                daily_paths=created_daily,
+                            )
+                            logger.info("[Memory] Long-term memory updated")
+                    except Exception as e:
+                        logger.warning(f"[Memory] Long-term update skipped: {e}")
+
                     last_mtime = current_mtime
                 else:
                     logger.debug("[Memory] No session changes detected")
