@@ -1383,9 +1383,17 @@
                     // Render all messages from session history
                     sessionData.messages.forEach(msg => {
                         const role = msg.role || 'user';
-                        // Skip tool messages if debug is disabled
-                        if (role === 'tool' && !(isDebugEnabled())) {
-                            return;
+                        // Skip tool messages and placeholder content if debug is disabled
+                        if (!isDebugEnabled()) {
+                            if (role === 'tool') {
+                                return;
+                            }
+                            // Skip messages with placeholder tool content
+                            const skipPhrases = ['[Tool call]', '[Tool exec result]'];
+                            const msgContent = msg.content || '';
+                            if (skipPhrases.some(phrase => msgContent.includes(phrase))) {
+                                return;
+                            }
                         }
                         const content = msg.content || '';
                         const timestamp = msg.timestamp || msg.created_at;
@@ -1742,8 +1750,15 @@
                 messages.forEach(msg => {
                     const role = msg.role || 'user';
                     // Skip tool messages if debug is disabled
-                    if (role === 'tool' && !(isDebugEnabled())) {
-                        return;
+                    if (!isDebugEnabled()) {
+                        if (role === 'tool') {
+                            return;
+                        }
+                        const skipPhrases = ['[Tool call]', '[Tool exec result]'];
+                        const msgContent = msg.content || '';
+                        if (skipPhrases.some(phrase => msgContent.includes(phrase))) {
+                            return;
+                        }
                     }
                     addMessage(role, msg.content || '', msg.timestamp || msg.created_at, msg.tool_calls);
                 });
