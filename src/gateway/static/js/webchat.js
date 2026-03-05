@@ -1125,6 +1125,30 @@
      * @param {string} text - Markdown text to render
      * @returns {string} HTML
      */
+    // Configure marked.js once at module level
+    (function() {
+        try {
+            marked.setOptions({
+                breaks: true,        // Convert \n to <br>
+                gfm: true,          // GitHub Flavored Markdown
+                highlight: function(code, lang) {
+                    if (lang && hljs) {
+                        try {
+                            return hljs.highlight(code, { language: lang }).value;
+                        } catch (e) {
+                            // Fallback: escape code to avoid HTML injection
+                            return escapeHtml(code);
+                        }
+                    }
+                    // No language or hljs unavailable: escape code
+                    return escapeHtml(code);
+                }
+            });
+        } catch (e) {
+            console.warn('Failed to configure marked:', e);
+        }
+    })();
+
     function renderMarkdown(text) {
         if (!text || typeof text !== 'string') {
             return '';
@@ -1138,27 +1162,42 @@
 
         // Use marked.js for proper markdown rendering
         try {
-            // Configure marked options
-            marked.setOptions({
-                breaks: true,        // Convert \n to <br>
-                gfm: true,          // GitHub Flavored Markdown
-                highlight: function(code, lang) {
-                    if (lang && hljs) {
-                        try {
-                            return hljs.highlight(code, { language: lang }).value;
-                        } catch (e) {
-                            return code;
-                        }
-                    }
-                    return code;
-                }
+            // Extract <pre> blocks first to preserve their newlines
+            const preBlocks = [];
+            let html = text.replace(/<pre[\s\S]*?<\/pre>/g, function(match) {
+                // Normalize any <br> inside <pre> back to newlines before extracting
+                const normalized = match.replace(/<br>/g, '\n');
+                const placeholder = '__PRE_BLOCK_' + preBlocks.length + '__';
+                preBlocks.push(normalized);
+                return placeholder;
             });
 
-            // Parse markdown and return
-            let html = marked.parse(text);
+            // Parse markdown (marked will handle escaping)
+            html = marked.parse(html);
+
+            // Convert newlines to <br> outside of <pre> blocks
+            html = html.replace(/__PRE_BLOCK_(\d+)__/g, function(_, index) {
+                return preBlocks[Number(index)];
+            });
+
+            // Restore <pre> blocks with their original newlines
+            html = html.replace(/__PRE_BLOCK_(\d+)__/g, function(_, index) {
+                return preBlocks[Number(index)];
+            });
+
+            // Additional newline to <br> conversion for non-pre content
+            // But skip content inside <pre> tags
+            const parts = html.split(/(<pre[\s\S]*?<\/pre>)/g);
+            html = parts.map(part => {
+                if (part.startsWith('<pre')) {
+                    return part; // Don't convert newlines inside <pre>
+                }
+                return part.replace(/\n/g, '<br>');
+            }).join('');
+
             return html;
         } catch (e) {
-            // Fallback to simple rendering
+            // Fallback to simple rendering with XSS protection
             console.warn('Markdown rendering failed:', e);
             return escapeHtml(text).replace(/\n/g, '<br>');
         }
