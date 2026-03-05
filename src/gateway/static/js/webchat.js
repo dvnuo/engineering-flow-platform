@@ -3,6 +3,28 @@
 (function() {
     'use strict';
 
+    // Debug flag - initialized early to avoid reference errors
+    let debugEnabled = document.getElementById('debugEnabled');
+    
+    // Helper to check if debug mode is on - handles null debugEnabled
+    function isDebugEnabled() {
+        try {
+            return debugEnabled && debugEnabled.checked;
+        } catch (e) {
+            return false;
+        }
+    }
+    
+    // Helper to check if message is a tool placeholder that should be hidden
+    function isToolPlaceholder(content, role) {
+        // Only filter placeholder content for assistant/tool messages
+        if (role !== 'assistant' && role !== 'tool') {
+            return false;
+        }
+        if (!content) return false;
+        return /\[Tool\s+.*\s+result\]/.test(content) || /Tool\s+.*\s+Result/.test(content);
+    }
+
     // DOM Elements
     const messagesContainer = document.getElementById('messages');
     const messageInput = document.getElementById('messageInput');
@@ -1388,9 +1410,8 @@
                             if (role === 'tool') {
                                 return;
                             }
-                            // Skip messages with placeholder tool content using regex
-                            const msgContent = msg.content || '';
-                            if (/\[Tool\s+.*\s+result\]/.test(msgContent) || /Tool\s+.*\s+Result/.test(msgContent)) {
+                            // Skip tool placeholder messages when debug is off
+                            if (!isDebugEnabled() && isToolPlaceholder(msg.content, role)) {
                                 return;
                             }
                         }
@@ -2125,12 +2146,7 @@
     const gitEmail = document.getElementById('gitEmail');
     const sshEnabled = document.getElementById('sshEnabled');
     const sshKeyPath = document.getElementById('sshKeyPath');
-    const debugEnabled = document.getElementById('debugEnabled');
 
-// Helper to check if debug mode is on
-function isDebugEnabled() {
-    return debugEnabled && debugEnabled.checked;
-}
 
     // Provider to Model mapping
     const providerModels = {
