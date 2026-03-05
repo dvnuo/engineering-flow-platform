@@ -44,7 +44,9 @@ def _build_partial_prompt(day: str, events: List[Dict[str, Any]], chunk_idx: int
         
         if t == "tool":
             tool_name = e.get("tool_name", "unknown")
-            result_preview = (e.get("result", "") or "")[:80]
+            # Use tool_result (from EventLogger) with fallback to result
+            tool_output = e.get("tool_result") or e.get("result", "")
+            result_preview = (tool_output or "")[:80]
             event_summary.append(f"[tool] {tool_name}: {result_preview}")
         elif t == "user":
             msg = (e.get("content", "") or "")[:80]
