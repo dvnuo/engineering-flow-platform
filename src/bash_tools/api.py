@@ -328,7 +328,7 @@ async def run_command(
                 "truncated": {"stdout": False, "stderr": False},
             }
         
-        duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
+        duration_ms = int((asyncio.get_running_loop().time() - start_time) * 1000)
         
         # Truncate if needed
         stdout_bytes = stdout[:max_output_bytes]
