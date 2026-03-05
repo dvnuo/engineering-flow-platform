@@ -2894,14 +2894,24 @@
                 message = data.message || 'LLM is thinking...';
                 break;
             case 'tool_call':
-                // Show tool name and arguments in debug mode
-                const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '';
-                message = `🔧 ${data.tool || 'Unknown tool'}\n📝 Args: ${argsStr || 'none'}`;
+                // Show tool name and arguments in debug mode only
+                const isDebugTool = typeof config !== 'undefined' && config.debug && config.debug.enabled;
+                if (isDebugTool) {
+                    const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '';
+                    message = `🔧 ${data.tool || 'Unknown tool'}\n📝 Args: ${argsStr || 'none'}`;
+                } else {
+                    message = '';
+                }
                 break;
             case 'tool_result':
-                // Show tool result or error
-                const statusIcon = data.success ? '✅' : '❌';
-                message = `${statusIcon} ${data.tool || 'Tool'} Result:\n${data.result || '(no result)'}`;
+                // Show tool result in debug mode only
+                const isDebugResult = typeof config !== 'undefined' && config.debug && config.debug.enabled;
+                if (isDebugResult) {
+                    const statusIcon = data.success ? '✅' : '❌';
+                    message = `${statusIcon} ${data.tool || 'Tool'} Result:\n${data.result || '(no result)'}`;
+                } else {
+                    message = '';
+                }
                 break;
             case 'confirmation':
                 message = data.message || 'Confirmation required';
