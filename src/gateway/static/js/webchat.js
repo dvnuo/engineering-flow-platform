@@ -2766,23 +2766,29 @@
                 break;
 
             case 'tool_call':
-                showAgentEvent('tool-call', `🔧 Calling: ${eventData.tool || 'Unknown tool'}`);
+                // Only show tool calls when debug is enabled
+                if (debugEnabled && debugEnabled.checked) {
+                    showAgentEvent('tool-call', `🔧 Calling: ${eventData.tool || 'Unknown tool'}`);
+                }
                 break;
 
             case 'tool_result':
-                // Show detailed result or error - ALWAYS show the result field
-                const success = eventData.success;
-                const tool = eventData.tool || 'Unknown tool';
-                const result = eventData.result;
+                // Only show tool results when debug is enabled
+                if (debugEnabled && debugEnabled.checked) {
+                    // Show detailed result or error
+                    const success = eventData.success;
+                    const tool = eventData.tool || 'Unknown tool';
+                    const result = eventData.result;
 
-                if (success) {
-                    // Success: show brief result preview
-                    const preview = result ? (result.length > 100 ? result.substring(0, 100) + '...' : result) : '(no result)';
-                    showAgentEvent('tool-result', `✅ ${tool}\nResult: ${preview}`);
-                } else {
-                    // Error: result already contains "Error:" prefix from __str__, don't duplicate
-                    const errorMsg = result || 'Unknown error (no details)';
-                    showAgentEvent('tool-result', `❌ ${tool}\n${errorMsg}`);
+                    if (success) {
+                        // Success: show brief result preview
+                        const preview = result ? (result.length > 100 ? result.substring(0, 100) + '...' : result) : '(no result)';
+                        showAgentEvent('tool-result', `✅ ${tool}\nResult: ${preview}`);
+                    } else {
+                        // Error: result already contains "Error:" prefix from __str__, don't duplicate
+                        const errorMsg = result || 'Unknown error (no details)';
+                        showAgentEvent('tool-result', `❌ ${tool}\n${errorMsg}`);
+                    }
                 }
                 break;
 
