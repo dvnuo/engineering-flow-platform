@@ -1558,12 +1558,9 @@ async def api_files_get(request: web.Request) -> web.Response:
         # Determine content type
         content_type = metadata.content_type or 'application/octet-stream'
         
-        # Read and return file
-        with open(file_path, 'rb') as f:
-            file_content = f.read()
-        
-        return web.Response(
-            body=file_content,
+        # Stream file using FileResponse to avoid blocking the event loop
+        return web.FileResponse(
+            path=file_path,
             content_type=content_type,
             headers={
                 'Content-Disposition': f'inline; filename="{metadata.original_filename}"'
