@@ -3,6 +3,28 @@
 (function() {
     'use strict';
 
+    // Debug flag - initialized early to avoid reference errors
+    let debugEnabled = document.getElementById('debugEnabled');
+    
+    // Helper to check if debug mode is on - handles null debugEnabled
+    function isDebugEnabled() {
+        try {
+            return debugEnabled && debugEnabled.checked;
+        } catch (e) {
+            return false;
+        }
+    }
+    
+    // Helper to check if message is a tool placeholder that should be hidden
+    function isToolPlaceholder(content, role) {
+        // Only filter placeholder content for assistant/tool messages
+        if (role !== 'assistant' && role !== 'tool') {
+            return false;
+        }
+        if (!content) return false;
+        return /\[Tool\s+.*\s+result\]/.test(content) || /Tool\s+.*\s+Result/.test(content);
+    }
+
     // DOM Elements
     const messagesContainer = document.getElementById('messages');
     const messageInput = document.getElementById('messageInput');
@@ -1010,12 +1032,17 @@
         let messageContent = content || '';
 
         if (role === 'tool') {
-            badge = '<span class="tool-badge">🔧 Tool Result</span>';
+            // Only show tool result badge in debug mode
+            if (isDebugEnabled()) {
+                badge = '<span class="tool-badge">🔧 Tool Result</span>';
+            }
         } else if (role === 'assistant' && toolCalls && toolCalls.length > 0) {
-            // Assistant message with tool calls but no content (pending tool execution)
-            badge = '<span class="tool-calls-badge">⚙️ Calling Tools</span>';
-            const toolNames = toolCalls.map(tc => tc.function?.name || tc.name).join(', ');
-            messageContent = `_Calling: ${toolNames}_`;
+            // Only show tool call badge in debug mode
+            if (isDebugEnabled()) {
+                badge = '<span class="tool-calls-badge">⚙️ Calling Tools</span>';
+                const toolNames = toolCalls.map(tc => tc.function?.name || tc.name).join(', ');
+                messageContent = `_Calling: ${toolNames}_`;
+            }
         }
 
         // Process @file_xxx references for inline images
@@ -1378,6 +1405,16 @@
                     // Render all messages from session history
                     sessionData.messages.forEach(msg => {
                         const role = msg.role || 'user';
+                        // Skip tool messages and placeholder content if debug is disabled
+                        if (!isDebugEnabled()) {
+                            if (role === 'tool') {
+                                return;
+                            }
+                            // Skip tool placeholder messages when debug is off
+                            if (!isDebugEnabled() && isToolPlaceholder(msg.content, role)) {
+                                return;
+                            }
+                        }
                         const content = msg.content || '';
                         const timestamp = msg.timestamp || msg.created_at;
                         addMessage(role, content, timestamp, msg.tool_calls);
@@ -1732,6 +1769,17 @@
             } else {
                 messages.forEach(msg => {
                     const role = msg.role || 'user';
+                    // Skip tool messages if debug is disabled
+                    if (!isDebugEnabled()) {
+                        if (role === 'tool') {
+                            return;
+                        }
+                        const skipPhrases = ['[Tool call]', '[Tool exec result]', '[Tool run_command result]', 'Tool Call', 'Tool Exec Result', 'Tool run_command result'];
+                        const msgContent = msg.content || '';
+                        if (skipPhrases.some(phrase => msgContent.includes(phrase))) {
+                            return;
+                        }
+                    }
                     addMessage(role, msg.content || '', msg.timestamp || msg.created_at, msg.tool_calls);
                 });
             }
@@ -2098,7 +2146,7 @@
     const gitEmail = document.getElementById('gitEmail');
     const sshEnabled = document.getElementById('sshEnabled');
     const sshKeyPath = document.getElementById('sshKeyPath');
-    const debugEnabled = document.getElementById('debugEnabled');
+
 
     // Provider to Model mapping
     const providerModels = {
@@ -2767,14 +2815,14 @@
 
             case 'tool_call':
                 // Only show tool calls when debug is enabled
-                if (debugEnabled && debugEnabled.checked) {
+                if (isDebugEnabled()) {
                     showAgentEvent('tool-call', `🔧 Calling: ${eventData.tool || 'Unknown tool'}`);
                 }
                 break;
 
             case 'tool_result':
                 // Only show tool results when debug is enabled
-                if (debugEnabled && debugEnabled.checked) {
+                if (isDebugEnabled()) {
                     // Show detailed result or error
                     const success = eventData.success;
                     const tool = eventData.tool || 'Unknown tool';
@@ -2863,14 +2911,22 @@
                 message = data.message || 'LLM is thinking...';
                 break;
             case 'tool_call':
-                // Show tool name and arguments in debug mode
-                const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '';
-                message = `🔧 ${data.tool || 'Unknown tool'}\n📝 Args: ${argsStr || 'none'}`;
+                // Only show in debug mode
+                if (isDebugEnabled()) {
+                    const argsStr = data.args ? JSON.stringify(data.args, null, 2) : '';
+                    message = `🔧 ${data.tool || 'Unknown tool'}\n📝 Args: ${argsStr || 'none'}`;
+                } else {
+                    message = '';
+                }
                 break;
             case 'tool_result':
-                // Show tool result or error
-                const statusIcon = data.success ? '✅' : '❌';
-                message = `${statusIcon} ${data.tool || 'Tool'} Result:\n${data.result || '(no result)'}`;
+                // Only show in debug mode
+                if (isDebugEnabled()) {
+                    const statusIcon = data.success ? '✅' : '❌';
+                    message = `${statusIcon} ${data.tool || 'Tool'} Result:\n${data.result || '(no result)'}`;
+                } else {
+                    message = '';
+                }
                 break;
             case 'confirmation':
                 message = data.message || 'Confirmation required';
