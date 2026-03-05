@@ -1389,7 +1389,7 @@
                                 return;
                             }
                             // Skip messages with placeholder tool content
-                            const skipPhrases = ['[Tool call]', '[Tool exec result]'];
+                            const skipPhrases = ['[Tool call]', '[Tool exec result]', '[Tool run_command result]', 'Tool Call', 'Tool Exec Result', 'Tool run_command result'];
                             const msgContent = msg.content || '';
                             if (skipPhrases.some(phrase => msgContent.includes(phrase))) {
                                 return;
@@ -1754,7 +1754,7 @@
                         if (role === 'tool') {
                             return;
                         }
-                        const skipPhrases = ['[Tool call]', '[Tool exec result]'];
+                        const skipPhrases = ['[Tool call]', '[Tool exec result]', '[Tool run_command result]', 'Tool Call', 'Tool Exec Result', 'Tool run_command result'];
                         const msgContent = msg.content || '';
                         if (skipPhrases.some(phrase => msgContent.includes(phrase))) {
                             return;
