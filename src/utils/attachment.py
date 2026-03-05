@@ -4,8 +4,8 @@ Downloads attachments from external sources (Jira, Confluence, etc.)
 and processes them for LLM consumption.
 """
 
-import asyncio
 import re
+import logging
 import logging
 import httpx
 from dataclasses import dataclass
