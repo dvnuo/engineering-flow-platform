@@ -48,6 +48,51 @@ def _get_adapter() -> JiraFormatAdapter:
 
 # ========== Tool Functions with Markdown Support ==========
 
+
+
+async def _process_issue_attachments(issue_key: str, fields: dict) -> str:
+    """Process issue attachments and return them for LLM."""
+    attachments = fields.get("attachment", [])
+    if not attachments:
+        return ""
+    
+    logger.info(f"Processing {len(attachments)} attachments for {issue_key}")
+    
+    results = []
+    for i, att in enumerate(attachments[:5]):  # Max 5 attachments
+        filename = att.get("filename", "unknown")
+        mime_type = att.get("mimeType", "application/octet-stream")
+        size = att.get("size", 0)
+        
+        content_url = att.get("content", "")
+        
+        if content_url:
+            try:
+                result = await download_and_process_attachment(
+                    url=content_url,
+                    session_id=f"jira-{issue_key}",
+                    options={"include_image_data": True}
+                )
+                
+                if result.content_format == "base64":
+                    results.append(f"- **{filename}** (image, {size} bytes)")
+                    results.append(f"  {result.content}")
+                elif result.content_format == "text" and result.content:
+                    preview = result.content[:500]
+                    results.append(f"- **{filename}** (text, {size} bytes)")
+                    results.append(f"  {preview}")
+                else:
+                    results.append(f"- **{filename}** ({mime_type}, {size} bytes)")
+            except Exception as e:
+                logger.warning(f"Failed to process attachment {filename}: {e}")
+                results.append(f"- **{filename}** ({mime_type}, {size} bytes) - [processing failed]")
+        else:
+            results.append(f"- **{filename}** ({mime_type}, {size} bytes)")
+    
+    if results:
+        return "**Attachments:**\n" + "\n".join(results) + "\n"
+    return ""
+
 async def jira_get_issue(
     issue_key: str,
     format: str = "markdown",
@@ -74,7 +119,7 @@ async def jira_get_issue(
             return "Error: Jira is not configured. Please check your settings."
         
         adapter = _get_adapter()
-        return await adapter.get_issue(
+        result = await adapter.get_issue(
             issue_key=issue_key,
             format=format,
             max_chars=max_chars,
@@ -82,6 +127,23 @@ async def jira_get_issue(
             include_fields=include_fields,
             include_comments=include_comments
         )
+        
+        # Process attachments
+        attachment_info = ""
+        try:
+            fields = result.get("fields", {}) if isinstance(result, dict) else {}
+            attachment_info = await _process_issue_attachments(issue_key, fields)
+        except Exception as e:
+            logger.warning(f"Failed to process attachments: {e}")
+        
+        if attachment_info:
+            if isinstance(result, str):
+                result = result + "\n" + attachment_info
+            elif isinstance(result, dict):
+                # Add attachment info as a field in the dict
+                result["attachment_info"] = attachment_info
+        
+        return result
     except Exception as e:
         return f"Error getting issue {issue_key}: {str(e)}"
 
@@ -128,7 +190,7 @@ async def jira_get_issue_by_url(
         
         adapter = JiraFormatAdapter(instance_channel)
         
-        return await adapter.get_issue(
+        result = await adapter.get_issue(
             issue_key=issue_key,
             format=format,
             max_chars=max_chars,
@@ -136,6 +198,19 @@ async def jira_get_issue_by_url(
             include_fields=include_fields,
             include_comments=include_comments
         )
+        
+        # Process attachments
+        if isinstance(result, dict):
+            try:
+                fields = result.get("fields", {})
+                attachment_info = await _process_issue_attachments(issue_key, fields)
+                if attachment_info:
+                    # Convert dict to markdown if needed
+                    result = str(result) + "\n" + attachment_info
+            except Exception as e:
+                logger.warning(f"Failed to process attachments: {e}")
+        
+        return result
     except Exception as e:
         return f"Error getting issue from URL: {str(e)}"
 
