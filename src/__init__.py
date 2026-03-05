@@ -128,6 +128,15 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = bash_tools_module.list_dir(path)
         return ToolResult(success="Error" not in result, content=result)
     
+    # Backward compatibility: map exec to run_command
+    if name == "exec":
+        name = "run_command"
+        # Map old exec args to new format
+        if "command" in kwargs:
+            kwargs["cmd"] = kwargs.pop("command")
+        if "timeout" in kwargs:
+            kwargs["timeout_ms"] = kwargs.pop("timeout") * 1000
+    
     elif name == "run_command":
         cmd = kwargs.get("cmd", "")
         args = kwargs.get("args") or []
