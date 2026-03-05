@@ -40,19 +40,19 @@ def _build_partial_prompt(day: str, events: List[Dict[str, Any]], chunk_idx: int
     event_summary = []
     for e in events:
         t = e.get("type")
-        sid = e.get("session_id", "?")
         
         if t == "tool":
             tool_name = e.get("tool_name", "unknown")
             # Use tool_result (from EventLogger) with fallback to result
-            tool_output = e.get("tool_result") or e.get("result", "")
-            result_preview = (tool_output or "")[:80]
-            event_summary.append(f"[tool] {tool_name}: {result_preview}")
+            # Truncate to avoid multi-line issues in prompt
+            tool_output = (e.get("tool_result") or e.get("result", "") or "")[:80]
+            tool_output = tool_output.replace("\n", " ").replace("\r", "")
+            event_summary.append(f"[tool] {tool_name}: {tool_output}")
         elif t == "user":
-            msg = (e.get("content", "") or "")[:80]
+            msg = (e.get("content", "") or "")[:80].replace("\n", " ").replace("\r", "")
             event_summary.append(f"[user] {msg}")
         elif t == "assistant":
-            msg = (e.get("content", "") or "")[:80]
+            msg = (e.get("content", "") or "")[:80].replace("\n", " ").replace("\r", "")
             event_summary.append(f"[assistant] {msg}")
     
     events_text = "\n".join(f"- {e}" for e in event_summary)
