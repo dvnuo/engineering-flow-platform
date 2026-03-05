@@ -706,6 +706,7 @@ async def _process_issue_attachments(issue_key: str, fields: dict) -> str:
         return "**Attachments:**\n" + "\n".join(results) + "\n"
     return ""
 
+
 async def jira_get_issue(issue_key: str) -> str:
     """Get details for a Jira issue."""
     logger.debug(f"jira_get_issue called: {issue_key}")
