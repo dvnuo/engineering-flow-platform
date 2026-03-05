@@ -1547,12 +1547,12 @@ async def api_files_get(request: web.Request) -> web.Response:
                 'error': 'File not found'
             }, status=404)
         
-        file_path = get_file_path(file_id)
-        
-        if not file_path.exists():
+        try:
+            file_path = get_file_path(file_id)
+        except StoredFileNotFoundError:
             return web.json_response({
                 'success': False,
-                'error': 'File not found on disk'
+                'error': 'File not found'
             }, status=404)
         
         # Determine content type
