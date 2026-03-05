@@ -441,6 +441,20 @@ class ConfluenceChannel:
         """
         await self._request("DELETE", f"/content/{page_id}/label/{label}")
         return True
+
+    async def get_attachments(self, page_id: str) -> List[Dict[str, Any]]:
+        """Get attachments for a page.
+        
+        Args:
+            page_id: Page ID
+            
+        Returns:
+            List of attachment metadata
+        """
+        logger.info(f"Fetching attachments for page: {page_id}")
+        result = await self._request("GET", f"/content/{page_id}/child/attachment")
+        return result.get("results", [])
+
     
     async def close(self):
         """Close the HTTP client."""
