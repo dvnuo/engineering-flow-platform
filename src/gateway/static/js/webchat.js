@@ -1010,12 +1010,23 @@
         let messageContent = content || '';
 
         if (role === 'tool') {
-            badge = '<span class="tool-badge">🔧 Tool Result</span>';
+            // Only show tool result badge in debug mode
+            const isDebugTool = typeof config !== 'undefined' && config.debug && config.debug.enabled;
+            if (isDebugTool) {
+                badge = '<span class="tool-badge">🔧 Tool Result</span>';
+            }
         } else if (role === 'assistant' && toolCalls && toolCalls.length > 0) {
-            // Assistant message with tool calls but no content (pending tool execution)
-            badge = '<span class="tool-calls-badge">⚙️ Calling Tools</span>';
-            const toolNames = toolCalls.map(tc => tc.function?.name || tc.name).join(', ');
-            messageContent = `_Calling: ${toolNames}_`;
+            // Assistant message with tool calls - only show in debug mode
+            const isDebugTool = typeof config !== 'undefined' && config.debug && config.debug.enabled;
+            if (isDebugTool) {
+                badge = '<span class="tool-calls-badge">⚙️ Calling Tools</span>';
+                const toolNames = toolCalls.map(tc => tc.function?.name || tc.name).join(', ');
+                messageContent = `_Calling: ${toolNames}_`;
+            } else {
+                // Hide tool call in non-debug mode
+                toolCalls = null;
+            }
+        }
         }
 
         // Process @file_xxx references for inline images
