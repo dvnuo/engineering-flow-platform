@@ -1022,9 +1022,9 @@
         const processedContent = messageContent;
 
         // Only render markdown for assistant/tool messages, not user messages
-        const contentHtml = (role === 'user' || role === 'error') 
-            ? escapeHtml(processedContent).replace(/\n/g, '<br>')
-            : renderMarkdown(processedContent);
+        const contentHtml = (role === 'assistant' || role === 'tool')
+            ? renderMarkdown(processedContent)
+            : escapeHtml(processedContent).replace(/\n/g, '<br>');
 
         div.innerHTML = `
             <div class="avatar" aria-hidden="true">${avatar}</div>
