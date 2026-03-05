@@ -1125,6 +1125,30 @@
      * @param {string} text - Markdown text to render
      * @returns {string} HTML
      */
+    // Configure marked.js once at module level
+    (function() {
+        try {
+            marked.setOptions({
+                breaks: true,        // Convert \n to <br>
+                gfm: true,          // GitHub Flavored Markdown
+                highlight: function(code, lang) {
+                    if (lang && hljs) {
+                        try {
+                            return hljs.highlight(code, { language: lang }).value;
+                        } catch (e) {
+                            // Fallback: escape code to avoid HTML injection
+                            return escapeHtml(code);
+                        }
+                    }
+                    // No language or hljs unavailable: escape code
+                    return escapeHtml(code);
+                }
+            });
+        } catch (e) {
+            console.warn('Failed to configure marked:', e);
+        }
+    })();
+
     function renderMarkdown(text) {
         if (!text || typeof text !== 'string') {
             return '';
@@ -1136,68 +1160,47 @@
             text = text.substring(0, MAX_INPUT_LENGTH);
         }
 
-        // Escape HTML first to prevent XSS
-        let html = escapeHtml(text);
+        // Use marked.js for proper markdown rendering
+        try {
+            // Extract <pre> blocks first to preserve their newlines
+            const preBlocks = [];
+            let html = text.replace(/<pre[\s\S]*?<\/pre>/g, function(match) {
+                // Normalize any <br> inside <pre> back to newlines before extracting
+                const normalized = match.replace(/<br>/g, '\n');
+                const placeholder = '__PRE_BLOCK_' + preBlocks.length + '__';
+                preBlocks.push(normalized);
+                return placeholder;
+            });
 
-        // Code blocks with language class (```lang ... ```)
-        html = html.replace(/```(\w*)\s*([\s\S]*?)```/g, function(match, lang, code) {
-            const langClass = lang ? `language-${lang}` : '';
-            const escapedCode = escapeHtml(code.trim());
-            return `<pre><code class="${langClass}">${escapedCode}</code></pre>`;
-        });
+            // Parse markdown (marked will handle escaping)
+            html = marked.parse(html);
 
-        // Inline code (`...`)
-        html = html.replace(/`([^`]+)`/g, function(match, code) {
-            return '<code>' + escapeHtml(code) + '</code>';
-        });
+            // Convert newlines to <br> outside of <pre> blocks
+            html = html.replace(/__PRE_BLOCK_(\d+)__/g, function(_, index) {
+                return preBlocks[Number(index)];
+            });
 
-        // Bold (**...** or __...__)
-        html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-        html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+            // Restore <pre> blocks with their original newlines
+            html = html.replace(/__PRE_BLOCK_(\d+)__/g, function(_, index) {
+                return preBlocks[Number(index)];
+            });
 
-        // Italic (*...* or _..._)
-        html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-        html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
+            // Additional newline to <br> conversion for non-pre content
+            // But skip content inside <pre> tags
+            const parts = html.split(/(<pre[\s\S]*?<\/pre>)/g);
+            html = parts.map(part => {
+                if (part.startsWith('<pre')) {
+                    return part; // Don't convert newlines inside <pre>
+                }
+                return part.replace(/\n/g, '<br>');
+            }).join('');
 
-        // Strikethrough (~~...~~)
-        html = html.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-
-        // Spoiler (||...||) - collapsible content
-        html = html.replace(/\|\|([^|]+)\|\|/g, '<span class="spoiler">$1</span>');
-
-        // Headers (# ## ### ####)
-        html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
-        html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-        html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-        html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-
-        // Blockquotes (> ...)
-        html = html.replace(/^&gt;\s*(.+)$/gm, '<blockquote>$1</blockquote>');
-        html = html.replace(/^>\s*(.+)$/gm, '<blockquote>$1</blockquote>');
-
-        // Unordered lists (- or * or +)
-        html = html.replace(/^[\-\*\+]\s+(.+)$/gm, '<li>$1</li>');
-
-        // Ordered lists (1. 2. etc.)
-        html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
-
-        // Wrap consecutive list items in <ul> or <ol>
-        html = html.replace(/(<li>.*<\/li>)+/g, function(match) {
-            // Check if any item starts with a digit pattern (ordered list)
-            const hasOrdered = /<li>\s*\d+\./.test(match);
-            if (hasOrdered) {
-                return '<ol>' + match + '</ol>';
-            }
-            return '<ul>' + match + '</ul>';
-        });
-
-        // Links ([text](url))
-        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="link">$1</a>');
-
-        // Horizontal rules (--- or ***)
-        html = html.replace(/^[\-\*]{3,}$/gm, '<hr class="divider">');
-
-        return html;
+            return html;
+        } catch (e) {
+            // Fallback to simple rendering with XSS protection
+            console.warn('Markdown rendering failed:', e);
+            return escapeHtml(text).replace(/\n/g, '<br>');
+        }
     }
 
     // Close skill and file selector when clicking outside
