@@ -1578,6 +1578,64 @@ async def api_files_get(request: web.Request) -> web.Response:
         }, status=500)
 
 
+
+
+async def api_files_get(request: web.Request) -> web.Response:
+    """Get a file by ID.
+    
+    GET /api/files/{file_id}
+    
+    Returns:
+        200: The file content
+        404: File not found
+    """
+    try:
+        from src.utils.file_parser import get_file_path, get_metadata, StoredFileNotFoundError
+        
+        file_id = request.match_info.get('file_id')
+        
+        if not file_id:
+            return web.json_response({
+                'success': False,
+                'error': 'file_id is required'
+            }, status=400)
+        
+        try:
+            file_path = get_file_path(file_id)
+        except StoredFileNotFoundError:
+            return web.json_response({
+                'success': False,
+                'error': 'File not found'
+            }, status=404)
+        
+        metadata = get_metadata(file_id)
+        
+        # Determine content type
+        content_type = metadata.content_type or 'application/octet-stream'
+        if not content_type or content_type == 'application/octet-stream':
+            # Try to detect from extension
+            import mimetypes
+            content_type = mimetypes.guess_type(metadata.filename)[0] or 'application/octet-stream'
+        
+        # Read and return file
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+        
+        return web.Response(
+            body=file_content,
+            content_type=content_type,
+            headers={
+                'Content-Disposition': f'inline; filename="{metadata.filename}"'
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error getting file {file_id}: {e}")
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
 async def api_files_delete(request: web.Request) -> web.Response:
     """Delete a file.
     
@@ -1654,6 +1712,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/files/parse', api_files_parse)
     app.router.add_get('/api/files/list', api_files_list)
     app.router.add_get('/api/files/{file_id}/preview', api_files_preview)
+    app.router.add_get('/api/files/{file_id}', api_files_get)
     app.router.add_get('/api/files/{file_id}', api_files_get)
     app.router.add_delete('/api/files/{file_id}', api_files_delete)
 
