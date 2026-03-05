@@ -498,7 +498,7 @@ class Gateway:
                     await update_long_term_memory_from_daily(
                         workspace=workspace,
                         llm_client=runtime_llm_client,
-                        daily_paths=None,
+                        daily_paths=created_daily,
                     )
                     logger.info("[Memory] Long-term memory updated")
             except Exception as e:
@@ -559,7 +559,7 @@ class Gateway:
                             await update_long_term_memory_from_daily(
                                 workspace=workspace,
                                 llm_client=runtime_llm_client,
-                                daily_paths=None,
+                                daily_paths=created_daily,
                             )
                             logger.info("[Memory] Long-term memory updated")
                     except Exception as e:
