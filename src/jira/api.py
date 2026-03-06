@@ -95,7 +95,7 @@ class JiraChannel:
         self.project = instance.get("project", "")
         
         # API version with validation
-        api_version = instance.get("api_version", "2")
+        api_version = str(instance.get("api_version", "2"))
         if api_version not in self.VALID_API_VERSIONS:
             logger.warning(f"Invalid api_version '{api_version}', defaulting to '2'")
             api_version = "2"
