@@ -1390,3 +1390,36 @@ async def jira_add_worklog(issue_key: str, time_spent: str, comment: str = None)
         return f"Work log added to {issue_key}: {time_spent}"
     except Exception as e:
         return f"Error adding worklog: {str(e)}"
+
+
+async def jira_add_attachment(issue_key: str, file_path: str) -> str:
+    """Add an attachment to a Jira issue.
+    
+    Args:
+        issue_key: Jira issue key (e.g., "PROJ-123")
+        file_path: Path to local file to upload
+        
+    Returns:
+        Success message with attachment details
+    """
+    import os
+    try:
+        if not jira_channel.is_configured():
+            return "Error: Jira is not configured."
+        
+        if not os.path.exists(file_path):
+            return f"Error: File not found: {file_path}"
+        
+        result = await jira_channel.add_attachment(issue_key, file_path)
+        
+        if isinstance(result, dict) and "error" in result:
+            return f"Error: {result['error']}"
+        
+        # Return success with attachment info
+        if isinstance(result, list) and len(result) > 0:
+            att = result[0]
+            return f"Attachment added: {att.get('filename', 'unknown')} ({att.get('size', 0)} bytes)"
+        return f"Attachment uploaded successfully"
+    except Exception as e:
+        logger.error(f"jira_add_attachment: {e}")
+        return f"Error adding attachment: {e}"
