@@ -27,6 +27,7 @@ __all__ = [
     "jira_get_issue_by_url",
     "jira_search",
     "jira_add_comment",
+    "jira_add_attachment",
     "jira_create_issue",
     "jira_update_issue",
     "jira_transition",

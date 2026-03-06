@@ -213,7 +213,9 @@ class JiraChannel:
         method: str,
         endpoint: str,
         data: Optional[Dict] = None,
-        params: Optional[Dict] = None
+        params: Optional[Dict] = None,
+        files: Optional[Dict] = None,
+        headers: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """Make authenticated request to Jira API with debug logging."""
         if not self.is_configured():
@@ -231,16 +233,30 @@ class JiraChannel:
                 logger.debug(f"Params: {json.dumps(params)}")
             if data:
                 logger.debug(f"Data: {_truncate_json(data)}")
+            if files:
+                logger.debug(f"Files: {list(files.keys())}")
         
-        headers = {
-            **self._auth_header,
-            "Content-Type": "application/json",
+        # Default headers
+        default_headers = {
             "Accept": "application/json"
         }
         
-        response = await self.client.request(
-            method, url, json=data, params=params, headers=headers
-        )
+        # For file uploads, don't set Content-Type (httpx will set multipart boundary)
+        if files:
+            # For attachments, use X-Atlassian-Token header
+            req_headers = {**default_headers, **(headers or {})}
+            response = await self.client.request(
+                method, url, files=files, params=params, headers=req_headers
+            )
+        else:
+            req_headers = {
+                **default_headers,
+                **self._auth_header,
+                "Content-Type": "application/json"
+            }
+            response = await self.client.request(
+                method, url, json=data, params=params, headers=req_headers
+            )
         
         # Debug: Log response
         if _is_debug_enabled():
