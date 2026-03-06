@@ -151,10 +151,10 @@ async def jira_get_issue(
         except Exception as e:
             logger.warning(f"Failed to process attachments: {e}")
         
-        # Only add attachment_info for raw format (adapter doesn't process attachments for raw)
-        # For markdown/wiki, adapter already includes attachment metadata
-        if attachment_info and format == "raw":
-            if isinstance(result, dict):
+        if attachment_info:
+            if isinstance(result, str):
+                result = result + "\n" + attachment_info
+            elif isinstance(result, dict):
                 result["attachment_info"] = attachment_info
         
         return result
