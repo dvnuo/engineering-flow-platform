@@ -701,24 +701,17 @@ class JiraChannel:
             return {"error": f"File not found: {file_path}"}
         
         filename = os.path.basename(file_path)
-        url = f"{self.base_url}/rest/api/{self.api_version}/issue/{issue_key}/attachments"
         
-        # Build headers - include auth but NOT Content-Type (httpx will set multipart)
-        headers = {
-            **self._auth_header,
-            "X-Atlassian-Token": "no-check",
-            "Accept": "application/json"
-        }
-        
-        # Use multipart form upload
+        # Use _request with files parameter
         with open(file_path, 'rb') as f:
             files = {'file': (filename, f)}
-            response = await self.client.request(
-                "POST", url, files=files, headers=headers
+            headers = {"X-Atlassian-Token": "no-check"}
+            return await self._request(
+                "POST", 
+                f"/issue/{issue_key}/attachments",
+                files=files,
+                headers=headers
             )
-        
-        response.raise_for_status()
-        return response.json() if response.text else []
 
 
 # Global channel instance
@@ -1352,17 +1345,22 @@ async def jira_assign_issue(issue_key: str, assignee: str = None) -> str:
             return "Error: assignee parameter is required"
         
         # Get accountId from username if needed
+        # Use accountId for v3 (Cloud), name for v2 (Server/DC)
         account_id = assignee
-        if "@" not in assignee:
-            # Search for user
-            user_search = await jira_channel._request(
-                "GET", 
-                f"/user/search?query={assignee}"
-            )
-            if user_search and len(user_search) > 0:
-                account_id = user_search[0].get("accountId", assignee)
+        if jira_channel.api_version == "3":
+            if "@" not in assignee:
+                # Search for user
+                user_search = await jira_channel._request(
+                    "GET", 
+                    f"/user/search?query={assignee}"
+                )
+                if user_search and len(user_search) > 0:
+                    account_id = user_search[0].get("accountId", assignee)
+            data = {"accountId": account_id} if account_id else None
+        else:
+            # v2 uses 'name' field
+            data = {"name": assignee} if assignee else None
         
-        data = {"accountId": account_id} if account_id else None
         result = await jira_channel._request("PUT", f"/issue/{issue_key}/assignee", data=data)
         return f"Issue {issue_key} assigned to {assignee}"
     except Exception as e:
