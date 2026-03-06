@@ -134,11 +134,17 @@ async def jira_get_issue(
             include_comments=include_comments
         )
         
-        # Process attachments
+        # Process attachments - need to fetch raw issue to get attachment field
         attachment_info = ""
         try:
-            fields = result.get("fields", {}) if isinstance(result, dict) else {}
-            attachment_info = await _process_issue_attachments(issue_key, fields)
+            if format == "raw":
+                fields = result.get("fields", {}) if isinstance(result, dict) else {}
+                attachment_info = await _process_issue_attachments(issue_key, fields)
+            else:
+                # For markdown/wiki, fetch attachment metadata separately
+                issue_data = await jira_channel.get_issue(issue_key)
+                fields = issue_data.get("fields", {}) if isinstance(issue_data, dict) else {}
+                attachment_info = await _process_issue_attachments(issue_key, fields)
         except Exception as e:
             logger.warning(f"Failed to process attachments: {e}")
         
