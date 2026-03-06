@@ -9,6 +9,7 @@ from .api import (
     JiraChannel, 
     jira_channel,
     jira_search,
+    jira_get_issue as jira_get_issue_from_api,
     jira_add_attachment,
     jira_transition,
     jira_get_transitions,
@@ -21,6 +22,7 @@ from .api import (
     jira_get_comments,
 )
 from .adapter import JiraFormatAdapter
+from src.utils.attachment import download_and_process_attachment
 
 __all__ = [
     "JiraChannel", 
