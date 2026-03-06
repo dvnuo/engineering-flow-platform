@@ -1769,16 +1769,9 @@
             } else {
                 messages.forEach(msg => {
                     const role = msg.role || 'user';
-                    // Skip tool messages if debug is disabled
-                    if (!isDebugEnabled()) {
-                        if (role === 'tool') {
-                            return;
-                        }
-                        // Skip tool placeholder messages when debug is off
-                        if (!isDebugEnabled() && isToolPlaceholder(msg.content, role)) {
-                            return;
-                        }
-                        }
+                    // Skip tool placeholder messages when debug is off
+                    if (!isDebugEnabled() && isToolPlaceholder(msg.content, role)) {
+                        return;
                     }
                     addMessage(role, msg.content || '', msg.timestamp || msg.created_at, msg.tool_calls);
                 });
