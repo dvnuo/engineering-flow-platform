@@ -22,7 +22,6 @@ class JiraFormatAdapter:
     def __init__(self, channel: JiraChannel):
         self.channel = channel
         self.converter = converter
-        # 部署类型：从 api_version 判断
         # v2 = Server/DC (wiki), v3 = Cloud (ADF)
         self.deployment = 'cloud' if getattr(channel, 'api_version', '2') == '3' else 'server'
     
@@ -71,7 +70,7 @@ class JiraFormatAdapter:
         include_comments: bool = True
     ) -> str:
         """Convert issue to Markdown format."""
-        fields = include_fields or ["summary", "status", "description", "comments", "attachment"]
+        fields = include_fields or ["summary", "status", "description", "comments"]
         lines = []
         
         # Get issue key
@@ -141,7 +140,7 @@ class JiraFormatAdapter:
         include_comments: bool = True
     ) -> str:
         """Convert issue to Jira wiki format."""
-        fields = include_fields or ["summary", "status", "description", "comments", "attachment"]
+        fields = include_fields or ["summary", "status", "description", "comments"]
         lines = []
         
         # Get issue key
