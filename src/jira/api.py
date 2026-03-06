@@ -16,7 +16,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -682,7 +682,7 @@ class JiraChannel:
         """Close the HTTP client."""
         await self.client.aclose()
 
-    async def add_attachment(self, issue_key: str, file_path: str) -> Dict[str, Any]:
+    async def add_attachment(self, issue_key: str, file_path: str) -> Union[Dict[str, Any], List[Any]]:
         """Add an attachment to an issue.
         
         Args:

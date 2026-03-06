@@ -230,12 +230,14 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         description_format = kwargs.get("description_format", "markdown")
         issue_type = kwargs.get("issue_type", "Task")
         priority = kwargs.get("priority")
+        assignee = kwargs.get("assignee")
         labels = kwargs.get("labels")
         result = await jira_module.jira_create_issue(
             project_key, summary, description,
             description_format=description_format,
             issue_type=issue_type,
             priority=priority,
+            assignee=assignee,
             labels=labels
         )
         return ToolResult(success="Error" not in result, content=result)

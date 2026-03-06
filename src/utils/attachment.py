@@ -131,6 +131,8 @@ async def _download_file(url: str, auth_header: dict = None) -> tuple[bytes, str
         # Check for redirect (303 for Jira Cloud attachments)
         if response.status_code in (301, 302, 303, 307, 308):
             redirect_url = response.headers.get("location", "")
+            if not redirect_url:
+                raise ValueError("Redirect response missing Location header")
             logger.info(f"Following redirect to: {redirect_url[:50]}...")
             
             # For redirect to media server, don't pass auth (token is in URL)
