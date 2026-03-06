@@ -133,7 +133,9 @@ async def _download_file(url: str, auth_header: dict = None) -> tuple[bytes, str
             redirect_url = response.headers.get("location", "")
             if not redirect_url:
                 raise ValueError("Redirect response missing Location header")
-            logger.info(f"Following redirect to: {redirect_url[:50]}...")
+            # Mask tokens in URL for logging
+            safe_url = redirect_url.split("?")[0] if "?" in redirect_url else redirect_url
+            logger.info(f"Following redirect to: {safe_url}")
             
             # For redirect to media server, don't pass auth (token is in URL)
             async with httpx.AsyncClient(timeout=30.0) as client2:

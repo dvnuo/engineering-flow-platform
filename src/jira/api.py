@@ -1423,11 +1423,15 @@ async def jira_add_worklog(issue_key: str, time_spent: str, comment: str = None)
     try:
         data = {"timeSpent": time_spent}
         if comment:
-            data["comment"] = {
-                "type": "doc",
-                "version": 1,
-                "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}]
-            }
+            # Use ADF for v3 (Cloud), plain text for v2 (Server/DC)
+            if jira_channel.api_version == "3":
+                data["comment"] = {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}]
+                }
+            else:
+                data["comment"] = comment
         
         result = await jira_channel._request("POST", f"/issue/{issue_key}/worklog", data=data)
         return f"Work log added to {issue_key}: {time_spent}"

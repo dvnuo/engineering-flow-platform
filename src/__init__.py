@@ -258,6 +258,12 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
             result = str(result)
         return ToolResult(success="Error" not in result, content=result)
     
+    elif name == "jira_add_attachment":
+        issue_key = kwargs.get("issue_key", "")
+        file_path = kwargs.get("file_path", "")
+        result = await jira_module.jira_add_attachment(issue_key, file_path)
+        return ToolResult(success="Error" not in result, content=result)
+    
     # GitHub tools
     elif name == "github_get_issue":
         owner = kwargs.get("owner", "")
