@@ -71,7 +71,7 @@ class JiraFormatAdapter:
         include_comments: bool = True
     ) -> str:
         """Convert issue to Markdown format."""
-        fields = include_fields or ["summary", "status", "description", "comments"]
+        fields = include_fields or ["summary", "status", "description", "comments", "attachment"]
         lines = []
         
         # Get issue key
@@ -154,7 +154,7 @@ class JiraFormatAdapter:
         include_comments: bool = True
     ) -> str:
         """Convert issue to Jira wiki format."""
-        fields = include_fields or ["summary", "status", "description", "comments"]
+        fields = include_fields or ["summary", "status", "description", "comments", "attachment"]
         lines = []
         
         # Get issue key
