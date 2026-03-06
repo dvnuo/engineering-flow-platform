@@ -677,6 +677,34 @@ class JiraChannel:
         """Close the HTTP client."""
         await self.client.aclose()
 
+    async def add_attachment(self, issue_key: str, file_path: str) -> Dict[str, Any]:
+        """Add an attachment to an issue.
+        
+        Args:
+            issue_key: Issue key (e.g., "PROJ-123")
+            file_path: Path to local file to upload
+            
+        Returns:
+            Attachment details
+        """
+        import os
+        if not os.path.exists(file_path):
+            return {"error": f"File not found: {file_path}"}
+        
+        filename = os.path.basename(file_path)
+        
+        # For Cloud, use multipart form upload
+        with open(file_path, 'rb') as f:
+            files = {'file': (filename, f)}
+            # Cloud requires X-Atlassian-Token: no-check
+            headers = {'X-Atlassian-Token': 'no-check'}
+            return await self._request(
+                "POST", 
+                f"/issue/{issue_key}/attachments",
+                files=files,
+                headers=headers
+            )
+
 
 # Global channel instance
 jira_channel = JiraChannel()
