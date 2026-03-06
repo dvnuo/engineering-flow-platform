@@ -1,6 +1,8 @@
 """Jira Integration - Single source of truth for Jira operations."""
 
 import logging
+
+logger = logging.getLogger(__name__)
 from typing import List, Optional, Union
 
 from .api import (
