@@ -421,7 +421,7 @@ Use this BEFORE running a command if you're unsure what commands exist or their 
 - run_command(cmd="grep", args=["-r", "pattern", "."])
 
 **Restrictions:**
-- cwd must be within ~/.efp/workspace
+- cwd must be within ~/.efp/workspace, if cwd us set, prefer commands relative to cwd, such as `ls -la` instead of `ls -la /path`
 - stdin is disabled (no interactive commands)
 - Output truncated at 200KB
 
