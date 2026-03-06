@@ -222,6 +222,23 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         body_format = kwargs.get("body_format", "markdown")
         result = await jira_module.jira_add_comment(issue_key, body, body_format=body_format)
         return ToolResult(success="Error" not in result, content=result)
+
+    elif name == "jira_create_issue":
+        project_key = kwargs.get("project_key", "")
+        summary = kwargs.get("summary", "")
+        description = kwargs.get("description", "")
+        description_format = kwargs.get("description_format", "markdown")
+        issue_type = kwargs.get("issue_type", "Task")
+        priority = kwargs.get("priority")
+        labels = kwargs.get("labels")
+        result = await jira_module.jira_create_issue(
+            project_key, summary, description,
+            description_format=description_format,
+            issue_type=issue_type,
+            priority=priority,
+            labels=labels
+        )
+        return ToolResult(success="Error" not in result, content=result)
     
     elif name == "jira_get_issue_by_url":
         url = kwargs.get("url", "")
