@@ -1251,7 +1251,7 @@ async def jira_update_issue(issue_key: str, summary: str = None, description: st
         if not data:
             return "Error: No fields to update"
         
-        result = await jira_channel._request("PUT", f"/rest/api/3/issue/{issue_key}", data=data)
+        result = await jira_channel._request("PUT", f"/issue/{issue_key}", data=data)
         return f"Issue {issue_key} updated successfully"
     except Exception as e:
         return f"Error updating issue {issue_key}: {str(e)}"
@@ -1269,13 +1269,13 @@ async def jira_assign_issue(issue_key: str, assignee: str = None) -> str:
             # Search for user
             user_search = await jira_channel._request(
                 "GET", 
-                f"/rest/api/3/user/search?query={assignee}"
+                f"/user/search?query={assignee}"
             )
             if user_search and len(user_search) > 0:
                 account_id = user_search[0].get("accountId", assignee)
         
         data = {"accountId": account_id} if account_id else None
-        result = await jira_channel._request("PUT", f"/rest/api/3/issue/{issue_key}/assignee", data=data)
+        result = await jira_channel._request("PUT", f"/issue/{issue_key}/assignee", data=data)
         return f"Issue {issue_key} assigned to {assignee}"
     except Exception as e:
         return f"Error assigning issue {issue_key}: {str(e)}"
@@ -1284,7 +1284,7 @@ async def jira_assign_issue(issue_key: str, assignee: str = None) -> str:
 async def jira_get_projects() -> str:
     """Get all accessible Jira projects."""
     try:
-        result = await jira_channel._request("GET", "/rest/api/3/project")
+        result = await jira_channel._request("GET", "/project")
         if not result:
             return "No projects found or not authorized"
         
@@ -1300,7 +1300,7 @@ async def jira_get_projects() -> str:
 async def jira_get_components(project_key: str) -> str:
     """Get all components for a Jira project."""
     try:
-        result = await jira_channel._request("GET", f"/rest/api/3/project/{project_key}/components")
+        result = await jira_channel._request("GET", f"/project/{project_key}/components")
         if not result:
             return f"No components found for project {project_key}"
         
@@ -1316,7 +1316,7 @@ async def jira_get_components(project_key: str) -> str:
 async def jira_get_versions(project_key: str) -> str:
     """Get all versions for a Jira project."""
     try:
-        result = await jira_channel._request("GET", f"/rest/api/3/project/{project_key}/versions")
+        result = await jira_channel._request("GET", f"/project/{project_key}/versions")
         if not result:
             return f"No versions found for project {project_key}"
         
@@ -1333,7 +1333,7 @@ async def jira_get_versions(project_key: str) -> str:
 async def jira_get_worklog(issue_key: str) -> str:
     """Get work logs for a Jira issue."""
     try:
-        result = await jira_channel._request("GET", f"/rest/api/3/issue/{issue_key}/worklog")
+        result = await jira_channel._request("GET", f"/issue/{issue_key}/worklog")
         if not result or not result.get("worklogs"):
             return f"No work logs found for {issue_key}"
         
@@ -1360,7 +1360,7 @@ async def jira_add_worklog(issue_key: str, time_spent: str, comment: str = None)
                 "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}]
             }
         
-        result = await jira_channel._request("POST", f"/rest/api/3/issue/{issue_key}/worklog", data=data)
+        result = await jira_channel._request("POST", f"/issue/{issue_key}/worklog", data=data)
         return f"Work log added to {issue_key}: {time_spent}"
     except Exception as e:
         return f"Error adding worklog: {str(e)}"
