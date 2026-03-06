@@ -113,17 +113,32 @@ async def _download_file(url: str, auth_header: dict = None) -> tuple[bytes, str
     
     Args:
         url: URL to download
-        auth_header: Optional auth headers dict
+        auth_header: Optional auth headers dict (e.g., {"Authorization": "Basic ..."})
         
     Returns:
         (content, content_type, filename)
     """
     logger.info(f"Downloading attachment from: {url}")
     
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    # For Jira Cloud, the first request returns a redirect to api.media.atlassian.com
+    # We need to handle this: first request with auth, then follow redirect without auth
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
         headers = auth_header or {}
+        
+        # First request - get redirect response
         response = await client.get(url, headers=headers)
-        response.raise_for_status()
+        
+        # Check for redirect (303 for Jira Cloud attachments)
+        if response.status_code in (301, 302, 303, 307, 308):
+            redirect_url = response.headers.get("location", "")
+            logger.info(f"Following redirect to: {redirect_url[:50]}...")
+            
+            # For redirect to media server, don't pass auth (token is in URL)
+            async with httpx.AsyncClient(timeout=30.0) as client2:
+                response = await client2.get(redirect_url)
+                response.raise_for_status()
+        else:
+            response.raise_for_status()
         
         content = response.content
         
