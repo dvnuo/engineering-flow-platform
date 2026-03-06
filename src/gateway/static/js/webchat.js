@@ -1774,10 +1774,10 @@
                         if (role === 'tool') {
                             return;
                         }
-                        const skipPhrases = ['[Tool call]', '[Tool exec result]', '[Tool run_command result]', 'Tool Call', 'Tool Exec Result', 'Tool run_command result'];
-                        const msgContent = msg.content || '';
-                        if (skipPhrases.some(phrase => msgContent.includes(phrase))) {
+                        // Skip tool placeholder messages when debug is off
+                        if (!isDebugEnabled() && isToolPlaceholder(msg.content, role)) {
                             return;
+                        }
                         }
                     }
                     addMessage(role, msg.content || '', msg.timestamp || msg.created_at, msg.tool_calls);
