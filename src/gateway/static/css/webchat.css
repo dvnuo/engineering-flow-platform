@@ -543,7 +543,7 @@ body {
     margin: 0;
 }
 
-.message-bubble a {
+.message.user .message-bubble a {
     color: #d2e5ff;
     text-decoration: none;
 }
