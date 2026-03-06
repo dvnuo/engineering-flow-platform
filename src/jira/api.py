@@ -1297,6 +1297,21 @@ def get_tools_schemas() -> list:
                 }
             }
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_add_attachment",
+                "description": "Add an attachment to a Jira issue.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"},
+                        "file_path": {"type": "string", "description": "Local file path to upload"}
+                    },
+                    "required": ["issue_key", "file_path"]
+                }
+            }
+        },
     ]
 
 
