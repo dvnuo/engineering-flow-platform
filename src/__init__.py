@@ -213,7 +213,15 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     
     elif name == "jira_get_issue_by_url":
         url = kwargs.get("url", "")
-        result = await jira_module.jira_get_issue_by_url(url)
+        format = kwargs.get("format", "markdown")
+        max_chars = kwargs.get("max_chars")
+        max_comments = kwargs.get("max_comments", 5)
+        include_comments = kwargs.get("include_comments", True)
+        include_fields = kwargs.get("include_fields")
+        result = await jira_module.jira_get_issue_by_url(
+            url, format=format, max_chars=max_chars, max_comments=max_comments,
+            include_comments=include_comments, include_fields=include_fields
+        )
         return ToolResult(success="Error" not in result, content=result)
     
     # GitHub tools
