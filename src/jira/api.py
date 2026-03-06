@@ -465,14 +465,18 @@ class JiraChannel:
         
         Args:
             issue_key: Issue key
-            comment: Comment text (v2: plain text, v3: ADF format)
+            comment: Comment text (v2: plain text, v3: ADF format) or pre-converted ADF dict
             
         Returns:
             Created comment details
         """
         logger.info(f"Adding comment to {issue_key}")
         
-        if self.api_version == "3":
+        # Check if comment is already in ADF format (dict with 'type': 'doc')
+        if isinstance(comment, dict) and comment.get("type") == "doc":
+            # Already ADF formatted, use as-is
+            body = comment
+        elif self.api_version == "3":
             # v3: Use ADF format
             body = {
                 "type": "doc",
