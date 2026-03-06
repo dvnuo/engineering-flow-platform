@@ -7,6 +7,7 @@ from .api import (
     JiraChannel, 
     jira_channel,
     jira_search,
+    jira_add_attachment,
     jira_transition,
     jira_get_transitions,
     jira_assign_issue,
