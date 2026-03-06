@@ -155,7 +155,10 @@ class JiraChannel:
     
     def _get_auth_type(self) -> str:
         """Determine authentication type based on configuration."""
-        if self.token:
+        # For Atlassian Cloud, use Basic Auth with username:api_token
+        if self.username and self.token:
+            return "Basic"
+        elif self.token:
             return "Bearer"
         elif self.username and self.password:
             return "Basic"
@@ -163,6 +166,13 @@ class JiraChannel:
     
     def _get_auth_header(self) -> Dict[str, str]:
         """Get authorization header based on authentication type."""
+        # Basic Auth (username:token) - for Atlassian Cloud
+        if self.username and self.token:
+            creds = f"{self.username}:{self.token}"
+            encoded = base64.b64encode(creds.encode()).decode()
+            logger.debug("Using Basic Auth (email:api_token) for Cloud")
+            return {"Authorization": f"Basic {encoded}"}
+        
         # Bearer Token authentication
         if self.token:
             logger.debug("Using Bearer Token authentication")
