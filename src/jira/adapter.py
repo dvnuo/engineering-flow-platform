@@ -70,7 +70,7 @@ class JiraFormatAdapter:
         include_comments: bool = True
     ) -> str:
         """Convert issue to Markdown format."""
-        fields = include_fields or ["summary", "status", "description", "comments"]
+        fields = include_fields or ["summary", "status", "description", "comments", "attachment"]
         lines = []
         
         # Get issue key
@@ -123,6 +123,19 @@ class JiraFormatAdapter:
                     body_md = self._convert_description_to_markdown(body)
                     lines.append(body_md)
         
+        # Attachments - process and include content
+        if "attachment" in fields:
+            issue_fields = issue.get("fields", {})
+            attachment_list = issue_fields.get("attachment", [])
+            if attachment_list:
+                lines.append(f"\n## Attachments ({len(attachment_list)})")
+                for att in attachment_list[:5]:
+                    filename = att.get("filename", "unknown")
+                    size = att.get("size", 0)
+                    mime = att.get("mimeType", "")
+                    lines.append(f"- **{filename}** ({mime}, {size} bytes)")
+                    # Note: Full content requires async call - shown as metadata only
+        
         result = "\n".join(lines)
         
         # Apply character limit
@@ -140,7 +153,7 @@ class JiraFormatAdapter:
         include_comments: bool = True
     ) -> str:
         """Convert issue to Jira wiki format."""
-        fields = include_fields or ["summary", "status", "description", "comments"]
+        fields = include_fields or ["summary", "status", "description", "comments", "attachment"]
         lines = []
         
         # Get issue key

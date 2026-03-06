@@ -35,7 +35,8 @@ class AttachmentResult:
 async def download_and_process_attachment(
     url: str,
     session_id: str = None,
-    options: dict = None
+    options: dict = None,
+    auth_header: dict = None
 ) -> AttachmentResult:
     """Download attachment from external URL and process for LLM.
     
@@ -46,6 +47,7 @@ async def download_and_process_attachment(
             - include_image_data: bool = True
             - max_image_size: int = 1024
             - max_text_chars: int = 5000
+        auth_header: Optional auth headers dict
     
     Returns:
         AttachmentResult with content ready for LLM
@@ -56,7 +58,7 @@ async def download_and_process_attachment(
     max_text_chars = options.get("max_text_chars", 5000)
     
     # Download file
-    content, content_type, filename = await _download_file(url)
+    content, content_type, filename = await _download_file(url, auth_header=auth_header)
     
     # Save to storage
     metadata = await save_uploaded_file(
@@ -106,17 +108,41 @@ async def download_and_process_attachment(
     )
 
 
-async def _download_file(url: str) -> tuple[bytes, str, str]:
+async def _download_file(url: str, auth_header: dict = None) -> tuple[bytes, str, str]:
     """Download file from URL.
     
+    Args:
+        url: URL to download
+        auth_header: Optional auth headers dict (e.g., {"Authorization": "Basic ..."})
+        
     Returns:
         (content, content_type, filename)
     """
     logger.info(f"Downloading attachment from: {url}")
     
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url)
-        response.raise_for_status()
+    # For Jira Cloud, the first request returns a redirect to api.media.atlassian.com
+    # We need to handle this: first request with auth, then follow redirect without auth
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+        headers = auth_header or {}
+        
+        # First request - get redirect response
+        response = await client.get(url, headers=headers)
+        
+        # Check for redirect (303 for Jira Cloud attachments)
+        if response.status_code in (301, 302, 303, 307, 308):
+            redirect_url = response.headers.get("location", "")
+            if not redirect_url:
+                raise ValueError("Redirect response missing Location header")
+            # Mask tokens in URL for logging
+            safe_url = redirect_url.split("?")[0] if "?" in redirect_url else redirect_url
+            logger.info(f"Following redirect to: {safe_url}")
+            
+            # For redirect to media server, don't pass auth (token is in URL)
+            async with httpx.AsyncClient(timeout=30.0) as client2:
+                response = await client2.get(redirect_url)
+                response.raise_for_status()
+        else:
+            response.raise_for_status()
         
         content = response.content
         
@@ -146,7 +172,7 @@ def _extract_filename(header: str) -> str:
     if not header:
         return ""
     
-        match = re.search(r'filename[^;=\n]*=(([\'"]).*?\2|[^;\n]*)', header)
+    match = re.search(r'filename[^;=\n]*=(([\'"]).*?\2|[^;\n]*)', header)
     if match:
         filename = match.group(1).strip('"\'')
         return filename

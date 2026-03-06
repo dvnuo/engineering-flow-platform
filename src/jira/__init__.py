@@ -3,10 +3,13 @@
 import logging
 from typing import List, Optional, Union
 
+logger = logging.getLogger(__name__)
+
 from .api import (
     JiraChannel, 
     jira_channel,
     jira_search,
+    jira_add_attachment,
     jira_transition,
     jira_get_transitions,
     jira_assign_issue,
@@ -18,6 +21,7 @@ from .api import (
     jira_get_comments,
 )
 from .adapter import JiraFormatAdapter
+from src.utils.attachment import download_and_process_attachment
 
 __all__ = [
     "JiraChannel", 
@@ -27,6 +31,7 @@ __all__ = [
     "jira_get_issue_by_url",
     "jira_search",
     "jira_add_comment",
+    "jira_add_attachment",
     "jira_create_issue",
     "jira_update_issue",
     "jira_transition",
@@ -68,10 +73,14 @@ async def _process_issue_attachments(issue_key: str, fields: dict) -> str:
         
         if content_url:
             try:
+                # Get auth header from Jira channel
+                auth_header = jira_channel._auth_header if jira_channel.is_configured() else None
+                
                 result = await download_and_process_attachment(
                     url=content_url,
                     session_id=f"jira-{issue_key}",
-                    options={"include_image_data": True}
+                    options={"include_image_data": True},
+                    auth_header=auth_header
                 )
                 
                 if result.content_format == "base64":
@@ -128,11 +137,17 @@ async def jira_get_issue(
             include_comments=include_comments
         )
         
-        # Process attachments
+        # Process attachments - need to fetch raw issue to get attachment field
         attachment_info = ""
         try:
-            fields = result.get("fields", {}) if isinstance(result, dict) else {}
-            attachment_info = await _process_issue_attachments(issue_key, fields)
+            if format == "raw":
+                fields = result.get("fields", {}) if isinstance(result, dict) else {}
+                attachment_info = await _process_issue_attachments(issue_key, fields)
+            else:
+                # For markdown/wiki, fetch attachment metadata separately
+                issue_data = await jira_channel.get_issue(issue_key)
+                fields = issue_data.get("fields", {}) if isinstance(issue_data, dict) else {}
+                attachment_info = await _process_issue_attachments(issue_key, fields)
         except Exception as e:
             logger.warning(f"Failed to process attachments: {e}")
         
@@ -140,7 +155,6 @@ async def jira_get_issue(
             if isinstance(result, str):
                 result = result + "\n" + attachment_info
             elif isinstance(result, dict):
-                # Add attachment info as a field in the dict
                 result["attachment_info"] = attachment_info
         
         return result

@@ -222,6 +222,25 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         body_format = kwargs.get("body_format", "markdown")
         result = await jira_module.jira_add_comment(issue_key, body, body_format=body_format)
         return ToolResult(success="Error" not in result, content=result)
+
+    elif name == "jira_create_issue":
+        project_key = kwargs.get("project_key", "")
+        summary = kwargs.get("summary", "")
+        description = kwargs.get("description", "")
+        description_format = kwargs.get("description_format", "markdown")
+        issue_type = kwargs.get("issue_type", "Task")
+        priority = kwargs.get("priority")
+        assignee = kwargs.get("assignee")
+        labels = kwargs.get("labels")
+        result = await jira_module.jira_create_issue(
+            project_key, summary, description,
+            description_format=description_format,
+            issue_type=issue_type,
+            priority=priority,
+            assignee=assignee,
+            labels=labels
+        )
+        return ToolResult(success="Error" not in result, content=result)
     
     elif name == "jira_get_issue_by_url":
         url = kwargs.get("url", "")
@@ -237,6 +256,33 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         # Ensure content is always a string (format="raw" returns dict)
         if isinstance(result, dict):
             result = str(result)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_add_attachment":
+        issue_key = kwargs.get("issue_key", "")
+        file_path = kwargs.get("file_path", "")
+        result = await jira_module.jira_add_attachment(issue_key, file_path)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_get_projects":
+        result = await jira_module.jira_get_projects()
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_get_transitions":
+        issue_key = kwargs.get("issue_key", "")
+        result = await jira_module.jira_get_transitions(issue_key)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_transition":
+        issue_key = kwargs.get("issue_key", "")
+        transition_id = kwargs.get("transition_id", "")
+        result = await jira_module.jira_transition(issue_key, transition_id)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_assign_issue":
+        issue_key = kwargs.get("issue_key", "")
+        assignee = kwargs.get("assignee", "")
+        result = await jira_module.jira_assign_issue(issue_key, assignee)
         return ToolResult(success="Error" not in result, content=result)
     
     # GitHub tools
