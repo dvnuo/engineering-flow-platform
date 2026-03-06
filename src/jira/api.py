@@ -692,18 +692,24 @@ class JiraChannel:
             return {"error": f"File not found: {file_path}"}
         
         filename = os.path.basename(file_path)
+        url = f"{self.base_url}/rest/api/{self.api_version}/issue/{issue_key}/attachments"
         
-        # For Cloud, use multipart form upload
+        # Build headers - include auth but NOT Content-Type (httpx will set multipart)
+        headers = {
+            **self._auth_header,
+            "X-Atlassian-Token": "no-check",
+            "Accept": "application/json"
+        }
+        
+        # Use multipart form upload
         with open(file_path, 'rb') as f:
             files = {'file': (filename, f)}
-            # Cloud requires X-Atlassian-Token: no-check
-            headers = {'X-Atlassian-Token': 'no-check'}
-            return await self._request(
-                "POST", 
-                f"/issue/{issue_key}/attachments",
-                files=files,
-                headers=headers
+            response = await self.client.request(
+                "POST", url, files=files, headers=headers
             )
+        
+        response.raise_for_status()
+        return response.json() if response.text else []
 
 
 # Global channel instance
