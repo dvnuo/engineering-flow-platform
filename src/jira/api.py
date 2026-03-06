@@ -252,7 +252,8 @@ class JiraChannel:
             req_headers = {
                 **default_headers,
                 **self._auth_header,
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                **(headers or {})
             }
             response = await self.client.request(
                 method, url, json=data, params=params, headers=req_headers
@@ -692,7 +693,6 @@ class JiraChannel:
         Returns:
             Attachment details
         """
-        import os
         if not os.path.exists(file_path):
             return {"error": f"File not found: {file_path}"}
         
@@ -1445,7 +1445,6 @@ async def jira_add_attachment(issue_key: str, file_path: str) -> str:
     Returns:
         Success message with attachment details
     """
-    import os
     try:
         if not jira_channel.is_configured():
             return "Error: Jira is not configured."
