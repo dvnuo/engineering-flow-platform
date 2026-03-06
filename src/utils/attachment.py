@@ -168,7 +168,7 @@ def _extract_filename(header: str) -> str:
     if not header:
         return ""
     
-        match = re.search(r'filename[^;=\n]*=(([\'"]).*?\2|[^;\n]*)', header)
+    match = re.search(r'filename[^;=\n]*=(([\'"]).*?\2|[^;\n]*)', header)
     if match:
         filename = match.group(1).strip('"\'')
         return filename
