@@ -205,6 +205,9 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
             issue_key, format=format, max_chars=max_chars, max_comments=max_comments,
             include_comments=include_comments, include_fields=include_fields
         )
+        # Ensure content is always a string (format="raw" returns dict)
+        if isinstance(result, dict):
+            result = str(result)
         return ToolResult(success="Error" not in result, content=result)
     
     elif name == "jira_search":
@@ -231,6 +234,9 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
             url, format=format, max_chars=max_chars, max_comments=max_comments,
             include_comments=include_comments, include_fields=include_fields
         )
+        # Ensure content is always a string (format="raw" returns dict)
+        if isinstance(result, dict):
+            result = str(result)
         return ToolResult(success="Error" not in result, content=result)
     
     # GitHub tools
