@@ -196,7 +196,15 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     # Jira tools
     elif name == "jira_get_issue":
         issue_key = kwargs.get("issue_key", "")
-        result = await jira_module.jira_get_issue(issue_key)
+        format = kwargs.get("format", "markdown")
+        max_chars = kwargs.get("max_chars")
+        max_comments = kwargs.get("max_comments", 5)
+        include_comments = kwargs.get("include_comments", True)
+        include_fields = kwargs.get("include_fields")
+        result = await jira_module.jira_get_issue(
+            issue_key, format=format, max_chars=max_chars, max_comments=max_comments,
+            include_comments=include_comments, include_fields=include_fields
+        )
         return ToolResult(success="Error" not in result, content=result)
     
     elif name == "jira_search":
@@ -207,8 +215,9 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     
     elif name == "jira_add_comment":
         issue_key = kwargs.get("issue_key", "")
-        comment = kwargs.get("comment", "")
-        result = await jira_module.jira_add_comment(issue_key, comment)
+        body = kwargs.get("body") or kwargs.get("comment", "")
+        body_format = kwargs.get("body_format", "markdown")
+        result = await jira_module.jira_add_comment(issue_key, body, body_format=body_format)
         return ToolResult(success="Error" not in result, content=result)
     
     elif name == "jira_get_issue_by_url":
@@ -249,7 +258,9 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     # Confluence tools
     elif name == "confluence_get_page":
         page_id = kwargs.get("page_id", "")
-        result = await confluence_module.confluence_get_page(page_id)
+        format = kwargs.get("format", "markdown")
+        max_chars = kwargs.get("max_chars")
+        result = await confluence_module.confluence_get_page(page_id, format=format, max_chars=max_chars)
         return ToolResult(success="Error" not in result, content=result)
     
     elif name == "confluence_search":
@@ -260,7 +271,9 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     
     elif name == "confluence_get_page_by_url":
         url = kwargs.get("url", "")
-        result = await confluence_module.confluence_get_page_by_url(url)
+        format = kwargs.get("format", "markdown")
+        max_chars = kwargs.get("max_chars")
+        result = await confluence_module.confluence_get_page_by_url(url, format=format, max_chars=max_chars)
         return ToolResult(success="Error" not in result, content=result)
     
     elif name == "confluence_create_page":
