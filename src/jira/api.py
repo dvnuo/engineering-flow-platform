@@ -312,7 +312,7 @@ class JiraChannel:
         if fields and self.api_version == "3":
             params["fields"] = ",".join(fields)
         
-        return await self._request("GET", "/search", params=params)
+        return await self._request("GET", "/search/jql", params=params)
     
     async def create_issue(
         self,
