@@ -22,7 +22,6 @@ class JiraFormatAdapter:
     def __init__(self, channel: JiraChannel):
         self.channel = channel
         self.converter = converter
-        # 部署类型：从 api_version 判断
         # v2 = Server/DC (wiki), v3 = Cloud (ADF)
         self.deployment = 'cloud' if getattr(channel, 'api_version', '2') == '3' else 'server'
     
