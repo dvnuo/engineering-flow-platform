@@ -243,8 +243,8 @@ class JiraChannel:
         
         # For file uploads, don't set Content-Type (httpx will set multipart boundary)
         if files:
-            # For attachments, use X-Atlassian-Token header
-            req_headers = {**default_headers, **(headers or {})}
+            # Include auth header for file uploads (needed for Jira Cloud)
+            req_headers = {**default_headers, **self._auth_header, **(headers or {})}
             response = await self.client.request(
                 method, url, files=files, params=params, headers=req_headers
             )
@@ -328,7 +328,12 @@ class JiraChannel:
         if fields and self.api_version == "3":
             params["fields"] = ",".join(fields)
         
-        return await self._request("GET", "/search/jql", params=params)
+        # Use correct endpoint based on API version
+        # v3 (Cloud): /search/jql
+        # v2 (Server/DC): /search
+        search_endpoint = "/search/jql" if self.api_version == "3" else "/search"
+        
+        return await self._request("GET", search_endpoint, params=params)
     
     async def create_issue(
         self,
