@@ -741,10 +741,14 @@ async def _process_issue_attachments(issue_key: str, fields: dict) -> str:
         
         if content_url:
             try:
+                # Get auth header from Jira channel
+                auth_header = jira_channel._auth_header if jira_channel.is_configured() else None
+                
                 result = await download_and_process_attachment(
                     url=content_url,
                     session_id=f"jira-{issue_key}",
-                    options={"include_image_data": True}
+                    options={"include_image_data": True},
+                    auth_header=auth_header
                 )
                 
                 if result.content_format == "base64":
