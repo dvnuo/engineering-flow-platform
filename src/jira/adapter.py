@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from ..utils.truncate import truncate
 from .api import JiraChannel
+from .api import _process_issue_attachments as process_attachments
 from .converter import converter
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,19 @@ class JiraFormatAdapter:
                     body = comment.get("body", {})
                     body_md = self._convert_description_to_markdown(body)
                     lines.append(body_md)
+        
+        # Attachments - process and include content
+        if "attachment" in fields:
+            import asyncio
+            try:
+                attachment_info = asyncio.get_event_loop().run_until_complete(
+                    process_attachments(issue_key, issue.get("fields", {}))
+                )
+                if attachment_info:
+                    lines.append(f"\n{attachment_info}")
+            except Exception as e:
+                # Silently skip if attachment processing fails
+                pass
         
         result = "\n".join(lines)
         
