@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional, Union
 
 from ..utils.truncate import truncate
 from .api import JiraChannel
-from .api import _process_issue_attachments as process_attachments
 from .converter import converter
 
 logger = logging.getLogger(__name__)
@@ -126,16 +125,16 @@ class JiraFormatAdapter:
         
         # Attachments - process and include content
         if "attachment" in fields:
-            import asyncio
-            try:
-                attachment_info = asyncio.get_event_loop().run_until_complete(
-                    process_attachments(issue_key, issue.get("fields", {}))
-                )
-                if attachment_info:
-                    lines.append(f"\n{attachment_info}")
-            except Exception as e:
-                # Silently skip if attachment processing fails
-                pass
+            issue_fields = issue.get("fields", {})
+            attachment_list = issue_fields.get("attachment", [])
+            if attachment_list:
+                lines.append(f"\n## Attachments ({len(attachment_list)})")
+                for att in attachment_list[:5]:
+                    filename = att.get("filename", "unknown")
+                    size = att.get("size", 0)
+                    mime = att.get("mimeType", "")
+                    lines.append(f"- **{filename}** ({mime}, {size} bytes)")
+                    # Note: Full content requires async call - shown as metadata only
         
         result = "\n".join(lines)
         
