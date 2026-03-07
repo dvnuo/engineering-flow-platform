@@ -464,8 +464,8 @@ class ConfluenceChannel:
         return result.get("results", [])
 
     
-    async def get_page_children(self, page_id: str):
-        logger.info(f'Fetching children for page: {page_id}')
+    async def get_page_children(self, page_id: str, limit: int = 10):
+        logger.info(f'Fetching children for page: {page_id}, limit: {limit}')
         result = await self._request('GET', f'/content/{page_id}/child/page')
         return result.get('results', [])
     
