@@ -87,9 +87,17 @@ class ConfluenceChannel:
         """Get authorization header based on authentication type.
         
         Supports:
+        - Basic auth (username:token) - for Atlassian Cloud
         - Bearer token: Authorization: Bearer {token}
         - Basic auth (username+password): Authorization: Basic {base64(username:password)}
         """
+        # Basic Auth (username:token) - for Atlassian Cloud
+        if self.username and self.token:
+            creds = f"{self.username}:{self.token}"
+            encoded = base64.b64encode(creds.encode()).decode()
+            logger.debug("Using Basic Auth (email:api_token) for Cloud")
+            return {"Authorization": f"Basic {encoded}"}
+        
         # Bearer Token authentication
         if self.token:
             logger.debug("Using Bearer Token authentication")
@@ -456,6 +464,31 @@ class ConfluenceChannel:
         return result.get("results", [])
 
     
+    async def get_page_children(self, page_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        logger.info(f"Fetching children for page: {page_id}, limit: {limit}")
+        result = await self._request('GET', f'/content/{page_id}/child/page', params={'limit': limit})
+        return result.get('results', [])
+    
+    async def get_page_history(self, page_id: str) -> Dict[str, Any]:
+        logger.info(f"Fetching history for page: {page_id}")
+        return await self._request('GET', f'/content/{page_id}/history')
+    
+    async def get_user(self, user_id: str = None, username: str = None) -> Dict[str, Any]:
+        logger.info(f"Fetching user: {user_id or username}")
+        if user_id:
+            return await self._request('GET', '/user', params={'accountId': user_id})
+        elif username:
+            return await self._request('GET', '/user', params={'username': username})
+        raise ValueError('user_id or username required')
+
+    async def watch_page(self, page_id: str) -> Dict[str, Any]:
+        logger.info(f"Watching page: {page_id}")
+        return await self._request('POST', f'/content/{page_id}/watch')
+    
+    async def unwatch_page(self, page_id: str) -> Dict[str, Any]:
+        logger.info(f"Unwatching page: {page_id}")
+        return await self._request('DELETE', f'/content/{page_id}/watch')
+
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()
