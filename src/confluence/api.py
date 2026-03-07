@@ -464,29 +464,29 @@ class ConfluenceChannel:
         return result.get("results", [])
 
     
-    async def get_page_children(self, page_id: str, limit: int = 10):
-        logger.info(f'Fetching children for page: {page_id}, limit: {limit}')
-        result = await self._request('GET', f'/content/{page_id}/child/page')
+    async def get_page_children(self, page_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        logger.info(f"Fetching children for page: {page_id}, limit: {limit}")
+        result = await self._request('GET', f'/content/{page_id}/child/page', params={'limit': limit})
         return result.get('results', [])
     
-    async def get_page_history(self, page_id: str):
-        logger.info(f'Fetching history for page: {page_id}')
+    async def get_page_history(self, page_id: str) -> Dict[str, Any]:
+        logger.info(f"Fetching history for page: {page_id}")
         return await self._request('GET', f'/content/{page_id}/history')
     
-    async def get_user(self, user_id=None, username=None):
-        logger.info(f'Fetching user: {user_id or username}')
+    async def get_user(self, user_id: str = None, username: str = None) -> Dict[str, Any]:
+        logger.info(f"Fetching user: {user_id or username}")
         if user_id:
-            return await self._request('GET', f'/user?accountId={user_id}')
+            return await self._request('GET', '/user', params={'accountId': user_id})
         elif username:
-            return await self._request('GET', f'/user?username={username}')
+            return await self._request('GET', '/user', params={'username': username})
         return {'error': 'user_id or username required'}
 
-    async def watch_page(self, page_id: str):
-        logger.info(f'Watching page: {page_id}')
-        return await self._request('PUT', f'/content/{page_id}/watch')
+    async def watch_page(self, page_id: str) -> Dict[str, Any]:
+        logger.info(f"Watching page: {page_id}")
+        return await self._request('POST', f'/content/{page_id}/watch')
     
-    async def unwatch_page(self, page_id: str):
-        logger.info(f'Unwatching page: {page_id}')
+    async def unwatch_page(self, page_id: str) -> Dict[str, Any]:
+        logger.info(f"Unwatching page: {page_id}")
         return await self._request('DELETE', f'/content/{page_id}/watch')
 
     async def close(self):
