@@ -196,7 +196,18 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     # Jira tools
     elif name == "jira_get_issue":
         issue_key = kwargs.get("issue_key", "")
-        result = await jira_module.jira_get_issue(issue_key)
+        format = kwargs.get("format", "markdown")
+        max_chars = kwargs.get("max_chars")
+        max_comments = kwargs.get("max_comments", 5)
+        include_comments = kwargs.get("include_comments", True)
+        include_fields = kwargs.get("include_fields")
+        result = await jira_module.jira_get_issue(
+            issue_key, format=format, max_chars=max_chars, max_comments=max_comments,
+            include_comments=include_comments, include_fields=include_fields
+        )
+        # Ensure content is always a string (format="raw" returns dict)
+        if isinstance(result, dict):
+            result = str(result)
         return ToolResult(success="Error" not in result, content=result)
     
     elif name == "jira_search":
@@ -207,13 +218,71 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     
     elif name == "jira_add_comment":
         issue_key = kwargs.get("issue_key", "")
-        comment = kwargs.get("comment", "")
-        result = await jira_module.jira_add_comment(issue_key, comment)
+        body = kwargs.get("body") or kwargs.get("comment", "")
+        body_format = kwargs.get("body_format", "markdown")
+        result = await jira_module.jira_add_comment(issue_key, body, body_format=body_format)
+        return ToolResult(success="Error" not in result, content=result)
+
+    elif name == "jira_create_issue":
+        project_key = kwargs.get("project_key", "")
+        summary = kwargs.get("summary", "")
+        description = kwargs.get("description", "")
+        description_format = kwargs.get("description_format", "markdown")
+        issue_type = kwargs.get("issue_type", "Task")
+        priority = kwargs.get("priority")
+        assignee = kwargs.get("assignee")
+        labels = kwargs.get("labels")
+        result = await jira_module.jira_create_issue(
+            project_key, summary, description,
+            description_format=description_format,
+            issue_type=issue_type,
+            priority=priority,
+            assignee=assignee,
+            labels=labels
+        )
         return ToolResult(success="Error" not in result, content=result)
     
     elif name == "jira_get_issue_by_url":
         url = kwargs.get("url", "")
-        result = await jira_module.jira_get_issue_by_url(url)
+        format = kwargs.get("format", "markdown")
+        max_chars = kwargs.get("max_chars")
+        max_comments = kwargs.get("max_comments", 5)
+        include_comments = kwargs.get("include_comments", True)
+        include_fields = kwargs.get("include_fields")
+        result = await jira_module.jira_get_issue_by_url(
+            url, format=format, max_chars=max_chars, max_comments=max_comments,
+            include_comments=include_comments, include_fields=include_fields
+        )
+        # Ensure content is always a string (format="raw" returns dict)
+        if isinstance(result, dict):
+            result = str(result)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_add_attachment":
+        issue_key = kwargs.get("issue_key", "")
+        file_path = kwargs.get("file_path", "")
+        result = await jira_module.jira_add_attachment(issue_key, file_path)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_get_projects":
+        result = await jira_module.jira_get_projects()
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_get_transitions":
+        issue_key = kwargs.get("issue_key", "")
+        result = await jira_module.jira_get_transitions(issue_key)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_transition":
+        issue_key = kwargs.get("issue_key", "")
+        transition_id = kwargs.get("transition_id", "")
+        result = await jira_module.jira_transition(issue_key, transition_id)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "jira_assign_issue":
+        issue_key = kwargs.get("issue_key", "")
+        assignee = kwargs.get("assignee", "")
+        result = await jira_module.jira_assign_issue(issue_key, assignee)
         return ToolResult(success="Error" not in result, content=result)
     
     # GitHub tools
@@ -241,7 +310,9 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     # Confluence tools
     elif name == "confluence_get_page":
         page_id = kwargs.get("page_id", "")
-        result = await confluence_module.confluence_get_page(page_id)
+        format = kwargs.get("format", "markdown")
+        max_chars = kwargs.get("max_chars")
+        result = await confluence_module.confluence_get_page(page_id, format=format, max_chars=max_chars)
         return ToolResult(success="Error" not in result, content=result)
     
     elif name == "confluence_search":
@@ -252,7 +323,9 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     
     elif name == "confluence_get_page_by_url":
         url = kwargs.get("url", "")
-        result = await confluence_module.confluence_get_page_by_url(url)
+        format = kwargs.get("format", "markdown")
+        max_chars = kwargs.get("max_chars")
+        result = await confluence_module.confluence_get_page_by_url(url, format=format, max_chars=max_chars)
         return ToolResult(success="Error" not in result, content=result)
     
     elif name == "confluence_create_page":

@@ -16,7 +16,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -95,7 +95,7 @@ class JiraChannel:
         self.project = instance.get("project", "")
         
         # API version with validation
-        api_version = instance.get("api_version", "2")
+        api_version = str(instance.get("api_version", "2"))
         if api_version not in self.VALID_API_VERSIONS:
             logger.warning(f"Invalid api_version '{api_version}', defaulting to '2'")
             api_version = "2"
@@ -155,7 +155,10 @@ class JiraChannel:
     
     def _get_auth_type(self) -> str:
         """Determine authentication type based on configuration."""
-        if self.token:
+        # For Atlassian Cloud, use Basic Auth with username:api_token
+        if self.username and self.token:
+            return "Basic"
+        elif self.token:
             return "Bearer"
         elif self.username and self.password:
             return "Basic"
@@ -163,6 +166,13 @@ class JiraChannel:
     
     def _get_auth_header(self) -> Dict[str, str]:
         """Get authorization header based on authentication type."""
+        # Basic Auth (username:token) - for Atlassian Cloud
+        if self.username and self.token:
+            creds = f"{self.username}:{self.token}"
+            encoded = base64.b64encode(creds.encode()).decode()
+            logger.debug("Using Basic Auth (email:api_token) for Cloud")
+            return {"Authorization": f"Basic {encoded}"}
+        
         # Bearer Token authentication
         if self.token:
             logger.debug("Using Bearer Token authentication")
@@ -203,7 +213,9 @@ class JiraChannel:
         method: str,
         endpoint: str,
         data: Optional[Dict] = None,
-        params: Optional[Dict] = None
+        params: Optional[Dict] = None,
+        files: Optional[Dict] = None,
+        headers: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """Make authenticated request to Jira API with debug logging."""
         if not self.is_configured():
@@ -221,16 +233,31 @@ class JiraChannel:
                 logger.debug(f"Params: {json.dumps(params)}")
             if data:
                 logger.debug(f"Data: {_truncate_json(data)}")
+            if files:
+                logger.debug(f"Files: {list(files.keys())}")
         
-        headers = {
-            **self._auth_header,
-            "Content-Type": "application/json",
+        # Default headers
+        default_headers = {
             "Accept": "application/json"
         }
         
-        response = await self.client.request(
-            method, url, json=data, params=params, headers=headers
-        )
+        # For file uploads, don't set Content-Type (httpx will set multipart boundary)
+        if files:
+            # Include auth header for file uploads (needed for Jira Cloud)
+            req_headers = {**default_headers, **self._auth_header, **(headers or {})}
+            response = await self.client.request(
+                method, url, files=files, params=params, headers=req_headers
+            )
+        else:
+            req_headers = {
+                **default_headers,
+                **self._auth_header,
+                "Content-Type": "application/json",
+                **(headers or {})
+            }
+            response = await self.client.request(
+                method, url, json=data, params=params, headers=req_headers
+            )
         
         # Debug: Log response
         if _is_debug_enabled():
@@ -302,7 +329,12 @@ class JiraChannel:
         if fields and self.api_version == "3":
             params["fields"] = ",".join(fields)
         
-        return await self._request("GET", "/search", params=params)
+        # Use correct endpoint based on API version
+        # v3 (Cloud): /search/jql
+        # v2 (Server/DC): /search
+        search_endpoint = "/search/jql" if self.api_version == "3" else "/search"
+        
+        return await self._request("GET", search_endpoint, params=params)
     
     async def create_issue(
         self,
@@ -433,14 +465,18 @@ class JiraChannel:
         
         Args:
             issue_key: Issue key
-            comment: Comment text (v2: plain text, v3: ADF format)
+            comment: Comment text (v2: plain text, v3: ADF format) or pre-converted ADF dict
             
         Returns:
             Created comment details
         """
         logger.info(f"Adding comment to {issue_key}")
         
-        if self.api_version == "3":
+        # Check if comment is already in ADF format (dict with 'type': 'doc')
+        if isinstance(comment, dict) and comment.get("type") == "doc":
+            # Already ADF formatted, use as-is
+            body = comment
+        elif self.api_version == "3":
             # v3: Use ADF format
             body = {
                 "type": "doc",
@@ -651,6 +687,32 @@ class JiraChannel:
         """Close the HTTP client."""
         await self.client.aclose()
 
+    async def add_attachment(self, issue_key: str, file_path: str) -> Union[Dict[str, Any], List[Any]]:
+        """Add an attachment to an issue.
+        
+        Args:
+            issue_key: Issue key (e.g., "PROJ-123")
+            file_path: Path to local file to upload
+            
+        Returns:
+            Attachment details
+        """
+        if not os.path.exists(file_path):
+            return {"error": f"File not found: {file_path}"}
+        
+        filename = os.path.basename(file_path)
+        
+        # Use _request with files parameter
+        with open(file_path, 'rb') as f:
+            files = {'file': (filename, f)}
+            headers = {"X-Atlassian-Token": "no-check"}
+            return await self._request(
+                "POST", 
+                f"/issue/{issue_key}/attachments",
+                files=files,
+                headers=headers
+            )
+
 
 # Global channel instance
 jira_channel = JiraChannel()
@@ -681,10 +743,14 @@ async def _process_issue_attachments(issue_key: str, fields: dict) -> str:
         
         if content_url:
             try:
+                # Get auth header from Jira channel
+                auth_header = jira_channel._auth_header if jira_channel.is_configured() else None
+                
                 result = await download_and_process_attachment(
                     url=content_url,
                     session_id=f"jira-{issue_key}",
-                    options={"include_image_data": True}
+                    options={"include_image_data": True},
+                    auth_header=auth_header
                 )
                 
                 if result.content_format == "base64":
@@ -1228,6 +1294,21 @@ def get_tools_schemas() -> list:
                 }
             }
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_add_attachment",
+                "description": "Add an attachment to a Jira issue.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string", "description": "Jira issue key (e.g., PROJ-123)"},
+                        "file_path": {"type": "string", "description": "Local file path to upload"}
+                    },
+                    "required": ["issue_key", "file_path"]
+                }
+            }
+        },
     ]
 
 
@@ -1251,7 +1332,7 @@ async def jira_update_issue(issue_key: str, summary: str = None, description: st
         if not data:
             return "Error: No fields to update"
         
-        result = await jira_channel._request("PUT", f"/rest/api/3/issue/{issue_key}", data=data)
+        result = await jira_channel._request("PUT", f"/issue/{issue_key}", data=data)
         return f"Issue {issue_key} updated successfully"
     except Exception as e:
         return f"Error updating issue {issue_key}: {str(e)}"
@@ -1264,18 +1345,23 @@ async def jira_assign_issue(issue_key: str, assignee: str = None) -> str:
             return "Error: assignee parameter is required"
         
         # Get accountId from username if needed
+        # Use accountId for v3 (Cloud), name for v2 (Server/DC)
         account_id = assignee
-        if "@" not in assignee:
-            # Search for user
-            user_search = await jira_channel._request(
-                "GET", 
-                f"/rest/api/3/user/search?query={assignee}"
-            )
-            if user_search and len(user_search) > 0:
-                account_id = user_search[0].get("accountId", assignee)
+        if jira_channel.api_version == "3":
+            if "@" not in assignee:
+                # Search for user
+                user_search = await jira_channel._request(
+                    "GET", 
+                    f"/user/search?query={assignee}"
+                )
+                if user_search and len(user_search) > 0:
+                    account_id = user_search[0].get("accountId", assignee)
+            data = {"accountId": account_id} if account_id else None
+        else:
+            # v2 uses 'name' field
+            data = {"name": assignee} if assignee else None
         
-        data = {"accountId": account_id} if account_id else None
-        result = await jira_channel._request("PUT", f"/rest/api/3/issue/{issue_key}/assignee", data=data)
+        result = await jira_channel._request("PUT", f"/issue/{issue_key}/assignee", data=data)
         return f"Issue {issue_key} assigned to {assignee}"
     except Exception as e:
         return f"Error assigning issue {issue_key}: {str(e)}"
@@ -1284,7 +1370,7 @@ async def jira_assign_issue(issue_key: str, assignee: str = None) -> str:
 async def jira_get_projects() -> str:
     """Get all accessible Jira projects."""
     try:
-        result = await jira_channel._request("GET", "/rest/api/3/project")
+        result = await jira_channel._request("GET", "/project")
         if not result:
             return "No projects found or not authorized"
         
@@ -1300,7 +1386,7 @@ async def jira_get_projects() -> str:
 async def jira_get_components(project_key: str) -> str:
     """Get all components for a Jira project."""
     try:
-        result = await jira_channel._request("GET", f"/rest/api/3/project/{project_key}/components")
+        result = await jira_channel._request("GET", f"/project/{project_key}/components")
         if not result:
             return f"No components found for project {project_key}"
         
@@ -1316,7 +1402,7 @@ async def jira_get_components(project_key: str) -> str:
 async def jira_get_versions(project_key: str) -> str:
     """Get all versions for a Jira project."""
     try:
-        result = await jira_channel._request("GET", f"/rest/api/3/project/{project_key}/versions")
+        result = await jira_channel._request("GET", f"/project/{project_key}/versions")
         if not result:
             return f"No versions found for project {project_key}"
         
@@ -1333,7 +1419,7 @@ async def jira_get_versions(project_key: str) -> str:
 async def jira_get_worklog(issue_key: str) -> str:
     """Get work logs for a Jira issue."""
     try:
-        result = await jira_channel._request("GET", f"/rest/api/3/issue/{issue_key}/worklog")
+        result = await jira_channel._request("GET", f"/issue/{issue_key}/worklog")
         if not result or not result.get("worklogs"):
             return f"No work logs found for {issue_key}"
         
@@ -1354,13 +1440,49 @@ async def jira_add_worklog(issue_key: str, time_spent: str, comment: str = None)
     try:
         data = {"timeSpent": time_spent}
         if comment:
-            data["comment"] = {
-                "type": "doc",
-                "version": 1,
-                "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}]
-            }
+            # Use ADF for v3 (Cloud), plain text for v2 (Server/DC)
+            if jira_channel.api_version == "3":
+                data["comment"] = {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}]
+                }
+            else:
+                data["comment"] = comment
         
-        result = await jira_channel._request("POST", f"/rest/api/3/issue/{issue_key}/worklog", data=data)
+        result = await jira_channel._request("POST", f"/issue/{issue_key}/worklog", data=data)
         return f"Work log added to {issue_key}: {time_spent}"
     except Exception as e:
         return f"Error adding worklog: {str(e)}"
+
+
+async def jira_add_attachment(issue_key: str, file_path: str) -> str:
+    """Add an attachment to a Jira issue.
+    
+    Args:
+        issue_key: Jira issue key (e.g., "PROJ-123")
+        file_path: Path to local file to upload
+        
+    Returns:
+        Success message with attachment details
+    """
+    try:
+        if not jira_channel.is_configured():
+            return "Error: Jira is not configured."
+        
+        if not os.path.exists(file_path):
+            return f"Error: File not found: {file_path}"
+        
+        result = await jira_channel.add_attachment(issue_key, file_path)
+        
+        if isinstance(result, dict) and "error" in result:
+            return f"Error: {result['error']}"
+        
+        # Return success with attachment info
+        if isinstance(result, list) and len(result) > 0:
+            att = result[0]
+            return f"Attachment added: {att.get('filename', 'unknown')} ({att.get('size', 0)} bytes)"
+        return f"Attachment uploaded successfully"
+    except Exception as e:
+        logger.error(f"jira_add_attachment: {e}")
+        return f"Error adding attachment: {e}"

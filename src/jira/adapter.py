@@ -22,7 +22,6 @@ class JiraFormatAdapter:
     def __init__(self, channel: JiraChannel):
         self.channel = channel
         self.converter = converter
-        # 部署类型：从 api_version 判断
         # v2 = Server/DC (wiki), v3 = Cloud (ADF)
         self.deployment = 'cloud' if getattr(channel, 'api_version', '2') == '3' else 'server'
     
@@ -123,6 +122,19 @@ class JiraFormatAdapter:
                     body = comment.get("body", {})
                     body_md = self._convert_description_to_markdown(body)
                     lines.append(body_md)
+        
+        # Attachments - process and include content
+        if "attachment" in fields:
+            issue_fields = issue.get("fields", {})
+            attachment_list = issue_fields.get("attachment", [])
+            if attachment_list:
+                lines.append(f"\n## Attachments ({len(attachment_list)})")
+                for att in attachment_list[:5]:
+                    filename = att.get("filename", "unknown")
+                    size = att.get("size", 0)
+                    mime = att.get("mimeType", "")
+                    lines.append(f"- **{filename}** ({mime}, {size} bytes)")
+                    # Note: Full content requires async call - shown as metadata only
         
         result = "\n".join(lines)
         
