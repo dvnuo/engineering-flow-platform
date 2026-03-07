@@ -10,6 +10,7 @@ from .api import (
     confluence_channel,
 )
 from .adapter import ConfluenceFormatAdapter
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "ConfluenceChannel", 
