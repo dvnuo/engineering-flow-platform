@@ -5,15 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Engineering Flow Platform - Chat</title>
     
-    <!-- Typography -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./static/css/webchat.css">
     
-    <link rel="stylesheet" href="/static/css/webchat.css">
-    
-    <!-- highlight.js for code highlighting -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <!-- Local vendor styles/scripts (no external CDN dependency) -->
+    <link rel="stylesheet" href="./static/vendor/highlightjs/github-dark.min.css">
 </head>
 <body>
     <!-- Topbar - Outside shell -->
@@ -528,12 +523,10 @@
         }
     </style>
     
-    <!-- highlight.js for code highlighting -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <!-- marked.js for proper markdown rendering -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
+    <script src="./static/vendor/highlightjs/highlight.min.js"></script>
+    <script src="./static/vendor/marked/marked.min.js"></script>
     
-    <script src="/static/js/webchat.js"></script>
+    <script src="./static/js/webchat.js"></script>
 
     <!-- Image Modal -->
     <div id="imageModal" class="image-modal" onclick="closeImageModal()">

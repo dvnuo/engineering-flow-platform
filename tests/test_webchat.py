@@ -36,8 +36,13 @@ class TestWebChatTemplate:
         """Test template links to static CSS and JS files."""
         html = load_template("webchat.html")
         
-        assert '/static/css/webchat.css' in html
-        assert '/static/js/webchat.js' in html
+        assert './static/css/webchat.css' in html
+        assert './static/js/webchat.js' in html
+        assert './static/vendor/highlightjs/github-dark.min.css' in html
+        assert './static/vendor/highlightjs/highlight.min.js' in html
+        assert './static/vendor/marked/marked.min.js' in html
+        assert 'https://cdnjs.cloudflare.com' not in html
+        assert 'https://fonts.googleapis.com' not in html
 
 
 class TestWebChatStaticFiles:
@@ -68,6 +73,7 @@ class TestWebChatStaticFiles:
         assert 'function sendMessage()' in js
         assert 'addMessage(' in js
         assert 'escapeHtml(' in js
+
 
 
 class TestWebChatRoutes:
