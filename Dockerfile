@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create workspace directory for memory files
-RUN mkdir -p /root/.openclaw/workspace
+RUN mkdir -p /root/.efp/workspace
 
 # Expose port
 EXPOSE 8000
