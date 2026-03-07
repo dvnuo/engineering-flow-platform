@@ -87,9 +87,17 @@ class ConfluenceChannel:
         """Get authorization header based on authentication type.
         
         Supports:
+        - Basic auth (username:token) - for Atlassian Cloud
         - Bearer token: Authorization: Bearer {token}
         - Basic auth (username+password): Authorization: Basic {base64(username:password)}
         """
+        # Basic Auth (username:token) - for Atlassian Cloud
+        if self.username and self.token:
+            creds = f"{self.username}:{self.token}"
+            encoded = base64.b64encode(creds.encode()).decode()
+            logger.debug("Using Basic Auth (email:api_token) for Cloud")
+            return {"Authorization": f"Basic {encoded}"}
+        
         # Bearer Token authentication
         if self.token:
             logger.debug("Using Bearer Token authentication")
