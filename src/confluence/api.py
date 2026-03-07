@@ -464,6 +464,23 @@ class ConfluenceChannel:
         return result.get("results", [])
 
     
+    async def get_page_children(self, page_id: str):
+        logger.info(f'Fetching children for page: {page_id}')
+        result = await self._request('GET', f'/content/{page_id}/child/page')
+        return result.get('results', [])
+    
+    async def get_page_history(self, page_id: str):
+        logger.info(f'Fetching history for page: {page_id}')
+        return await self._request('GET', f'/content/{page_id}/history')
+    
+    async def get_user(self, user_id=None, username=None):
+        logger.info(f'Fetching user: {user_id or username}')
+        if user_id:
+            return await self._request('GET', f'/user?accountId={user_id}')
+        elif username:
+            return await self._request('GET', f'/user?username={username}')
+        return {'error': 'user_id or username required'}
+
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()
