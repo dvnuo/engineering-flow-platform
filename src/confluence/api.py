@@ -481,6 +481,14 @@ class ConfluenceChannel:
             return await self._request('GET', f'/user?username={username}')
         return {'error': 'user_id or username required'}
 
+    async def watch_page(self, page_id: str):
+        logger.info(f'Watching page: {page_id}')
+        return await self._request('PUT', f'/content/{page_id}/watch')
+    
+    async def unwatch_page(self, page_id: str):
+        logger.info(f'Unwatching page: {page_id}')
+        return await self._request('DELETE', f'/content/{page_id}/watch')
+
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()
