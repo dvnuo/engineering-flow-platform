@@ -479,7 +479,7 @@ class ConfluenceChannel:
             return await self._request('GET', '/user', params={'accountId': user_id})
         elif username:
             return await self._request('GET', '/user', params={'username': username})
-        return {'error': 'user_id or username required'}
+        raise ValueError('user_id or username required')
 
     async def watch_page(self, page_id: str) -> Dict[str, Any]:
         logger.info(f"Watching page: {page_id}")
