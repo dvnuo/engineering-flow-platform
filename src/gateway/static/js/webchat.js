@@ -2150,6 +2150,8 @@
             { value: 'gpt-5.1-codex', label: 'GPT-5.1-Codex' },
             { value: 'gpt-5.1-codex-max', label: 'GPT-5.1-Codex-Max' },
             { value: 'gpt-5.2', label: 'GPT-5.2' },
+            { value: 'gpt-5.3-codex-max', label: 'GPT-5.3-Codex-Max' },
+            { value: 'gpt-5.4', label: 'GPT-5.4' },
             { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
         ],
         openai: [
