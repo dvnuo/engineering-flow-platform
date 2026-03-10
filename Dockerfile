@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install system tools required by internal bash/github tooling
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git curl ca-certificates gnupg \
+    && apt-get install -y --no-install-recommends git curl ca-certificates gnupg tesseract-ocr \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | gpg --dearmor -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
