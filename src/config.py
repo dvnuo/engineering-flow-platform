@@ -163,7 +163,11 @@ class Config:
                     self._resolve_env_vars(value)
         elif self._is_sequence(obj):
             for i, item in enumerate(obj):
-                if self._is_mapping(item) or self._is_sequence(item):
+                if isinstance(item, str):
+                    # Resolve ${VAR} in string list items
+                    if item.startswith("${") and not item.startswith("ENC:"):
+                        obj[i] = resolve_value(item)
+                elif self._is_mapping(item) or self._is_sequence(item):
                     self._resolve_env_vars(item)
     
     def _get_encryption_key(self) -> Optional[str]:
@@ -208,8 +212,8 @@ class Config:
             key_bytes = hashlib.sha256(key.encode()).digest()
             f = Fernet(base64.urlsafe_b64encode(key_bytes))
             
-            encrypted_bytes = base64.urlsafe_b64decode(value[4:])
-            decrypted = f.decrypt(encrypted_bytes)
+            # Fernet returns base64-encoded token, just remove prefix and decode
+            decrypted = f.decrypt(value[4:].encode())
             return decrypted.decode()
         except Exception as e:
             logging.getLogger(__name__).warning(f"Failed to decrypt config value: {e}")
