@@ -133,7 +133,9 @@ class Config:
     def _is_sequence(self, obj: Any) -> bool:
         """Check if obj is a sequence (list or CommentedSeq)."""
         from collections.abc import Sequence
-        return isinstance(obj, Sequence) and not isinstance(obj, str)
+        return isinstance(obj, Sequence) and not isinstance(
+            obj, (str, bytes, bytearray, memoryview)
+        )
     
     def _get_encryption_key(self) -> Optional[str]:
         """Get encryption key from environment variable."""
