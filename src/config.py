@@ -184,8 +184,14 @@ class Config:
             decrypted = f.decrypt(value[4:].encode())
             return decrypted.decode()
         except Exception as e:
-            logging.getLogger(__name__).warning(f"Failed to decrypt config value: {e}")
-            return value
+            logging.getLogger(__name__).error(
+                f"Failed to decrypt config value. Check EFP_CONFIG_KEY and configuration file: {e}",
+                exc_info=True,
+            )
+            raise RuntimeError(
+                "Failed to decrypt an encrypted configuration value. "
+                "Ensure EFP_CONFIG_KEY is correct and the configuration file contains valid encrypted values."
+            ) from e
     
     SENSITIVE_FIELDS = {"api_key", "password", "token", "api_token", "secret"}
     
