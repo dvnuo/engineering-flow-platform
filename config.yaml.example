@@ -2,6 +2,15 @@
 # COPY THIS FILE TO config.yaml AND FILL IN YOUR VALUES!
 
 # ============================================
+# Environment Variables in Config
+# ============================================
+# Sensitive values can be read from environment variables using ${VAR} syntax:
+#   api_key: "${OPENAI_API_KEY}"          # Reads from OPENAI_API_KEY env var
+#   password: "${JIRA_PASSWORD:default}"   # Uses "default" if env var not set
+#
+# This keeps secrets out of config files exposed to K8s administrators.
+
+# ============================================
 # LLM Configuration (REQUIRED)
 # ============================================
 llm:

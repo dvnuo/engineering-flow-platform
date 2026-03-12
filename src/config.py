@@ -121,6 +121,32 @@ class Config:
             self._last_modified = self.config_path.stat().st_mtime
         else:
             self._config = {}
+        
+        # Resolve environment variables in sensitive fields
+        self._resolve_env_vars(self._config)
+    
+    def _resolve_env_vars(self, obj: Any) -> None:
+        """Recursively resolve ${VAR} and ${VAR:default} in config."""
+        import re
+        import os
+        
+        pattern = re.compile(r'\$\{([^}:]+)(?::([^}]*))?\}')
+        
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if isinstance(value, str):
+                    match = pattern.match(value)
+                    if match:
+                        var_name = match.group(1)
+                        default_value = match.group(2)
+                        env_value = os.environ.get(var_name, default_value if default_value is not None else "")
+                        obj[key] = env_value
+                elif isinstance(value, (dict, list)):
+                    self._resolve_env_vars(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                if isinstance(item, (dict, list)):
+                    self._resolve_env_vars(item)
     
     @property
     def config_source(self) -> str:
