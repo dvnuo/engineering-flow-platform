@@ -128,13 +128,41 @@ class Config:
         # Decrypt sensitive fields
         self._decrypt_sensitive_fields(self._config)
     
+    def _resolve_env_vars(self, obj: Any) -> None:
+        """Recursively resolve ${VAR} and ${VAR:default} in config."""
+        import re
+        import os
+        
+        pattern = re.compile(r'^\$\{([^}:]+)(?::([^}]*))?\}$')
+        
+        def resolve_value(value: str) -> str:
+            match = pattern.match(value)
+            if match:
+                var_name = match.group(1)
+                default_value = match.group(2)
+                return os.environ.get(var_name, default_value if default_value is not None else "")
+            return value
+        
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if isinstance(value, str):
+                    # Don't resolve env vars for already-encrypted or placeholder values
+                    if not value.startswith("ENC:") and not value.startswith("${"):
+                        obj[key] = resolve_value(value)
+                elif isinstance(value, (dict, list)):
+                    self._resolve_env_vars(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                if isinstance(item, (dict, list)):
+                    self._resolve_env_vars(item)
+    
     def _get_encryption_key(self) -> Optional[str]:
         """Get encryption key from environment variable."""
         import os
         return os.environ.get("EFP_CONFIG_KEY")
     
     def _encrypt_value(self, value: str) -> str:
-        """Encrypt a value using AES."""
+        """Encrypt a value using Fernet (AES-CBC + HMAC)."""
         import os
         import base64
         from cryptography.fernet import Fernet
@@ -152,8 +180,8 @@ class Config:
         return f"ENC:{base64.urlsafe_b64encode(encrypted).decode()}"
     
     def _decrypt_value(self, value: str) -> str:
-        """Decrypt a value using AES."""
-        import os
+        """Decrypt a value using Fernet (AES-CBC + HMAC)."""
+        import logging
         import base64
         from cryptography.fernet import Fernet
         
@@ -162,7 +190,7 @@ class Config:
         
         key = self._get_encryption_key()
         if not key:
-            # Return as-is if no key configured
+            logging.getLogger(__name__).warning("Found ENC: value but EFP_CONFIG_KEY is not set")
             return value
         
         try:
@@ -173,8 +201,8 @@ class Config:
             encrypted_bytes = base64.urlsafe_b64decode(value[4:])
             decrypted = f.decrypt(encrypted_bytes)
             return decrypted.decode()
-        except Exception:
-            # Return as-is if decryption fails
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Failed to decrypt config value: {e}")
             return value
     
     SENSITIVE_FIELDS = {"api_key", "password", "token", "api_token", "secret"}
@@ -183,7 +211,8 @@ class Config:
         """Recursively encrypt sensitive fields in config."""
         if isinstance(obj, dict):
             for key, value in obj.items():
-                if key in self.SENSITIVE_FIELDS and isinstance(value, str) and value and not value.startswith("ENC:"):
+                # Skip encryption for env var placeholders or already encrypted values
+                if key in self.SENSITIVE_FIELDS and isinstance(value, str) and value and not value.startswith("ENC:") and not value.startswith("${"):
                     obj[key] = self._encrypt_value(value)
                 elif isinstance(value, (dict, list)):
                     self._encrypt_sensitive_fields(value)
@@ -200,14 +229,6 @@ class Config:
                     obj[key] = self._decrypt_value(value)
                 elif isinstance(value, (dict, list)):
                     self._decrypt_sensitive_fields(value)
-        elif isinstance(obj, list):
-            for item in obj:
-                if isinstance(item, (dict, list)):
-                    self._decrypt_sensitive_fields(item)
-        elif isinstance(obj, list):
-            for item in obj:
-                if isinstance(item, (dict, list)):
-                    self._resolve_env_vars(item)
     
     @property
     def config_source(self) -> str:
