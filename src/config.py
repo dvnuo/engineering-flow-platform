@@ -125,6 +125,16 @@ class Config:
         # Decrypt sensitive fields
         self._decrypt_sensitive_fields(self._config)
     
+    def _is_mapping(self, obj: Any) -> bool:
+        """Check if obj is a mapping (dict or CommentedMap)."""
+        from collections.abc import Mapping
+        return isinstance(obj, Mapping)
+    
+    def _is_sequence(self, obj: Any) -> bool:
+        """Check if obj is a sequence (list or CommentedSeq)."""
+        from collections.abc import Sequence
+        return isinstance(obj, Sequence) and not isinstance(obj, str)
+    
     def _get_encryption_key(self) -> Optional[str]:
         """Get encryption key from environment variable."""
         import os
