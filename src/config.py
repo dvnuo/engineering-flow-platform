@@ -169,8 +169,11 @@ class Config:
         
         key = self._get_encryption_key()
         if not key:
-            logging.getLogger(__name__).warning("Found ENC: value but EFP_CONFIG_KEY is not set")
-            return value
+            # Fail fast: encrypted config values require EFP_CONFIG_KEY
+            raise RuntimeError(
+                "Found ENC: value in configuration but EFP_CONFIG_KEY is not set. "
+                "Set EFP_CONFIG_KEY to the correct encryption key before starting the application."
+            )
         
         try:
             import hashlib
