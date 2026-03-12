@@ -724,7 +724,7 @@ async def api_save_config(request: web.Request) -> web.Response:
         
         # Perform partial update - only merge provided sections
         config = existing_config.copy()
-        sections = ['llm', 'jira', 'confluence', 'github', 'git', 'ssh', 'debug']
+        sections = ['llm', 'jira', 'confluence', 'github', 'git', 'ssh', 'debug', 'proxy']
         
         for section in sections:
             if section in data:
@@ -744,6 +744,10 @@ async def api_save_config(request: web.Request) -> web.Response:
         if not config.config_path.exists():
             config.config_path = config_path
         config.reload(changed_sections=updated_sections)
+        
+        # Apply proxy settings if proxy section was updated
+        if 'proxy' in updated_sections:
+            config.apply_proxy()
         
         return web.json_response({
             'success': True, 

@@ -18,8 +18,12 @@ if str(project_root) not in sys.path:
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from src.gateway.server import gateway
 from src.config import config
+
+# Apply proxy settings early (before any HTTP clients are created)
+config.apply_proxy()
+
+from src.gateway.server import gateway
 from src.sessions.persistence import session_persistence
 from src.sessions.manager import session_manager
 from src.sessions.usage import usage_tracker
@@ -112,6 +116,8 @@ async def main() -> None:
     
     # Check configuration
     can_start, warnings = check_config()
+    
+    logger.info(f"Proxy enabled: {config.proxy.get('enabled', False)}")
     
     for warning in warnings:
         logger.warning(warning)

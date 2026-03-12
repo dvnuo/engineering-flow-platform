@@ -293,6 +293,44 @@ class Config:
         return self._config.get("debug", {})
     
     @property
+    def proxy(self) -> Dict[str, Any]:
+        """Get proxy configuration."""
+        return self._config.get("proxy", {})
+    
+    def apply_proxy(self) -> None:
+        """Apply proxy settings to os.environ."""
+        proxy_config = self.proxy
+        if proxy_config.get("enabled") and proxy_config.get("url"):
+            url = proxy_config.get("url", "")
+            
+            # Add username:password if provided
+            username = proxy_config.get("username")
+            password = proxy_config.get("password")
+            if username and password:
+                # Parse existing URL and insert credentials
+                from urllib.parse import urlparse, urlunparse
+                parsed = urlparse(url)
+                # Insert credentials into netloc
+                netloc = f"{username}:{password}@{parsed.hostname}"
+                if parsed.port:
+                    netloc += f":{parsed.port}"
+                url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+            
+            os.environ["http_proxy"] = url
+            os.environ["https_proxy"] = url
+            os.environ["HTTP_PROXY"] = url
+            os.environ["HTTPS_PROXY"] = url
+            # Handle no_proxy for internal addresses
+            no_proxy = proxy_config.get("no_proxy", "localhost,127.0.0.1")
+            os.environ["no_proxy"] = no_proxy
+            os.environ["NO_PROXY"] = no_proxy
+        elif "proxy" in self._config:
+            # Only clear if proxy section exists but is disabled
+            # Don't clear inherited env vars when proxy section is absent
+            for var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]:
+                os.environ.pop(var, None)
+    
+    @property
     def heartbeat(self) -> Dict[str, Any]:
         """Get heartbeat configuration."""
         return self._config.get("heartbeat", {})
