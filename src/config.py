@@ -324,8 +324,9 @@ class Config:
             no_proxy = proxy_config.get("no_proxy", "localhost,127.0.0.1")
             os.environ["no_proxy"] = no_proxy
             os.environ["NO_PROXY"] = no_proxy
-        else:
-            # Clear proxy settings
+        elif "proxy" in self._config:
+            # Only clear if proxy section exists but is disabled
+            # Don't clear inherited env vars when proxy section is absent
             for var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]:
                 os.environ.pop(var, None)
     
