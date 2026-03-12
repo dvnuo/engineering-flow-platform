@@ -130,38 +130,47 @@ class Gateway:
 
     async def handle_git_info(self, request: Request) -> web.Response:
         """Get git commit info."""
-        import os
         commit_id = None
         repo_url = None
-        
-        # Try to read commit ID from file (written by init container)
-        commit_file = "/app/.commit-id"
-        if os.path.exists(commit_file):
+
+        # Derive repository root from this file location (../.. from src/gateway/)
+        repo_root = Path(__file__).resolve().parents[2]
+
+        # Allow override of commit file path via environment variable
+        commit_file_env = os.getenv("COMMIT_FILE_PATH")
+        commit_file = Path(commit_file_env) if commit_file_env else repo_root / ".commit-id"
+
+        # Try to read commit ID from file (e.g. written by init container)
+        if commit_file.exists():
             try:
-                with open(commit_file, "r") as f:
+                with commit_file.open("r") as f:
                     commit_id = f.read().strip()
             except Exception:
                 pass
-        
-        # Try to get current commit via git rev-parse
-        if os.path.exists("/app/.git"):
+
+        # Try to get current commit via git rev-parse, if still unknown
+        git_dir = repo_root / ".git"
+        if commit_id is None and git_dir.exists():
             try:
                 import subprocess
                 result = subprocess.run(
-                    ["git", "-C", "/app", "rev-parse", "HEAD"],
-                    capture_output=True, text=True, timeout=5
+                    ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 if result.returncode == 0:
                     commit_id = result.stdout.strip()
                 result = subprocess.run(
-                    ["git", "-C", "/app", "remote", "get-url", "origin"],
-                    capture_output=True, text=True, timeout=5
+                    ["git", "-C", str(repo_root), "remote", "get-url", "origin"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 if result.returncode == 0:
                     repo_url = result.stdout.strip()
             except Exception:
                 pass
-        
         return web.json_response({
             "commit_id": commit_id,
             "repo_url": repo_url,
