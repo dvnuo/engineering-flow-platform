@@ -347,3 +347,22 @@ error_logging:
 #   log_full_errors: true
 #   return_error_details: true
 #   sanitize_errors: true
+
+# ============================================
+# Proxy Configuration (OPTIONAL)
+# ============================================
+# Configure HTTP/HTTPS proxy for outbound requests
+# This will be applied to os.environ at startup
+
+proxy:
+  enabled: false  # Set to true to enable proxy
+  url: ""  # Proxy URL (e.g., "http://proxy.example.com:8080")
+  # username: ""  # Optional: proxy username
+  # password: ""  # Optional: proxy password
+
+# Example usage:
+# proxy:
+#   enabled: true
+#   url: "http://proxy.example.com:8080"
+#   username: "user"
+#   password: "password"

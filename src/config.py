@@ -293,6 +293,29 @@ class Config:
         return self._config.get("debug", {})
     
     @property
+    def proxy(self) -> Dict[str, Any]:
+        """Get proxy configuration."""
+        return self._config.get("proxy", {})
+    
+    def apply_proxy(self) -> None:
+        """Apply proxy settings to os.environ."""
+        proxy_config = self.proxy
+        if proxy_config.get("enabled") and proxy_config.get("url"):
+            url = proxy_config.get("url", "")
+            os.environ["http_proxy"] = url
+            os.environ["https_proxy"] = url
+            os.environ["HTTP_PROXY"] = url
+            os.environ["HTTPS_PROXY"] = url
+            # Handle no_proxy for internal addresses
+            no_proxy = proxy_config.get("no_proxy", "localhost,127.0.0.1")
+            os.environ["no_proxy"] = no_proxy
+            os.environ["NO_PROXY"] = no_proxy
+        else:
+            # Clear proxy settings
+            for var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]:
+                os.environ.pop(var, None)
+    
+    @property
     def heartbeat(self) -> Dict[str, Any]:
         """Get heartbeat configuration."""
         return self._config.get("heartbeat", {})

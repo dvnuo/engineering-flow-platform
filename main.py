@@ -113,6 +113,10 @@ async def main() -> None:
     # Check configuration
     can_start, warnings = check_config()
     
+    # Apply proxy settings
+    config.apply_proxy()
+    logger.info(f"Proxy enabled: {config.proxy.get('enabled', False)}")
+    
     for warning in warnings:
         logger.warning(warning)
     
