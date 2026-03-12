@@ -122,9 +122,6 @@ class Config:
         else:
             self._config = {}
         
-        # Resolve environment variables in sensitive fields
-        self._resolve_env_vars(self._config)
-        
         # Decrypt sensitive fields
         self._decrypt_sensitive_fields(self._config)
     
