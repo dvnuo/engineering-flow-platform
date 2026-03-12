@@ -2,6 +2,18 @@
 # COPY THIS FILE TO config.yaml AND FILL IN YOUR VALUES!
 
 # ============================================
+# Encryption Configuration (OPTIONAL)
+# ============================================
+# Sensitive fields (api_key, password, token) can be encrypted in config.yaml.
+# Set the encryption key via environment variable: EFP_CONFIG_KEY
+# Values will be stored as ENC:base64... and automatically decrypted at runtime.
+#
+# Example:
+#   EFP_CONFIG_KEY=my-secret-key python main.py
+#
+# When enabled, writing sensitive fields will automatically encrypt them.
+
+# ============================================
 # LLM Configuration (REQUIRED)
 # ============================================
 llm:
