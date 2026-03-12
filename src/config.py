@@ -302,6 +302,20 @@ class Config:
         proxy_config = self.proxy
         if proxy_config.get("enabled") and proxy_config.get("url"):
             url = proxy_config.get("url", "")
+            
+            # Add username:password if provided
+            username = proxy_config.get("username")
+            password = proxy_config.get("password")
+            if username and password:
+                # Parse existing URL and insert credentials
+                from urllib.parse import urlparse, urlunparse
+                parsed = urlparse(url)
+                # Insert credentials into netloc
+                netloc = f"{username}:{password}@{parsed.hostname}"
+                if parsed.port:
+                    netloc += f":{parsed.port}"
+                url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+            
             os.environ["http_proxy"] = url
             os.environ["https_proxy"] = url
             os.environ["HTTP_PROXY"] = url
