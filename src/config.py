@@ -423,7 +423,7 @@ class Config:
             os.environ["HTTP_PROXY"] = url
             os.environ["HTTPS_PROXY"] = url
             # Handle no_proxy for internal addresses
-            no_proxy = proxy_config.get("no_proxy", "localhost,127.0.0.1,169.254.169.254,svc.cluster.local")
+            no_proxy = proxy_config.get("no_proxy", "localhost,127.0.0.1,169.254.169.254,.svc.cluster.local")
             os.environ["no_proxy"] = no_proxy
             os.environ["NO_PROXY"] = no_proxy
         elif "proxy" in self._config:
