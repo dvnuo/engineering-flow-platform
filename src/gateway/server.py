@@ -127,6 +127,7 @@ class Gateway:
     async def handle_health(self, request: Request) -> web.Response:
         """Health check endpoint."""
         return web.json_response({"status": "ok", "service": "engineering-flow-platform"})
+
     async def handle_git_info(self, request: Request) -> web.Response:
         """Get git commit info."""
         commit_id = None
@@ -154,27 +155,18 @@ class Gateway:
             except Exception:
                 pass
 
-        # Fallback: derive repository root from this file location (../.. from src/gateway/)
+        # Fallback: derive repository root from this file location
         repo_root = Path(__file__).resolve().parents[2]
 
         # Allow override of commit file path via environment variable
         commit_file_env = os.getenv("COMMIT_FILE_PATH")
         commit_file = Path(commit_file_env) if commit_file_env else repo_root / ".commit-id"
-        repo_file_env = os.getenv("REPO_URL_FILE_PATH")
-        repo_file = Path(repo_file_env) if repo_file_env else repo_root / ".repo-url"
 
-        # Try to read from files as fallback
+        # Try to read commit ID from file (e.g. written by init container)
         if commit_file.exists() and not commit_id:
             try:
                 with commit_file.open("r") as f:
                     commit_id = f.read().strip()
-            except Exception:
-                pass
-
-        if repo_file.exists() and not repo_url:
-            try:
-                with repo_file.open("r") as f:
-                    repo_url = f.read().strip()
             except Exception:
                 pass
 
@@ -206,6 +198,8 @@ class Gateway:
             "commit_id": commit_id,
             "repo_url": repo_url,
         })
+
+    async def handle_list_sessions(self, request: Request) -> web.Response:
         """List all active sessions with details.
 
         GET /api/sessions?limit=10
