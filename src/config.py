@@ -128,6 +128,16 @@ class Config:
         # Decrypt sensitive fields
         self._decrypt_sensitive_fields(self._config)
     
+    def _is_mapping(self, obj: Any) -> bool:
+        """Check if obj is a mapping (dict or CommentedMap)."""
+        from collections.abc import Mapping
+        return isinstance(obj, Mapping)
+    
+    def _is_sequence(self, obj: Any) -> bool:
+        """Check if obj is a sequence (list or CommentedSeq)."""
+        from collections.abc import Sequence
+        return isinstance(obj, Sequence) and not isinstance(obj, str)
+    
     def _resolve_env_vars(self, obj: Any) -> None:
         """Recursively resolve ${VAR} and ${VAR:default} in config."""
         import re
@@ -143,17 +153,17 @@ class Config:
                 return os.environ.get(var_name, default_value if default_value is not None else "")
             return value
         
-        if isinstance(obj, dict):
+        if self._is_mapping(obj):
             for key, value in obj.items():
                 if isinstance(value, str):
-                    # Don't resolve env vars for already-encrypted or placeholder values
-                    if not value.startswith("ENC:") and not value.startswith("${"):
+                    # Resolve ${VAR} placeholders (but not ENC:)
+                    if value.startswith("${") and not value.startswith("ENC:"):
                         obj[key] = resolve_value(value)
-                elif isinstance(value, (dict, list)):
+                elif self._is_mapping(value) or self._is_sequence(value):
                     self._resolve_env_vars(value)
-        elif isinstance(obj, list):
-            for item in obj:
-                if isinstance(item, (dict, list)):
+        elif self._is_sequence(obj):
+            for i, item in enumerate(obj):
+                if self._is_mapping(item) or self._is_sequence(item):
                     self._resolve_env_vars(item)
     
     def _get_encryption_key(self) -> Optional[str]:
@@ -163,8 +173,8 @@ class Config:
     
     def _encrypt_value(self, value: str) -> str:
         """Encrypt a value using Fernet (AES-CBC + HMAC)."""
-        import os
         import base64
+        import hashlib
         from cryptography.fernet import Fernet
         
         key = self._get_encryption_key()
@@ -172,12 +182,12 @@ class Config:
             return value
         
         # Generate key from the configured key (must be 32 bytes for Fernet)
-        import hashlib
         key_bytes = hashlib.sha256(key.encode()).digest()
         f = Fernet(base64.urlsafe_b64encode(key_bytes))
         
+        # Fernet.encrypt returns urlsafe-base64 directly, no extra wrap needed
         encrypted = f.encrypt(value.encode())
-        return f"ENC:{base64.urlsafe_b64encode(encrypted).decode()}"
+        return f"ENC:{encrypted.decode()}"
     
     def _decrypt_value(self, value: str) -> str:
         """Decrypt a value using Fernet (AES-CBC + HMAC)."""
@@ -209,26 +219,30 @@ class Config:
     
     def _encrypt_sensitive_fields(self, obj: Any) -> None:
         """Recursively encrypt sensitive fields in config."""
-        if isinstance(obj, dict):
+        if self._is_mapping(obj):
             for key, value in obj.items():
                 # Skip encryption for env var placeholders or already encrypted values
                 if key in self.SENSITIVE_FIELDS and isinstance(value, str) and value and not value.startswith("ENC:") and not value.startswith("${"):
                     obj[key] = self._encrypt_value(value)
-                elif isinstance(value, (dict, list)):
+                elif self._is_mapping(value) or self._is_sequence(value):
                     self._encrypt_sensitive_fields(value)
-        elif isinstance(obj, list):
+        elif self._is_sequence(obj):
             for item in obj:
-                if isinstance(item, (dict, list)):
+                if self._is_mapping(item) or self._is_sequence(item):
                     self._encrypt_sensitive_fields(item)
     
     def _decrypt_sensitive_fields(self, obj: Any) -> None:
         """Recursively decrypt sensitive fields in config."""
-        if isinstance(obj, dict):
+        if self._is_mapping(obj):
             for key, value in obj.items():
                 if key in self.SENSITIVE_FIELDS and isinstance(value, str) and value.startswith("ENC:"):
                     obj[key] = self._decrypt_value(value)
-                elif isinstance(value, (dict, list)):
+                elif self._is_mapping(value) or self._is_sequence(value):
                     self._decrypt_sensitive_fields(value)
+        elif self._is_sequence(obj):
+            for item in obj:
+                if self._is_mapping(item) or self._is_sequence(item):
+                    self._decrypt_sensitive_fields(item)
     
     @property
     def config_source(self) -> str:
