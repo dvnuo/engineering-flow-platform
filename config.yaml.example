@@ -369,3 +369,15 @@ error_logging:
 #   url: "http://proxy.example.com:8080"
 #   username: "user"
 #   password: "password"
+
+# ============================================
+# Encryption Configuration (OPTIONAL)
+# ============================================
+# Sensitive fields (api_key, password, token) can be encrypted in config.yaml.
+# Set the encryption key via environment variable: EFP_CONFIG_KEY
+# Values will be stored as ENC:base64... and automatically decrypted at runtime.
+#
+# Example:
+#   EFP_CONFIG_KEY=my-secret-key python main.py
+#
+# When enabled, writing sensitive fields will automatically encrypt them.

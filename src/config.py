@@ -124,25 +124,86 @@ class Config:
         
         # Resolve environment variables in sensitive fields
         self._resolve_env_vars(self._config)
+        
+        # Decrypt sensitive fields
+        self._decrypt_sensitive_fields(self._config)
     
-    def _resolve_env_vars(self, obj: Any) -> None:
-        """Recursively resolve ${VAR} and ${VAR:default} in config."""
-        import re
+    def _get_encryption_key(self) -> Optional[str]:
+        """Get encryption key from environment variable."""
         import os
+        return os.environ.get("EFP_CONFIG_KEY")
+    
+    def _encrypt_value(self, value: str) -> str:
+        """Encrypt a value using AES."""
+        import os
+        import base64
+        from cryptography.fernet import Fernet
         
-        pattern = re.compile(r'\$\{([^}:]+)(?::([^}]*))?\}')
+        key = self._get_encryption_key()
+        if not key:
+            return value
         
+        # Generate key from the configured key (must be 32 bytes for Fernet)
+        import hashlib
+        key_bytes = hashlib.sha256(key.encode()).digest()
+        f = Fernet(base64.urlsafe_b64encode(key_bytes))
+        
+        encrypted = f.encrypt(value.encode())
+        return f"ENC:{base64.urlsafe_b64encode(encrypted).decode()}"
+    
+    def _decrypt_value(self, value: str) -> str:
+        """Decrypt a value using AES."""
+        import os
+        import base64
+        from cryptography.fernet import Fernet
+        
+        if not value.startswith("ENC:"):
+            return value
+        
+        key = self._get_encryption_key()
+        if not key:
+            # Return as-is if no key configured
+            return value
+        
+        try:
+            import hashlib
+            key_bytes = hashlib.sha256(key.encode()).digest()
+            f = Fernet(base64.urlsafe_b64encode(key_bytes))
+            
+            encrypted_bytes = base64.urlsafe_b64decode(value[4:])
+            decrypted = f.decrypt(encrypted_bytes)
+            return decrypted.decode()
+        except Exception:
+            # Return as-is if decryption fails
+            return value
+    
+    SENSITIVE_FIELDS = {"api_key", "password", "token", "api_token", "secret"}
+    
+    def _encrypt_sensitive_fields(self, obj: Any) -> None:
+        """Recursively encrypt sensitive fields in config."""
         if isinstance(obj, dict):
             for key, value in obj.items():
-                if isinstance(value, str):
-                    match = pattern.match(value)
-                    if match:
-                        var_name = match.group(1)
-                        default_value = match.group(2)
-                        env_value = os.environ.get(var_name, default_value if default_value is not None else "")
-                        obj[key] = env_value
+                if key in self.SENSITIVE_FIELDS and isinstance(value, str) and value and not value.startswith("ENC:"):
+                    obj[key] = self._encrypt_value(value)
                 elif isinstance(value, (dict, list)):
-                    self._resolve_env_vars(value)
+                    self._encrypt_sensitive_fields(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                if isinstance(item, (dict, list)):
+                    self._encrypt_sensitive_fields(item)
+    
+    def _decrypt_sensitive_fields(self, obj: Any) -> None:
+        """Recursively decrypt sensitive fields in config."""
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if key in self.SENSITIVE_FIELDS and isinstance(value, str) and value.startswith("ENC:"):
+                    obj[key] = self._decrypt_value(value)
+                elif isinstance(value, (dict, list)):
+                    self._decrypt_sensitive_fields(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                if isinstance(item, (dict, list)):
+                    self._decrypt_sensitive_fields(item)
         elif isinstance(obj, list):
             for item in obj:
                 if isinstance(item, (dict, list)):

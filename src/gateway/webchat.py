@@ -734,6 +734,10 @@ async def api_save_config(request: web.Request) -> web.Response:
                 else:
                     config[section] = data[section]
         
+        # Encrypt sensitive fields before saving
+        from src.config import config as global_config
+        global_config._encrypt_sensitive_fields(config)
+        
         # Write back with preserved formatting and comments
         with open(config_path, 'w', encoding='utf-8') as f:
             yaml.dump(config, f)
