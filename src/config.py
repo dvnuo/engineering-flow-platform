@@ -128,48 +128,6 @@ class Config:
         # Decrypt sensitive fields
         self._decrypt_sensitive_fields(self._config)
     
-    def _is_mapping(self, obj: Any) -> bool:
-        """Check if obj is a mapping (dict or CommentedMap)."""
-        from collections.abc import Mapping
-        return isinstance(obj, Mapping)
-    
-    def _is_sequence(self, obj: Any) -> bool:
-        """Check if obj is a sequence (list or CommentedSeq)."""
-        from collections.abc import Sequence
-        return isinstance(obj, Sequence) and not isinstance(obj, str)
-    
-    def _resolve_env_vars(self, obj: Any) -> None:
-        """Recursively resolve ${VAR} and ${VAR:default} in config."""
-        import re
-        import os
-        
-        pattern = re.compile(r'^\$\{([^}:]+)(?::([^}]*))?\}$')
-        
-        def resolve_value(value: str) -> str:
-            match = pattern.match(value)
-            if match:
-                var_name = match.group(1)
-                default_value = match.group(2)
-                return os.environ.get(var_name, default_value if default_value is not None else "")
-            return value
-        
-        if self._is_mapping(obj):
-            for key, value in obj.items():
-                if isinstance(value, str):
-                    # Resolve ${VAR} placeholders (but not ENC:)
-                    if value.startswith("${") and not value.startswith("ENC:"):
-                        obj[key] = resolve_value(value)
-                elif self._is_mapping(value) or self._is_sequence(value):
-                    self._resolve_env_vars(value)
-        elif self._is_sequence(obj):
-            for i, item in enumerate(obj):
-                if isinstance(item, str):
-                    # Resolve ${VAR} in string list items
-                    if item.startswith("${") and not item.startswith("ENC:"):
-                        obj[i] = resolve_value(item)
-                elif self._is_mapping(item) or self._is_sequence(item):
-                    self._resolve_env_vars(item)
-    
     def _get_encryption_key(self) -> Optional[str]:
         """Get encryption key from environment variable."""
         import os

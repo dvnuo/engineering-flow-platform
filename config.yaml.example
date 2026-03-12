@@ -2,13 +2,16 @@
 # COPY THIS FILE TO config.yaml AND FILL IN YOUR VALUES!
 
 # ============================================
-# Environment Variables in Config
+# Encryption Configuration (OPTIONAL)
 # ============================================
-# Sensitive values can be read from environment variables using ${VAR} syntax:
-#   api_key: "${OPENAI_API_KEY}"          # Reads from OPENAI_API_KEY env var
-#   password: "${JIRA_PASSWORD:default}"   # Uses "default" if env var not set
+# Sensitive fields (api_key, password, token) can be encrypted in config.yaml.
+# Set the encryption key via environment variable: EFP_CONFIG_KEY
+# Values will be stored as ENC:base64... and automatically decrypted at runtime.
 #
-# This keeps secrets out of config files exposed to K8s administrators.
+# Example:
+#   EFP_CONFIG_KEY=my-secret-key python main.py
+#
+# When enabled, writing sensitive fields will automatically encrypt them.
 
 # ============================================
 # LLM Configuration (REQUIRED)
