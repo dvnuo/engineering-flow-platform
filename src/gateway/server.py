@@ -143,6 +143,15 @@ class Gateway:
             except Exception:
                 pass
         
+        # Try to read repo URL from file (written by init container)
+        repo_file = "/app/.repo-url"
+        if os.path.exists(repo_file):
+            try:
+                with open(repo_file, "r") as f:
+                    repo_url = f.read().strip()
+            except Exception:
+                pass
+        
         # Try to get current commit via git rev-parse
         if os.path.exists("/app/.git"):
             try:
