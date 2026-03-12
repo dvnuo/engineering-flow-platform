@@ -133,7 +133,29 @@ class Gateway:
         commit_id = None
         repo_url = None
 
-        # Derive repository root from this file location (../.. from src/gateway/)
+        # Check mounted code directory first (/app)
+        app_root = Path("/app")
+        
+        # Try to get commit via git rev-parse from /app
+        if (app_root / ".git").exists():
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["git", "-C", str(app_root), "rev-parse", "HEAD"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    commit_id = result.stdout.strip()
+                result = subprocess.run(
+                    ["git", "-C", str(app_root), "remote", "get-url", "origin"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    repo_url = result.stdout.strip()
+            except Exception:
+                pass
+
+        # Fallback: derive repository root from this file location
         repo_root = Path(__file__).resolve().parents[2]
 
         # Allow override of commit file path via environment variable
@@ -141,14 +163,14 @@ class Gateway:
         commit_file = Path(commit_file_env) if commit_file_env else repo_root / ".commit-id"
 
         # Try to read commit ID from file (e.g. written by init container)
-        if commit_file.exists():
+        if commit_file.exists() and not commit_id:
             try:
                 with commit_file.open("r") as f:
                     commit_id = f.read().strip()
             except Exception:
                 pass
 
-        # Try to get current commit via git rev-parse, if still unknown
+        # Fallback: try from EFP source directory
         git_dir = repo_root / ".git"
         if commit_id is None and git_dir.exists():
             try:
@@ -171,6 +193,7 @@ class Gateway:
                     repo_url = result.stdout.strip()
             except Exception:
                 pass
+        
         return web.json_response({
             "commit_id": commit_id,
             "repo_url": repo_url,
