@@ -354,12 +354,6 @@ error_logging:
 # Configure HTTP/HTTPS proxy for outbound requests
 # This will be applied to os.environ at startup
 
-proxy:
-  enabled: false  # Set to true to enable proxy
-  url: ""  # Proxy URL (e.g., "http://proxy.example.com:8080")
-  # username: ""  # Optional: proxy username
-  # password: ""  # Optional: proxy password
-
 # Example usage:
 # proxy:
 #   enabled: true
