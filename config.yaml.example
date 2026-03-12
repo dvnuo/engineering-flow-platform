@@ -372,4 +372,3 @@ error_logging:
 #   url: "http://proxy.example.com:8080"
 #   username: "user"
 #   password: "password"
-# When enabled, writing sensitive fields will automatically encrypt them.
