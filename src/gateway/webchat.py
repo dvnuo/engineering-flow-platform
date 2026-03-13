@@ -794,6 +794,35 @@ async def api_get_config(request: web.Request) -> web.Response:
         if hasattr(config, 'to_dict'):
             config = config.to_dict()
         
+        # Decrypt sensitive fields before returning
+        try:
+            def decrypt_value(val):
+                if isinstance(val, str) and val.startswith("ENC:"):
+                    from src.config import Settings
+                    s = Settings()
+                    return s._decrypt_value(val)
+                return val
+            
+            def decrypt_config(obj):
+                if isinstance(obj, dict):
+                    for key, value in obj.items():
+                        if key in {"api_key", "password", "token", "api_token", "secret"}:
+                            obj[key] = decrypt_value(value)
+                        elif isinstance(value, dict):
+                            decrypt_config(value)
+                        elif isinstance(value, list):
+                            for item in value:
+                                if isinstance(item, dict):
+                                    decrypt_config(item)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        if isinstance(item, dict):
+                            decrypt_config(item)
+            
+            decrypt_config(config)
+        except Exception as e:
+            logger.warning(f"Failed to decrypt config values: {e}")
+        
         return web.json_response({'config': config})
     except Exception as e:
         logger.error(f"Error reading config: {e}")
