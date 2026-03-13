@@ -34,7 +34,7 @@ from src.agents.core import Agent as AgentCore
 from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
-from src.config import config
+from src.config import config as global_config
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
 from src.sessions.usage import usage_tracker
@@ -798,9 +798,8 @@ async def api_get_config(request: web.Request) -> web.Response:
         try:
             def decrypt_value(val):
                 if isinstance(val, str) and val.startswith("ENC:"):
-                    from src.config import Settings
-                    s = Settings()
-                    return s._decrypt_value(val)
+                    # Use the global config object's decrypt method
+                    return global_config._decrypt_value(val)
                 return val
             
             def decrypt_config(obj):
