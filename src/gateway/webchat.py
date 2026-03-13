@@ -796,11 +796,8 @@ async def api_get_config(request: web.Request) -> web.Response:
         
         # Decrypt sensitive fields before returning
         try:
-            settings = config or {}
-            
             def decrypt_value(val):
                 if isinstance(val, str) and val.startswith("ENC:"):
-                    # Use config module to decrypt
                     from src.config import Settings
                     s = Settings()
                     return s._decrypt_value(val)
