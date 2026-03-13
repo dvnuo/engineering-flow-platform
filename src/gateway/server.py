@@ -161,6 +161,8 @@ class Gateway:
         # Allow override of commit file path via environment variable
         commit_file_env = os.getenv("COMMIT_FILE_PATH")
         commit_file = Path(commit_file_env) if commit_file_env else repo_root / ".commit-id"
+        repo_file_env = os.getenv("REPO_URL_FILE_PATH")
+        repo_file = Path(repo_file_env) if repo_file_env else repo_root / ".repo-url"
 
         # Try to read commit ID from file (e.g. written by init container)
         if commit_file.exists() and not commit_id:
@@ -170,7 +172,15 @@ class Gateway:
             except Exception:
                 pass
 
-        # Fallback: try from EFP source directory
+        # Try to read repo URL from file (written by init container)
+        if repo_file.exists():
+            try:
+                with repo_file.open("r") as f:
+                    repo_url = f.read().strip()
+            except Exception:
+                pass
+
+        # Try to get current commit via git rev-parse, if still unknown
         git_dir = repo_root / ".git"
         if commit_id is None and git_dir.exists():
             try:
