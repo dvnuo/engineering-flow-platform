@@ -8,6 +8,7 @@ UNIQUE_MARKER_12345
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -157,7 +158,6 @@ async def api_chat(request: web.Request) -> web.Response:
         # Parse file references BEFORE inject_context
         attached_images = []
         try:
-            import re, json
             refs = re.findall(r'@file_([a-zA-Z0-9]+)', message)
             if refs:
                 from pathlib import Path
