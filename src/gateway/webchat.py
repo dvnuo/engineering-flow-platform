@@ -8,6 +8,7 @@ UNIQUE_MARKER_12345
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -35,6 +36,7 @@ from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.config import config as global_config
+config = global_config  # Alias for convenience
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
 from src.sessions.usage import usage_tracker
@@ -157,7 +159,6 @@ async def api_chat(request: web.Request) -> web.Response:
         # Parse file references BEFORE inject_context
         attached_images = []
         try:
-            import re, json
             refs = re.findall(r'@file_([a-zA-Z0-9]+)', message)
             if refs:
                 from pathlib import Path
