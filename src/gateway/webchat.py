@@ -144,6 +144,7 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Get attachments from new field
         attachments = data.get('attachments', [])
+        logger.info(f"[api_chat] DEBUG: full request data: {data}")
         
         if not message and not attachments:
             return web.json_response({'error': 'Empty message'}, status=400)
