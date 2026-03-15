@@ -130,7 +130,7 @@ async def api_chat(request: web.Request) -> web.Response:
     """Handle chat API requests.
     
     POST /api/chat
-    Body: {"message": "...", "session_id": "optional", "reasoning_replay": false}
+    Body: {"message": "...", "session_id": "optional", "attachments": ["file_id1", "file_id2"]}
     """
     try:
         data = await request.json()
@@ -142,7 +142,10 @@ async def api_chat(request: web.Request) -> web.Response:
         # Get reasoning_replay setting
         reasoning_replay = data.get('reasoning_replay', None)
         
-        if not message:
+        # Get attachments from new field
+        attachments = data.get('attachments', [])
+        
+        if not message and not attachments:
             return web.json_response({'error': 'Empty message'}, status=400)
         
         # Check if LLM is configured before processing
@@ -186,6 +189,42 @@ async def api_chat(request: web.Request) -> web.Response:
                 message = message.strip() if message.strip() else "[image]"
         except Exception as e:
             logger.warning(f"[api_chat] File ref parse error: {e}")
+        
+        # Also process attachments from new attachments field
+        if attachments and isinstance(attachments, list):
+            try:
+                import json
+                from pathlib import Path
+                metadata_file = Path('~/.efp/workspace/uploads/metadata.json').expanduser()
+                if metadata_file.exists():
+                    with open(metadata_file, 'r') as f:
+                        file_data = json.load(f)
+                    for file_id in attachments:
+                        # Try exact match first, then prefix match
+                        meta = file_data.get(file_id)
+                        if not meta:
+                            # Try prefix match
+                            for fid, m in file_data.items():
+                                if fid.startswith(file_id):
+                                    meta = m
+                                    file_id = fid
+                                    break
+                        if meta:
+                            ct = meta.get('content_type', '')
+                            if ct.startswith('image/'):
+                                try:
+                                    import base64
+                                    img_path = Path('~/.efp/workspace/uploads').expanduser() / meta['stored_filename']
+                                    with open(img_path, 'rb') as img:
+                                        img_data = base64.b64encode(img.read()).decode('utf-8')
+                                    ext = ct.split('/')[-1]
+                                    attached_images.append(f'data:image/{ext};base64,{img_data}')
+                                except Exception as e:
+                                    logger.warning(f"[api_chat] Failed to load attachment {file_id}: {e}")
+                    if attached_images and not message.strip():
+                        message = "[image]"
+            except Exception as e:
+                logger.warning(f"[api_chat] Attachments parse error: {e}")
         
         # Inject file context if user has uploaded files
         original_msg_for_history = message if message.strip() else ("[image]" if attached_images else "")
