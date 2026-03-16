@@ -194,3 +194,13 @@ class TestListThinkingLevels:
         from src.agents.thinking import list_thinking_levels, ThinkLevel
         levels = list_thinking_levels(provider="openai", model="gpt-5.2")
         assert ThinkLevel.XHIGH in levels
+
+
+class TestNormalizeThinkLevelEdgeCases:
+    """Additional edge case tests."""
+
+    def test_normalize_think_alias(self):
+        """Test think alias."""
+        from src.agents.thinking import normalize_think_level, ThinkLevel
+        result = normalize_think_level("think")
+        assert result == ThinkLevel.MINIMAL
