@@ -2,6 +2,7 @@
 
 import pytest
 import json
+from unittest.mock import MagicMock, patch
 
 from src.agents.errors import (
     LLMError,
@@ -298,9 +299,12 @@ class TestHandleHttpxErrors:
         from src.agents.errors import handle_httpx_error
         import httpx
         
-        # Create mock response
-        response = httpx.Response(400, json={"error": "test"})
-        error = httpx.HTTPStatusError("error", request=None, response=response)
+        # Create mock request and response
+        mock_request = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_response.text = '{"error": "test"}'
+        error = httpx.HTTPStatusError("error", request=mock_request, response=mock_response)
         
         result = handle_httpx_error(error, provider="test")
         assert result.status_code == 400
@@ -310,7 +314,8 @@ class TestHandleHttpxErrors:
         from src.agents.errors import handle_httpx_error
         import httpx
         
-        error = httpx.HTTPStatusError("error", request=None, response=None)
+        mock_request = MagicMock()
+        error = httpx.HTTPStatusError("error", request=mock_request, response=None)
         
         result = handle_httpx_error(error, provider="test")
         assert result.status_code == 0

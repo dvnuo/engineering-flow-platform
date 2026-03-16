@@ -144,12 +144,6 @@ class TestXHighModels:
             assert " " not in ref
 
 
-@pytest.mark.skip(reason="get_think_level_for_model does not exist in thinking.py")
-def test_get_think_level_for_model():
-    """Test get_think_level_for_model function."""
-    pass
-
-
 class TestSupportsXHighThinking:
     """Tests for supports_xhigh_thinking function."""
 

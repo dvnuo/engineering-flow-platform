@@ -4,6 +4,22 @@ import logging
 import pytest
 from io import StringIO
 
+
+@pytest.fixture(autouse=True)
+def reset_root_logger():
+    """Reset root logger after each test to avoid global state pollution."""
+    # Save original handlers and level
+    root = logging.getLogger()
+    original_handlers = root.handlers.copy()
+    original_level = root.level
+    
+    yield
+    
+    # Restore original state
+    root.handlers = original_handlers
+    root.setLevel(original_level)
+
+
 from src.utils.logger import (
     EnhancedLogger,
     StructuredLogger,
