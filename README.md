@@ -73,7 +73,7 @@ Access the web UI at `http://localhost:8000/`
 
 ```yaml
 llm:
-  provider: "openai"  # openai, github_copilot, claude, ollama
+  provider: "openai"  # openai (default), github_copilot
   api_key: "sk-..."
   model: "gpt-4o"
 ```
@@ -89,7 +89,7 @@ jira:
       url: "https://company.atlassian.net"
       project: "PROJ"
       # Auth: Bearer token, Basic (username+password), or Basic (username+api_token)
-      token: ""your-jira-api-token"  # Or use encrypted config"
+      token: "your-jira-api-token"
 ```
 
 #### Confluence (Multiple Instances)
@@ -100,7 +100,7 @@ confluence:
     - name: "Wiki"
       url: "https://company.atlassian.net/wiki"
       username: "user@company.com"
-      password: ""your-password"  # Or use encrypted config"
+      password: "your-password"
 ```
 
 #### GitHub
@@ -179,7 +179,7 @@ engineering-flow-platform/
 {
   "message": "What are the open Jira tickets?",
   "session_id": "optional-session-id",
-  "attachments": ["file_id1", "file_id2"]  // Optional file attachments
+  "attachments": ["file_id1", "file_id2"]
 }
 ```
 
@@ -199,7 +199,7 @@ engineering-flow-platform/
 | `/api/files/upload` | POST | Upload file (multipart) |
 | `/api/files` | GET | List files |
 | `/api/files/{id}` | GET | Download file |
-| `/api/files/{id}/parse` | POST | Parse file content |
+| `/api/files/parse` | POST | Parse file content (body: {file_id}) |
 | `/api/files/{id}/preview` | GET | Get file preview |
 
 ### Settings
@@ -245,10 +245,12 @@ file: <binary>
 Returns:
 ```json
 {
+  "success": true,
   "file_id": "uuid...",
   "filename": "example.png",
   "content_type": "image/png",
-  "size": 12345
+  "size": 12345,
+  "uploaded_at": "2024-01-01T00:00:00Z"
 }
 ```
 
@@ -261,7 +263,7 @@ Sessions are automatically persisted to `~/.efp/workspace/sessions/`.
 ### Session Structure
 ```
 ~/.efp/workspace/sessions/
-├── {session-id}-{hash}.jsonl  # Session conversation history
+├── {session_id}_{hash}.jsonl  # Session conversation history
 └── archive/                   # Archived sessions
 ```
 
