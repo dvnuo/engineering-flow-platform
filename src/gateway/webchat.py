@@ -8,6 +8,7 @@ UNIQUE_MARKER_12345
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -159,45 +160,67 @@ async def api_chat(request: web.Request) -> web.Response:
         
         logger.info(f"[api_chat] Processing message for session: {session_id}")
         
-        # Process attachments from attachments field (new format)
+        # Process attachments from both @file_ references (backward compat) and attachments field
         attached_images = []
-        if attachments and isinstance(attachments, list):
+        
+        # Helper to process a single file_id
+        async def process_file(file_id: str) -> bool:
+            """Process a file_id and add to attached_images if valid. Returns True if processed."""
+            nonlocal attached_images
+            # Only process first image to avoid large payloads
+            if len(attached_images) >= 1:
+                return False
             try:
-                from pathlib import Path
-                metadata_file = Path('~/.efp/workspace/uploads/metadata.json').expanduser()
-                if metadata_file.exists():
-                    # Use asyncio.to_thread for blocking I/O
-                    file_data = await asyncio.to_thread(lambda: json.load(open(metadata_file)))
-                    for file_id in attachments:
-                        # Only process first image to avoid large payloads
-                        if len(attached_images) >= 1:
-                            break
-                        # Try exact match first, then prefix match
-                        meta = file_data.get(file_id)
-                        if not meta:
-                            # Try prefix match
-                            for fid, m in file_data.items():
-                                if fid.startswith(file_id):
-                                    meta = m
-                                    file_id = fid
-                                    break
-                        if meta:
-                            ct = meta.get('content_type', '')
-                            if ct.startswith('image/'):
-                                try:
-                                    import base64
-                                    img_path = Path('~/.efp/workspace/uploads').expanduser() / meta['stored_filename']
-                                    img_data = await asyncio.to_thread(
-                                        lambda: base64.b64encode(open(img_path, 'rb').read()).decode('utf-8')
-                                    )
-                                    ext = ct.split('/')[-1]
-                                    attached_images.append(f'data:image/{ext};base64,{img_data}')
-                                except Exception as e:
-                                    logger.warning(f"[api_chat] Failed to load attachment {file_id}: {e}")
-                    if attached_images and not message.strip():
-                        message = "[image]"
+                from src.utils.file_parser.storage import get_metadata, get_file_path, StoredFileNotFoundError
+                metadata = get_metadata(file_id)
+                # Validate session ownership
+                if metadata.session_id and metadata.session_id != session_id:
+                    logger.warning(f"[api_chat] File {file_id} belongs to different session")
+                    return False
+                # Check if it's an image
+                if metadata.content_type and metadata.content_type.startswith('image/'):
+                    file_path = get_file_path(file_id)
+                    if file_path.exists():
+                        import base64
+                        img_data = await asyncio.to_thread(
+                            lambda: base64.b64encode(open(file_path, 'rb').read()).decode('utf-8')
+                        )
+                        ext = metadata.content_type.split('/')[-1]
+                        attached_images.append(f'data:image/{ext};base64,{img_data}')
+                        return True
+            except StoredFileNotFoundError:
+                logger.warning(f"[api_chat] File {file_id} not found")
             except Exception as e:
-                logger.warning(f"[api_chat] Attachments parse error: {e}")
+                logger.warning(f"[api_chat] Failed to process file {file_id}: {e}")
+            return False
+        
+        # 1. Parse @file_ references from message (backward compatibility)
+        try:
+            refs = re.findall(r'@file_([a-zA-Z0-9]+)', message)
+            for short_id in set(refs):
+                # Try exact match first, then prefix match
+                try:
+                    from src.utils.file_parser.storage import get_metadata
+                    metadata = get_metadata(short_id)
+                    await process_file(metadata.file_id)
+                except StoredFileNotFoundError:
+                    # Try prefix match
+                    from src.utils.file_parser.storage import _file_metadata
+                    for fid in _file_metadata.keys():
+                        if fid.startswith(short_id):
+                            await process_file(fid)
+                            break
+        except Exception as e:
+            logger.warning(f"[api_chat] @file_ parse error: {e}")
+        
+        # 2. Process attachments from new attachments field
+        if attachments and isinstance(attachments, list):
+            for file_id in attachments:
+                await process_file(file_id)
+        
+        # Set placeholder message if only images
+        if attached_images and not message.strip():
+            message = "[image]"
         
         # Revalidate: if no message and no attached images, return error
         if not message.strip() and not attached_images:
