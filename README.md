@@ -18,7 +18,7 @@ Engineering Flow Platform is an AI-powered engineering assistant that orchestrat
 - **AI Chat Interface** - Natural language interaction with the agent
 - **Multi-Channel Integration** - Jira, Confluence, GitHub, Git, Bash
 - **Session Persistence** - Conversations persist across restarts
-- **File Attachments** - Support for images and documents in chat
+- **File Attachments** - Support for images in chat (documents via file-parse)
 - **Settings Panel** - Web-based configuration for LLM and integrations
 
 ---
@@ -36,10 +36,13 @@ Engineering Flow Platform is an AI-powered engineering assistant that orchestrat
 # Install dependencies
 pip install -r requirements.txt
 
-# Copy config template
-cp config.yaml.example config.yaml
+# Create config directory
+mkdir -p ~/.efp
 
-# Edit config.yaml with your settings
+# Copy config template
+cp config.yaml.example ~/.efp/config.yaml
+
+# Edit ~/.efp/config.yaml with your settings
 # Minimum required: LLM api_key
 
 # Start server
@@ -52,11 +55,12 @@ python main.py
 # Default (port 8000)
 python main.py
 
-# Custom port
-PORT=8001 python main.py
+# Custom port (edit config.yaml)
+# server:
+#   port: 8001
 
 # With encrypted config
-EFP_CONFIG_KEY=your-key python main.py
+EFP_CONFIG_KEY="your-secret-passphrase" python main.py
 ```
 
 Access the web UI at `http://localhost:8000/`
@@ -69,7 +73,7 @@ Access the web UI at `http://localhost:8000/`
 
 ```yaml
 llm:
-  provider: "openai"  # openai, github_copilot, anthropic
+  provider: "openai"  # openai, github_copilot, claude, ollama
   api_key: "sk-..."
   model: "gpt-4o"
 ```
@@ -85,7 +89,7 @@ jira:
       url: "https://company.atlassian.net"
       project: "PROJ"
       # Auth: Bearer token, Basic (username+password), or Basic (username+api_token)
-      token: "${JIRA_TOKEN}"
+      token: ""your-jira-api-token"  # Or use encrypted config"
 ```
 
 #### Confluence (Multiple Instances)
@@ -96,14 +100,14 @@ confluence:
     - name: "Wiki"
       url: "https://company.atlassian.net/wiki"
       username: "user@company.com"
-      password: "${CONFLUENCE_PASSWORD}"
+      password: ""your-password"  # Or use encrypted config"
 ```
 
 #### GitHub
 ```yaml
 github:
   enabled: true
-  token: "${GITHUB_TOKEN}"
+  api_token: "ghp_xxxx"  # GitHub personal access token
   repos:
     - "owner/repo1"
     - "owner/repo2"
@@ -129,7 +133,6 @@ llm:
 ```
 engineering-flow-platform/
 ├── main.py                 # Server entry point
-├── config.yaml             # Configuration (not in git)
 ├── config.yaml.example     # Configuration template
 ├── requirements.txt        # Python dependencies
 ├── src/
@@ -154,7 +157,7 @@ engineering-flow-platform/
 │   ├── hooks/              # Lifecycle hooks
 │   └── utils/              # Utilities
 │       └── file_parser/     # File upload & storage
-├── skills/                 # Agent skills (Python packages)
+├── skills/                 # Skill definitions (Markdown + code)
 ├── tests/                  # Test suite
 └── workspace/               # Workspace files (for local dev)
     └── .efp/               # Runtime data
@@ -186,15 +189,17 @@ engineering-flow-platform/
 |----------|--------|-------------|
 | `/api/sessions` | GET | List all sessions |
 | `/api/sessions/{id}` | GET | Load session history |
-| `/api/sessions/{id}` | DELETE | Delete session |
+| `/api/sessions/{id}/clear` | POST | Clear session history |
+| `/api/clear` | POST | Clear all sessions |
 
 ### Files
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/files` | POST | Upload file |
+| `/api/files/upload` | POST | Upload file (multipart) |
+| `/api/files` | GET | List files |
 | `/api/files/{id}` | GET | Download file |
-| `/api/files/{id}/parse` | GET | Parse file content |
+| `/api/files/{id}/parse` | POST | Parse file content |
 | `/api/files/{id}/preview` | GET | Get file preview |
 
 ### Settings
@@ -231,7 +236,7 @@ Only the first image attachment is processed to avoid large payloads.
 ### Uploading Files
 
 ```
-POST /api/files
+POST /api/files/upload
 Content-Type: multipart/form-data
 
 file: <binary>
@@ -256,8 +261,8 @@ Sessions are automatically persisted to `~/.efp/workspace/sessions/`.
 ### Session Structure
 ```
 ~/.efp/workspace/sessions/
-└── {session_id}/
-    └── session.json    # Conversation history
+├── {session-id}-{hash}.jsonl  # Session conversation history
+└── archive/                   # Archived sessions
 ```
 
 ### Configuration
