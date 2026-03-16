@@ -2,7 +2,6 @@
 
 import logging
 import pytest
-from io import StringIO
 
 
 @pytest.fixture(autouse=True)

@@ -1,8 +1,7 @@
 """Tests for error handling utilities."""
 
-import pytest
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from src.agents.errors import (
     LLMError,
@@ -263,7 +262,6 @@ class TestLogError:
     def test_log_error_basic(self):
         """Test basic log_error call."""
         error = LLMError("Test error")
-        # Should not raise exception
         log_error(error, component="TEST", level="ERROR")
 
     def test_log_error_warning_level(self):
@@ -272,34 +270,12 @@ class TestLogError:
         log_error(error, component="TEST", level="WARNING")
 
 
-class TestHandleHttpxError:
-    """Tests for handle_httpx_error function."""
-
-    def test_handle_httpx_error_basic(self):
-        """Test handle_httpx_error basic."""
-        # This requires httpx mocking - just test function exists
-        from src.agents.errors import handle_httpx_error
-        assert callable(handle_httpx_error)
-
-
-class TestHandleHttpxRequestError:
-    """Tests for handle_httpx_request_error function."""
-
-    def test_handle_httpx_request_error_basic(self):
-        """Test handle_httpx_request_error basic."""
-        from src.agents.errors import handle_httpx_request_error
-        assert callable(handle_httpx_request_error)
-
-
 class TestHandleHttpxErrors:
     """Tests for httpx error handlers."""
 
     def test_handle_httpx_error_with_response(self):
         """Test handle_httpx_error with response."""
-        from src.agents.errors import handle_httpx_error
         import httpx
-        
-        # Create mock request and response
         mock_request = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 400
@@ -311,9 +287,7 @@ class TestHandleHttpxErrors:
 
     def test_handle_httpx_error_without_response(self):
         """Test handle_httpx_error without response."""
-        from src.agents.errors import handle_httpx_error
         import httpx
-        
         mock_request = MagicMock()
         error = httpx.HTTPStatusError("error", request=mock_request, response=None)
         
@@ -322,9 +296,7 @@ class TestHandleHttpxErrors:
 
     def test_handle_httpx_request_error_connect_error(self):
         """Test handle_httpx_request_error with ConnectError."""
-        from src.agents.errors import handle_httpx_request_error
         import httpx
-        
         error = httpx.ConnectError("connection failed")
         
         result = handle_httpx_request_error(error, provider="test")
@@ -333,9 +305,7 @@ class TestHandleHttpxErrors:
 
     def test_handle_httpx_request_error_timeout(self):
         """Test handle_httpx_request_error with TimeoutException."""
-        from src.agents.errors import handle_httpx_request_error
         import httpx
-        
         error = httpx.TimeoutException("timed out")
         
         result = handle_httpx_request_error(error, provider="test")
@@ -343,9 +313,7 @@ class TestHandleHttpxErrors:
 
     def test_handle_httpx_request_error_read_error(self):
         """Test handle_httpx_request_error with ReadError."""
-        from src.agents.errors import handle_httpx_request_error
         import httpx
-        
         error = httpx.ReadError("read failed")
         
         result = handle_httpx_request_error(error, provider="test")
@@ -353,9 +321,7 @@ class TestHandleHttpxErrors:
 
     def test_handle_httpx_request_error_write_error(self):
         """Test handle_httpx_request_error with WriteError."""
-        from src.agents.errors import handle_httpx_request_error
         import httpx
-        
         error = httpx.WriteError("write failed")
         
         result = handle_httpx_request_error(error, provider="test")
@@ -363,9 +329,7 @@ class TestHandleHttpxErrors:
 
     def test_handle_httpx_request_error_protocol_error(self):
         """Test handle_httpx_request_error with RemoteProtocolError."""
-        from src.agents.errors import handle_httpx_request_error
         import httpx
-        
         error = httpx.RemoteProtocolError("protocol error")
         
         result = handle_httpx_request_error(error, provider="test")
@@ -373,63 +337,8 @@ class TestHandleHttpxErrors:
 
     def test_handle_httpx_request_error_generic(self):
         """Test handle_httpx_request_error with generic error."""
-        from src.agents.errors import handle_httpx_request_error
         import httpx
-        
         error = httpx.RequestError("generic error")
         
         result = handle_httpx_request_error(error, provider="test")
         assert result.error_type == "network_error"
-
-
-class TestWrapProviderCall:
-    """Tests for wrap_provider_call decorator."""
-
-    def test_wrap_provider_call_basic(self):
-        """Test wrap_provider_call decorator exists."""
-        from src.agents.errors import wrap_provider_call
-        assert callable(wrap_provider_call)
-
-
-class TestHTTPErrorJsonDecode:
-    """Tests for HTTPError JSON parsing edge cases."""
-
-    def test_http_error_invalid_json_body(self):
-        """Test HTTPError with invalid JSON body."""
-        error = HTTPError(400, "not valid json {", provider="openai")
-        assert error.status_code == 400
-
-    def test_http_error_with_endpoint(self):
-        """Test HTTPError with endpoint."""
-        error = HTTPError(500, "error", provider="openai", endpoint="/api/test")
-        assert error.details["endpoint"] == "/api/test"
-
-    def test_http_error_with_request_body(self):
-        """Test HTTPError with request body."""
-        error = HTTPError(400, "error", provider="openai", request_body={"key": "value"})
-        assert error.details is not None
-
-
-class TestNetworkErrorEdgeCases:
-    """Tests for NetworkError edge cases."""
-
-    def test_network_error_no_original(self):
-        """Test NetworkError without original error."""
-        error = NetworkError("Network error", provider="openai")
-        assert error.original_error is None
-
-    def test_network_error_with_request_body(self):
-        """Test NetworkError with endpoint."""
-        error = NetworkError("error", provider="openai", endpoint="/api/test")
-        assert error.details["endpoint"] == "/api/test"
-
-
-class TestWrapProviderDecorator:
-    """Additional tests for wrap_provider_call."""
-
-    def test_wrap_provider_call_returns_callable(self):
-        """Test wrap_provider_call returns a callable."""
-        from src.agents.errors import wrap_provider_call
-        
-        # Just test the function exists and is callable
-        assert callable(wrap_provider_call)

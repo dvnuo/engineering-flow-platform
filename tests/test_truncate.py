@@ -1,6 +1,6 @@
 """Tests for truncate utilities."""
 
-import pytest
+# unused: import pytest
 
 from src.utils.truncate import (
     truncate,

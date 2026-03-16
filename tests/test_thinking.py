@@ -1,6 +1,5 @@
 """Tests for thinking module."""
 
-import pytest
 
 from src.agents.thinking import (
     ThinkLevel,
@@ -28,8 +27,7 @@ class TestThinkLevel:
         assert ThinkLevel.LOW.value == "low"
 
     def test_think_level_comparison(self):
-        """Test ThinkLevel comparison works."""
-        # Enum comparison works with is_
+        """Test ThinkLevel enum values are distinct."""
         assert ThinkLevel.LOW is not ThinkLevel.OFF
 
 
