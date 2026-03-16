@@ -143,6 +143,21 @@ def get_metadata(file_id: str) -> FileMetadata:
     return _file_metadata[file_id]
 
 
+def find_file_by_prefix(prefix: str) -> Optional[str]:
+    """Find a file ID by prefix.
+    
+    Args:
+        prefix: Partial file ID prefix
+        
+    Returns:
+        Full file_id if found, None otherwise
+    """
+    for fid in _file_metadata.keys():
+        if fid.startswith(prefix):
+            return fid
+    return None
+
+
 def list_files(session_id: Optional[str] = None) -> list:
     """List files, optionally filtered by session.
     

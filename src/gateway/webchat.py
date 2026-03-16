@@ -168,8 +168,8 @@ async def api_chat(request: web.Request) -> web.Response:
             """Process a file_id and add to attached_images if valid. Returns True if processed."""
             nonlocal attached_images
             # Only process first image to avoid large payloads
-            if len(attached_images) >= 1:
-                return False
+            if attached_images:
+                return True
             try:
                 from src.utils.file_parser.storage import get_metadata, get_file_path, StoredFileNotFoundError
                 metadata = get_metadata(file_id)
@@ -183,7 +183,7 @@ async def api_chat(request: web.Request) -> web.Response:
                     if file_path.exists():
                         import base64
                         img_data = await asyncio.to_thread(
-                            lambda: base64.b64encode(open(file_path, 'rb').read()).decode('utf-8')
+                            lambda: base64.b64encode(file_path.read_bytes()).decode('utf-8')
                         )
                         ext = metadata.content_type.split('/')[-1]
                         attached_images.append(f'data:image/{ext};base64,{img_data}')
@@ -202,14 +202,14 @@ async def api_chat(request: web.Request) -> web.Response:
                 try:
                     from src.utils.file_parser.storage import get_metadata
                     metadata = get_metadata(short_id)
-                    await process_file(metadata.file_id)
+                    if await process_file(metadata.file_id):
+                        break  # Stop after first image
                 except StoredFileNotFoundError:
-                    # Try prefix match
-                    from src.utils.file_parser.storage import _file_metadata
-                    for fid in _file_metadata.keys():
-                        if fid.startswith(short_id):
-                            await process_file(fid)
-                            break
+                    # Try prefix match using public helper
+                    from src.utils.file_parser.storage import find_file_by_prefix
+                    fid = find_file_by_prefix(short_id)
+                    if fid:
+                        await process_file(fid)
         except Exception as e:
             logger.warning(f"[api_chat] @file_ parse error: {e}")
         
