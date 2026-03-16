@@ -1,8 +1,7 @@
 # Engineering Flow Platform
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![pytest](https://img.shields.io/badge/pytest-76%20tests-green.svg)](tests/)
-[![MIT License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
 ## ⚠️ Research Use Only
 
@@ -10,213 +9,17 @@
 
 ---
 
-## About Engineering Flow Platform
+## About
 
-Engineering Flow Platform is an agentic platform designed to improve software delivery flow by reducing waiting time, orchestrating asynchronous workflows, and enabling intent-driven product engineering across the SDLC.
+Engineering Flow Platform is an AI-powered engineering assistant that orchestrates workflows across the SDLC. It integrates with Jira, Confluence, GitHub, and more to automate and accelerate engineering tasks.
 
-It is not a coding assistant or a standalone AI tool, but a platform capability that reshapes how engineering work progresses when humans are offline.
+### Core Capabilities
 
-### Why Engineering Flow Platform?
-
-Traditional developer productivity efforts focus on helping individuals work faster — writing code quicker, fixing bugs sooner, or generating documentation automatically.
-
-However, in modern software delivery, the primary bottleneck is not how fast developers work, but how long work items spend waiting across the SDLC.
-
-Engineering Flow Platform is built on a different premise:
-
-> **Productivity is a flow problem, not a speed problem.**
-
----
-
-## Core Principles
-
-### 1. Flow First
-The platform optimizes for flow efficiency rather than individual efficiency.
-
-- Focus on lead time and cycle time
-- Reduce waiting, handoffs, and coordination delays
-- Treat SDLC as a value stream, not a task list
-
-### 2. Intent Over Instructions
-Humans declare intent; the platform determines execution.
-
-Instead of specifying step-by-step instructions, users describe:
-- The desired outcome
-- Constraints and risk tolerance
-- Required approval or oversight
-
-The platform translates intent into executable workflows.
-
-### 3. Asynchronous by Default
-Engineering work should continue even when no one is online.
-
-- Agents operate asynchronously
-- Workflows are event-driven and long-running
-- Humans review outcomes instead of driving execution
-
-### 4. Platform, Not Bots
-Engineering Flow Platform is not a collection of independent bots.
-
-It provides:
-- Central orchestration
-- Shared context and memory
-- Unified governance and auditability
-- Consistent interaction surfaces
-
-### 5. Governance-Embedded Autonomy
-Autonomy is introduced gradually and safely.
-
-- Role-based access control
-- Auditable actions and decisions
-- Human-in-the-loop checkpoints
-- Explicit escalation and rollback paths
-
----
-
-## What Is an Engineering Flow?
-
-An engineering flow represents a unit of work moving through the SDLC — from intent to outcome.
-
-Examples include:
-- Release failure analysis
-- Dependency or framework migration
-- Backlog refinement and impact analysis
-- CI/CD quality triage
-- Incident root cause investigation
-
-Each flow:
-- Is goal-oriented
-- May span multiple tools and systems
-- Advances state asynchronously
-- Produces verifiable outcomes
-
----
-
-## High-Level Architecture
-
-Engineering Flow Platform is composed of five logical layers:
-
-### 1. Intent Layer
-The single entry point for human interaction.
-
-Users express what they want to achieve, not how to achieve it.
-
-### 2. Flow Orchestration Layer
-The core engine of the platform.
-
-- Decomposes intent into flow steps
-- Coordinates task-specific agents
-- Tracks state, dependencies, and progress
-- Manages retries, failures, and rollbacks
-
-### 3. Asynchronous Execution Layer
-Enables long-running, event-driven workflows.
-
-- Agents operate independently of human presence
-- Execution continues across time boundaries
-- Supports delegation followed by review
-
-### 4. Context and Control Layer
-Provides the foundation for safe and effective agent execution.
-
-Includes:
-- Tool integrations (e.g. Git, CI/CD, issue tracking, cloud)
-- Knowledge sources (documentation, runbooks, repositories)
-- Standards and policies
-- Historical memory and decision traces
-- Governance and guardrails
-
-### 5. Interaction Surfaces
-Agents operate where work already happens.
-
-Supported surfaces may include:
-- CLI and API
-- Issue and documentation systems
-- Chat and collaboration tools
-- Developer portals
-
----
-
-## Project Structure
-
-A modular, agentic platform with clear separation between skill declarations and implementation:
-
-```
-engineering-flow/
-├── skills/                    # 🎯 Skill Declarations (.md files)
-│   ├── review-pr.md           # Single-file skills
-│   ├── skill_creator/
-│   │   └── skill.md
-│   └── test_case_generator/
-│       └── skill.md
-│
-├── main.py                    # Entry point
-├── __init__.py               # Package exports
-│
-└── src/                       # 🤖 All Implementation Code 
-    ├── agents/                # Agent core + skill execution
-    │   ├── executor.py        # SkillsExecutor, execute_skill()
-    │   ├── subagent.py        # SubAgent spawning & management
-    │   ├── subagent_schemas.py
-    │   ├── core.py           # Agent with ReAct pattern
-    │   ├── llm.py           # LLM client
-    │   ├── heartbeat.py      # Periodic background checks
-    │   ├── memory.py        # Memory system
-    │   ├── model_fallback.py # Model fallback logic
-    │   ├── queue.py         # Message queue
-    │   ├── thinking.py      # Thinking levels
-    │   └── compaction.py     # Context compaction
-    │
-    ├── channels/             # Channel adapters
-    │   ├── discord.py
- github.py
-       │   ├── │   ├── jira.py
-    │   └── confluence.py
-    │
-    ├── cron/                 # Scheduled tasks
-    │   └── mention_poller.py
-    │
-    ├── gateway/              # Web API server
-    │   ├── server.py
-    │   └── webchat.py
-    │
-    ├── memory/               # Memory storage (LightweightMemory)
-    │   ├── __init__.py
-    │   └── lightweight.py
-    │
-    ├── sessions/             # Session management
-    │   └── manager.py
-    │
-    ├── git/                 # Git tool
-    ├── github/              # GitHub tool
-    ├── jira/                # Jira tool
-    ├── confluence/           # Confluence tool
-    ├── skill_creator/        # Skill creation tool
-    │   └── scripts/
-    ├── config.py            # Configuration
-    └── utils/               # Utilities
-        └── logger.py
-```
-
-### Architecture Principles
-
-1. **skills/** - Declarative skill definitions (.md files with YAML frontmatter)
-2. **src/** - All implementation code 
-3. **main.py** and **__init__.py** at root for easy execution
-4. Skills follow naming: `skills/*.md` or `skills/*/skill.md`
-
-## Features
-
-- **Modular Architecture** - Clean separation of concerns
-- **Declarative Skills** - Skills defined as .md files with YAML frontmatter
-- **Tool Integration** - Git, GitHub, Jira, Confluence support
-- **SubAgent System** - Spawn and manage sub-agent sessions
-- **Session Management** - Persistent conversation context
-- **Memory System** - Load context from workspace files
-- **Heartbeat** - Periodic background checks
-- **Extensible** - Easy to add new channels or tools
-- **Shell Tools** - File operations and secure command execution
-- **WebChat UI** - Full-featured chat interface at `/`
+- **AI Chat Interface** - Natural language interaction with the agent
+- **Multi-Channel Integration** - Jira, Confluence, GitHub, Git, Bash
+- **Session Persistence** - Conversations persist across restarts
+- **File Attachments** - Support for images and documents in chat
+- **Settings Panel** - Web-based configuration for LLM and integrations
 
 ---
 
@@ -224,239 +27,272 @@ engineering-flow/
 
 ### Prerequisites
 
-- Docker and Docker Compose
-- Git
+- Python 3.11+
+- API keys for LLM provider (OpenAI, GitHub Copilot, or Anthropic)
 
-### Running with Docker
-
-```bash
-# Clone and setup
-git clone https://github.com/dvnuo/engineering-flow-platform.git
-cd engineering-flow-platform
-
-# Start with Docker Compose
-docker-compose up -d
-```
-
-### Local Development
+### Setup
 
 ```bash
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
 # Install dependencies
 pip install -r requirements.txt
 
-# Run tests
-pytest tests/ -v
+# Copy config template
+cp config.yaml.example config.yaml
+
+# Edit config.yaml with your settings
+# Minimum required: LLM api_key
+
+# Start server
+python main.py
 ```
 
----
+### Server Options
 
-## Adding New Skills
+```bash
+# Default (port 8000)
+python main.py
 
-### 1. Create Skill Declaration
+# Custom port
+PORT=8001 python main.py
 
-Create `skills/my_skill/skill.md`:
-
-```yaml
----
-name: my-skill
-description: "Description of what my skill does"
-triggers:
-  - /my-skill
-tools:
-  - my_tool
-strategy:
-  - "Step 1: Do something"
-  - "Step 2: Do something else"
-output_format: markdown
----
-
-# My Skill
-
-Describe the skill here...
-
-### Usage
-
-How to use this skill...
+# With encrypted config
+EFP_CONFIG_KEY=your-key python main.py
 ```
 
-### 2. Create Tool Implementation
-
-Add tool to `src/my_skill/__init__.py`:
-
-```python
-from src import ToolResult
-
-async def my_tool(param: str) -> ToolResult:
-    """Tool implementation."""
-    return ToolResult(success=True, content="Result")
-```
-
-### 3. Register Tool
-
-Export from `src/__init__.py` if needed.
-
----
-
-## Module Documentation
-
-| Module | Path | Description |
-|--------|------|-------------|
-| **Agent** | `src/agents/` | Agent core logic, heartbeat |
-| **Channel** | `src/channels/` | Multi-channel adapters |
-| **Skills** | `skills/` | Skill framework (.md files) |
-| **Src** | `src/` | Tool implementations, executor |
-| **Tests** | `tests/` | Test suite |
-| **Cron** | `src/cron/` | Scheduled task scheduler |
-| **Gateway** | `src/gateway/` | Web API server, WebChat UI |
-| **Memory** | `src/memory/` | Persistent memory storage |
-| **Session** | `src/sessions/` | Session lifecycle management |
-
-## Available Skills
-
-| Skill | Type | Description |
-|-------|------|-------------|
-| `review-pr` | Single file | Review GitHub pull requests |
-| `skill-creator` | Directory | Create and manage skills |
-| `test-case-generator` | Directory | Generate test cases from requirements |
+Access the web UI at `http://localhost:8000/`
 
 ---
 
 ## Configuration
 
-Edit `config.yaml`:
+### LLM Providers
 
 ```yaml
-discord:
-  bot_token: "${DISCORD_BOT_TOKEN}"
-  channel_id: "${DISCORD_CHANNEL_ID}"
-
 llm:
-  provider: "openai"
-  api_key: "${LLM_API_KEY}"
-  model: "gpt-3.5-turbo"
+  provider: "openai"  # openai, github_copilot, anthropic
+  api_key: "sk-..."
+  model: "gpt-4o"
+```
 
-server:
-  host: "0.0.0.0"
-  port: 8000
+### Integrations
+
+#### Jira (Multiple Instances)
+```yaml
+jira:
+  enabled: true
+  instances:
+    - name: "Production"
+      url: "https://company.atlassian.net"
+      project: "PROJ"
+      # Auth: Bearer token, Basic (username+password), or Basic (username+api_token)
+      token: "${JIRA_TOKEN}"
+```
+
+#### Confluence (Multiple Instances)
+```yaml
+confluence:
+  enabled: true
+  instances:
+    - name: "Wiki"
+      url: "https://company.atlassian.net/wiki"
+      username: "user@company.com"
+      password: "${CONFLUENCE_PASSWORD}"
+```
+
+#### GitHub
+```yaml
+github:
+  enabled: true
+  token: "${GITHUB_TOKEN}"
+  repos:
+    - "owner/repo1"
+    - "owner/repo2"
+```
+
+### Encryption
+
+Sensitive values can be encrypted:
+
+```bash
+# Set encryption key via environment
+export EFP_CONFIG_KEY="your-32-byte-key"
+
+# Use encrypted values in config
+llm:
+  api_key: "ENC:base64encryptedvalue..."
 ```
 
 ---
 
-## Shell Tools (bash_tools)
+## Project Structure
 
-The platform includes shell tools for secure command execution.
-
-### Available Tools
-
-| Tool | Description |
-|------|-------------|
-| `discover_commands` | Discover available commands on the system |
-| `run_command` | Execute shell commands with security controls |
-
-### Security Features
-
-The tools have built-in security:
-
-- Working directory limited to `~/.efp/workspace`
-- Dangerous commands blocked (rm, sudo, bash, etc.)
-- Shell wrapper execution blocked
-- Output size limited to 200KB
-- Environment PATH override blocked
-
-### Usage
-
-```python
-# Discover available commands
-result = await discover_commands(prefix="git")
-
-# Run a command
-result = await run_command(cmd="ls", args=["-la"])
 ```
-
-See `src/bash_tools/README.md` for more details.
-    - "tail"
-    - "tr"
-    - "wc"
-
-  # Command allowlist patterns
-  allowlist:
-    - "/usr/bin/git"
-    - "/usr/bin/ls"
+engineering-flow-platform/
+├── main.py                 # Server entry point
+├── config.yaml             # Configuration (not in git)
+├── config.yaml.example     # Configuration template
+├── requirements.txt        # Python dependencies
+├── src/
+│   ├── agents/             # Agent core logic
+│   │   ├── core.py          # Main agent loop
+│   │   ├── llm.py          # LLM client
+│   │   ├── executor.py     # Tool execution
+│   │   └── memory.py       # Agent memory
+│   ├── gateway/            # HTTP server & WebChat
+│   │   ├── server.py        # aiohttp server
+│   │   ├── webchat.py       # Chat API & UI
+│   │   ├── static/          # Web assets
+│   │   └── templates/       # HTML templates
+│   ├── channels/           # Channel adapters
+│   ├── jira/               # Jira integration
+│   ├── confluence/         # Confluence integration
+│   ├── github/             # GitHub integration
+│   ├── git/                # Git tools
+│   ├── memory/             # Memory system
+│   ├── sessions/           # Session persistence
+│   ├── tools/              # Built-in tools
+│   ├── hooks/              # Lifecycle hooks
+│   └── utils/              # Utilities
+│       └── file_parser/     # File upload & storage
+├── skills/                 # Agent skills (Python packages)
+├── tests/                  # Test suite
+└── workspace/               # Workspace files (for local dev)
+    └── .efp/               # Runtime data
 ```
-
-### Dangerous Environment Variables
-
-The following environment variables are blocked by default:
-
-- `LD_PRELOAD`, `LD_LIBRARY_PATH` - Library injection
-- `NODE_OPTIONS`, `NODE_PATH` - Node.js code injection
-- `PYTHONPATH`, `PYTHONHOME` - Python code injection
-- `BASH_ENV`, `ENV` - Shell execution injection
-- Custom `PATH` - Binary hijacking prevention
 
 ---
 
-## WebChat UI
+## API Endpoints
 
-The platform includes a full-featured web interface for interacting with the agent.
+### Chat
 
-### Access
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/chat` | POST | Send message to agent |
+| `/api/chat/stream` | POST | Streaming chat response |
 
-- **WebChat**: `http://localhost:8000/` (root URL)
+**Chat Request:**
+```json
+{
+  "message": "What are the open Jira tickets?",
+  "session_id": "optional-session-id",
+  "attachments": ["file_id1", "file_id2"]  // Optional file attachments
+}
+```
 
-### Features
+### Sessions
 
-- **Chat Interface** - Send messages and view responses
-- **Session History** - Persisted conversation context
-- **Skills Panel** - Browse available skills
-- **Thinking Process** - View agent's reasoning steps (expandable)
-- **File Explorer** - Browse workspace files
-- **Settings** - Configure LLM, integrations, and preferences
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/sessions` | GET | List all sessions |
+| `/api/sessions/{id}` | GET | Load session history |
+| `/api/sessions/{id}` | DELETE | Delete session |
 
-### API Endpoints
+### Files
 
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/` | GET | WebChat UI |
-| `/api/chat` | POST | Send message |
-| `/api/sessions` | GET | List sessions |
-| `/api/sessions/{id}` | GET | Load session |
-| `/api/skills` | GET | List skills |
-| `/api/events` | WS | Real-time events (WebSocket) |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/files` | POST | Upload file |
+| `/api/files/{id}` | GET | Download file |
+| `/api/files/{id}/parse` | GET | Parse file content |
+| `/api/files/{id}/preview` | GET | Get file preview |
+
+### Settings
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/config` | GET | Get current config |
+| `/api/config/save` | POST | Save config |
+| `/api/git-info` | GET | Git repository info |
+
+---
+
+## Chat Attachments
+
+### Sending Attachments
+
+The chat API supports file attachments in two ways:
+
+1. **New format** (recommended): Send `attachments` array in JSON body
+   ```json
+   {
+     "message": "Analyze this image",
+     "attachments": ["file_id1", "file_id2"]
+   }
+   ```
+
+2. **Legacy format**: Include `@file_<id>` in message text
+   ```
+   What is in @file_abc12345?
+   ```
+
+Only the first image attachment is processed to avoid large payloads.
+
+### Uploading Files
+
+```
+POST /api/files
+Content-Type: multipart/form-data
+
+file: <binary>
+```
+
+Returns:
+```json
+{
+  "file_id": "uuid...",
+  "filename": "example.png",
+  "content_type": "image/png",
+  "size": 12345
+}
+```
+
+---
+
+## Session Management
+
+Sessions are automatically persisted to `~/.efp/workspace/sessions/`.
+
+### Session Structure
+```
+~/.efp/workspace/sessions/
+└── {session_id}/
+    └── session.json    # Conversation history
+```
+
+### Configuration
+```yaml
+session:
+  max_history: 5        # Turns to keep in context
+  max_iterations: 30    # Max tool calls per turn
+  persistence:
+    enabled: true
+    storage_dir: "~/.efp/workspace/sessions"
+    ttl_seconds: 2592000  # 30 days
+```
 
 ---
 
 ## Memory System
 
-Workspace files loaded from `~/.efp/workspace/`:
+### Workspace Files
 
-```
-~/.efp/workspace/
-├── SOUL.md        # Agent persona
-├── USER.md        # User preferences
-├── AGENTS.md      # Workspace conventions
-├── TOOLS.md       # Tool configurations
-├── MEMORY.md      # Long-term memory (consolidated from daily memories)
-└── memory/
-    └── YYYY-MM-DD.md  # Daily memory files
-```
+Located at `~/.efp/workspace/`:
 
-### Memory Generation Logic
+| File | Purpose |
+|------|---------|
+| `SOUL.md` | Agent persona and behavior |
+| `USER.md` | User preferences |
+| `AGENTS.md` | Workspace conventions |
+| `TOOLS.md` | Tool configurations |
+| `MEMORY.md` | Long-term memory |
+| `memory/YYYY-MM-DD.md` | Daily memory |
 
-- **Startup**: On server start, daily memory files are generated from session events (including today)
-- **Periodic Check**: Every 1 hour, checks if session files have changed; if so, regenerates today's daily memory
-- **Daily Memory**: Generated from session events in `.sessions/` directory
-- **Long-term Memory**: Consolidates last 3 days of daily memory with existing MEMORY.md
+### Memory Generation
 
-```
-Trigger: Server startup (async background task)
-  └── ensure_daily_memories() → generates daily memory files
-       └── update_long_term_memory_from_daily() → consolidates to MEMORY.md
-```
+- **Startup**: Generates daily memory from session events
+- **Hourly**: Checks for changes, regenerates if needed
+- **Long-term**: Consolidates last 3 days to MEMORY.md
 
 ---
 
@@ -470,15 +306,43 @@ pytest tests/ -v
 
 ### Adding Tests
 
-Create test files in `tests/` directory following the pattern `test_*.py`.
+Create test files in `tests/` following `test_*.py` pattern.
+
+### Code Style
+
+- Follow existing code style in the project
+- Use type hints where helpful
+- Add docstrings for public APIs
+
+### Adding New Integrations
+
+1. Create module in `src/{integration}/`
+2. Implement API client
+3. Add config schema to `config.py`
+4. Add tools in `src/tools/`
+5. Document in README
 
 ---
 
-## Status
+## Troubleshooting
 
-This project is under active development.
+### Server Won't Start
 
-The initial focus is on high-value, low-risk internal engineering workflows where asynchronous execution and governance-aware autonomy provide immediate benefits.
+1. Check config.yaml exists and has valid YAML
+2. Verify LLM api_key is set
+3. Check port is not in use: `lsof -i :8000`
+
+### Chat Not Working
+
+1. Check LLM configuration is correct
+2. Verify API key has sufficient credits
+3. Check server logs for errors
+
+### File Upload Fails
+
+1. Ensure upload directory exists: `~/.efp/workspace/uploads/`
+2. Check file size limits
+3. Verify file type is allowed
 
 ---
 
@@ -488,15 +352,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-## Vision
+## Support
 
-Engineering Flow Platform represents a step toward a zero-friction SDLC, where:
-
-- Humans specify intent
-- Agents execute and observe
-- Systems govern and learn
-- Engineering flow never stops
-
----
-
-**⚠️ This project is for research purposes only. Not for production use.**
+- Issues: https://github.com/dvnuo/engineering-flow-platform/issues
+- Discussions: https://github.com/dvnuo/engineering-flow-platform/discussions
