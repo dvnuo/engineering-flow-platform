@@ -267,6 +267,7 @@ async def api_chat(request: web.Request) -> web.Response:
             track_usage=True,
             reasoning_replay=reasoning_replay,
             attached_images=attached_images if attached_images else None,
+            attachments=attachments if attachments else None,
         )
         
         # Force save session to persistence
