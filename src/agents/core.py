@@ -226,10 +226,8 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Add user message to history (with attachments if any)
         extra = {}
-        if attached_images:
-            extra["attached_images"] = attached_images
         if attachments:
-            extra["attachments"] = attachments
+            extra["attachments"] = attachments  # Save file IDs, not base64
         await session_manager.add_message(
             session_id, "user", message,
             extra=extra if extra else None
