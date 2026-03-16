@@ -11,6 +11,9 @@ from src.utils.logger import (
     get_structured_logger,
     setup_logging,
     LogContext,
+    quick_setup,
+    DEFAULT_FORMAT,
+    STRUCTURED_FORMAT,
 )
 
 
@@ -42,6 +45,59 @@ class TestEnhancedLogger:
         assert isinstance(logger, EnhancedLogger)
         assert logger.name == "test_module"
 
+    def test_debug_method(self):
+        """Test debug method."""
+        logger = EnhancedLogger("test", logging.getLogger("test_debug"))
+        logger.debug("debug message")
+
+    def test_info_method(self):
+        """Test info method."""
+        logger = EnhancedLogger("test", logging.getLogger("test_info"))
+        logger.info("info message")
+
+    def test_warning_method(self):
+        """Test warning method."""
+        logger = EnhancedLogger("test", logging.getLogger("test_warning"))
+        logger.warning("warning message")
+
+    def test_error_method(self):
+        """Test error method."""
+        logger = EnhancedLogger("test", logging.getLogger("test_error"))
+        logger.error("error message")
+
+    def test_critical_method(self):
+        """Test critical method."""
+        logger = EnhancedLogger("test", logging.getLogger("test_critical"))
+        logger.critical("critical message")
+
+    def test_exception_method(self):
+        """Test exception method."""
+        logger = EnhancedLogger("test", logging.getLogger("test_exception"))
+        try:
+            raise ValueError("test")
+        except ValueError:
+            logger.exception("exception message")
+
+    def test_log_call_without_args(self):
+        """Test log_call without arguments."""
+        logger = EnhancedLogger("test", logging.getLogger("test_log_call"))
+        logger.log_call("test_function")
+
+    def test_log_call_with_args(self):
+        """Test log_call with arguments."""
+        logger = EnhancedLogger("test", logging.getLogger("test_log_call"))
+        logger.log_call("test_function", args=("a", "b"), kwargs={"key": "value"})
+
+    def test_log_result_success(self):
+        """Test log_result with success."""
+        logger = EnhancedLogger("test", logging.getLogger("test_result"))
+        logger.log_result("test_function", result="success")
+
+    def test_log_result_error(self):
+        """Test log_result with error."""
+        logger = EnhancedLogger("test", logging.getLogger("test_result"))
+        logger.log_result("test_function", error="failed")
+
 
 class TestStructuredLogger:
     """Tests for StructuredLogger class."""
@@ -61,6 +117,38 @@ class TestStructuredLogger:
         
         assert "test message" in caplog.text
 
+    def test_structured_logger_warning(self, caplog):
+        """Test structured logger warning level."""
+        test_logger = logging.getLogger("test_structured_warn")
+        structured = StructuredLogger("test_structured_warn", test_logger)
+        
+        with caplog.at_level(logging.WARNING):
+            structured.warning("warning message")
+        
+        assert "warning message" in caplog.text
+
+    def test_structured_logger_error(self, caplog):
+        """Test structured logger error level."""
+        test_logger = logging.getLogger("test_structured_err")
+        structured = StructuredLogger("test_structured_err", test_logger)
+        
+        with caplog.at_level(logging.ERROR):
+            structured.error("error message")
+        
+        assert "error message" in caplog.text
+
+    def test_structured_logger_debug(self):
+        """Test structured logger debug level."""
+        test_logger = logging.getLogger("test_structured_debug")
+        structured = StructuredLogger("test_structured_debug", test_logger)
+        structured.debug("debug message")
+
+    def test_structured_logger_critical(self):
+        """Test structured logger critical level."""
+        test_logger = logging.getLogger("test_structured_crit")
+        structured = StructuredLogger("test_structured_crit", test_logger)
+        structured.critical("critical message")
+
 
 class TestLogContext:
     """Tests for LogContext class."""
@@ -78,6 +166,19 @@ class TestLogContext:
         result = ctx._format_message("test message")
         assert "test message" in result
         assert "user_id=123" in result
+
+    def test_log_context_enter(self):
+        """Test LogContext enter."""
+        logger = EnhancedLogger("test")
+        ctx = LogContext(logger, user_id="123")
+        result = ctx.__enter__()
+        assert result == ctx
+
+    def test_log_context_exit(self):
+        """Test LogContext exit."""
+        logger = EnhancedLogger("test")
+        ctx = LogContext(logger, user_id="123")
+        ctx.__exit__(None, None, None)
 
 
 class TestSetupLogging:
@@ -128,3 +229,54 @@ class TestSetupLogging:
             console=False,
         )
         assert logger.level == logging.INFO
+
+    def test_setup_logging_debug_level(self, tmp_path):
+        """Test logging with DEBUG level."""
+        log_dir = tmp_path / "logs"
+        logger = setup_logging(
+            level="DEBUG",
+            log_dir=str(log_dir),
+            log_file="test.log",
+            console=False,
+        )
+        assert logger.level == logging.DEBUG
+
+    def test_setup_logging_warning_level(self, tmp_path):
+        """Test logging with WARNING level."""
+        log_dir = tmp_path / "logs"
+        logger = setup_logging(
+            level="WARNING",
+            log_dir=str(log_dir),
+            log_file="test.log",
+            console=False,
+        )
+        assert logger.level == logging.WARNING
+
+
+class TestQuickSetup:
+    """Tests for quick_setup function."""
+
+    def test_quick_setup_basic(self, tmp_path):
+        """Test quick_setup basic."""
+        import os
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            logger = quick_setup("INFO")
+            assert logger.level == logging.INFO
+        finally:
+            os.chdir(old_cwd)
+
+
+class TestConstants:
+    """Tests for module constants."""
+
+    def test_default_format(self):
+        """Test DEFAULT_FORMAT constant."""
+        assert isinstance(DEFAULT_FORMAT, str)
+        assert "%(asctime)s" in DEFAULT_FORMAT
+
+    def test_structured_format(self):
+        """Test STRUCTURED_FORMAT constant."""
+        assert isinstance(STRUCTURED_FORMAT, str)
+        assert "%(asctime)s" in STRUCTURED_FORMAT
