@@ -12,6 +12,7 @@ from aiohttp import web
 from aiohttp.web import Request
 
 import os
+import re
 import hashlib
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -203,7 +204,16 @@ class Gateway:
                     repo_url = result.stdout.strip()
             except Exception:
                 pass
-        
+
+        def clean_repo_url(url: str) -> str:
+            """Remove username, password, and port from a git repo URL."""
+            if not url: return url
+            url = re.sub(r"^https?://[^@]+@", "https://", url)
+            url = re.sub(r"(https?://[^/:]+):\d+", r"\1", url)
+            return url  # clean repo_url repo_url = clean_repo_url(repo_url)
+
+        # clean repo url
+        repo_url = clean_repo_url(repo_url)
         return web.json_response({
             "commit_id": commit_id,
             "repo_url": repo_url,
