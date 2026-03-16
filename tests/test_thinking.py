@@ -118,11 +118,10 @@ class TestNormalizeThinkLevel:
         assert normalize_think_level("  off  ") == ThinkLevel.OFF
         assert normalize_think_level("  low  ") == ThinkLevel.LOW
 
-    def test_normalize_invalid_returns_none_or_fallback(self):
-        """Test invalid values."""
+    def test_normalize_invalid_returns_none(self):
+        """Test invalid values return None."""
         result = normalize_think_level("invalid_level")
-        # Based on implementation, invalid values may return None or LOW
-        assert result is None or result == ThinkLevel.LOW
+        assert result is None
 
 
 class TestXHighModels:
@@ -145,9 +144,9 @@ class TestXHighModels:
             assert " " not in ref
 
 
+@pytest.mark.skip(reason="get_think_level_for_model does not exist in thinking.py")
 def test_get_think_level_for_model():
     """Test get_think_level_for_model function."""
-    # Function may not exist - skip test
     pass
 
 
