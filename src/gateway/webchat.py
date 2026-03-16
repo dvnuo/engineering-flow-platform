@@ -130,7 +130,7 @@ async def api_chat(request: web.Request) -> web.Response:
     """Handle chat API requests.
     
     POST /api/chat
-    Body: {"message": "...", "session_id": "optional", "reasoning_replay": false}
+    Body: {"message": "...", "session_id": "optional", "attachments": ["file_id1", "file_id2"]}
     """
     try:
         data = await request.json()
@@ -142,7 +142,11 @@ async def api_chat(request: web.Request) -> web.Response:
         # Get reasoning_replay setting
         reasoning_replay = data.get('reasoning_replay', None)
         
-        if not message:
+        # Get attachments from new field
+        attachments = data.get('attachments', [])
+        logger.info(f"[api_chat] DEBUG: full request data: {data}")
+        
+        if not message and not attachments:
             return web.json_response({'error': 'Empty message'}, status=400)
         
         # Check if LLM is configured before processing
@@ -150,7 +154,7 @@ async def api_chat(request: web.Request) -> web.Response:
         if not api_key:
             return web.json_response({
                 'error': 'LLM not configured',
-                'message': 'Please configure LLM API key in Settings to use the chat feature.',
+                'message': 'Please configure LLM API Key in Settings to use the chat feature.',
                 'code': 'llm_not_configured'
             }, status=503)
         
@@ -186,6 +190,49 @@ async def api_chat(request: web.Request) -> web.Response:
                 message = message.strip() if message.strip() else "[image]"
         except Exception as e:
             logger.warning(f"[api_chat] File ref parse error: {e}")
+        
+        # Also process attachments from new attachments field
+        if attachments and isinstance(attachments, list):
+            try:
+                from pathlib import Path
+                metadata_file = Path('~/.efp/workspace/uploads/metadata.json').expanduser()
+                if metadata_file.exists():
+                    # Use asyncio.to_thread for blocking I/O
+                    file_data = await asyncio.to_thread(lambda: json.load(open(metadata_file)))
+                    for file_id in attachments:
+                        # Only process first image to avoid large payloads
+                        if len(attached_images) >= 1:
+                            break
+                        # Try exact match first, then prefix match
+                        meta = file_data.get(file_id)
+                        if not meta:
+                            # Try prefix match
+                            for fid, m in file_data.items():
+                                if fid.startswith(file_id):
+                                    meta = m
+                                    file_id = fid
+                                    break
+                        if meta:
+                            ct = meta.get('content_type', '')
+                            if ct.startswith('image/'):
+                                try:
+                                    import base64
+                                    img_path = Path('~/.efp/workspace/uploads').expanduser() / meta['stored_filename']
+                                    img_data = await asyncio.to_thread(
+                                        lambda: base64.b64encode(open(img_path, 'rb').read()).decode('utf-8')
+                                    )
+                                    ext = ct.split('/')[-1]
+                                    attached_images.append(f'data:image/{ext};base64,{img_data}')
+                                except Exception as e:
+                                    logger.warning(f"[api_chat] Failed to load attachment {file_id}: {e}")
+                    if attached_images and not message.strip():
+                        message = "[image]"
+            except Exception as e:
+                logger.warning(f"[api_chat] Attachments parse error: {e}")
+        
+        # Revalidate: if no message and no attached images, return error
+        if not message.strip() and not attached_images:
+            return web.json_response({'error': 'Empty message'}, status=400)
         
         # Inject file context if user has uploaded files
         original_msg_for_history = message if message.strip() else ("[image]" if attached_images else "")
@@ -227,6 +274,7 @@ async def api_chat(request: web.Request) -> web.Response:
             track_usage=True,
             reasoning_replay=reasoning_replay,
             attached_images=attached_images if attached_images else None,
+            attachments=attachments if attachments else None,
         )
         
         # Force save session to persistence

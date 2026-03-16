@@ -204,6 +204,7 @@ You have access to the following tools. When a user asks you to do something tha
         reasoning_replay: Optional[bool] = None,
         stream_callback: Optional[Callable[[str], None]] = None,
         attached_images: Optional[List[str]] = None,
+        attachments: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Process a user message with ReAct pattern.
         
@@ -223,8 +224,14 @@ You have access to the following tools. When a user asks you to do something tha
         """
         usage_data = {}
         
-        # Add user message to history
-        await session_manager.add_message(session_id, "user", message)
+        # Add user message to history (with attachments if any)
+        extra = {}
+        if attachments:
+            extra["attachments"] = attachments  # Save file IDs, not base64
+        await session_manager.add_message(
+            session_id, "user", message,
+            extra=extra if extra else None
+        )
 
         # Get conversation history
         messages = await session_manager.get_history(session_id)
