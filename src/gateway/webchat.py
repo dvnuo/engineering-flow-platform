@@ -8,7 +8,6 @@ UNIQUE_MARKER_12345
 import asyncio
 import json
 import logging
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -160,38 +159,8 @@ async def api_chat(request: web.Request) -> web.Response:
         
         logger.info(f"[api_chat] Processing message for session: {session_id}")
         
-        # Parse file references BEFORE inject_context
+        # Process attachments from attachments field (new format)
         attached_images = []
-        try:
-            refs = re.findall(r'@file_([a-zA-Z0-9]+)', message)
-            if refs:
-                from pathlib import Path
-                metadata_file = Path('~/.efp/workspace/uploads/metadata.json').expanduser()
-                if metadata_file.exists():
-                    with open(metadata_file, 'r') as f:
-                        file_data = json.load(f)
-                    for short_id in set(refs):
-                        for file_id, meta in file_data.items():
-                            if file_id.startswith(short_id):
-                                ct = meta.get('content_type', '')
-                                if ct.startswith('image/'):
-                                    try:
-                                        import base64
-                                        img_path = Path('~/.efp/workspace/uploads').expanduser() / meta['stored_filename']
-                                        with open(img_path, 'rb') as img:
-                                            img_data = base64.b64encode(img.read()).decode('utf-8')
-                                        ext = ct.split('/')[-1]
-                                        attached_images.append(f'data:image/{ext};base64,{img_data}')
-                                    except:
-                                        pass
-                                break
-            # IMPORTANT: Preserve message content before inject_context clears it
-            if attached_images:
-                message = message.strip() if message.strip() else "[image]"
-        except Exception as e:
-            logger.warning(f"[api_chat] File ref parse error: {e}")
-        
-        # Also process attachments from new attachments field
         if attachments and isinstance(attachments, list):
             try:
                 from pathlib import Path
