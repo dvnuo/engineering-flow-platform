@@ -143,6 +143,28 @@ def get_metadata(file_id: str) -> FileMetadata:
     return _file_metadata[file_id]
 
 
+def find_file_by_prefix(prefix: str) -> Optional[str]:
+    """Find a file ID by prefix.
+    
+    Args:
+        prefix: Partial file ID prefix (minimum 8 characters recommended)
+        
+    Returns:
+        Full file_id if found, None otherwise
+        
+    Raises:
+        ValueError: If prefix is too short (< 8 chars) or ambiguous
+    """
+    if len(prefix) < 8:
+        raise ValueError(f"Prefix too short: {prefix} (minimum 8 characters)")
+    
+    matches = [fid for fid in _file_metadata.keys() if fid.startswith(prefix)]
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous prefix: {prefix} matches {len(matches)} files")
+    
+    return matches[0] if matches else None
+
+
 def list_files(session_id: Optional[str] = None) -> list:
     """List files, optionally filtered by session.
     
