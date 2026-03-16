@@ -204,12 +204,15 @@ async def api_chat(request: web.Request) -> web.Response:
                     metadata = get_metadata(short_id)
                     if await process_file(metadata.file_id):
                         break  # Stop after first image
-                except StoredFileNotFoundError:
-                    # Try prefix match using public helper
+                except (StoredFileNotFoundError, ValueError):
+                    # Try prefix match using public helper (handles short/ambiguous prefixes)
                     from src.utils.file_parser.storage import find_file_by_prefix
-                    fid = find_file_by_prefix(short_id)
-                    if fid:
-                        await process_file(fid)
+                    try:
+                        fid = find_file_by_prefix(short_id)
+                        if fid:
+                            await process_file(fid)
+                    except ValueError as ve:
+                        logger.warning(f"[api_chat] Prefix lookup failed: {ve}")
         except Exception as e:
             logger.warning(f"[api_chat] @file_ parse error: {e}")
         
