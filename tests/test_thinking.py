@@ -197,3 +197,42 @@ class TestNormalizeThinkLevelEdgeCases:
         from src.agents.thinking import normalize_think_level, ThinkLevel
         result = normalize_think_level("think")
         assert result == ThinkLevel.MINIMAL
+
+
+class TestFormatThinkingLevels:
+    """Tests for format_thinking_levels function."""
+
+    def test_format_thinking_levels_basic(self):
+        """Test basic format_thinking_levels."""
+        from src.agents.thinking import format_thinking_levels
+        result = format_thinking_levels()
+        assert isinstance(result, str)
+        assert "off" in result.lower()
+
+    def test_format_thinking_levels_with_separator(self):
+        """Test format_thinking_levels with custom separator."""
+        from src.agents.thinking import format_thinking_levels
+        result = format_thinking_levels(separator=" | ")
+        assert " | " in result
+
+
+class TestFormatRuntimeInfo:
+    """Tests for format_runtime_info function."""
+
+    def test_format_runtime_info_basic(self):
+        """Test basic format_runtime_info."""
+        from src.agents.thinking import format_runtime_info
+        result = format_runtime_info()
+        assert isinstance(result, str)
+
+    def test_format_runtime_info_with_params(self):
+        """Test format_runtime_info with parameters."""
+        from src.agents.thinking import format_runtime_info
+        result = format_runtime_info(
+            host="test-host",
+            os_info="Linux",
+            model="gpt-4"
+        )
+        assert "test-host" in result
+        assert "Linux" in result
+        assert "gpt-4" in result

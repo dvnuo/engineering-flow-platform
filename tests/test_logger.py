@@ -15,7 +15,13 @@ def reset_root_logger():
     
     yield
     
-    # Restore original state
+    # Close any new handlers created during the test
+    for handler in root.handlers[:]:
+        if handler not in original_handlers:
+            handler.close()
+            root.removeHandler(handler)
+    
+    # Restore original handlers and level
     root.handlers = original_handlers
     root.setLevel(original_level)
 
