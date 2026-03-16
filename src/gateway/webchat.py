@@ -154,7 +154,7 @@ async def api_chat(request: web.Request) -> web.Response:
         if not api_key:
             return web.json_response({
                 'error': 'LLM not configured',
-                'message': 'Please configure LLM API key in Settings to use the chat feature.',
+                'message': 'Please configure LLM API Key in Settings to use the chat feature.',
                 'code': 'llm_not_configured'
             }, status=503)
         
@@ -194,13 +194,15 @@ async def api_chat(request: web.Request) -> web.Response:
         # Also process attachments from new attachments field
         if attachments and isinstance(attachments, list):
             try:
-                import json
                 from pathlib import Path
                 metadata_file = Path('~/.efp/workspace/uploads/metadata.json').expanduser()
                 if metadata_file.exists():
-                    with open(metadata_file, 'r') as f:
-                        file_data = json.load(f)
+                    # Use asyncio.to_thread for blocking I/O
+                    file_data = await asyncio.to_thread(lambda: json.load(open(metadata_file)))
                     for file_id in attachments:
+                        # Only process first image to avoid large payloads
+                        if len(attached_images) >= 1:
+                            break
                         # Try exact match first, then prefix match
                         meta = file_data.get(file_id)
                         if not meta:
@@ -216,8 +218,9 @@ async def api_chat(request: web.Request) -> web.Response:
                                 try:
                                     import base64
                                     img_path = Path('~/.efp/workspace/uploads').expanduser() / meta['stored_filename']
-                                    with open(img_path, 'rb') as img:
-                                        img_data = base64.b64encode(img.read()).decode('utf-8')
+                                    img_data = await asyncio.to_thread(
+                                        lambda: base64.b64encode(open(img_path, 'rb').read()).decode('utf-8')
+                                    )
                                     ext = ct.split('/')[-1]
                                     attached_images.append(f'data:image/{ext};base64,{img_data}')
                                 except Exception as e:
@@ -226,6 +229,10 @@ async def api_chat(request: web.Request) -> web.Response:
                         message = "[image]"
             except Exception as e:
                 logger.warning(f"[api_chat] Attachments parse error: {e}")
+        
+        # Revalidate: if no message and no attached images, return error
+        if not message.strip() and not attached_images:
+            return web.json_response({'error': 'Empty message'}, status=400)
         
         # Inject file context if user has uploaded files
         original_msg_for_history = message if message.strip() else ("[image]" if attached_images else "")
