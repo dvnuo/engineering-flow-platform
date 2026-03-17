@@ -196,6 +196,123 @@ async def setup_ssh_key() -> bool:
     return True
 
 
+async def generate_ssh_key(key_type: str = "ed25519", comment: str = "engineering-flow-platform") -> dict:
+    """Generate SSH key pair.
+    
+    Args:
+        key_type: Key type (ed25519 or rsa)
+        comment: Comment for the key
+        
+    Returns:
+        dict with success status, public key, and key path
+    """
+    import subprocess
+    
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(ssh_dir, 0o700)
+    
+    # Determine key file path
+    if key_type == "ed25519":
+        private_key_path = ssh_dir / "id_ed25519"
+        public_key_path = ssh_dir / "id_ed25519.pub"
+    else:
+        private_key_path = ssh_dir / "id_rsa"
+        public_key_path = ssh_dir / "id_rsa.pub"
+    
+    # Check if key already exists
+    if private_key_path.exists():
+        # Read existing public key
+        if public_key_path.exists():
+            with open(public_key_path, 'r') as f:
+                public_key = f.read().strip()
+            return {
+                "success": True,
+                "message": "SSH key already exists",
+                "public_key": public_key,
+                "private_key_path": str(private_key_path),
+                "key_type": key_type
+            }
+    
+    # Generate new key
+    try:
+        # Use ssh-keygen to generate the key
+        cmd = [
+            "ssh-keygen",
+            "-t", key_type,
+            "-f", str(private_key_path),
+            "-N", "",  # No passphrase
+            "-C", comment
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            logger.error(f"SSH key generation failed: {result.stderr}")
+            return {
+                "success": False,
+                "error": result.stderr
+            }
+        
+        # Set proper permissions
+        os.chmod(private_key_path, 0o600)
+        os.chmod(public_key_path, 0o644)
+        
+        # Read and return public key
+        with open(public_key_path, 'r') as f:
+            public_key = f.read().strip()
+        
+        logger.info(f"SSH {key_type} key generated at {private_key_path}")
+        
+        return {
+            "success": True,
+            "message": f"SSH {key_type} key generated successfully",
+            "public_key": public_key,
+            "private_key_path": str(private_key_path),
+            "key_type": key_type
+        }
+        
+    except Exception as e:
+        logger.error(f"SSH key generation error: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+async def get_ssh_public_key() -> dict:
+    """Get existing SSH public key.
+    
+    Returns:
+        dict with public key if exists
+    """
+    ssh_dir = Path.home() / ".ssh"
+    
+    # Check for ed25519 first, then rsa
+    for key_type in ["ed25519", "rsa"]:
+        if key_type == "ed25519":
+            public_key_path = ssh_dir / "id_ed25519.pub"
+            private_key_path = ssh_dir / "id_ed25519"
+        else:
+            public_key_path = ssh_dir / "id_rsa.pub"
+            private_key_path = ssh_dir / "id_rsa"
+        
+        if public_key_path.exists():
+            with open(public_key_path, 'r') as f:
+                public_key = f.read().strip()
+            return {
+                "success": True,
+                "public_key": public_key,
+                "private_key_path": str(private_key_path),
+                "key_type": key_type
+            }
+    
+    return {
+        "success": False,
+        "message": "No SSH key found. Generate one first."
+    }
+
+
 async def setup_git_user() -> bool:
     """Setup git user from config."""
     git_config = config.get("git", {})
