@@ -36,7 +36,6 @@ from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.config import config as global_config
-config = global_config  # Alias for convenience
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
 from src.sessions.usage import usage_tracker
@@ -130,7 +129,7 @@ async def api_chat(request: web.Request) -> web.Response:
     """Handle chat API requests.
     
     POST /api/chat
-    Body: {"message": "...", "session_id": "optional", "attachments": ["file_id1", "file_id2"]}
+    Body: {"message": "...", "session_id": "optional", "attachments": ["file_id1", "file_id2"], "reasoning_replay": false}
     """
     try:
         data = await request.json()
@@ -150,7 +149,7 @@ async def api_chat(request: web.Request) -> web.Response:
             return web.json_response({'error': 'Empty message'}, status=400)
         
         # Check if LLM is configured before processing
-        api_key = config.llm.get('api_key')
+        api_key = global_config.llm.get('api_key')
         if not api_key:
             return web.json_response({
                 'error': 'LLM not configured',
@@ -258,7 +257,7 @@ async def api_chat(request: web.Request) -> web.Response:
         # This is the Claude Code style - no separate skill matching/execution needed
         
         # Get model from config
-        model = config.llm.get('model', 'gpt-5-mini')
+        model = global_config.llm.get('model', 'gpt-5-mini')
         
         # Run agent (history is managed internally by session_manager)
         agent = AgentCore(model=model)
@@ -292,8 +291,8 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Record usage if available
         if usage:
-            provider = config.llm.get('provider', 'openai')
-            model = config.llm.get('model', 'gpt-5-mini')
+            provider = global_config.llm.get('provider', 'openai')
+            model = global_config.llm.get('model', 'gpt-5-mini')
             usage_tracker.record_usage(
                 provider=provider,
                 model=model,
@@ -402,7 +401,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         event_queue = asyncio.Queue()
         
         # Get model from config
-        model = config.llm.get('model', 'gpt-5-mini')
+        model = global_config.llm.get('model', 'gpt-5-mini')
         
         # Run agent and stream response
         agent = AgentCore(model=model)
@@ -432,8 +431,8 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         
         # Record usage
         if usage:
-            provider = config.llm.get('provider', 'openai')
-            model = config.llm.get('model', 'gpt-5-mini')
+            provider = global_config.llm.get('provider', 'openai')
+            model = global_config.llm.get('model', 'gpt-5-mini')
             usage_tracker.record_usage(
                 provider=provider,
                 model=model,
@@ -773,13 +772,12 @@ async def api_save_config(request: web.Request) -> web.Response:
         for section in sections:
             if section in data:
                 # Deep merge to preserve other fields in this section
-                if section in config and isinstance(config.get(section), (dict, CommentedMap)):
+                if section in config and isinstance(global_config.get(section), (dict, CommentedMap)):
                     config[section] = deep_merge(config[section], data[section])
                 else:
                     config[section] = data[section]
         
         # Encrypt sensitive fields before saving
-        from src.config import config as global_config
         global_config._encrypt_sensitive_fields(config)
         
         # Write back with preserved formatting and comments
@@ -788,14 +786,13 @@ async def api_save_config(request: web.Request) -> web.Response:
         
         # Determine which sections changed and reload services
         updated_sections = [s for s in sections if s in data]
-        from src.config import config
-        if not config.config_path.exists():
-            config.config_path = config_path
-        config.reload(changed_sections=updated_sections)
+        if not global_config.config_path.exists():
+            global_config.config_path = config_path
+        global_config.reload(changed_sections=updated_sections)
         
         # Apply proxy settings if proxy section was updated
         if 'proxy' in updated_sections:
-            config.apply_proxy()
+            global_config.apply_proxy()
         
         return web.json_response({
             'success': True, 
@@ -836,7 +833,7 @@ async def api_get_config(request: web.Request) -> web.Response:
         
         # Convert CommentedMap to regular dict for JSON response
         if hasattr(config, 'to_dict'):
-            config = config.to_dict()
+            config = global_config.to_dict()
         
         # Decrypt sensitive fields before returning
         try:
