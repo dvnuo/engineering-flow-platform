@@ -888,7 +888,7 @@ async def api_ssh_generate(request: web.Request) -> web.Response:
     """
     try:
         data = await request.json() if request.can_read_body else {}
-        key_type = data.get("key_type", "ed25519")
+        key_type = data.get("key_type", "rsa")
         comment = data.get("comment", "engineering-flow-platform")
         
         if key_type not in ["ed25519", "rsa"]:

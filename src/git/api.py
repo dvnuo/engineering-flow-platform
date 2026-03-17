@@ -196,7 +196,7 @@ async def setup_ssh_key() -> bool:
     return True
 
 
-async def generate_ssh_key(key_type: str = "ed25519", comment: str = "engineering-flow-platform") -> dict:
+async def generate_ssh_key(key_type: str = "rsa", comment: str = "engineering-flow-platform") -> dict:
     """Generate SSH key pair.
     
     Args:
