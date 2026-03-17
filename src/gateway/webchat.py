@@ -883,7 +883,6 @@ async def api_ssh_generate(request: web.Request) -> web.Response:
     Returns:
         - success: boolean
         - public_key: the public key to add to GitHub/GitLab
-        - private_key_path: path where private key is stored
         - key_type: type of key generated
     """
     try:
@@ -905,7 +904,6 @@ async def api_ssh_generate(request: web.Request) -> web.Response:
                 "success": True,
                 "message": result.get("message"),
                 "public_key": result.get("public_key"),
-                "private_key_path": result.get("private_key_path"),
                 "key_type": result.get("key_type"),
                 "instructions": "Add the public key to your GitHub/GitLab account settings"
             })
@@ -938,7 +936,6 @@ async def api_ssh_public_key(request: web.Request) -> web.Response:
             return web.json_response({
                 "success": True,
                 "public_key": result.get("public_key"),
-                "private_key_path": result.get("private_key_path"),
                 "key_type": result.get("key_type")
             })
         else:
