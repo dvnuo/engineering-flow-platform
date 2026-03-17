@@ -91,6 +91,7 @@ class Gateway:
 
         # Register routes (only for webhook mode or API endpoints)
         self.app.router.add_get("/health", self.handle_health)
+        self.app.router.add_get("/actuator/health", self.handle_health)
         self.app.router.add_get("/api/git-info", self.handle_git_info)
         self.app.router.add_get("/api/sessions", self.handle_list_sessions)
         self.app.router.add_post("/api/sessions/{session_id}/clear", self.handle_clear_session)
