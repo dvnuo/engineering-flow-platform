@@ -872,6 +872,83 @@ async def api_get_config(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e)}, status=500)
 
 
+# ========== SSH Key Management ==========
+
+async def api_ssh_generate(request: web.Request) -> web.Response:
+    """Generate SSH key pair.
+    
+    POST /api/ssh/generate
+    Body: {"key_type": "ed25519" | "rsa", "comment": "optional comment"}
+    
+    Returns:
+        - success: boolean
+        - public_key: the public key to add to GitHub/GitLab
+        - key_type: type of key generated
+    """
+    try:
+        data = await request.json() if request.can_read_body else {}
+        key_type = data.get("key_type", "rsa")
+        comment = data.get("comment", "engineering-flow-platform")
+        
+        if key_type not in ["ed25519", "rsa"]:
+            return web.json_response(
+                {"error": "Invalid key_type. Use 'ed25519' or 'rsa'"},
+                status=400
+            )
+        
+        from src.git.api import generate_ssh_key
+        result = await generate_ssh_key(key_type=key_type, comment=comment)
+        
+        if result.get("success"):
+            return web.json_response({
+                "success": True,
+                "message": result.get("message"),
+                "public_key": result.get("public_key"),
+                "key_type": result.get("key_type"),
+                "instructions": "Add the public key to your GitHub/GitLab account settings"
+            })
+        else:
+            return web.json_response({
+                "success": False,
+                "error": result.get("error", "Failed to generate SSH key")
+            }, status=500)
+            
+    except Exception as e:
+        logger.error(f"Error generating SSH key: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def api_ssh_public_key(request: web.Request) -> web.Response:
+    """Get existing SSH public key.
+    
+    GET /api/ssh/public-key
+    
+    Returns:
+        - success: boolean
+        - public_key: the public key (if exists)
+        - key_type: type of key
+    """
+    try:
+        from src.git.api import get_ssh_public_key
+        result = await get_ssh_public_key()
+        
+        if result.get("success"):
+            return web.json_response({
+                "success": True,
+                "public_key": result.get("public_key"),
+                "key_type": result.get("key_type")
+            })
+        else:
+            return web.json_response({
+                "success": False,
+                "message": result.get("message", "No SSH key found")
+            }, status=404)
+            
+    except Exception as e:
+        logger.error(f"Error getting SSH public key: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
 # ========== GitHub Copilot Authorization ==========
 
 import httpx
@@ -1782,6 +1859,8 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/clear', api_clear)
     app.router.add_get('/api/config', api_get_config)
     app.router.add_post('/api/config/save', api_save_config)
+    app.router.add_post('/api/ssh/generate', api_ssh_generate)
+    app.router.add_get('/api/ssh/public-key', api_ssh_public_key)
     app.router.add_get('/api/skills', api_skills)
     app.router.add_post('/api/copilot/auth/start', api_copilot_auth_start)
     app.router.add_post('/api/copilot/auth/check', api_copilot_auth_check)
