@@ -142,6 +142,37 @@ def _truncate_text(text: str, max_length: int = 200) -> str:
     return truncate_with_count(text, max_length)
 
 
+def _log_llm_request_response(request_data: Dict, response_data: Dict, session_id: str = None):
+    """Log complete LLM request and response to a separate file.
+    
+    Creates a JSONL file per session with complete LLM interactions.
+    Useful for debugging and auditing LLM behavior.
+    """
+    import os
+    from datetime import datetime
+    
+    log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "logs", "llm")
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Create entry
+    entry = {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "session_id": session_id,
+        "request": request_data,
+        "response": response_data,
+    }
+    
+    # Append to JSONL file
+    filename = f"llm_{datetime.utcnow().strftime('%Y-%m-%d')}.jsonl"
+    filepath = os.path.join(log_dir, filename)
+    
+    try:
+        with open(filepath, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass  # Don't fail if logging fails
+
+
 def _convert_messages_to_input_items(messages: List[Dict]) -> List[Dict]:
     """Convert Chat-style messages to Responses API input_items format."""
     items = []
@@ -635,6 +666,27 @@ class OpenAIProvider(BaseProvider):
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens,
+            }
+        }
+        
+        # Log complete request/response for debugging
+        _log_llm_request_response(
+            request_data={"model": model_name, "instructions": system_prompt, "input": input_items},
+            response_data=data,
+            session_id=None
+        )
+        
+        # Include full request/response in result for sidebar display
+        result["_llm_debug"] = {
+            "request": {
+                "model": model_name,
+                "instructions": system_prompt[:500] if system_prompt else None,
+                "input": input_items[:5],
+            },
+            "response": {
+                "content": content[:2000],
+                "function_calls": function_calls_result[:3],
+                "usage": result["usage"],
             }
         }
         

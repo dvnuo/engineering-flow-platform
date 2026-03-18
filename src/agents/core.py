@@ -696,6 +696,10 @@ You have access to the following tools. When a user asks you to do something tha
                 events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
                 result["events"] = events
                 
+                # Add LLM debug info if available
+                if llm_result and "_llm_debug" in llm_result:
+                    result["_llm_debug"] = llm_result["_llm_debug"]
+                
                 # Trigger memory update (async, fire and forget)
                 # We need to get the last user message and assistant response
                 recent_messages = await session_manager.get_history(session_id)

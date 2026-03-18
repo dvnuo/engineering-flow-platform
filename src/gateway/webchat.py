@@ -318,6 +318,16 @@ async def api_chat(request: web.Request) -> web.Response:
             session['metadata']['thinking_events'] = events
             logger.info(f"[api_chat] Saved {len(events)} thinking events to session metadata")
         
+        # Include LLM debug info for sidebar display
+        llm_debug = result.get("_llm_debug", {}) if result else {}
+        if llm_debug:
+            response_data['_llm_debug'] = llm_debug
+            # Save to session for persistence
+            if 'metadata' not in session:
+                session['metadata'] = {}
+            session['metadata']['_llm_debug'] = llm_debug
+            logger.info(f"[api_chat] Saved LLM debug info to session metadata")
+        
         # Include reasoning if available
         if reasoning:
             response_data['reasoning'] = reasoning
