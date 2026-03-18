@@ -577,7 +577,18 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Step 1: Call LLM with tools (include skill_prompt from first call)
             logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM")
-            send_event("llm_thinking", {"message": "LLM is thinking..."})
+            
+            # Build context info for thinking display (without relying on model reasoning)
+            context_info = []
+            if iteration == 1:
+                # Show user message on first iteration
+                for item in input_items:
+                    if item.get("type") == "message" and item.get("role") == "user":
+                        context_info.append(f"User: {item.get('content', '')[:200]}")
+            if context_info:
+                send_event("llm_thinking", {"message": " | ".join(context_info), "iteration": iteration})
+            else:
+                send_event("llm_thinking", {"message": f"Iteration {iteration}: Processing...", "iteration": iteration})
             
             logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM with {len(input_items)} input_items")
             
@@ -649,6 +660,19 @@ You have access to the following tools. When a user asks you to do something tha
                             tracer_instance.log_thinking(reasoning_content)
                         except Exception:
                             pass
+                else:
+                    # No reasoning_replay: show context info instead
+                    user_msg = ""
+                    for item in input_items:
+                        if item.get("type") == "message" and item.get("role") == "user":
+                            user_msg = item.get("content", "")[:200]
+                            break
+                    if user_msg:
+                        send_event("llm_thinking", {
+                            "message": f"User: {user_msg}",
+                            "context": "user_message",
+                            "iteration": iteration
+                        })
                 
                 # Send completion event
                 send_event("complete", {
