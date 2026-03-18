@@ -506,7 +506,13 @@ class OpenAIProvider(BaseProvider):
         """Call OpenAI Responses API (/responses endpoint)."""
         # Fall back to chat() when reasoning_replay is needed (not supported)
         if reasoning_replay:
-            return await self.chat(messages=messages, system_prompt=system_prompt, tools=tools, model=model, max_tokens=max_tokens, reasoning_replay=reasoning_replay)
+            # Convert input_items to messages for chat()
+            chat_messages = []
+            if input_items:
+                for item in input_items:
+                    if item.get("type") == "message":
+                        chat_messages.append({"role": item.get("role", "user"), "content": item.get("content", "")})
+            return await self.chat(messages=chat_messages, system_prompt=system_prompt, tools=tools, model=model, max_tokens=max_tokens, reasoning_replay=reasoning_replay)
         
         model_name = model or self.default_model
         
