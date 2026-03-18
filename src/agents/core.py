@@ -696,9 +696,15 @@ You have access to the following tools. When a user asks you to do something tha
                 events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
                 result["events"] = events
                 
-                # Add LLM debug info if available
+                # Add complete thinking flow to debug info
                 if llm_result and "_llm_debug" in llm_result:
-                    result["_llm_debug"] = llm_result["_llm_debug"]
+                    # Get all events from tracer for complete flow
+                    all_events = tracer_instance.get_events_for_ui(limit=50, session_id=session_id)
+                    result["_llm_debug"] = {
+                        "llm_request": llm_result["_llm_debug"],
+                        "thinking_events": all_events,
+                        "final_response": content,
+                    }
                 
                 # Trigger memory update (async, fire and forget)
                 # We need to get the last user message and assistant response
