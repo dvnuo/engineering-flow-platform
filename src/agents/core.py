@@ -687,13 +687,9 @@ You have access to the following tools. When a user asks you to do something tha
                     "arguments": args_str,
                 })
             
-            # Save assistant message with tool_calls to history
-            if tool_calls:
-                await session_manager.add_message(
-                    session_id, "assistant", 
-                    content or "[Tool call]",
-                    extra={"tool_calls": tool_calls}
-                )
+            # Note: Tool execution info is sent via WebSocket events and saved 
+            # to session metadata via tracer (thinking_events). No message is saved
+            # here - the final LLM response will be saved after tool execution.
             
             # Execute each function call
             for fc in function_calls:
@@ -756,7 +752,8 @@ You have access to the following tools. When a user asks you to do something tha
                     "call_id": call_id,
                     "output": str(tool_result),
                 })
-                await session_manager.add_message(session_id, "assistant", f"[Tool {tool_name} result] {str(tool_result)}", extra={"tool_name": tool_name, "call_id": call_id})
+                # Tool results are sent via WebSocket events and saved to tracer.
+                # No separate message saved - frontend displays via Thinking Process.
                 
                 logger.info(f"Tool result: {truncate_with_count(str(tool_result), 200)}")
             
