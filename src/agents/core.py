@@ -687,8 +687,9 @@ You have access to the following tools. When a user asks you to do something tha
                     "arguments": args_str,
                 })
             
-            # Note: Don't save messages for tool calls here - they will be in the 
-            # final LLM response. Tool execution info is sent via WebSocket events.
+            # Note: Tool execution info is sent via WebSocket events and saved 
+            # to session metadata via tracer (thinking_events). No message is saved
+            # here - the final LLM response will be saved after tool execution.
             
             # Execute each function call
             for fc in function_calls:
@@ -751,9 +752,8 @@ You have access to the following tools. When a user asks you to do something tha
                     "call_id": call_id,
                     "output": str(tool_result),
                 })
-                # Save tool result to extra (not as visible message content)
-                # Tool results are sent via WebSocket events - no need to save as message
-                # Frontend displays them in Thinking Process
+                # Tool results are sent via WebSocket events and saved to tracer.
+                # No separate message saved - frontend displays via Thinking Process.
                 
                 logger.info(f"Tool result: {truncate_with_count(str(tool_result), 200)}")
             
