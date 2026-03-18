@@ -583,8 +583,15 @@ You have access to the following tools. When a user asks you to do something tha
             if iteration == 1:
                 # Show user message on first iteration
                 for item in input_items:
-                    if item.get("type") == "message" and item.get("role") == "user":
-                        context_info.append(f"User: {item.get('content', '')[:200]}")
+                    # Handle both formats: {'type': 'message', 'role': ...} or {'role': ..., 'content': ...}
+                    role = item.get("role", "")
+                    if role == "user":
+                        content = item.get("content", "")
+                        if isinstance(content, list):
+                            text = " ".join([c.get("text", str(c)) for c in content])
+                        else:
+                            text = str(content)
+                        context_info.append(f"User: {text[:200]}")
             if context_info:
                 send_event("llm_thinking", {"message": " | ".join(context_info), "iteration": iteration})
             else:
