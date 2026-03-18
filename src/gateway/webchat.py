@@ -322,11 +322,21 @@ async def api_chat(request: web.Request) -> web.Response:
         llm_debug = result.get("_llm_debug", {}) if result else {}
         if llm_debug:
             response_data['_llm_debug'] = llm_debug
-            # Save to session for persistence
-            if 'metadata' not in session:
-                session['metadata'] = {}
-            session['metadata']['_llm_debug'] = llm_debug
-            logger.info(f"[api_chat] Saved LLM debug info to session metadata")
+            
+            # Save to session chatlog file
+            chatlog_dir = os.path.join(session_persistence.storage_dir, "chatlogs")
+            os.makedirs(chatlog_dir, exist_ok=True)
+            chatlog_file = os.path.join(chatlog_dir, f"{session_id}.json")
+            try:
+                with open(chatlog_file, "w") as f:
+                    json.dump({
+                        "session_id": session_id,
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "llm_debug": llm_debug
+                    }, f, indent=2)
+                logger.info(f"[api_chat] Saved LLM chatlog to {chatlog_file}")
+            except Exception as e:
+                logger.warning(f"[api_chat] Failed to save chatlog: {e}")
         
         # Include reasoning if available
         if reasoning:
@@ -585,6 +595,32 @@ async def api_load_session(request: web.Request) -> web.Response:
         })
     except Exception as e:
         logger.error(f"Error loading session: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_session_chatlog(request: web.Request) -> web.Response:
+    """Load session LLM chatlog.
+    
+    GET /api/sessions/{session_id}/chatlog
+    Returns: LLM request/response data
+    """
+    try:
+        session_id = request.match_info.get('session_id', '')
+        if not session_id:
+            return web.json_response({'error': 'Session ID required'}, status=400)
+        
+        # Load from chatlog file
+        chatlog_file = os.path.join(session_persistence.storage_dir, "chatlogs", f"{session_id}.json")
+        
+        if os.path.exists(chatlog_file):
+            with open(chatlog_file, "r") as f:
+                chatlog_data = json.load(f)
+            return web.json_response(chatlog_data)
+        else:
+            return web.json_response({'error': 'Chatlog not found'}, status=404)
+            
+    except Exception as e:
+        logger.error(f"Error loading chatlog: {e}")
         return web.json_response({'error': str(e)}, status=500)
 
 
@@ -1860,6 +1896,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/chat/stream', api_chat_stream)
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/sessions/{session_id}', api_load_session)
+    app.router.add_get('/api/sessions/{session_id}/chatlog', api_session_chatlog)
     app.router.add_get('/api/files', api_browse_files)
     app.router.add_get('/api/files/read', api_read_file)
     app.router.add_get('/api/usage', api_usage)
