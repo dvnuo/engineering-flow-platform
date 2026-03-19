@@ -44,34 +44,72 @@ class SessionPruner:
                 "messages": len(history),
             }
         
-        # Separate system, user, assistant, and tool messages
-        system_msgs = [m for m in history if m["role"] == "system"]
-        user_msgs = [m for m in history if m["role"] == "user"]
-        assistant_msgs = [m for m in history if m["role"] == "assistant"]
-        tool_msgs = [m for m in history if m["role"] == "tool"]
+        # Build a map of tool_call_id to tool_result
+        tool_call_id_to_result = {}
+        for m in history:
+            if m.get("role") == "tool" and m.get("tool_call_id"):
+                tool_call_id_to_result[m["tool_call_id"]] = m
         
-        # Keep recent messages
-        recent_user = user_msgs[-self.config["max_messages"]//2:]
+        # Separate by role
+        system_msgs = [m for m in history if m.get("role") == "system"]
+        user_msgs = [m for m in history if m.get("role") == "user"]
+        assistant_msgs = [m for m in history if m.get("role") == "assistant"]
+        tool_msgs = [m for m in history if m.get("role") == "tool"]
+        
+        # Keep recent user messages
+        recent_user = user_msgs[-self.config["max_messages"]//2:] if self.config["preserve_user_messages"] else []
+        
+        # Keep recent assistant messages AND their associated tool results
         recent_assistant = assistant_msgs[-self.config["max_messages"]//2:]
-        recent_tool = tool_msgs[-self.config["max_tool_results"]:]
         
-        # Build pruned history
+        # Collect tool_call_ids from recent assistant messages
+        recent_tool_call_ids = set()
+        for msg in recent_assistant:
+            for tc in msg.get("tool_calls", []):
+                recent_tool_call_ids.add(tc.get("id", ""))
+        
+        # Keep only tool results that are associated with recent assistant messages
+        recent_tool = []
+        for msg in tool_msgs:
+            tool_call_id = msg.get("tool_call_id", "")
+            if tool_call_id in recent_tool_call_ids:
+                recent_tool.append(msg)
+        
+        # Also keep some recent standalone tool results (not associated with assistant)
+        standalone_tools = [m for m in tool_msgs if m.get("role") == "tool" and m.get("tool_call_id", "") not in recent_tool_call_ids]
+        recent_standalone_tool = standalone_tools[-self.config["max_tool_results"]:]
+        recent_tool.extend(recent_standalone_tool)
+        
+        # Build pruned history maintaining original order
         pruned_history = []
-        pruned_history.extend(system_msgs if self.config["preserve_system_prompt"] else [])
-        pruned_history.extend(recent_user if self.config["preserve_user_messages"] else [])
-        pruned_history.extend(recent_assistant)
-        pruned_history.extend(recent_tool)
         
-        # Sort by timestamp
-        pruned_history.sort(key=lambda m: m.get("timestamp", ""), reverse=True)
+        # Add system messages
+        if self.config["preserve_system_prompt"]:
+            pruned_history.extend(system_msgs)
         
-        # Update session
-        session["history"] = pruned_history
+        # Rebuild history in order, including only recent messages
+        # Create a set of timestamps to include
+        recent_timestamps = set()
+        for msg in recent_user:
+            recent_timestamps.add(msg.get("timestamp", ""))
+        for msg in recent_assistant:
+            recent_timestamps.add(msg.get("timestamp", ""))
+        for msg in recent_tool:
+            recent_timestamps.add(msg.get("timestamp", ""))
+        
+        # Add all recent messages (they maintain their original order in the conversation)
+        for msg in history:
+            ts = msg.get("timestamp", "")
+            if ts in recent_timestamps:
+                pruned_history.append(msg)
         
         logger.info(
             f"Pruned session {session_id}: "
             f"{len(history)} -> {len(pruned_history)} messages"
         )
+        
+        # Update session with pruned history
+        session["history"] = pruned_history
         
         return {
             "pruned": True,
@@ -79,6 +117,7 @@ class SessionPruner:
             "pruned_count": len(history) - len(pruned_history),
             "remaining_count": len(pruned_history),
             "preserved_user": len(recent_user),
+            "preserved_assistant": len(recent_assistant),
             "preserved_tool": len(recent_tool),
         }
     
