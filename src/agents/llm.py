@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # Models that don't support Responses API and should use Chat API instead
 USE_CHAT_API_MODELS = {
     "openai": ["gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-4", "gpt-4-turbo"],
-    "github": [],  # All Copilot models support Responses API
+    "github_copilot": [],  # All Copilot models support Responses API
     "claude": [],  # Claude uses its own format (not responses/chat)
     "ollama": [],  # Ollama uses its own API
 }
@@ -1577,15 +1577,23 @@ class LLMClient:
             )
         
         # Check if model should use Chat API instead of Responses API
-        if provider in USE_CHAT_API_MODELS:
-            chat_models = USE_CHAT_API_MODELS[provider]
-            if model in chat_models:
-                logger.info(f"[{provider}] Model {model} does not support Responses API, using Chat API")
+        # Use effective_model (explicit model or provider default), normalize case
+        effective_model = (model or getattr(client, 'default_model', None) or '').lower()
+        if effective_model and provider in USE_CHAT_API_MODELS:
+            chat_models = [m.lower() for m in USE_CHAT_API_MODELS.get(provider, [])]
+            if effective_model in chat_models:
+                logger.info(f"[{provider}] Model {effective_model} does not support Responses API, using Chat API")
+                # Convert input_items to messages for chat()
+                chat_messages = []
+                if input_items:
+                    for item in input_items:
+                        if item.get("type") == "message":
+                            chat_messages.append({"role": item.get("role", "user"), "content": item.get("content", "")})
                 return await self.chat(
-                    messages=messages,
+                    messages=chat_messages,
                     system_prompt=system_prompt,
                     tools=tools,
-                    model=model,
+                    model=effective_model,
                     max_tokens=max_tokens,
                     provider=provider,
                     reasoning_replay=reasoning_replay,
