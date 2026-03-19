@@ -276,6 +276,24 @@ class BaseProvider:
     async def chat(self, **kwargs) -> Dict[str, Any]:
         raise NotImplementedError
 
+    def _add_llm_debug(self, result: Dict, request_info: Dict, response_data: Dict = None) -> Dict:
+        """Add _llm_debug to result for all providers.
+        
+        Args:
+            result: The result dict to add debug info to
+            request_info: Dict with keys: model, instructions, input, tools, max_output_tokens
+            response_data: Optional raw response data
+        """
+        result["_llm_debug"] = {
+            "request": request_info,
+            "response": {
+                "content": result.get("content", ""),
+                "function_calls": result.get("tool_calls", []),
+                "usage": result.get("usage", {}),
+            }
+        }
+        return result
+
     def list_models(self) -> List[str]:
         return []
 
@@ -639,20 +657,14 @@ class OpenAIProvider(BaseProvider):
             }
         }
         
-        # Include full request/response in result for sidebar display (complete, no truncation)
-        result["_llm_debug"] = {
-            "request": {
-                "model": model_name,
-                "instructions": system_prompt,  # Full, not truncated
-                "input": input_items,  # Full, not truncated
-                "tools": converted_tools,  # Include tools
-            },
-            "response": {
-                "content": content,  # Full, not truncated
-                "function_calls": function_calls_result,
-                "usage": result["usage"],
-            }
-        }
+        # Add _llm_debug for sidebar display (using base method)
+        self._add_llm_debug(result, {
+            "model": model_name,
+            "instructions": system_prompt,
+            "input": input_items,
+            "tools": converted_tools,
+            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+        })
         
         # Calculate cost and record usage
         cost = estimate_cost(model_name, prompt_tokens, completion_tokens)
@@ -1043,6 +1055,15 @@ class GitHubCopilotProvider(BaseProvider):
             task_type="responses",
         )
         
+        # Add _llm_debug for sidebar display
+        self._add_llm_debug(result, {
+            "model": model_name,
+            "instructions": system_prompt,
+            "input": input_items,
+            "tools": tools,
+            "max_output_tokens": max_tokens or 4096,
+        })
+        
         return result
     
     def list_models(self) -> List[str]:
@@ -1211,6 +1232,15 @@ class ClaudeProvider(BaseProvider):
             task_type="chat",
         )
         
+        # Add _llm_debug for sidebar display
+        self._add_llm_debug(result, {
+            "model": model or self.default_model,
+            "instructions": system_prompt,
+            "input": _convert_messages_to_input_items(messages),
+            "tools": tools,
+            "max_output_tokens": max_tokens or 4096,
+        })
+        
         return result
     
     def list_models(self) -> List[str]:
@@ -1337,6 +1367,15 @@ class OllamaProvider(BaseProvider):
             session_id="llm_api",
             task_type="chat",
         )
+        
+        # Add _llm_debug for sidebar display
+        self._add_llm_debug(result, {
+            "model": model or self.default_model,
+            "instructions": system_prompt,
+            "input": _convert_messages_to_input_items(messages),
+            "tools": tools,
+            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+        })
         
         return result
     
