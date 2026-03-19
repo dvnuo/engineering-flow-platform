@@ -1635,12 +1635,14 @@ class LLMClient:
                             msg = {"role": role, "content": content}
                             if role == "assistant":
                                 last_assistant_msg = msg
+                                last_assistant_appended = True  # Normal append marks it as already in list
                             chat_messages.append(msg)
                         
                         # Handle function_call -> convert to Chat tool_calls
                         elif item_type == "function_call":
                             if last_assistant_msg is None:
                                 last_assistant_msg = {"role": "assistant", "content": ""}
+                                last_assistant_appended = False  # Reset for new pending message
                             # Convert Responses function_call to Chat tool_calls format
                             tc = {
                                 "id": item.get("call_id", ""),
