@@ -1587,6 +1587,7 @@ class LLMClient:
                 # Convert input_items or messages to chat format
                 chat_messages = []
                 last_assistant_msg = None
+                pending_assistant = False
                 
                 # Prefer messages if provided (already in chat format)
                 if messages:
@@ -1598,6 +1599,11 @@ class LLMClient:
                         
                         # Handle regular messages
                         if item_type == "message" or ("role" in item and "content" in item):
+                            # Flush pending assistant message with tool_calls
+                            if pending_assistant and last_assistant_msg:
+                                chat_messages.append(last_assistant_msg)
+                                pending_assistant = False
+                            
                             role = item.get("role", "user")
                             content = item.get("content", "")
                             
@@ -1605,6 +1611,10 @@ class LLMClient:
                             if isinstance(content, list):
                                 converted_content = []
                                 for block in content:
+                                    # Handle non-dict blocks (plain strings)
+                                    if isinstance(block, str):
+                                        converted_content.append({"type": "text", "text": block})
+                                        continue
                                     block_type = block.get("type", "")
                                     if block_type == "input_text":
                                         converted_content.append({"type": "text", "text": block.get("text", "")})
@@ -1641,15 +1651,26 @@ class LLMClient:
                             if "tool_calls" not in last_assistant_msg:
                                 last_assistant_msg["tool_calls"] = []
                             last_assistant_msg["tool_calls"].append(tc)
+                            pending_assistant = True
                         
                         # Handle function_call_output -> convert to Chat tool result
                         elif item_type == "function_call_output":
+                            # Flush pending assistant message first
+                            if pending_assistant and last_assistant_msg:
+                                chat_messages.append(last_assistant_msg)
+                                pending_assistant = False
+                                last_assistant_msg = None
+                            
                             tool_msg = {
                                 "role": "tool",
                                 "tool_call_id": item.get("call_id", ""),
                                 "content": item.get("output", ""),
                             }
                             chat_messages.append(tool_msg)
+                
+                # Flush any remaining pending assistant message
+                if pending_assistant and last_assistant_msg:
+                    chat_messages.append(last_assistant_msg)
                 
                 chat_result = await self.chat(
                     messages=chat_messages,
