@@ -276,19 +276,21 @@ class BaseProvider:
     async def chat(self, **kwargs) -> Dict[str, Any]:
         raise NotImplementedError
 
-    def _add_llm_debug(self, result: Dict, request_info: Dict, response_data: Dict = None) -> Dict:
+    def _add_llm_debug(self, result: Dict, request_info: Dict) -> Dict:
         """Add _llm_debug to result for all providers.
         
         Args:
             result: The result dict to add debug info to
             request_info: Dict with keys: model, instructions, input, tools, max_output_tokens
-            response_data: Optional raw response data
         """
+        # Prefer function_calls (Responses API format), fall back to tool_calls (Chat format)
+        func_calls = result.get("function_calls") or result.get("tool_calls") or []
+        
         result["_llm_debug"] = {
             "request": request_info,
             "response": {
                 "content": result.get("content", ""),
-                "function_calls": result.get("tool_calls", []),
+                "function_calls": func_calls,
                 "usage": result.get("usage", {}),
             }
         }
@@ -1055,13 +1057,13 @@ class GitHubCopilotProvider(BaseProvider):
             task_type="responses",
         )
         
-        # Add _llm_debug for sidebar display
+        # Add _llm_debug for sidebar display (match actual request payload)
         self._add_llm_debug(result, {
             "model": model_name,
             "instructions": system_prompt,
             "input": input_items,
-            "tools": tools,
-            "max_output_tokens": max_tokens or 4096,
+            "tools": converted_tools,  # Use converted tools (same as actual request)
+            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),  # Match actual default
         })
         
         return result
@@ -1368,12 +1370,12 @@ class OllamaProvider(BaseProvider):
             task_type="chat",
         )
         
-        # Add _llm_debug for sidebar display
+        # Add _llm_debug for sidebar display (use converted ollama_tools)
         self._add_llm_debug(result, {
             "model": model or self.default_model,
             "instructions": system_prompt,
             "input": _convert_messages_to_input_items(messages),
-            "tools": tools,
+            "tools": ollama_tools if tools else None,  # Use converted tools (same as actual request)
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
         })
         
