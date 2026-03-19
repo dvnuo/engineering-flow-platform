@@ -531,6 +531,39 @@ You have access to the following tools. When a user asks you to do something tha
                 role = msg.get("role", "user")
                 if role == "tool":
                     continue
+                
+                # Handle tool_calls from assistant messages - convert to function_call for Responses API
+                tool_calls = msg.get("tool_calls", [])
+                if tool_calls and role == "assistant":
+                    for tc in tool_calls:
+                        call_id = tc.get("id", "")
+                        func = tc.get("function", {})
+                        name = func.get("name", "")
+                        args = func.get("arguments", {})
+                        args_str = args if isinstance(args, str) else json.dumps(args)
+                        items.append({
+                            "type": "function_call",
+                            "call_id": call_id,
+                            "name": name,
+                            "arguments": args_str,
+                        })
+                    # Also add the content if any
+                    content = msg.get("content", "")
+                    if content:
+                        items.append({"role": role, "content": str(content)})
+                    continue
+                
+                # Handle tool_call_id for tool result messages
+                tool_call_id = msg.get("tool_call_id", "")
+                if tool_call_id:
+                    content = msg.get("content", "")
+                    items.append({
+                        "type": "function_call_output",
+                        "call_id": tool_call_id,
+                        "output": str(content) if content else "",
+                    })
+                    continue
+                
                 content = msg.get("content", "")
                 if isinstance(content, list):
                     conv = []
