@@ -577,7 +577,25 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Step 1: Call LLM with tools (include skill_prompt from first call)
             logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM")
-            send_event("llm_thinking", {"message": "LLM is thinking..."})
+            
+            # Build context info for thinking display (without relying on model reasoning)
+            context_info = []
+            if iteration == 1:
+                # Show user message on first iteration
+                for item in input_items:
+                    # Handle both formats: {'type': 'message', 'role': ...} or {'role': ..., 'content': ...}
+                    role = item.get("role", "")
+                    if role == "user":
+                        content = item.get("content", "")
+                        if isinstance(content, list):
+                            text = " ".join([c.get("text", str(c)) for c in content])
+                        else:
+                            text = str(content)
+                        context_info.append(f"User: {text[:200]}")
+            if context_info:
+                send_event("llm_thinking", {"message": " | ".join(context_info), "iteration": iteration})
+            else:
+                send_event("llm_thinking", {"message": f"Iteration {iteration}: Processing...", "iteration": iteration})
             
             logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM with {len(input_items)} input_items")
             
@@ -632,7 +650,36 @@ You have access to the following tools. When a user asks you to do something tha
                 await session_manager.add_message(session_id, "assistant", content)
                 result = {"response": content, "usage": usage_data}
                 if enable_reasoning:
-                    result["reasoning"] = llm_result.get("reasoning", "")
+                    reasoning_content = llm_result.get("reasoning", "")
+                    result["reasoning"] = reasoning_content
+                    
+                    # Send actual thinking content if reasoning is available
+                    if reasoning_content:
+                        send_event("llm_thinking", {
+                            "message": reasoning_content[:500],  # Truncate for display
+                            "thinking": reasoning_content,  # Full thinking for storage
+                            "iteration": iteration
+                        })
+                        # Also log to tracer for persistence
+                        try:
+                            from src.skills import get_tracer
+                            tracer_instance = get_tracer()
+                            tracer_instance.log_thinking(reasoning_content)
+                        except Exception:
+                            pass
+                else:
+                    # No reasoning_replay: show context info instead
+                    user_msg = ""
+                    for item in input_items:
+                        if item.get("type") == "message" and item.get("role") == "user":
+                            user_msg = item.get("content", "")[:200]
+                            break
+                    if user_msg:
+                        send_event("llm_thinking", {
+                            "message": f"User: {user_msg}",
+                            "context": "user_message",
+                            "iteration": iteration
+                        })
                 
                 # Send completion event
                 send_event("complete", {
@@ -648,6 +695,16 @@ You have access to the following tools. When a user asks you to do something tha
                 tracer_instance = get_tracer()
                 events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
                 result["events"] = events
+                
+                # Add complete thinking flow to debug info
+                if llm_result and "_llm_debug" in llm_result:
+                    # Get all events from tracer for complete flow
+                    all_events = tracer_instance.get_events_for_ui(limit=50, session_id=session_id)
+                    result["_llm_debug"] = {
+                        "llm_request": llm_result["_llm_debug"],
+                        "thinking_events": all_events,
+                        "final_response": content,
+                    }
                 
                 # Trigger memory update (async, fire and forget)
                 # We need to get the last user message and assistant response
@@ -674,6 +731,23 @@ You have access to the following tools. When a user asks you to do something tha
                 return result
             
             logger.info(f"[Tool Loop] Iteration {iteration}: LLM requested {len(tool_calls)} tool calls")
+            
+            # Send actual thinking content if reasoning is available (for tool call iterations too)
+            if enable_reasoning:
+                reasoning_content = llm_result.get("reasoning", "")
+                if reasoning_content:
+                    send_event("llm_thinking", {
+                        "message": reasoning_content[:500],
+                        "thinking": reasoning_content,
+                        "iteration": iteration
+                    })
+                    # Also log to tracer for persistence
+                    try:
+                        from src.skills import get_tracer
+                        tracer_instance = get_tracer()
+                        tracer_instance.log_thinking(reasoning_content)
+                    except Exception:
+                        pass
             
             # Add function_call to input_items for Responses API
             if function_calls:
