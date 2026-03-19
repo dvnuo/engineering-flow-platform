@@ -1588,6 +1588,7 @@ class LLMClient:
                 chat_messages = []
                 last_assistant_msg = None
                 pending_assistant = False
+                last_assistant_appended = False
                 
                 # Prefer messages if provided (already in chat format)
                 if messages:
@@ -1599,9 +1600,10 @@ class LLMClient:
                         
                         # Handle regular messages
                         if item_type == "message" or ("role" in item and "content" in item):
-                            # Flush pending assistant message with tool_calls
-                            if pending_assistant and last_assistant_msg:
+                            # Flush pending assistant message with tool_calls (only if not already appended)
+                            if pending_assistant and last_assistant_msg and not last_assistant_appended:
                                 chat_messages.append(last_assistant_msg)
+                                last_assistant_appended = True
                                 pending_assistant = False
                             
                             role = item.get("role", "user")
@@ -1655,9 +1657,10 @@ class LLMClient:
                         
                         # Handle function_call_output -> convert to Chat tool result
                         elif item_type == "function_call_output":
-                            # Flush pending assistant message first
-                            if pending_assistant and last_assistant_msg:
+                            # Flush pending assistant message first (only if not already appended)
+                            if pending_assistant and last_assistant_msg and not last_assistant_appended:
                                 chat_messages.append(last_assistant_msg)
+                                last_assistant_appended = True
                                 pending_assistant = False
                                 last_assistant_msg = None
                             
@@ -1668,8 +1671,8 @@ class LLMClient:
                             }
                             chat_messages.append(tool_msg)
                 
-                # Flush any remaining pending assistant message
-                if pending_assistant and last_assistant_msg:
+                # Flush any remaining pending assistant message (only if not already appended)
+                if pending_assistant and last_assistant_msg and not last_assistant_appended:
                     chat_messages.append(last_assistant_msg)
                 
                 chat_result = await self.chat(
