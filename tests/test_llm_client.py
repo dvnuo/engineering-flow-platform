@@ -549,3 +549,143 @@ class TestResponsesAPI:
         sig = inspect.signature(client.responses)
         # If we get here without TypeError, the signature is correct
         assert "messages" in sig.parameters
+
+
+class TestChatAPIFallback:
+    """Tests for model-based fallback from Responses to Chat API."""
+
+    @pytest.mark.asyncio
+    async def test_responses_fallback_to_chat_for_old_models(self):
+        """Test that responses() falls back to chat() for models in USE_CHAT_API_MODELS."""
+        from src.agents.llm import USE_CHAT_API_MODELS, OpenAIProvider
+        
+        # Create a provider with gpt-3.5-turbo (which is in USE_CHAT_API_MODELS)
+        provider = OpenAIProvider()
+        provider.default_model = "gpt-3.5-turbo"
+        provider.api_key = "test-key"
+        
+        # Create LLMClient with our provider
+        client = LLMClient()
+        client.providers = {"openai": provider}
+        client.default_provider = "openai"
+        
+        # Mock chat() to verify it's called
+        with patch.object(client, 'chat', new_callable=AsyncMock) as mock_chat:
+            mock_chat.return_value = {"content": "test response", "function_calls": []}
+            
+            # Call responses with gpt-3.5-turbo
+            result = await client.responses(
+                messages=[{"role": "user", "content": "hello"}],
+                model="gpt-3.5-turbo"
+            )
+            
+            # Verify chat was called (fallback triggered)
+            mock_chat.assert_called_once()
+            assert result["content"] == "test response"
+
+    @pytest.mark.asyncio
+    async def test_responses_uses_responses_api_for_new_models(self):
+        """Test that responses() uses Responses API for models NOT in USE_CHAT_API_MODELS."""
+        from src.agents.llm import USE_CHAT_API_MODELS, OpenAIProvider
+        
+        # Create a provider with gpt-4o (which is NOT in USE_CHAT_API_MODELS)
+        provider = OpenAIProvider()
+        provider.default_model = "gpt-4o"
+        provider.api_key = "test-key"
+        
+        # Create LLMClient with our provider
+        client = LLMClient()
+        client.providers = {"openai": provider}
+        client.default_provider = "openai"
+        
+        # Mock the provider's responses method
+        with patch.object(provider, 'responses', new_callable=AsyncMock) as mock_responses:
+            mock_responses.return_value = {"content": "test response"}
+            
+            # Call responses with gpt-4o
+            result = await client.responses(
+                messages=[{"role": "user", "content": "hello"}],
+                model="gpt-4o"
+            )
+            
+            # Verify provider.responses was called (no fallback)
+            mock_responses.assert_called_once()
+            assert result["content"] == "test response"
+
+    @pytest.mark.asyncio
+    async def test_responses_fallback_preserves_function_calls(self):
+        """Test that fallback converts function_calls correctly."""
+        from src.agents.llm import USE_CHAT_API_MODELS, OpenAIProvider
+        
+        provider = OpenAIProvider()
+        provider.default_model = "gpt-3.5-turbo"
+        provider.api_key = "test-key"
+        
+        client = LLMClient()
+        client.providers = {"openai": provider}
+        client.default_provider = "openai"
+        
+        # Simulate Chat API returning tool_calls
+        with patch.object(client, 'chat', new_callable=AsyncMock) as mock_chat:
+            mock_chat.return_value = {
+                "content": "I used a tool",
+                "tool_calls": [
+                    {"id": "call_123", "type": "function", "function": {"name": "test_func", "arguments": "{}"}}
+                ]
+            }
+            
+            result = await client.responses(
+                messages=[{"role": "user", "content": "use a tool"}],
+                model="gpt-3.5-turbo"
+            )
+            
+            # Verify function_calls is populated from tool_calls
+            assert "function_calls" in result
+            assert len(result["function_calls"]) == 1
+            assert result["function_calls"][0]["call_id"] == "call_123"
+            assert result["function_calls"][0]["name"] == "test_func"
+
+    @pytest.mark.asyncio
+    async def test_responses_fallback_converts_input_items(self):
+        """Test that fallback converts input_items to chat messages correctly."""
+        from src.agents.llm import USE_CHAT_API_MODELS, OpenAIProvider
+        
+        provider = OpenAIProvider()
+        provider.default_model = "gpt-3.5-turbo"
+        provider.api_key = "test-key"
+        
+        client = LLMClient()
+        client.providers = {"openai": provider}
+        client.default_provider = "openai"
+        
+        # input_items with function_call and function_call_output
+        input_items = [
+            {"type": "message", "role": "user", "content": "use a tool"},
+            {"type": "function_call", "call_id": "call_123", "name": "test_func", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_123", "output": "tool result"},
+        ]
+        
+        with patch.object(client, 'chat', new_callable=AsyncMock) as mock_chat:
+            mock_chat.return_value = {"content": "done"}
+            
+            await client.responses(
+                input_items=input_items,
+                model="gpt-3.5-turbo"
+            )
+            
+            # Verify chat was called with converted messages
+            mock_chat.assert_called_once()
+            call_args = mock_chat.call_args
+            
+            # Check messages were passed
+            messages = call_args.kwargs.get("messages", [])
+            assert len(messages) >= 2
+            
+            # Should have user message
+            user_msg = next((m for m in messages if m.get("role") == "user"), None)
+            assert user_msg is not None
+            
+            # Should have tool result message
+            tool_msg = next((m for m in messages if m.get("role") == "tool"), None)
+            assert tool_msg is not None
+            assert tool_msg.get("tool_call_id") == "call_123"

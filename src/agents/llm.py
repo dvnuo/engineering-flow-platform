@@ -37,6 +37,16 @@ from .errors import (
 
 logger = logging.getLogger(__name__)
 
+
+# Models that don't support Responses API and should use Chat API instead
+# Pre-compute lowercase set for O(1) lookup
+USE_CHAT_API_MODELS = {
+    "openai": {"gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-4", "gpt-4-turbo"},
+    "github_copilot": set(),  # All Copilot models support Responses API
+    "claude": set(),  # Claude uses its own format
+    "ollama": set(),  # Ollama uses its own API
+}
+
 # Debug logging cache
 _DEBUG_ENABLED = None
 _HTTPX_TRACE_ENABLED = None
@@ -1566,6 +1576,130 @@ class LLMClient:
                 provider=provider,
                 reasoning_replay=reasoning_replay,
             )
+        
+        # Check if model should use Chat API instead of Responses API
+        # Use effective_model (explicit model or provider default)
+        effective_model = model or getattr(client, 'default_model', None) or ''
+        effective_model_norm = effective_model.lower()
+        if effective_model_norm and provider in USE_CHAT_API_MODELS:
+            if effective_model_norm in USE_CHAT_API_MODELS[provider]:
+                logger.info(f"[{provider}] Model {effective_model} does not support Responses API, using Chat API")
+                # Convert input_items or messages to chat format
+                chat_messages = []
+                last_assistant_msg = None
+                pending_assistant = False
+                last_assistant_appended = False
+                
+                # Prefer messages if provided (already in chat format)
+                if messages:
+                    chat_messages = list(messages)
+                elif input_items:
+                    # Convert input_items to chat messages
+                    for item in input_items:
+                        item_type = item.get("type", "")
+                        
+                        # Handle regular messages
+                        if item_type == "message" or ("role" in item and "content" in item):
+                            # Flush pending assistant message with tool_calls (only if not already appended)
+                            if pending_assistant and last_assistant_msg and not last_assistant_appended:
+                                chat_messages.append(last_assistant_msg)
+                                last_assistant_appended = True
+                                pending_assistant = False
+                            
+                            role = item.get("role", "user")
+                            content = item.get("content", "")
+                            
+                            # Convert Responses format to Chat format
+                            if isinstance(content, list):
+                                converted_content = []
+                                for block in content:
+                                    # Handle non-dict blocks (plain strings)
+                                    if isinstance(block, str):
+                                        converted_content.append({"type": "text", "text": block})
+                                        continue
+                                    block_type = block.get("type", "")
+                                    if block_type == "input_text":
+                                        converted_content.append({"type": "text", "text": block.get("text", "")})
+                                    elif block_type == "input_image":
+                                        img_url = block.get("image_url", {})
+                                        if isinstance(img_url, str):
+                                            converted_content.append({"type": "image_url", "image_url": {"url": img_url}})
+                                        else:
+                                            converted_content.append({"type": "image_url", "image_url": img_url})
+                                    elif block_type == "text":
+                                        converted_content.append(block)
+                                    else:
+                                        converted_content.append(block)
+                                content = converted_content
+                            
+                            msg = {"role": role, "content": content}
+                            if role == "assistant":
+                                last_assistant_msg = msg
+                                last_assistant_appended = True  # Normal append marks it as already in list
+                            chat_messages.append(msg)
+                        
+                        # Handle function_call -> convert to Chat tool_calls
+                        elif item_type == "function_call":
+                            if last_assistant_msg is None:
+                                last_assistant_msg = {"role": "assistant", "content": ""}
+                                last_assistant_appended = False  # Reset for new pending message
+                            # Convert Responses function_call to Chat tool_calls format
+                            tc = {
+                                "id": item.get("call_id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": item.get("name", ""),
+                                    "arguments": item.get("arguments", ""),
+                                }
+                            }
+                            if "tool_calls" not in last_assistant_msg:
+                                last_assistant_msg["tool_calls"] = []
+                            last_assistant_msg["tool_calls"].append(tc)
+                            pending_assistant = True
+                        
+                        # Handle function_call_output -> convert to Chat tool result
+                        elif item_type == "function_call_output":
+                            # Flush pending assistant message first (only if not already appended)
+                            if pending_assistant and last_assistant_msg and not last_assistant_appended:
+                                chat_messages.append(last_assistant_msg)
+                                last_assistant_appended = True
+                                pending_assistant = False
+                                last_assistant_msg = None
+                            
+                            tool_msg = {
+                                "role": "tool",
+                                "tool_call_id": item.get("call_id", ""),
+                                "content": item.get("output", ""),
+                            }
+                            chat_messages.append(tool_msg)
+                
+                # Flush any remaining pending assistant message (only if not already appended)
+                if pending_assistant and last_assistant_msg and not last_assistant_appended:
+                    chat_messages.append(last_assistant_msg)
+                
+                chat_result = await self.chat(
+                    messages=chat_messages,
+                    system_prompt=system_prompt,
+                    tools=tools,
+                    model=effective_model,
+                    max_tokens=max_tokens,
+                    provider=provider,
+                    reasoning_replay=reasoning_replay,
+                )
+                
+                # Convert chat result to Responses format
+                if chat_result.get("tool_calls"):
+                    # Convert Chat tool_calls to Responses function_calls format
+                    function_calls = []
+                    for tc in chat_result["tool_calls"]:
+                        function_calls.append({
+                            "call_id": tc.get("id", ""),
+                            "name": tc.get("function", {}).get("name", ""),
+                            "arguments": tc.get("function", {}).get("arguments", ""),
+                        })
+                    chat_result["function_calls"] = function_calls
+                
+                return chat_result
         
         return await client.responses(
             messages=messages,
