@@ -952,24 +952,8 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
             logger.debug(f"Input messages count: {len(input_items)}")
         
-        # Make API call
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.api_base}/responses",
-                    headers=headers,
-                    json=payload
-                )
-                response.raise_for_status()
-                data = response.json()
-        except httpx.HTTPStatusError as e:
-            error = handle_httpx_error(e, provider=self.name, endpoint="/responses")
-            log_error(error, component=self.name.upper())
-            raise error
-        except httpx.RequestError as e:
-            error = handle_httpx_request_error(e, provider=self.name, endpoint="/responses")
-            log_error(error, component=self.name.upper())
-            raise error
+        # Use _call_api for centralized retry/backoff behavior
+        data = await self._call_api("/responses", payload)
         
         # Debug: Log response
         if _is_debug_enabled():
