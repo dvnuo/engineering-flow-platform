@@ -547,6 +547,14 @@ You have access to the following tools. When a user asks you to do something tha
                 # Handle tool_calls from assistant messages - convert to function_call for Responses API
                 tool_calls = msg.get("tool_calls", [])
                 if tool_calls and role == "assistant":
+                    # First add assistant content (chronological order)
+                    content = msg.get("content", "")
+                    if content:
+                        if isinstance(content, list):
+                            items.append({"role": role, "content": content})
+                        else:
+                            items.append({"role": role, "content": str(content)})
+                    # Then add function_call items
                     for tc in tool_calls:
                         call_id = tc.get("id", "")
                         func = tc.get("function", {})
@@ -559,8 +567,7 @@ You have access to the following tools. When a user asks you to do something tha
                             "name": name,
                             "arguments": args_str,
                         })
-                    # For assistant with tool_calls, fall through to normal content processing
-                    # (don't continue) to properly handle content normalization
+                    continue
                 
                 # Handle tool_call_id for other messages (fallback)
                 if tool_call_id:

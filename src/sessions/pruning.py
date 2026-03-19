@@ -44,64 +44,50 @@ class SessionPruner:
                 "messages": len(history),
             }
         
-        # Build a map of tool_call_id to tool_result
-        tool_call_id_to_result = {}
-        for m in history:
-            if m.get("role") == "tool" and m.get("tool_call_id"):
-                tool_call_id_to_result[m["tool_call_id"]] = m
+        # Separate by role, keeping original indices
+        system_indices = [i for i, m in enumerate(history) if m.get("role") == "system"]
+        user_indices = [i for i, m in enumerate(history) if m.get("role") == "user"]
+        assistant_indices = [i for i, m in enumerate(history) if m.get("role") == "assistant"]
+        tool_indices = [i for i, m in enumerate(history) if m.get("role") == "tool"]
         
-        # Separate by role
-        system_msgs = [m for m in history if m.get("role") == "system"]
-        user_msgs = [m for m in history if m.get("role") == "user"]
-        assistant_msgs = [m for m in history if m.get("role") == "assistant"]
-        tool_msgs = [m for m in history if m.get("role") == "tool"]
+        # Calculate how many to keep
+        max_total = self.config["max_messages"]
+        # Budget: user + assistant + tool = max_total
+        num_user = min(len(user_indices), max_total // 3)
+        num_assistant = min(len(assistant_indices), max_total // 3)
+        num_tool = min(len(tool_indices), max_total // 3)
         
-        # Keep recent user messages
-        recent_user = user_msgs[-self.config["max_messages"]//2:] if self.config["preserve_user_messages"] else []
-        
-        # Keep recent assistant messages AND their associated tool results
-        recent_assistant = assistant_msgs[-self.config["max_messages"]//2:]
+        # Keep recent by indices (not timestamps to avoid collisions)
+        recent_user_indices = set(user_indices[-num_user:] if num_user > 0 else [])
+        recent_assistant_indices = set(assistant_indices[-num_assistant:] if num_assistant > 0 else [])
         
         # Collect tool_call_ids from recent assistant messages
         recent_tool_call_ids = set()
-        for msg in recent_assistant:
+        for idx in recent_assistant_indices:
+            msg = history[idx]
             for tc in msg.get("tool_calls", []):
                 recent_tool_call_ids.add(tc.get("id", ""))
         
-        # Keep only tool results that are associated with recent assistant messages
-        recent_tool = []
-        for msg in tool_msgs:
+        # Keep tool results associated with recent assistant messages
+        recent_tool_indices = set()
+        for idx in tool_indices:
+            msg = history[idx]
             tool_call_id = msg.get("tool_call_id", "")
             if tool_call_id in recent_tool_call_ids:
-                recent_tool.append(msg)
+                recent_tool_indices.add(idx)
         
-        # Also keep some recent standalone tool results (not associated with assistant)
-        standalone_tools = [m for m in tool_msgs if m.get("role") == "tool" and m.get("tool_call_id", "") not in recent_tool_call_ids]
-        recent_standalone_tool = standalone_tools[-self.config["max_tool_results"]:]
-        recent_tool.extend(recent_standalone_tool)
+        # Also keep recent standalone tool results
+        standalone_tool_indices = [i for i in tool_indices if i not in recent_tool_call_ids]
+        recent_tool_indices.update(standalone_tool_indices[-num_tool:] if num_tool > 0 else [])
         
-        # Build pruned history maintaining original order
-        pruned_history = []
+        # Build set of all indices to keep
+        keep_indices = set(system_indices) if self.config["preserve_system_prompt"] else set()
+        keep_indices.update(recent_user_indices)
+        keep_indices.update(recent_assistant_indices)
+        keep_indices.update(recent_tool_indices)
         
-        # Add system messages
-        if self.config["preserve_system_prompt"]:
-            pruned_history.extend(system_msgs)
-        
-        # Rebuild history in order, including only recent messages
-        # Create a set of timestamps to include
-        recent_timestamps = set()
-        for msg in recent_user:
-            recent_timestamps.add(msg.get("timestamp", ""))
-        for msg in recent_assistant:
-            recent_timestamps.add(msg.get("timestamp", ""))
-        for msg in recent_tool:
-            recent_timestamps.add(msg.get("timestamp", ""))
-        
-        # Add all recent messages (they maintain their original order in the conversation)
-        for msg in history:
-            ts = msg.get("timestamp", "")
-            if ts in recent_timestamps:
-                pruned_history.append(msg)
+        # Rebuild history in original order
+        pruned_history = [history[i] for i in range(len(history)) if i in keep_indices]
         
         logger.info(
             f"Pruned session {session_id}: "
@@ -116,9 +102,9 @@ class SessionPruner:
             "original_count": len(history),
             "pruned_count": len(history) - len(pruned_history),
             "remaining_count": len(pruned_history),
-            "preserved_user": len(recent_user),
-            "preserved_assistant": len(recent_assistant),
-            "preserved_tool": len(recent_tool),
+            "preserved_user": len(recent_user_indices),
+            "preserved_assistant": len(recent_assistant_indices),
+            "preserved_tool": len(recent_tool_indices),
         }
     
     async def should_prune(self, session_id: str) -> bool:
