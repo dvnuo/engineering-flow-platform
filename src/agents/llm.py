@@ -1234,11 +1234,11 @@ class ClaudeProvider(BaseProvider):
             task_type="chat",
         )
         
-        # Add _llm_debug for sidebar display
+        # Add _llm_debug for sidebar display (Claude uses Messages API format)
         self._add_llm_debug(result, {
             "model": model or self.default_model,
             "instructions": system_prompt,
-            "input": _convert_messages_to_input_items(messages),
+            "input": messages,  # Claude uses Messages API, not input_items
             "tools": tools,
             "max_output_tokens": max_tokens or 4096,
         })
@@ -1370,12 +1370,13 @@ class OllamaProvider(BaseProvider):
             task_type="chat",
         )
         
-        # Add _llm_debug for sidebar display (use converted ollama_tools)
+        # Add _llm_debug for sidebar display (Ollama uses Messages API format)
+        # Use original tools param (not converted ollama_tools) since they contain the same info
         self._add_llm_debug(result, {
             "model": model or self.default_model,
             "instructions": system_prompt,
-            "input": _convert_messages_to_input_items(messages),
-            "tools": ollama_tools if tools else None,  # Use converted tools (same as actual request)
+            "input": messages,  # Ollama uses Messages API, not input_items
+            "tools": tools,  # Original tools format (for display purposes)
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
         })
         
