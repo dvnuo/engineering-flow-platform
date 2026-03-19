@@ -39,11 +39,12 @@ logger = logging.getLogger(__name__)
 
 
 # Models that don't support Responses API and should use Chat API instead
+# Pre-compute lowercase set for O(1) lookup
 USE_CHAT_API_MODELS = {
-    "openai": ["gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-4", "gpt-4-turbo"],
-    "github_copilot": [],  # All Copilot models support Responses API
-    "claude": [],  # Claude uses its own format (not responses/chat)
-    "ollama": [],  # Ollama uses its own API
+    "openai": {"gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-4", "gpt-4-turbo"},
+    "github_copilot": set(),  # All Copilot models support Responses API
+    "claude": set(),  # Claude uses its own format
+    "ollama": set(),  # Ollama uses its own API
 }
 
 # Debug logging cache
@@ -1577,11 +1578,11 @@ class LLMClient:
             )
         
         # Check if model should use Chat API instead of Responses API
-        # Use effective_model (explicit model or provider default), normalize case
-        effective_model = (model or getattr(client, 'default_model', None) or '').lower()
-        if effective_model and provider in USE_CHAT_API_MODELS:
-            chat_models = [m.lower() for m in USE_CHAT_API_MODELS.get(provider, [])]
-            if effective_model in chat_models:
+        # Use effective_model (explicit model or provider default)
+        effective_model = model or getattr(client, 'default_model', None) or ''
+        effective_model_norm = effective_model.lower()
+        if effective_model_norm and provider in USE_CHAT_API_MODELS:
+            if effective_model_norm in USE_CHAT_API_MODELS[provider]:
                 logger.info(f"[{provider}] Model {effective_model} does not support Responses API, using Chat API")
                 # Convert input_items to messages for chat()
                 chat_messages = []
@@ -1593,7 +1594,7 @@ class LLMClient:
                     messages=chat_messages,
                     system_prompt=system_prompt,
                     tools=tools,
-                    model=effective_model,
+                    model=effective_model,  # Pass original model, not lowercased
                     max_tokens=max_tokens,
                     provider=provider,
                     reasoning_replay=reasoning_replay,
