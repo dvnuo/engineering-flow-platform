@@ -529,8 +529,56 @@ You have access to the following tools. When a user asks you to do something tha
             items = []
             for msg in msgs:
                 role = msg.get("role", "user")
+                
+                # Handle tool_call_id for tool result messages BEFORE skipping tool role
+                tool_call_id = msg.get("tool_call_id", "")
+                if tool_call_id and role == "tool":
+                    content = msg.get("content", "")
+                    items.append({
+                        "type": "function_call_output",
+                        "call_id": tool_call_id,
+                        "output": str(content) if content else "",
+                    })
+                    continue
+                
                 if role == "tool":
                     continue
+                
+                # Handle tool_calls from assistant messages - convert to function_call for Responses API
+                tool_calls = msg.get("tool_calls", [])
+                if tool_calls and role == "assistant":
+                    # First add assistant content (chronological order)
+                    content = msg.get("content", "")
+                    if content:
+                        if isinstance(content, list):
+                            items.append({"role": role, "content": content})
+                        else:
+                            items.append({"role": role, "content": str(content)})
+                    # Then add function_call items
+                    for tc in tool_calls:
+                        call_id = tc.get("id", "")
+                        func = tc.get("function", {})
+                        name = func.get("name", "")
+                        args = func.get("arguments", {})
+                        args_str = args if isinstance(args, str) else json.dumps(args)
+                        items.append({
+                            "type": "function_call",
+                            "call_id": call_id,
+                            "name": name,
+                            "arguments": args_str,
+                        })
+                    continue
+                
+                # Handle tool_call_id for other messages (fallback)
+                if tool_call_id:
+                    content = msg.get("content", "")
+                    items.append({
+                        "type": "function_call_output",
+                        "call_id": tool_call_id,
+                        "output": str(content) if content else "",
+                    })
+                    continue
+                
                 content = msg.get("content", "")
                 if isinstance(content, list):
                     conv = []
@@ -749,9 +797,8 @@ You have access to the following tools. When a user asks you to do something tha
                     except Exception:
                         pass
             
-            # Add function_call to input_items for Responses API
-            if function_calls:
-                fc = function_calls[0]
+            # Add function_call to input_items for Responses API (ALL function calls, not just first)
+            for fc in function_calls:
                 args = fc.get("arguments", {})
                 args_str = args if isinstance(args, str) else json.dumps(args)
                 input_items.append({

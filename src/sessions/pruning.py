@@ -44,42 +44,67 @@ class SessionPruner:
                 "messages": len(history),
             }
         
-        # Separate system, user, assistant, and tool messages
-        system_msgs = [m for m in history if m["role"] == "system"]
-        user_msgs = [m for m in history if m["role"] == "user"]
-        assistant_msgs = [m for m in history if m["role"] == "assistant"]
-        tool_msgs = [m for m in history if m["role"] == "tool"]
+        # Separate by role, keeping original indices
+        system_indices = [i for i, m in enumerate(history) if m.get("role") == "system"]
+        user_indices = [i for i, m in enumerate(history) if m.get("role") == "user"]
+        assistant_indices = [i for i, m in enumerate(history) if m.get("role") == "assistant"]
+        tool_indices = [i for i, m in enumerate(history) if m.get("role") == "tool"]
         
-        # Keep recent messages
-        recent_user = user_msgs[-self.config["max_messages"]//2:]
-        recent_assistant = assistant_msgs[-self.config["max_messages"]//2:]
-        recent_tool = tool_msgs[-self.config["max_tool_results"]:]
+        # Calculate how many to keep
+        max_total = self.config["max_messages"]
+        # Budget: user + assistant + tool = max_total
+        num_user = min(len(user_indices), max_total // 3)
+        num_assistant = min(len(assistant_indices), max_total // 3)
+        num_tool = min(len(tool_indices), max_total // 3)
         
-        # Build pruned history
-        pruned_history = []
-        pruned_history.extend(system_msgs if self.config["preserve_system_prompt"] else [])
-        pruned_history.extend(recent_user if self.config["preserve_user_messages"] else [])
-        pruned_history.extend(recent_assistant)
-        pruned_history.extend(recent_tool)
+        # Keep recent by indices (not timestamps to avoid collisions)
+        recent_user_indices = set(user_indices[-num_user:] if num_user > 0 else [])
+        recent_assistant_indices = set(assistant_indices[-num_assistant:] if num_assistant > 0 else [])
         
-        # Sort by timestamp
-        pruned_history.sort(key=lambda m: m.get("timestamp", ""), reverse=True)
+        # Collect tool_call_ids from recent assistant messages
+        recent_tool_call_ids = set()
+        for idx in recent_assistant_indices:
+            msg = history[idx]
+            for tc in msg.get("tool_calls", []):
+                recent_tool_call_ids.add(tc.get("id", ""))
         
-        # Update session
-        session["history"] = pruned_history
+        # Keep tool results associated with recent assistant messages
+        recent_tool_indices = set()
+        for idx in tool_indices:
+            msg = history[idx]
+            tool_call_id = msg.get("tool_call_id", "")
+            if tool_call_id in recent_tool_call_ids:
+                recent_tool_indices.add(idx)
+        
+        # Also keep recent standalone tool results
+        standalone_tool_indices = [i for i in tool_indices if i not in recent_tool_call_ids]
+        recent_tool_indices.update(standalone_tool_indices[-num_tool:] if num_tool > 0 else [])
+        
+        # Build set of all indices to keep
+        keep_indices = set(system_indices) if self.config["preserve_system_prompt"] else set()
+        keep_indices.update(recent_user_indices)
+        keep_indices.update(recent_assistant_indices)
+        keep_indices.update(recent_tool_indices)
+        
+        # Rebuild history in original order
+        pruned_history = [history[i] for i in range(len(history)) if i in keep_indices]
         
         logger.info(
             f"Pruned session {session_id}: "
             f"{len(history)} -> {len(pruned_history)} messages"
         )
         
+        # Update session with pruned history
+        session["history"] = pruned_history
+        
         return {
             "pruned": True,
             "original_count": len(history),
             "pruned_count": len(history) - len(pruned_history),
             "remaining_count": len(pruned_history),
-            "preserved_user": len(recent_user),
-            "preserved_tool": len(recent_tool),
+            "preserved_user": len(recent_user_indices),
+            "preserved_assistant": len(recent_assistant_indices),
+            "preserved_tool": len(recent_tool_indices),
         }
     
     async def should_prune(self, session_id: str) -> bool:
