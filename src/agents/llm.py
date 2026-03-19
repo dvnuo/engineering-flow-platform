@@ -37,6 +37,15 @@ from .errors import (
 
 logger = logging.getLogger(__name__)
 
+
+# Models that don't support Responses API and should use Chat API instead
+USE_CHAT_API_MODELS = {
+    "openai": ["gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-4", "gpt-4-turbo"],
+    "github": [],  # All Copilot models support Responses API
+    "claude": [],  # Claude uses its own format (not responses/chat)
+    "ollama": [],  # Ollama uses its own API
+}
+
 # Debug logging cache
 _DEBUG_ENABLED = None
 _HTTPX_TRACE_ENABLED = None
@@ -1566,6 +1575,21 @@ class LLMClient:
                 provider=provider,
                 reasoning_replay=reasoning_replay,
             )
+        
+        # Check if model should use Chat API instead of Responses API
+        if provider in USE_CHAT_API_MODELS:
+            chat_models = USE_CHAT_API_MODELS[provider]
+            if model in chat_models:
+                logger.info(f"[{provider}] Model {model} does not support Responses API, using Chat API")
+                return await self.chat(
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    tools=tools,
+                    model=model,
+                    max_tokens=max_tokens,
+                    provider=provider,
+                    reasoning_replay=reasoning_replay,
+                )
         
         return await client.responses(
             messages=messages,
