@@ -1584,21 +1584,57 @@ class LLMClient:
         if effective_model_norm and provider in USE_CHAT_API_MODELS:
             if effective_model_norm in USE_CHAT_API_MODELS[provider]:
                 logger.info(f"[{provider}] Model {effective_model} does not support Responses API, using Chat API")
-                # Convert input_items to messages for chat()
+                # Convert input_items or messages to chat format
                 chat_messages = []
-                if input_items:
+                
+                # Prefer messages if provided (already in chat format)
+                if messages:
+                    chat_messages = list(messages)
+                elif input_items:
+                    # Convert input_items to chat messages
                     for item in input_items:
-                        if item.get("type") == "message":
-                            chat_messages.append({"role": item.get("role", "user"), "content": item.get("content", "")})
-                return await self.chat(
+                        # Handle both: {"type": "message", ...} and {"role": ..., "content": ...}
+                        if item.get("type") == "message" or ("role" in item and "content" in item):
+                            role = item.get("role", "user")
+                            content = item.get("content", "")
+                            
+                            # Convert Responses format to Chat format
+                            if isinstance(content, list):
+                                converted_content = []
+                                for block in content:
+                                    block_type = block.get("type", "")
+                                    if block_type == "input_text":
+                                        converted_content.append({"type": "text", "text": block.get("text", "")})
+                                    elif block_type == "input_image":
+                                        # Convert to image_url format
+                                        img_url = block.get("image_url", {})
+                                        if isinstance(img_url, str):
+                                            converted_content.append({"type": "image_url", "image_url": {"url": img_url}})
+                                        else:
+                                            converted_content.append({"type": "image_url", "image_url": img_url})
+                                    elif block_type == "text":
+                                        converted_content.append(block)
+                                    else:
+                                        converted_content.append(block)
+                                content = converted_content
+                            
+                            chat_messages.append({"role": role, "content": content})
+                
+                chat_result = await self.chat(
                     messages=chat_messages,
                     system_prompt=system_prompt,
                     tools=tools,
-                    model=effective_model,  # Pass original model, not lowercased
+                    model=effective_model,
                     max_tokens=max_tokens,
                     provider=provider,
                     reasoning_replay=reasoning_replay,
                 )
+                
+                # Convert chat result to Responses format
+                if chat_result.get("tool_calls"):
+                    chat_result["function_calls"] = chat_result["tool_calls"]
+                
+                return chat_result
         
         return await client.responses(
             messages=messages,
