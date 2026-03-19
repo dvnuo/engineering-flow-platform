@@ -1586,6 +1586,7 @@ class LLMClient:
                 logger.info(f"[{provider}] Model {effective_model} does not support Responses API, using Chat API")
                 # Convert input_items or messages to chat format
                 chat_messages = []
+                last_assistant_msg = None
                 
                 # Prefer messages if provided (already in chat format)
                 if messages:
@@ -1593,8 +1594,10 @@ class LLMClient:
                 elif input_items:
                     # Convert input_items to chat messages
                     for item in input_items:
-                        # Handle both: {"type": "message", ...} and {"role": ..., "content": ...}
-                        if item.get("type") == "message" or ("role" in item and "content" in item):
+                        item_type = item.get("type", "")
+                        
+                        # Handle regular messages
+                        if item_type == "message" or ("role" in item and "content" in item):
                             role = item.get("role", "user")
                             content = item.get("content", "")
                             
@@ -1606,7 +1609,6 @@ class LLMClient:
                                     if block_type == "input_text":
                                         converted_content.append({"type": "text", "text": block.get("text", "")})
                                     elif block_type == "input_image":
-                                        # Convert to image_url format
                                         img_url = block.get("image_url", {})
                                         if isinstance(img_url, str):
                                             converted_content.append({"type": "image_url", "image_url": {"url": img_url}})
@@ -1618,7 +1620,36 @@ class LLMClient:
                                         converted_content.append(block)
                                 content = converted_content
                             
-                            chat_messages.append({"role": role, "content": content})
+                            msg = {"role": role, "content": content}
+                            if role == "assistant":
+                                last_assistant_msg = msg
+                            chat_messages.append(msg)
+                        
+                        # Handle function_call -> convert to Chat tool_calls
+                        elif item_type == "function_call":
+                            if last_assistant_msg is None:
+                                last_assistant_msg = {"role": "assistant", "content": ""}
+                            # Convert Responses function_call to Chat tool_calls format
+                            tc = {
+                                "id": item.get("call_id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": item.get("name", ""),
+                                    "arguments": item.get("arguments", ""),
+                                }
+                            }
+                            if "tool_calls" not in last_assistant_msg:
+                                last_assistant_msg["tool_calls"] = []
+                            last_assistant_msg["tool_calls"].append(tc)
+                        
+                        # Handle function_call_output -> convert to Chat tool result
+                        elif item_type == "function_call_output":
+                            tool_msg = {
+                                "role": "tool",
+                                "tool_call_id": item.get("call_id", ""),
+                                "content": item.get("output", ""),
+                            }
+                            chat_messages.append(tool_msg)
                 
                 chat_result = await self.chat(
                     messages=chat_messages,
@@ -1632,7 +1663,15 @@ class LLMClient:
                 
                 # Convert chat result to Responses format
                 if chat_result.get("tool_calls"):
-                    chat_result["function_calls"] = chat_result["tool_calls"]
+                    # Convert Chat tool_calls to Responses function_calls format
+                    function_calls = []
+                    for tc in chat_result["tool_calls"]:
+                        function_calls.append({
+                            "call_id": tc.get("id", ""),
+                            "name": tc.get("function", {}).get("name", ""),
+                            "arguments": tc.get("function", {}).get("arguments", ""),
+                        })
+                    chat_result["function_calls"] = function_calls
                 
                 return chat_result
         
