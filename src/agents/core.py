@@ -529,6 +529,18 @@ You have access to the following tools. When a user asks you to do something tha
             items = []
             for msg in msgs:
                 role = msg.get("role", "user")
+                
+                # Handle tool_call_id for tool result messages BEFORE skipping tool role
+                tool_call_id = msg.get("tool_call_id", "")
+                if tool_call_id and role == "tool":
+                    content = msg.get("content", "")
+                    items.append({
+                        "type": "function_call_output",
+                        "call_id": tool_call_id,
+                        "output": str(content) if content else "",
+                    })
+                    continue
+                
                 if role == "tool":
                     continue
                 
@@ -547,14 +559,14 @@ You have access to the following tools. When a user asks you to do something tha
                             "name": name,
                             "arguments": args_str,
                         })
-                    # Also add the content if any
+                    # Also add the content if any (reuse normalization logic below)
                     content = msg.get("content", "")
+                    # Don't force string - add as-is for proper format
                     if content:
                         items.append({"role": role, "content": str(content)})
                     continue
                 
-                # Handle tool_call_id for tool result messages
-                tool_call_id = msg.get("tool_call_id", "")
+                # Handle tool_call_id for other messages (fallback)
                 if tool_call_id:
                     content = msg.get("content", "")
                     items.append({
