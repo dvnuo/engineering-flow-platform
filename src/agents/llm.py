@@ -1156,6 +1156,15 @@ class ClaudeProvider(BaseProvider):
         # Parse and log content/tool calls
         parsed = self._parse_response(data)
         
+        # Add _llm_debug for sidebar display (Claude uses Messages API format)
+        self._add_llm_debug(parsed, {
+            "model": model or self.default_model,
+            "instructions": system_prompt,
+            "input": messages,  # Claude uses Messages API, not input_items
+            "tools": tools,
+            "max_output_tokens": max_tokens or 4096,
+        })
+        
         # Debug: Log content and tool calls
         if _is_debug_enabled():
             content = parsed.get("content", "")
@@ -1233,15 +1242,6 @@ class ClaudeProvider(BaseProvider):
             session_id="llm_api",
             task_type="chat",
         )
-        
-        # Add _llm_debug for sidebar display (Claude uses Messages API format)
-        self._add_llm_debug(result, {
-            "model": model or self.default_model,
-            "instructions": system_prompt,
-            "input": messages,  # Claude uses Messages API, not input_items
-            "tools": tools,
-            "max_output_tokens": max_tokens or 4096,
-        })
         
         return result
     
