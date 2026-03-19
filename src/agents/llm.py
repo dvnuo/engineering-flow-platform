@@ -669,23 +669,30 @@ class OpenAIProvider(BaseProvider):
             }
         }
         
-        # Log complete request/response for debugging
+        # Log complete request/response for debugging (full data, no truncation)
         _log_llm_request_response(
-            request_data={"model": model_name, "instructions": system_prompt, "input": input_items},
+            request_data={
+                "model": model_name, 
+                "instructions": system_prompt, 
+                "input": input_items,
+                "tools": converted_tools,  # Include tools
+                "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+            },
             response_data=data,
             session_id=None
         )
         
-        # Include full request/response in result for sidebar display
+        # Include full request/response in result for sidebar display (complete, no truncation)
         result["_llm_debug"] = {
             "request": {
                 "model": model_name,
-                "instructions": system_prompt[:500] if system_prompt else None,
-                "input": input_items[:5],
+                "instructions": system_prompt,  # Full, not truncated
+                "input": input_items,  # Full, not truncated
+                "tools": converted_tools,  # Include tools
             },
             "response": {
-                "content": content[:2000],
-                "function_calls": function_calls_result[:3],
+                "content": content,  # Full, not truncated
+                "function_calls": function_calls_result,
                 "usage": result["usage"],
             }
         }
