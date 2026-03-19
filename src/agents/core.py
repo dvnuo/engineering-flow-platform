@@ -559,12 +559,8 @@ You have access to the following tools. When a user asks you to do something tha
                             "name": name,
                             "arguments": args_str,
                         })
-                    # Also add the content if any (reuse normalization logic below)
-                    content = msg.get("content", "")
-                    # Don't force string - add as-is for proper format
-                    if content:
-                        items.append({"role": role, "content": str(content)})
-                    continue
+                    # For assistant with tool_calls, fall through to normal content processing
+                    # (don't continue) to properly handle content normalization
                 
                 # Handle tool_call_id for other messages (fallback)
                 if tool_call_id:
