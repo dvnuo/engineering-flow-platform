@@ -785,30 +785,8 @@ class GitHubCopilotProvider(BaseProvider):
                     logger.debug(f"  Tool {i}: {tool_name}")
 
         
-        # Make API call with proper error handling
-        endpoint = "/chat/completions"
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.api_base}{endpoint}",
-                    headers=headers,
-                    json=payload
-                )
-                response.raise_for_status()
-                data = response.json()
-        except httpx.HTTPStatusError as e:
-            error = handle_httpx_error(e, provider=self.name, endpoint=endpoint)
-            log_error(error, component=self.name.upper())
-            raise error
-        except httpx.RequestError as e:
-            error = handle_httpx_request_error(e, provider=self.name, endpoint=endpoint)
-            log_error(error, component=self.name.upper())
-            raise error
-        
-        # Debug: Log response
-        if _is_debug_enabled():
-            logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
-            logger.debug(f"Status: {response.status_code}")
+        # Make API call with proper error handling - use _call_api for retry
+        data = await self._call_api("/chat/completions", payload)
         
         choice = data["choices"][0]
         message = choice["message"]
@@ -1133,14 +1111,8 @@ class ClaudeProvider(BaseProvider):
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(all_messages)}")
         
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.api_base}/messages",
-                headers=self._get_headers(),
-                json=payload
-            )
-            response.raise_for_status()
-            data = response.json()
+        # Use _call_api for retry support
+        data = await self._call_api("/messages", payload)
         
         # Debug: Log response
         if _is_debug_enabled():
@@ -1310,24 +1282,21 @@ class OllamaProvider(BaseProvider):
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(full_messages)}")
         
+        # Use _call_api for retry support, but handle Ollama not running specially
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(
-                    f"{self.api_base}/api/chat",
-                    json=payload
-                )
-                response.raise_for_status()
-                data = response.json()
-        except httpx.ConnectError:
-            if _is_debug_enabled():
-                logger.debug(f"=== [{self.name.upper()}] ERROR ===")
-                logger.debug("Ollama not running. Start with: ollama serve")
-            return {
-                "content": "",
-                "tool_calls": [],
-                "error": "Ollama not running. Start with: ollama serve",
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            }
+            data = await self._call_api("/api/chat", payload)
+        except Exception as e:
+            if "ConnectError" in str(type(e).__name__) or "connection" in str(e).lower():
+                if _is_debug_enabled():
+                    logger.debug(f"=== [{self.name.upper()}] ERROR ===")
+                    logger.debug("Ollama not running. Start with: ollama serve")
+                return {
+                    "content": "",
+                    "tool_calls": [],
+                    "error": "Ollama not running. Start with: ollama serve",
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                }
+            raise
         
         # Debug: Log response
         if _is_debug_enabled():
