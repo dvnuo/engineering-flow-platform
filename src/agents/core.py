@@ -790,9 +790,8 @@ You have access to the following tools. When a user asks you to do something tha
                     except Exception:
                         pass
             
-            # Add function_call to input_items for Responses API
-            if function_calls:
-                fc = function_calls[0]
+            # Add function_call to input_items for Responses API (ALL function calls, not just first)
+            for fc in function_calls:
                 args = fc.get("arguments", {})
                 args_str = args if isinstance(args, str) else json.dumps(args)
                 input_items.append({
