@@ -1866,7 +1866,7 @@ async def api_files_download(request: web.Request) -> web.Response:
                 'error': 'path is required'
             }, status=400)
         
-        # Handle single file
+        # Handle single file or directory
         if len(file_paths) == 1:
             file_path = file_paths[0]
             try:
@@ -1877,7 +1877,37 @@ async def api_files_download(request: web.Request) -> web.Response:
                     'error': 'Invalid path'
                 }, status=400)
             
-            if not resolved_path.exists() or not resolved_path.is_file():
+            if not resolved_path.exists():
+                return web.json_response({
+                    'success': False,
+                    'error': 'File not found'
+                }, status=404)
+            
+            # If it's a directory, create a ZIP of the entire directory
+            if resolved_path.is_dir():
+                def create_dir_zip():
+                    buffer = io.BytesIO()
+                    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                        for root, dirs, files in os.walk(resolved_path):
+                            for file in files:
+                                file_path = os.path.join(root, file)
+                                arcname = os.path.relpath(file_path, resolved_path.parent)
+                                zf.write(file_path, arcname)
+                    return buffer.getvalue()
+                
+                content = await asyncio.to_thread(create_dir_zip)
+                
+                response = web.Response(
+                    body=content,
+                    content_type='application/zip',
+                    headers={
+                        'Content-Disposition': f'attachment; filename="{resolved_path.name}.zip"'
+                    }
+                )
+                return response
+            
+            # Single file download
+            if not resolved_path.is_file():
                 return web.json_response({
                     'success': False,
                     'error': 'File not found'
@@ -1918,14 +1948,23 @@ async def api_files_download(request: web.Request) -> web.Response:
             )
             return response
         
-        # Handle multiple files - create ZIP
+        # Handle multiple files - create ZIP (including directories)
         def create_zip():
             buffer = io.BytesIO()
             with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
                 for file_path in file_paths:
                     try:
                         resolved_path = Path(file_path).resolve()
-                        if resolved_path.exists() and resolved_path.is_file():
+                        if not resolved_path.exists():
+                            continue
+                        if resolved_path.is_dir():
+                            # Add entire directory
+                            for root, dirs, files in os.walk(resolved_path):
+                                for file in files:
+                                    full_path = os.path.join(root, file)
+                                    arcname = os.path.relpath(full_path, resolved_path.parent)
+                                    zf.write(full_path, arcname)
+                        elif resolved_path.is_file():
                             zf.write(resolved_path, resolved_path.name)
                     except Exception:
                         continue
