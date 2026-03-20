@@ -1846,7 +1846,6 @@ async def api_files_download(request: web.Request) -> web.Response:
         404: File not found
     """
     try:
-        import aiofiles
         import os
         from pathlib import Path
         
@@ -1893,9 +1892,12 @@ async def api_files_download(request: web.Request) -> web.Response:
         elif suffix == '.pdf':
             content_type = 'application/pdf'
         
-        # Read file async
-        async with aiofiles.open(resolved_path, 'rb') as f:
-            content = await f.read()
+        # Read file synchronously (wrapped in to_thread)
+        def read_file():
+            with open(resolved_path, 'rb') as f:
+                return f.read()
+        
+        content = await asyncio.to_thread(read_file)
         
         # Return file with appropriate headers
         response = web.Response(
