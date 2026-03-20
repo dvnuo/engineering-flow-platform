@@ -683,7 +683,7 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 compacted_messages, compaction_stats = await compact_messages(
                     messages=agent_msgs_for_compact,
-                    max_tokens=max_tokens,
+                    max_tokens=compaction_threshold,
                     context_window=context_window,
                     recent_count=5,
                 )
@@ -709,6 +709,10 @@ You have access to the following tools. When a user asks you to do something tha
                 )
                 
                 # Rebuild input_items after compaction
+                input_items = _to_input_items(loop_messages)
+            else:
+                # Keep input_items in sync with loop_messages (append new assistant tool_call if present)
+                # This ensures input_items always reflects the current loop_messages state
                 input_items = _to_input_items(loop_messages)
             # ===== END COMPACTION IN LOOP =====
             
