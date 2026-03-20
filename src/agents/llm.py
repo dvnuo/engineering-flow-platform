@@ -718,7 +718,6 @@ class GitHubCopilotProvider(BaseProvider):
     
     def _get_headers(self) -> Dict[str, str]:
         """Override to include Copilot-specific headers."""
-        import os
         api_key = os.environ.get('GITHUB_COPILOT_TOKEN') or config.llm.get('api_key', '')
         return {
             "Authorization": f"Bearer {api_key}",
