@@ -1230,6 +1230,12 @@ class OllamaProvider(BaseProvider):
         )
         self.default_model = "llama3"
     
+    def _get_headers(self) -> Dict[str, str]:
+        """Override to omit Authorization header for local Ollama."""
+        return {
+            "Content-Type": "application/json",
+        }
+    
     async def chat(
         self,
         messages: List[Dict],
