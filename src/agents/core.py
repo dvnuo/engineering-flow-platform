@@ -660,8 +660,16 @@ You have access to the following tools. When a user asks you to do something tha
             # Before each LLM call, check if we need to compact
             # This prevents token overflow during long tool loops
             current_tokens = estimate_messages_tokens(
-                [AgentMessage(**{k: v for k, v in m.items() if k in ['role', 'content', 'timestamp', 'tool_calls', 'tool_use_id']}) 
-                 for m in loop_messages]
+                [
+                    AgentMessage(
+                        role=m.get("role", "user"),
+                        content=m.get("content", ""),
+                        timestamp=m.get("timestamp"),
+                        tool_calls=m.get("tool_calls"),
+                        tool_use_id=m.get("tool_call_id"),
+                    )
+                    for m in loop_messages
+                ]
             )
             if current_tokens > compaction_threshold:
                 logger.info(
