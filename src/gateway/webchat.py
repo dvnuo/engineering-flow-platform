@@ -1836,6 +1836,85 @@ async def api_files_get(request: web.Request) -> web.Response:
         }, status=500)
 
 
+async def api_files_download(request: web.Request) -> web.Response:
+    """Download a file.
+    
+    GET /api/files/download?path=<file_path>
+    
+    Returns:
+        200: File content as stream
+        404: File not found
+    """
+    try:
+        import aiofiles
+        import os
+        from pathlib import Path
+        
+        # Get file path from query param
+        file_path = request.query.get('path', '')
+        
+        if not file_path:
+            return web.json_response({
+                'success': False,
+                'error': 'path is required'
+            }, status=400)
+        
+        # Security: resolve path and check it's within allowed directories
+        try:
+            resolved_path = Path(file_path).resolve()
+        except Exception:
+            return web.json_response({
+                'success': False,
+                'error': 'Invalid path'
+            }, status=400)
+        
+        # Check if file exists
+        if not resolved_path.exists() or not resolved_path.is_file():
+            return web.json_response({
+                'success': False,
+                'error': 'File not found'
+            }, status=404)
+        
+        # Determine content type
+        content_type = 'application/octet-stream'
+        suffix = resolved_path.suffix.lower()
+        if suffix == '.md':
+            content_type = 'text/markdown'
+        elif suffix == '.txt':
+            content_type = 'text/plain'
+        elif suffix == '.json':
+            content_type = 'application/json'
+        elif suffix == '.py':
+            content_type = 'text/x-python'
+        elif suffix in ['.jpg', '.jpeg']:
+            content_type = 'image/jpeg'
+        elif suffix == '.png':
+            content_type = 'image/png'
+        elif suffix == '.pdf':
+            content_type = 'application/pdf'
+        
+        # Read file async
+        async with aiofiles.open(resolved_path, 'rb') as f:
+            content = await f.read()
+        
+        # Return file with appropriate headers
+        response = web.Response(
+            body=content,
+            content_type=content_type,
+            headers={
+                'Content-Disposition': f'attachment; filename="{resolved_path.name}"'
+            }
+        )
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error downloading file: {e}")
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
 async def api_files_delete(request: web.Request) -> web.Response:
     """Delete a file.
     
@@ -1914,6 +1993,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/files/upload', api_files_upload)
     app.router.add_post('/api/files/parse', api_files_parse)
     app.router.add_get('/api/files/list', api_files_list)
+    app.router.add_get('/api/files/download', api_files_download)
     app.router.add_get('/api/files/{file_id}/preview', api_files_preview)
     app.router.add_get('/api/files/{file_id}', api_files_get)
     app.router.add_delete('/api/files/{file_id}', api_files_delete)
