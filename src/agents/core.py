@@ -671,7 +671,7 @@ You have access to the following tools. When a user asks you to do something tha
                     for m in loop_messages
                 ]
             )
-            if current_tokens > compaction_threshold:
+            if current_tokens > compaction_threshold and iteration > 1:
                 logger.info(
                     f"[Tool Loop] Iteration {iteration}: Messages ({current_tokens}) exceed "
                     f"threshold ({compaction_threshold}), compacting..."
