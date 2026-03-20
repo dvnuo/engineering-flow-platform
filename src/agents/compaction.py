@@ -793,11 +793,18 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
         # GPT-3.5
         "gpt-3.5-turbo": 16385,
         # Claude series
+        # 4.x models (including versioned like claude-haiku-4-20250514)
         "claude-opus-4": 200000,
         "claude-sonnet-4": 200000,
+        "claude-haiku-4": 200000,
+        # 3.5 models (multiple naming conventions)
         "claude-haiku-3-5": 200000,
         "claude-opus-3-5": 200000,
         "claude-sonnet-3-5": 200000,
+        "claude-3-5-sonnet": 200000,
+        # 3.x models
+        "claude-3-opus": 200000,
+        "claude-3-haiku": 200000,
     }
     
     if model:

@@ -1048,13 +1048,6 @@ You have access to the following tools. When a user asks you to do something tha
                     "success": tool_result.success
                 })
                 
-                # Add function_call_output to input_items (Responses API)
-                input_items.append({
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": str(tool_result),
-                })
-                
                 # Also add to loop_messages for next compaction cycle
                 loop_messages.append({
                     "role": "tool",
