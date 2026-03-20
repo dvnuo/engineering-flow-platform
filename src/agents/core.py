@@ -619,8 +619,72 @@ You have access to the following tools. When a user asks you to do something tha
         
         input_items = _to_input_items(messages)
         
+        # Token threshold for compaction (80% of max_tokens)
+        compaction_threshold = int(max_tokens * 0.8)
+        
+        # Keep track of messages for compaction during loop
+        # This list will be updated with tool results
+        loop_messages = messages.copy()
+        
         while iteration < max_tool_iterations:
             iteration += 1
+            
+            # ===== COMPACTION IN LOOP =====
+            # Before each LLM call, check if we need to compact
+            # This prevents token overflow during long tool loops
+            current_tokens = estimate_messages_tokens(
+                [AgentMessage(**{k: v for k, v in m.items() if k in ['role', 'content', 'timestamp', 'tool_calls', 'tool_use_id']}) 
+                 for m in loop_messages]
+            )
+            if current_tokens > compaction_threshold and iteration > 1:
+                # Only compact if not first iteration (first iteration already compacted)
+                logger.info(
+                    f"[Tool Loop] Iteration {iteration}: Messages ({current_tokens}) exceed "
+                    f"threshold ({compaction_threshold}), compacting..."
+                )
+                
+                # Convert to AgentMessage for compaction
+                agent_msgs_for_compact = [
+                    AgentMessage(
+                        role=m.get("role", "user"),
+                        content=m.get("content", ""),
+                        timestamp=m.get("timestamp"),
+                        tool_calls=m.get("tool_calls"),
+                        tool_use_id=m.get("tool_call_id"),
+                    )
+                    for m in loop_messages
+                ]
+                
+                compacted_messages, compaction_stats = await compact_messages(
+                    messages=agent_msgs_for_compact,
+                    max_tokens=compaction_threshold,
+                    context_window=context_window,
+                    recent_count=5,
+                )
+                
+                # Convert back to dict format
+                loop_messages = []
+                for msg in compacted_messages:
+                    msg_dict = {
+                        "role": msg.role,
+                        "content": msg.content,
+                        "timestamp": msg.timestamp,
+                    }
+                    if msg.tool_calls:
+                        msg_dict["tool_calls"] = msg.tool_calls
+                    if msg.tool_use_id:
+                        msg_dict["tool_call_id"] = msg.tool_use_id
+                    loop_messages.append(msg_dict)
+                
+                logger.info(
+                    f"[Tool Loop] Compaction complete: "
+                    f"kept_tokens={compaction_stats.kept_tokens}, "
+                    f"dropped_messages={compaction_stats.dropped_messages}"
+                )
+                
+                # Rebuild input_items after compaction
+                input_items = _to_input_items(loop_messages)
+            # ===== END COMPACTION IN LOOP =====
             
             # Send iteration start event
             send_event("iteration_start", {"iteration": iteration, "total": max_tool_iterations})
@@ -865,6 +929,13 @@ You have access to the following tools. When a user asks you to do something tha
                 return result
             
             # Add function_call to input_items for Responses API (ALL function calls, not just first)
+            # Also add assistant message to loop_messages for compaction tracking
+            if tool_calls:
+                loop_messages.append({
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": tool_calls,
+                })
             
             # Note: Tool execution info is sent via WebSocket events and saved 
             # to session metadata via tracer (thinking_events). No message is saved
@@ -931,6 +1002,14 @@ You have access to the following tools. When a user asks you to do something tha
                     "call_id": call_id,
                     "output": str(tool_result),
                 })
+                
+                # Also add to loop_messages for next compaction cycle
+                loop_messages.append({
+                    "role": "tool",
+                    "content": str(tool_result),
+                    "tool_call_id": call_id,
+                })
+                
                 # Tool results are sent via WebSocket events and saved to tracer.
                 # No separate message saved - frontend displays via Thinking Process.
                 
