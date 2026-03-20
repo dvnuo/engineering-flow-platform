@@ -444,6 +444,10 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Get max iterations from config, default to 30
         max_tool_iterations = config.session.get("max_iterations", 30) if hasattr(config, 'session') else 30
+        
+        # Get compaction threshold from config (default 80%)
+        # This determines when to trigger compaction during tool loops
+        compaction_threshold_pct = config.session.get("compaction_threshold", 0.8) if hasattr(config, 'session') else 0.8
         iteration = 0
         
         # Helper function to send stream events
@@ -619,8 +623,8 @@ You have access to the following tools. When a user asks you to do something tha
         
         input_items = _to_input_items(messages)
         
-        # Token threshold for compaction (80% of max_tokens)
-        compaction_threshold = int(max_tokens * 0.8)
+        # Token threshold for compaction (configurable, default 80% of max_tokens)
+        compaction_threshold = int(max_tokens * compaction_threshold_pct)
         
         # Keep track of messages for compaction during loop
         # This list will be updated with tool results
