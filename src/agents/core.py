@@ -16,6 +16,7 @@ from src.agents.thinking import ThinkLevel, normalize_think_level, format_runtim
 from src.config import config
 from src.utils.truncate import truncate, truncate_with_count
 from src.sessions.manager import session_manager
+from src.sessions.persistence import session_persistence
 from src.agents.executor import (
     skills_executor,
     SkillResult,
@@ -807,6 +808,24 @@ You have access to the following tools. When a user asks you to do something tha
                     "name": fc.get("name", ""),
                     "arguments": args_str,
                 })
+            
+            # Save intermediate chatlog after each LLM call (for recovery on interruption)
+            try:
+                all_events = tracer_instance.get_events_for_ui(limit=50, session_id=session_id)
+                chatlog_data = {
+                    "session_id": session_id,
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "iteration": iteration,
+                    "llm_debug": llm_result.get("_llm_debug", {}),
+                    "thinking_events": all_events,
+                }
+                chatlog_dir = os.path.join(session_persistence.storage_dir, "chatlogs")
+                os.makedirs(chatlog_dir, exist_ok=True)
+                chatlog_file = os.path.join(chatlog_dir, f"{session_id}.json")
+                with open(chatlog_file, "w") as f:
+                    json.dump(chatlog_data, f, indent=2)
+            except Exception as e:
+                logger.debug(f"Failed to save intermediate chatlog: {e}")
             
             # Note: Tool execution info is sent via WebSocket events and saved 
             # to session metadata via tracer (thinking_events). No message is saved
