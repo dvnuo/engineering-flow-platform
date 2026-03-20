@@ -1,5 +1,6 @@
 """Agent core implementation following modern agent loop patterns."""
 
+import asyncio
 import contextvars
 import json
 import logging
