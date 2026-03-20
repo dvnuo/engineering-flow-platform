@@ -750,7 +750,6 @@ class GitHubCopilotProvider(BaseProvider):
             }
         
         # Build messages - GitHub Copilot uses system differently
-        # Build messages - GitHub Copilot uses system differently
         all_messages = []
         if system_prompt:
             # GitHub Copilot: prepend system message to conversation
@@ -1294,10 +1293,7 @@ class OllamaProvider(BaseProvider):
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             }
         
-        # Debug: Log response
-        if _is_debug_enabled():
-            logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
-            logger.debug(f"Status: {response.status_code}")
+        # Debug: Log response (response is handled inside _call_api)
         
         # Parse and log result
         result = self._parse_response(data)
