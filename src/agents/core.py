@@ -657,37 +657,25 @@ You have access to the following tools. When a user asks you to do something tha
             iteration += 1
             
             # ===== COMPACTION IN LOOP =====
-            # Before each LLM call, check if we need to compact
-            # This prevents token overflow during long tool loops
-            current_tokens = estimate_messages_tokens(
-                [
-                    AgentMessage(
-                        role=m.get("role", "user"),
-                        content=m.get("content", ""),
-                        timestamp=m.get("timestamp"),
-                        tool_calls=m.get("tool_calls"),
-                        tool_use_id=m.get("tool_call_id"),
-                    )
-                    for m in loop_messages
-                ]
-            )
+            # Build AgentMessage list once for token estimation and compaction
+            agent_msgs_for_compact = [
+                AgentMessage(
+                    role=m.get("role", "user"),
+                    content=m.get("content", ""),
+                    timestamp=m.get("timestamp"),
+                    tool_calls=m.get("tool_calls"),
+                    tool_use_id=m.get("tool_call_id"),
+                )
+                for m in loop_messages
+            ]
+            
+            current_tokens = estimate_messages_tokens(agent_msgs_for_compact)
+            
             if current_tokens > compaction_threshold and iteration > 1:
                 logger.info(
                     f"[Tool Loop] Iteration {iteration}: Messages ({current_tokens}) exceed "
                     f"threshold ({compaction_threshold}), compacting..."
                 )
-                
-                # Convert to AgentMessage for compaction
-                agent_msgs_for_compact = [
-                    AgentMessage(
-                        role=m.get("role", "user"),
-                        content=m.get("content", ""),
-                        timestamp=m.get("timestamp"),
-                        tool_calls=m.get("tool_calls"),
-                        tool_use_id=m.get("tool_call_id"),
-                    )
-                    for m in loop_messages
-                ]
                 
                 compacted_messages, compaction_stats = await compact_messages(
                     messages=agent_msgs_for_compact,
@@ -715,13 +703,9 @@ You have access to the following tools. When a user asks you to do something tha
                     f"kept_tokens={compaction_stats.kept_tokens}, "
                     f"dropped_messages={compaction_stats.dropped_messages}"
                 )
-                
-                # Rebuild input_items after compaction
-                input_items = _to_input_items(loop_messages)
-            else:
-                # Keep input_items in sync with loop_messages (append new assistant tool_call if present)
-                # This ensures input_items always reflects the current loop_messages state
-                input_items = _to_input_items(loop_messages)
+            
+            # Keep input_items in sync with loop_messages (possibly compacted)
+            input_items = _to_input_items(loop_messages)
             # ===== END COMPACTION IN LOOP =====
             
             # Send iteration start event
@@ -966,9 +950,9 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 return result
             
-            # Add function_call to input_items for Responses API (ALL function calls, not just first)
-            # Also add assistant message to loop_messages for compaction tracking
-            # Convert Responses API format to Chat format for compaction compatibility
+            # Record tool calls in loop_messages (ALL function calls, not just first);
+            # input_items will be rebuilt from loop_messages on next iteration.
+            # Convert Responses API format to Chat format for compaction compatibility.
             if tool_calls:
                 chat_format_tool_calls = []
                 for tc in tool_calls:
