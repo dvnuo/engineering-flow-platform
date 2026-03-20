@@ -324,7 +324,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Use 80% of context window as the limit for prompt history
         # This delays compaction by allowing more history before triggering it
-        max_tokens = max(128000, int(context_window * 0.8))
+        max_tokens = int(context_window * 0.8)
         
         # Estimate current token count
         # Convert session messages to AgentMessage format
@@ -447,7 +447,29 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Get compaction threshold from config (default 80%)
         # This determines when to trigger compaction during tool loops
-        compaction_threshold_pct = config.session.get("compaction_threshold", 0.8) if hasattr(config, 'session') else 0.8
+        # Normalize and validate the threshold value
+        raw_compaction_threshold = config.session.get("compaction_threshold", 0.8) if hasattr(config, 'session') else 0.8
+        
+        def _normalize_compaction_threshold(raw_value):
+            """Normalize compaction threshold to float in (0, 1). Supports: 0.8, 80, '0.8', '80'"""
+            default_value = 0.8
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                logger.warning("Invalid compaction_threshold value %r, using default 0.8", raw_value)
+                return default_value
+            
+            # Interpret values > 1 as percentages (e.g., 80 -> 0.8)
+            if value > 1:
+                value = value / 100.0
+            
+            # Clamp to sensible range [0.1, 0.95]
+            clamped = max(0.1, min(0.95, value))
+            if clamped != value:
+                logger.warning("Compaction threshold %f out of range, clamped to %f", value, clamped)
+            return clamped
+        
+        compaction_threshold_pct = _normalize_compaction_threshold(raw_compaction_threshold)
         iteration = 0
         
         # Helper function to send stream events
@@ -624,7 +646,10 @@ You have access to the following tools. When a user asks you to do something tha
         input_items = _to_input_items(messages)
         
         # Token threshold for compaction (configurable, default 80% of max_tokens)
-        compaction_threshold = int(max_tokens * compaction_threshold_pct)
+        # Also bound by context_window to avoid overflow for small context models
+        raw_threshold = int(max_tokens * compaction_threshold_pct)
+        max_by_context = int(context_window * compaction_threshold_pct)
+        compaction_threshold = max(1, min(raw_threshold, max_by_context))
         
         # Keep track of messages for compaction during loop
         # This list will be updated with tool results
@@ -934,11 +959,25 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Add function_call to input_items for Responses API (ALL function calls, not just first)
             # Also add assistant message to loop_messages for compaction tracking
+            # Convert Responses API format to Chat format for compaction compatibility
             if tool_calls:
+                chat_format_tool_calls = []
+                for tc in tool_calls:
+                    call_id = tc.get("call_id", "")
+                    name = tc.get("name", "")
+                    args = tc.get("arguments", {})
+                    args_str = args if isinstance(args, str) else json.dumps(args)
+                    chat_format_tool_calls.append({
+                        "id": call_id,
+                        "function": {
+                            "name": name,
+                            "arguments": args_str
+                        }
+                    })
                 loop_messages.append({
                     "role": "assistant",
                     "content": content,
-                    "tool_calls": tool_calls,
+                    "tool_calls": chat_format_tool_calls,
                 })
             
             # Note: Tool execution info is sent via WebSocket events and saved 
