@@ -1854,12 +1854,12 @@ async def api_files_download(request: web.Request) -> web.Response:
         from typing import List
         
         # Get file paths from query param (support multiple 'paths')
-        file_paths = request.query.getall('paths')
-        if not file_paths:
-            # Fallback to single 'path' param
-            file_path = request.query.get('path', '')
-            if file_path:
-                file_paths = [file_path]
+        # Collect all 'paths' and 'path' values from query string
+        file_paths = []
+        for key, value in request.query.items():
+            if key == 'paths' or key == 'path':
+                if value:
+                    file_paths.append(value)
         
         if not file_paths:
             return web.json_response({
