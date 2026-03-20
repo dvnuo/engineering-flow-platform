@@ -120,6 +120,9 @@ def estimate_tokens(text: str) -> int:
     """
     if not text:
         return 0
+    # Handle non-string content (e.g., list from vision blocks)
+    if not isinstance(text, str):
+        text = str(text)
     # OpenAI's tiktoken is more accurate, but this is a simple approximation
     return len(text) // 4
 
@@ -778,11 +781,23 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
     """
     # Default context windows
     context_windows = {
+        # GPT-4 series
         "gpt-4": 8192,
         "gpt-4-turbo": 128000,
+        "gpt-4o": 128000,
+        "gpt-4o-mini": 128000,
+        # GPT-5 series
+        "gpt-5": 200000,
+        "gpt-5-mini": 200000,
+        "gpt-5-pro": 200000,
+        # GPT-3.5
         "gpt-3.5-turbo": 16385,
+        # Claude series
+        "claude-opus-4": 200000,
         "claude-sonnet-4": 200000,
         "claude-haiku-3-5": 200000,
+        "claude-opus-3-5": 200000,
+        "claude-sonnet-3-5": 200000,
     }
     
     if model:

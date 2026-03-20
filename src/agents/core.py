@@ -645,11 +645,9 @@ You have access to the following tools. When a user asks you to do something tha
         
         input_items = _to_input_items(messages)
         
-        # Token threshold for compaction (configurable, default 80% of max_tokens)
-        # Also bound by context_window to avoid overflow for small context models
-        raw_threshold = int(max_tokens * compaction_threshold_pct)
-        max_by_context = int(context_window * compaction_threshold_pct)
-        compaction_threshold = max(1, min(raw_threshold, max_by_context))
+        # Token threshold for compaction (configurable, default 80% of context_window)
+        # This is the TRIGGER threshold - compaction runs when token count exceeds this
+        compaction_threshold = int(context_window * compaction_threshold_pct)
         
         # Keep track of messages for compaction during loop
         # This list will be updated with tool results
@@ -665,8 +663,7 @@ You have access to the following tools. When a user asks you to do something tha
                 [AgentMessage(**{k: v for k, v in m.items() if k in ['role', 'content', 'timestamp', 'tool_calls', 'tool_use_id']}) 
                  for m in loop_messages]
             )
-            if current_tokens > compaction_threshold and iteration > 1:
-                # Only compact if not first iteration (first iteration already compacted)
+            if current_tokens > compaction_threshold:
                 logger.info(
                     f"[Tool Loop] Iteration {iteration}: Messages ({current_tokens}) exceed "
                     f"threshold ({compaction_threshold}), compacting..."
@@ -686,7 +683,7 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 compacted_messages, compaction_stats = await compact_messages(
                     messages=agent_msgs_for_compact,
-                    max_tokens=compaction_threshold,
+                    max_tokens=max_tokens,
                     context_window=context_window,
                     recent_count=5,
                 )
