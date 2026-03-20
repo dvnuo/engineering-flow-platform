@@ -929,10 +929,7 @@ class GitHubCopilotProvider(BaseProvider):
         # Use _call_api for centralized retry/backoff behavior
         data = await self._call_api("/responses", payload)
         
-        # Debug: Log response
-        if _is_debug_enabled():
-            logger.debug(f"=== [GITHUB COPILOT] RESPONSES API RESPONSE ===")
-            logger.debug(f"Status: {response.status_code}")
+        # Debug: Log response (response handled inside _call_api)
         
         # Parse response - Responses API uses 'output' array instead of 'choices'
         output_items = data.get("output", [])
@@ -1110,10 +1107,7 @@ class ClaudeProvider(BaseProvider):
         # Use _call_api for retry support
         data = await self._call_api("/messages", payload)
         
-        # Debug: Log response
-        if _is_debug_enabled():
-            logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
-            logger.debug(f"Status: {response.status_code}")
+        # Debug: Log response (response handled inside _call_api)
         
         # Parse and log content/tool calls
         parsed = self._parse_response(data)
