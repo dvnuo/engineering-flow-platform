@@ -695,37 +695,38 @@ You have access to the following tools. When a user asks you to do something tha
             tool_calls = function_calls  # alias
             
             # Save intermediate chatlog after EVERY LLM call (for recovery on interruption)
-            # This must be BEFORE the early return for no-tool-calls
-            try:
-                from src.skills import get_tracer
-                tracer_instance = get_tracer()
-                all_events = tracer_instance.get_events_for_ui(limit=50, session_id=session_id)
-                
-                # Sanitize session_id to prevent path traversal
-                safe_session_id = "".join(c for c in session_id if c.isalnum() or c in "-_")
-                if not safe_session_id:
-                    safe_session_id = "default"
-                
-                chatlog_data = {
-                    "session_id": session_id,
-                    "timestamp": datetime.utcnow().isoformat() + "Z",
-                    "iteration": iteration,
-                    "llm_debug": {
-                        "llm_request": llm_result.get("_llm_debug", {}),
+            # Use asyncio.to_thread to avoid blocking the event loop
+            async def save_chatlog():
+                try:
+                    from src.skills import get_tracer
+                    tracer_instance = get_tracer()
+                    all_events = tracer_instance.get_events_for_ui(limit=50, session_id=session_id)
+                    
+                    chatlog_data = {
+                        "session_id": session_id,
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "iteration": iteration,
+                        "llm_debug": {
+                            "llm_request": llm_result.get("_llm_debug", {}),
+                            "thinking_events": all_events,
+                        },
                         "thinking_events": all_events,
-                    },
-                    "thinking_events": all_events,
-                }
-                chatlog_dir = os.path.join(session_persistence.storage_dir, "chatlogs")
-                os.makedirs(chatlog_dir, exist_ok=True)
-                chatlog_file = os.path.join(chatlog_dir, f"{safe_session_id}.json")
-                # Atomic write: write to temp file first, then replace
-                temp_chatlog_file = chatlog_file + ".tmp"
-                with open(temp_chatlog_file, "w") as f:
-                    json.dump(chatlog_data, f, indent=2)
-                os.replace(temp_chatlog_file, chatlog_file)
-            except Exception as e:
-                logger.debug(f"Failed to save intermediate chatlog: {e}")
+                    }
+                    chatlog_dir = os.path.join(session_persistence.storage_dir, "chatlogs")
+                    os.makedirs(chatlog_dir, exist_ok=True)
+                    # Use raw session_id to match webchat.py's approach
+                    chatlog_file = os.path.join(chatlog_dir, f"{session_id}.json")
+                    # Atomic write: write to temp file first, then replace
+                    import uuid
+                    temp_chatlog_file = chatlog_file + f".{uuid.uuid4().hex[:8]}.tmp"
+                    with open(temp_chatlog_file, "w") as f:
+                        json.dump(chatlog_data, f, indent=2)
+                    os.replace(temp_chatlog_file, chatlog_file)
+                except Exception as e:
+                    logger.debug(f"Failed to save intermediate chatlog: {e}")
+            
+            # Run chatlog save in background thread to avoid blocking
+            asyncio.create_task(save_chatlog())
             
             # If no function calls, we're done - return the response
             if not tool_calls:
