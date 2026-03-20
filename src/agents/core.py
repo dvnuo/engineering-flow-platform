@@ -816,7 +816,10 @@ You have access to the following tools. When a user asks you to do something tha
                     "session_id": session_id,
                     "timestamp": datetime.utcnow().isoformat() + "Z",
                     "iteration": iteration,
-                    "llm_debug": llm_result.get("_llm_debug", {}),
+                    "llm_debug": {
+                        "llm_request": llm_result.get("_llm_debug", {}),
+                        "thinking_events": all_events,
+                    },
                     "thinking_events": all_events,
                 }
                 chatlog_dir = os.path.join(session_persistence.storage_dir, "chatlogs")
