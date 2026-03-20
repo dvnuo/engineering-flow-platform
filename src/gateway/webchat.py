@@ -1840,6 +1840,7 @@ async def api_files_download(request: web.Request) -> web.Response:
     """Download a file.
     
     GET /api/files/download?path=<file_path>
+    GET /api/files/download?paths=<file_path>  (alternative)
     
     Returns:
         200: File content as stream
@@ -1849,8 +1850,8 @@ async def api_files_download(request: web.Request) -> web.Response:
         import os
         from pathlib import Path
         
-        # Get file path from query param
-        file_path = request.query.get('path', '')
+        # Get file path from query param (support both 'path' and 'paths')
+        file_path = request.query.get('path', request.query.get('paths', ''))
         
         if not file_path:
             return web.json_response({
