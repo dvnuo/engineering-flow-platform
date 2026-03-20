@@ -315,6 +315,7 @@ You have access to the following tools. When a user asks you to do something tha
             compact_messages,
             estimate_messages_tokens,
             resolve_context_window_tokens,
+            normalize_compaction_threshold,
             CompactionStats,
         )
         
@@ -449,27 +450,7 @@ You have access to the following tools. When a user asks you to do something tha
         # This determines when to trigger compaction during tool loops
         # Normalize and validate the threshold value
         raw_compaction_threshold = config.session.get("compaction_threshold", 0.8) if hasattr(config, 'session') else 0.8
-        
-        def _normalize_compaction_threshold(raw_value):
-            """Normalize compaction threshold to float in (0, 1). Supports: 0.8, 80, '0.8', '80'"""
-            default_value = 0.8
-            try:
-                value = float(raw_value)
-            except (TypeError, ValueError):
-                logger.warning("Invalid compaction_threshold value %r, using default 0.8", raw_value)
-                return default_value
-            
-            # Interpret values > 1 as percentages (e.g., 80 -> 0.8)
-            if value > 1:
-                value = value / 100.0
-            
-            # Clamp to sensible range [0.1, 0.95]
-            clamped = max(0.1, min(0.95, value))
-            if clamped != value:
-                logger.warning("Compaction threshold %f out of range, clamped to %f", value, clamped)
-            return clamped
-        
-        compaction_threshold_pct = _normalize_compaction_threshold(raw_compaction_threshold)
+        compaction_threshold_pct = normalize_compaction_threshold(raw_compaction_threshold)
         iteration = 0
         
         # Helper function to send stream events

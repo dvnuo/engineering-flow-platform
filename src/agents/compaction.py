@@ -809,11 +809,43 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
     
     if model:
         model_lower = model.lower()
-        for key, value in context_windows.items():
+        # Prefer longer matches first to avoid "gpt-4" matching "gpt-4o"
+        for key in sorted(context_windows.keys(), key=len, reverse=True):
             if key in model_lower:
-                return value
+                return context_windows[key]
     
     return 4096  # Default
+
+
+def normalize_compaction_threshold(raw_value, default_value=0.8):
+    """Normalize compaction threshold to float in (0, 1).
+    
+    Supports:
+    - numeric values like 0.8
+    - percent-style values like 80 (interpreted as 80%)
+    - string representations of the above
+    
+    Args:
+        raw_value: The value from config
+        default_value: Fallback if invalid
+        
+    Returns:
+        Float in range [0.1, 0.95]
+    """
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return default_value
+    
+    # Interpret values >= 2 as percentages (e.g., 80 -> 0.8)
+    # Values like 1.5 are treated as-is (will be clamped to 0.95)
+    if value >= 2:
+        value = value / 100.0
+    
+    # Clamp to sensible range [0.1, 0.95]
+    clamped = max(0.1, min(0.95, value))
+    
+    return clamped
 
 
 # Export
@@ -835,6 +867,7 @@ __all__ = [
     "compact_messages",
     "fix_tool_call_consistency",
     "resolve_context_window_tokens",
+    "normalize_compaction_threshold",
     # Constants
     "BASE_CHUNK_RATIO",
     "MIN_CHUNK_RATIO",
