@@ -1851,6 +1851,7 @@ async def api_files_download(request: web.Request) -> web.Response:
         import os
         import zipfile
         from pathlib import Path
+        from typing import List
         
         # Get file paths from query param (support multiple 'paths')
         file_paths = request.query.getall('paths')
@@ -1865,6 +1866,26 @@ async def api_files_download(request: web.Request) -> web.Response:
                 'success': False,
                 'error': 'path is required'
             }, status=400)
+        
+        # Security: restrict paths to workspace directory
+        workspace_root = Path.home() / ".efp" / "workspace"
+        
+        def is_safe_path(path: str) -> bool:
+            """Check if path is within workspace directory."""
+            try:
+                resolved = Path(path).resolve()
+                # Check if resolved path is within workspace
+                return str(resolved).startswith(str(workspace_root))
+            except Exception:
+                return False
+        
+        # Validate all paths are within workspace
+        for fp in file_paths:
+            if not is_safe_path(fp):
+                return web.json_response({
+                    'success': False,
+                    'error': 'Path must be within workspace directory'
+                }, status=400)
         
         # Handle single file or directory
         if len(file_paths) == 1:
