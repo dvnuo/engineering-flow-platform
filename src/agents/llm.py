@@ -716,6 +716,17 @@ class GitHubCopilotProvider(BaseProvider):
         )
         self.default_model = config.llm.get('model', 'gpt-5-mini')
     
+    def _get_headers(self) -> Dict[str, str]:
+        """Override to include Copilot-specific headers."""
+        import os
+        api_key = os.environ.get('GITHUB_COPILOT_TOKEN') or config.llm.get('api_key', '')
+        return {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": "2023-06-01",
+            "Accept": "application/vnd.github.copilot-chat-preview+json",
+        }
+    
     async def chat(
         self,
         messages: List[Dict],
@@ -738,14 +749,7 @@ class GitHubCopilotProvider(BaseProvider):
                 }
             }
         
-        import os
-        headers = {
-            "Authorization": f"Bearer {os.environ.get('GITHUB_COPILOT_TOKEN', config.llm.get('api_key', ''))}",
-            "Content-Type": "application/json",
-            "X-GitHub-Api-Version": "2023-06-01",
-            "Accept": "application/vnd.github.copilot-chat-preview+json",
-        }
-        
+        # Build messages - GitHub Copilot uses system differently
         # Build messages - GitHub Copilot uses system differently
         all_messages = []
         if system_prompt:
@@ -888,12 +892,6 @@ class GitHubCopilotProvider(BaseProvider):
                     "code": "api_key_missing"
                 }
             }
-        
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "X-GitHub-Api-Version": "2023-06-01",
-        }
         
         model_name = model or self.default_model
         
@@ -1285,18 +1283,16 @@ class OllamaProvider(BaseProvider):
         # Use _call_api for retry support, but handle Ollama not running specially
         try:
             data = await self._call_api("/api/chat", payload)
-        except Exception as e:
-            if "ConnectError" in str(type(e).__name__) or "connection" in str(e).lower():
-                if _is_debug_enabled():
-                    logger.debug(f"=== [{self.name.upper()}] ERROR ===")
-                    logger.debug("Ollama not running. Start with: ollama serve")
-                return {
-                    "content": "",
-                    "tool_calls": [],
-                    "error": "Ollama not running. Start with: ollama serve",
-                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-                }
-            raise
+        except httpx.ConnectError:
+            if _is_debug_enabled():
+                logger.debug(f"=== [{self.name.upper()}] ERROR ===")
+                logger.debug("Ollama not running. Start with: ollama serve")
+            return {
+                "content": "",
+                "tool_calls": [],
+                "error": "Ollama not running. Start with: ollama serve",
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            }
         
         # Debug: Log response
         if _is_debug_enabled():
