@@ -1837,75 +1837,108 @@ async def api_files_get(request: web.Request) -> web.Response:
 
 
 async def api_files_download(request: web.Request) -> web.Response:
-    """Download a file.
+    """Download files.
     
-    GET /api/files/download?path=<file_path>
-    GET /api/files/download?paths=<file_path>  (alternative)
+    GET /api/files/download?paths=<file_path>
+    GET /api/files/download?paths=<file1>&paths=<file2>&...  (multiple)
     
     Returns:
-        200: File content as stream
+        200: File or ZIP archive
         404: File not found
     """
     try:
+        import io
         import os
+        import zipfile
         from pathlib import Path
         
-        # Get file path from query param (support both 'path' and 'paths')
-        file_path = request.query.get('path', request.query.get('paths', ''))
+        # Get file paths from query param (support multiple 'paths')
+        file_paths = request.query.getall('paths')
+        if not file_paths:
+            # Fallback to single 'path' param
+            file_path = request.query.get('path', '')
+            if file_path:
+                file_paths = [file_path]
         
-        if not file_path:
+        if not file_paths:
             return web.json_response({
                 'success': False,
                 'error': 'path is required'
             }, status=400)
         
-        # Security: resolve path and check it's within allowed directories
-        try:
-            resolved_path = Path(file_path).resolve()
-        except Exception:
-            return web.json_response({
-                'success': False,
-                'error': 'Invalid path'
-            }, status=400)
+        # Handle single file
+        if len(file_paths) == 1:
+            file_path = file_paths[0]
+            try:
+                resolved_path = Path(file_path).resolve()
+            except Exception:
+                return web.json_response({
+                    'success': False,
+                    'error': 'Invalid path'
+                }, status=400)
+            
+            if not resolved_path.exists() or not resolved_path.is_file():
+                return web.json_response({
+                    'success': False,
+                    'error': 'File not found'
+                }, status=404)
+            
+            # Determine content type
+            content_type = 'application/octet-stream'
+            suffix = resolved_path.suffix.lower()
+            if suffix == '.md':
+                content_type = 'text/markdown'
+            elif suffix == '.txt':
+                content_type = 'text/plain'
+            elif suffix == '.json':
+                content_type = 'application/json'
+            elif suffix == '.py':
+                content_type = 'text/x-python'
+            elif suffix in ['.jpg', '.jpeg']:
+                content_type = 'image/jpeg'
+            elif suffix == '.png':
+                content_type = 'image/png'
+            elif suffix == '.pdf':
+                content_type = 'application/pdf'
+            
+            # Read file synchronously
+            def read_file():
+                with open(resolved_path, 'rb') as f:
+                    return f.read()
+            
+            content = await asyncio.to_thread(read_file)
+            
+            # Return single file
+            response = web.Response(
+                body=content,
+                content_type=content_type,
+                headers={
+                    'Content-Disposition': f'attachment; filename="{resolved_path.name}"'
+                }
+            )
+            return response
         
-        # Check if file exists
-        if not resolved_path.exists() or not resolved_path.is_file():
-            return web.json_response({
-                'success': False,
-                'error': 'File not found'
-            }, status=404)
+        # Handle multiple files - create ZIP
+        def create_zip():
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for file_path in file_paths:
+                    try:
+                        resolved_path = Path(file_path).resolve()
+                        if resolved_path.exists() and resolved_path.is_file():
+                            zf.write(resolved_path, resolved_path.name)
+                    except Exception:
+                        continue
+            return buffer.getvalue()
         
-        # Determine content type
-        content_type = 'application/octet-stream'
-        suffix = resolved_path.suffix.lower()
-        if suffix == '.md':
-            content_type = 'text/markdown'
-        elif suffix == '.txt':
-            content_type = 'text/plain'
-        elif suffix == '.json':
-            content_type = 'application/json'
-        elif suffix == '.py':
-            content_type = 'text/x-python'
-        elif suffix in ['.jpg', '.jpeg']:
-            content_type = 'image/jpeg'
-        elif suffix == '.png':
-            content_type = 'image/png'
-        elif suffix == '.pdf':
-            content_type = 'application/pdf'
+        content = await asyncio.to_thread(create_zip)
         
-        # Read file synchronously (wrapped in to_thread)
-        def read_file():
-            with open(resolved_path, 'rb') as f:
-                return f.read()
-        
-        content = await asyncio.to_thread(read_file)
-        
-        # Return file with appropriate headers
+        # Return ZIP file
         response = web.Response(
             body=content,
-            content_type=content_type,
+            content_type='application/zip',
             headers={
-                'Content-Disposition': f'attachment; filename="{resolved_path.name}"'
+                'Content-Disposition': 'attachment; filename="files.zip"'
             }
         )
         return response
