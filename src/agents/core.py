@@ -1,5 +1,6 @@
 """Agent core implementation following modern agent loop patterns."""
 
+import asyncio
 import contextvars
 import json
 import logging
@@ -16,6 +17,7 @@ from src.agents.thinking import ThinkLevel, normalize_think_level, format_runtim
 from src.config import config
 from src.utils.truncate import truncate, truncate_with_count
 from src.sessions.manager import session_manager
+from src.sessions.persistence import session_persistence
 from src.agents.executor import (
     skills_executor,
     SkillResult,
@@ -693,6 +695,40 @@ You have access to the following tools. When a user asks you to do something tha
             function_calls = llm_result.get("function_calls", [])
             tool_calls = function_calls  # alias
             
+            # Save intermediate chatlog after EVERY LLM call (for recovery on interruption)
+            # Use asyncio.to_thread to avoid blocking the event loop
+            async def save_chatlog():
+                try:
+                    from src.skills import get_tracer
+                    tracer_instance = get_tracer()
+                    all_events = tracer_instance.get_events_for_ui(limit=50, session_id=session_id)
+                    
+                    chatlog_data = {
+                        "session_id": session_id,
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "iteration": iteration,
+                        "llm_debug": {
+                            "llm_request": llm_result.get("_llm_debug", {}),
+                            "thinking_events": all_events,
+                        },
+                        "thinking_events": all_events,
+                    }
+                    chatlog_dir = os.path.join(session_persistence.storage_dir, "chatlogs")
+                    os.makedirs(chatlog_dir, exist_ok=True)
+                    # Use raw session_id to match webchat.py's approach
+                    chatlog_file = os.path.join(chatlog_dir, f"{session_id}.json")
+                    # Atomic write: write to temp file first, then replace
+                    import uuid
+                    temp_chatlog_file = chatlog_file + f".{uuid.uuid4().hex[:8]}.tmp"
+                    with open(temp_chatlog_file, "w") as f:
+                        json.dump(chatlog_data, f, indent=2)
+                    os.replace(temp_chatlog_file, chatlog_file)
+                except Exception as e:
+                    logger.debug(f"Failed to save intermediate chatlog: {e}")
+            
+            # Run chatlog save in background thread to avoid blocking
+            asyncio.create_task(save_chatlog())
+            
             # If no function calls, we're done - return the response
             if not tool_calls:
                 await session_manager.add_message(session_id, "assistant", content)
@@ -797,16 +833,38 @@ You have access to the following tools. When a user asks you to do something tha
                     except Exception:
                         pass
             
+            # Check if LLM wants to call tools
+            if not tool_calls:
+                # No tool calls - return the response
+                if enable_reasoning:
+                    reasoning_content = llm_result.get("reasoning", "")
+                    if reasoning_content:
+                        send_event("llm_thinking", {
+                            "message": reasoning_content[:500],
+                            "thinking": reasoning_content,
+                            "iteration": iteration
+                        })
+                
+                # Build final result
+                result = {
+                    "content": content,
+                    "role": "assistant",
+                    "events": events,
+                }
+                
+                # Add complete thinking flow to debug info
+                if llm_result and "_llm_debug" in llm_result:
+                    # Get all events from tracer for complete flow
+                    all_events = tracer_instance.get_events_for_ui(limit=50, session_id=session_id)
+                    result["_llm_debug"] = {
+                        "llm_request": llm_result["_llm_debug"],
+                        "thinking_events": all_events,
+                        "final_response": content,
+                    }
+                
+                return result
+            
             # Add function_call to input_items for Responses API (ALL function calls, not just first)
-            for fc in function_calls:
-                args = fc.get("arguments", {})
-                args_str = args if isinstance(args, str) else json.dumps(args)
-                input_items.append({
-                    "type": "function_call",
-                    "call_id": fc.get("call_id", ""),
-                    "name": fc.get("name", ""),
-                    "arguments": args_str,
-                })
             
             # Note: Tool execution info is sent via WebSocket events and saved 
             # to session metadata via tracer (thinking_events). No message is saved
