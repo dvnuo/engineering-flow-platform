@@ -15,6 +15,7 @@ from src.agents.compaction import (
     is_oversized_for_summary,
     prune_history_for_context_share,
     resolve_context_window_tokens,
+    normalize_compaction_threshold,
     BASE_CHUNK_RATIO,
     MIN_CHUNK_RATIO,
     SAFETY_MARGIN,
@@ -307,6 +308,114 @@ class TestResolveContextWindowTokens:
     def test_none_model(self):
         """Test None model returns default."""
         assert resolve_context_window_tokens(None) == 4096
+
+    def test_gpt_4o(self):
+        """Test GPT-4o context window."""
+        assert resolve_context_window_tokens("gpt-4o") == 128000
+
+    def test_gpt_4o_mini(self):
+        """Test GPT-4o Mini context window."""
+        assert resolve_context_window_tokens("gpt-4o-mini") == 128000
+
+    def test_gpt_5(self):
+        """Test GPT-5 context window."""
+        assert resolve_context_window_tokens("gpt-5") == 200000
+
+    def test_gpt_5_mini(self):
+        """Test GPT-5 Mini context window."""
+        assert resolve_context_window_tokens("gpt-5-mini") == 200000
+
+    def test_gpt_5_pro(self):
+        """Test GPT-5 Pro context window."""
+        assert resolve_context_window_tokens("gpt-5-pro") == 200000
+
+    def test_claude_haiku_4(self):
+        """Test Claude Haiku 4.x context window."""
+        assert resolve_context_window_tokens("claude-haiku-4") == 200000
+
+    def test_claude_haiku_4_versioned(self):
+        """Test versioned Claude Haiku 4 model ID."""
+        assert resolve_context_window_tokens("claude-haiku-4-20250514") == 200000
+
+    def test_claude_3_5_sonnet(self):
+        """Test Claude 3.5 Sonnet with alternative naming."""
+        assert resolve_context_window_tokens("claude-3-5-sonnet") == 200000
+
+    def test_claude_3_opus(self):
+        """Test Claude 3 Opus context window."""
+        assert resolve_context_window_tokens("claude-3-opus") == 200000
+
+    def test_claude_3_haiku(self):
+        """Test Claude 3 Haiku context window."""
+        assert resolve_context_window_tokens("claude-3-haiku") == 200000
+
+    def test_claude_opus_3_5(self):
+        """Test Claude Opus 3.5 context window."""
+        assert resolve_context_window_tokens("claude-opus-3-5") == 200000
+
+    def test_claude_sonnet_3_5(self):
+        """Test Claude Sonnet 3.5 context window."""
+        assert resolve_context_window_tokens("claude-sonnet-3-5") == 200000
+
+
+class TestNormalizeCompactionThreshold:
+    """Tests for compaction threshold normalization."""
+    
+    def test_float_0_8(self):
+        """Test float 0.8 passes through."""
+        assert normalize_compaction_threshold(0.8) == 0.8
+    
+    def test_float_0_5(self):
+        """Test float 0.5 passes through."""
+        assert normalize_compaction_threshold(0.5) == 0.5
+    
+    def test_percent_80(self):
+        """Test percent-style 80 becomes 0.8."""
+        assert normalize_compaction_threshold(80) == 0.8
+    
+    def test_percent_50(self):
+        """Test percent-style 50 becomes 0.5."""
+        assert normalize_compaction_threshold(50) == 0.5
+    
+    def test_string_float_0_8(self):
+        """Test string '0.8' becomes 0.8."""
+        assert normalize_compaction_threshold("0.8") == 0.8
+    
+    def test_string_percent_80(self):
+        """Test string '80' becomes 0.8."""
+        assert normalize_compaction_threshold("80") == 0.8
+    
+    def test_string_percent_90(self):
+        """Test string '90' becomes 0.9."""
+        assert normalize_compaction_threshold("90") == 0.9
+    
+    def test_invalid_string_returns_default(self):
+        """Test invalid string returns default 0.8."""
+        assert normalize_compaction_threshold("invalid") == 0.8
+    
+    def test_none_returns_default(self):
+        """Test None returns default 0.8."""
+        assert normalize_compaction_threshold(None) == 0.8
+    
+    def test_list_returns_default(self):
+        """Test list returns default 0.8."""
+        assert normalize_compaction_threshold([1, 2, 3]) == 0.8
+    
+    def test_clamp_to_0_1_for_low_value(self):
+        """Test values < 0.1 are clamped to 0.1."""
+        assert normalize_compaction_threshold(0.05) == 0.1
+    
+    def test_clamp_to_0_95_for_high_value(self):
+        """Test values > 0.95 are clamped to 0.95."""
+        assert normalize_compaction_threshold(1.5) == 0.95
+    
+    def test_percent_150_clamped_to_0_95(self):
+        """Test percent 150 (>1) is divided by 100 = 1.5, clamped to 0.95."""
+        assert normalize_compaction_threshold(150) == 0.95
+    
+    def test_custom_default(self):
+        """Test custom default value."""
+        assert normalize_compaction_threshold("invalid", default_value=0.5) == 0.5
 
 
 class TestAgentMessage:

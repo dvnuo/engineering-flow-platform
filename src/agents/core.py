@@ -315,6 +315,7 @@ You have access to the following tools. When a user asks you to do something tha
             compact_messages,
             estimate_messages_tokens,
             resolve_context_window_tokens,
+            normalize_compaction_threshold,
             CompactionStats,
         )
         
@@ -324,7 +325,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Use 80% of context window as the limit for prompt history
         # This delays compaction by allowing more history before triggering it
-        max_tokens = max(128000, int(context_window * 0.8))
+        max_tokens = int(context_window * 0.8)
         
         # Estimate current token count
         # Convert session messages to AgentMessage format
@@ -444,6 +445,12 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Get max iterations from config, default to 30
         max_tool_iterations = config.session.get("max_iterations", 30) if hasattr(config, 'session') else 30
+        
+        # Get compaction threshold from config (default 80%)
+        # This determines when to trigger compaction during tool loops
+        # Normalize and validate the threshold value
+        raw_compaction_threshold = config.session.get("compaction_threshold", 0.8) if hasattr(config, 'session') else 0.8
+        compaction_threshold_pct = normalize_compaction_threshold(raw_compaction_threshold)
         iteration = 0
         
         # Helper function to send stream events
@@ -619,8 +626,68 @@ You have access to the following tools. When a user asks you to do something tha
         
         input_items = _to_input_items(messages)
         
+        # Token threshold for compaction (configurable, default 80% of context_window)
+        # This is the TRIGGER threshold - compaction runs when token count exceeds this
+        compaction_threshold = int(context_window * compaction_threshold_pct)
+        
+        # Keep track of messages for compaction during loop
+        # This list will be updated with tool results
+        loop_messages = messages.copy()
+        
         while iteration < max_tool_iterations:
             iteration += 1
+            
+            # ===== COMPACTION IN LOOP =====
+            # Build AgentMessage list once for token estimation and compaction
+            agent_msgs_for_compact = [
+                AgentMessage(
+                    role=m.get("role", "user"),
+                    content=m.get("content", ""),
+                    timestamp=m.get("timestamp"),
+                    tool_calls=m.get("tool_calls"),
+                    tool_use_id=m.get("tool_call_id"),
+                )
+                for m in loop_messages
+            ]
+            
+            current_tokens = estimate_messages_tokens(agent_msgs_for_compact)
+            
+            if current_tokens > compaction_threshold and iteration > 1:
+                logger.info(
+                    f"[Tool Loop] Iteration {iteration}: Messages ({current_tokens}) exceed "
+                    f"threshold ({compaction_threshold}), compacting..."
+                )
+                
+                compacted_messages, compaction_stats = await compact_messages(
+                    messages=agent_msgs_for_compact,
+                    max_tokens=compaction_threshold,
+                    context_window=context_window,
+                    recent_count=5,
+                )
+                
+                # Convert back to dict format
+                loop_messages = []
+                for msg in compacted_messages:
+                    msg_dict = {
+                        "role": msg.role,
+                        "content": msg.content,
+                        "timestamp": msg.timestamp,
+                    }
+                    if msg.tool_calls:
+                        msg_dict["tool_calls"] = msg.tool_calls
+                    if msg.tool_use_id:
+                        msg_dict["tool_call_id"] = msg.tool_use_id
+                    loop_messages.append(msg_dict)
+                
+                logger.info(
+                    f"[Tool Loop] Compaction complete: "
+                    f"kept_tokens={compaction_stats.kept_tokens}, "
+                    f"dropped_messages={compaction_stats.dropped_messages}"
+                )
+            
+            # Keep input_items in sync with loop_messages (possibly compacted)
+            input_items = _to_input_items(loop_messages)
+            # ===== END COMPACTION IN LOOP =====
             
             # Send iteration start event
             send_event("iteration_start", {"iteration": iteration, "total": max_tool_iterations})
@@ -864,7 +931,28 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 return result
             
-            # Add function_call to input_items for Responses API (ALL function calls, not just first)
+            # Record tool calls in loop_messages (ALL function calls, not just first);
+            # input_items will be rebuilt from loop_messages on next iteration.
+            # Convert Responses API format to Chat format for compaction compatibility.
+            if tool_calls:
+                chat_format_tool_calls = []
+                for tc in tool_calls:
+                    call_id = tc.get("call_id", "")
+                    name = tc.get("name", "")
+                    args = tc.get("arguments", {})
+                    args_str = args if isinstance(args, str) else json.dumps(args)
+                    chat_format_tool_calls.append({
+                        "id": call_id,
+                        "function": {
+                            "name": name,
+                            "arguments": args_str
+                        }
+                    })
+                loop_messages.append({
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": chat_format_tool_calls,
+                })
             
             # Note: Tool execution info is sent via WebSocket events and saved 
             # to session metadata via tracer (thinking_events). No message is saved
@@ -925,12 +1013,13 @@ You have access to the following tools. When a user asks you to do something tha
                     "success": tool_result.success
                 })
                 
-                # Add function_call_output to input_items (Responses API)
-                input_items.append({
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": str(tool_result),
+                # Also add to loop_messages for next compaction cycle
+                loop_messages.append({
+                    "role": "tool",
+                    "content": str(tool_result),
+                    "tool_call_id": call_id,
                 })
+                
                 # Tool results are sent via WebSocket events and saved to tracer.
                 # No separate message saved - frontend displays via Thinking Process.
                 
