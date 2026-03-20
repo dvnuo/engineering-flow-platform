@@ -689,3 +689,106 @@ class TestChatAPIFallback:
             tool_msg = next((m for m in messages if m.get("role") == "tool"), None)
             assert tool_msg is not None
             assert tool_msg.get("tool_call_id") == "call_123"
+
+
+class TestGitHubCopilotProvider:
+    """Tests for GitHub Copilot provider retry behavior."""
+
+    @pytest.mark.asyncio
+    async def test_github_copilot_chat_uses_call_api(self):
+        """Test that GitHub Copilot chat uses _call_api for retry support."""
+        from src.agents.llm import GitHubCopilotProvider
+        
+        provider = GitHubCopilotProvider()
+        provider.default_model = "gpt-5-mini"
+        provider.api_key = "test-key"
+        
+        # Mock _call_api to verify it's called
+        with patch.object(provider, '_call_api', new_callable=AsyncMock) as mock_call_api:
+            mock_call_api.return_value = {
+                "choices": [{"message": {"content": "test response"}}]
+            }
+            
+            result = await provider.chat(
+                messages=[{"role": "user", "content": "hello"}]
+            )
+            
+            # Verify _call_api was called
+            mock_call_api.assert_called_once()
+            assert result["content"] == "test response"
+
+    @pytest.mark.asyncio
+    async def test_github_copilot_responses_uses_call_api(self):
+        """Test that GitHub Copilot responses uses _call_api for retry support."""
+        from src.agents.llm import GitHubCopilotProvider
+        
+        provider = GitHubCopilotProvider()
+        provider.default_model = "gpt-5-mini"
+        provider.api_key = "test-key"
+        
+        # Mock _call_api to verify it's called
+        with patch.object(provider, '_call_api', new_callable=AsyncMock) as mock_call_api:
+            mock_call_api.return_value = {
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "test response"}]}]
+            }
+            
+            result = await provider.responses(
+                messages=[{"role": "user", "content": "hello"}]
+            )
+            
+            # Verify _call_api was called
+            mock_call_api.assert_called_once()
+            assert result["content"] == "test response"
+
+    @pytest.mark.asyncio
+    async def test_github_copilot_get_headers_includes_copilot_specific(self):
+        """Test that GitHub Copilot _get_headers includes required Copilot headers."""
+        from src.agents.llm import GitHubCopilotProvider
+        
+        provider = GitHubCopilotProvider()
+        
+        with patch.dict('os.environ', {'GITHUB_COPILOT_TOKEN': 'test-token'}):
+            headers = provider._get_headers()
+            
+            assert "Authorization" in headers
+            assert "X-GitHub-Api-Version" in headers
+            assert "Accept" in headers
+            assert headers["Accept"] == "application/vnd.github.copilot-chat-preview+json"
+
+
+class TestOllamaProvider:
+    """Tests for Ollama provider."""
+
+    @pytest.mark.asyncio
+    async def test_ollama_chat_uses_call_api(self):
+        """Test that Ollama chat uses _call_api for retry support."""
+        from src.agents.llm import OllamaProvider
+        
+        provider = OllamaProvider()
+        provider.default_model = "llama3"
+        
+        # Mock _call_api to verify it's called
+        with patch.object(provider, '_call_api', new_callable=AsyncMock) as mock_call_api:
+            mock_call_api.return_value = {
+                "message": {"content": "test response"}
+            }
+            
+            result = await provider.chat(
+                messages=[{"role": "user", "content": "hello"}]
+            )
+            
+            # Verify _call_api was called
+            mock_call_api.assert_called_once()
+            assert result["content"] == "test response"
+
+    @pytest.mark.asyncio
+    async def test_ollama_get_headers_omits_auth(self):
+        """Test that Ollama _get_headers omits Authorization header."""
+        from src.agents.llm import OllamaProvider
+        
+        provider = OllamaProvider()
+        headers = provider._get_headers()
+        
+        # Should not have Authorization header for local Ollama
+        assert "Authorization" not in headers
+        assert "Content-Type" in headers

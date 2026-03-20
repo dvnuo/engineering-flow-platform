@@ -716,6 +716,16 @@ class GitHubCopilotProvider(BaseProvider):
         )
         self.default_model = config.llm.get('model', 'gpt-5-mini')
     
+    def _get_headers(self) -> Dict[str, str]:
+        """Override to include Copilot-specific headers."""
+        api_key = os.environ.get('GITHUB_COPILOT_TOKEN') or config.llm.get('api_key', '')
+        return {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": "2023-06-01",
+            "Accept": "application/vnd.github.copilot-chat-preview+json",
+        }
+    
     async def chat(
         self,
         messages: List[Dict],
@@ -737,14 +747,6 @@ class GitHubCopilotProvider(BaseProvider):
                     "code": "api_key_missing"
                 }
             }
-        
-        import os
-        headers = {
-            "Authorization": f"Bearer {os.environ.get('GITHUB_COPILOT_TOKEN', config.llm.get('api_key', ''))}",
-            "Content-Type": "application/json",
-            "X-GitHub-Api-Version": "2023-06-01",
-            "Accept": "application/vnd.github.copilot-chat-preview+json",
-        }
         
         # Build messages - GitHub Copilot uses system differently
         all_messages = []
@@ -785,30 +787,8 @@ class GitHubCopilotProvider(BaseProvider):
                     logger.debug(f"  Tool {i}: {tool_name}")
 
         
-        # Make API call with proper error handling
-        endpoint = "/chat/completions"
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.api_base}{endpoint}",
-                    headers=headers,
-                    json=payload
-                )
-                response.raise_for_status()
-                data = response.json()
-        except httpx.HTTPStatusError as e:
-            error = handle_httpx_error(e, provider=self.name, endpoint=endpoint)
-            log_error(error, component=self.name.upper())
-            raise error
-        except httpx.RequestError as e:
-            error = handle_httpx_request_error(e, provider=self.name, endpoint=endpoint)
-            log_error(error, component=self.name.upper())
-            raise error
-        
-        # Debug: Log response
-        if _is_debug_enabled():
-            logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
-            logger.debug(f"Status: {response.status_code}")
+        # Make API call with proper error handling - use _call_api for retry
+        data = await self._call_api("/chat/completions", payload)
         
         choice = data["choices"][0]
         message = choice["message"]
@@ -911,12 +891,6 @@ class GitHubCopilotProvider(BaseProvider):
                 }
             }
         
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "X-GitHub-Api-Version": "2023-06-01",
-        }
-        
         model_name = model or self.default_model
         
         # Convert messages to input_items if provided
@@ -952,24 +926,8 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
             logger.debug(f"Input messages count: {len(input_items)}")
         
-        # Make API call
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.api_base}/responses",
-                    headers=headers,
-                    json=payload
-                )
-                response.raise_for_status()
-                data = response.json()
-        except httpx.HTTPStatusError as e:
-            error = handle_httpx_error(e, provider=self.name, endpoint="/responses")
-            log_error(error, component=self.name.upper())
-            raise error
-        except httpx.RequestError as e:
-            error = handle_httpx_request_error(e, provider=self.name, endpoint="/responses")
-            log_error(error, component=self.name.upper())
-            raise error
+        # Use _call_api for centralized retry/backoff behavior
+        data = await self._call_api("/responses", payload)
         
         # Debug: Log response
         if _is_debug_enabled():
@@ -1149,14 +1107,8 @@ class ClaudeProvider(BaseProvider):
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(all_messages)}")
         
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.api_base}/messages",
-                headers=self._get_headers(),
-                json=payload
-            )
-            response.raise_for_status()
-            data = response.json()
+        # Use _call_api for retry support
+        data = await self._call_api("/messages", payload)
         
         # Debug: Log response
         if _is_debug_enabled():
@@ -1277,6 +1229,12 @@ class OllamaProvider(BaseProvider):
         )
         self.default_model = "llama3"
     
+    def _get_headers(self) -> Dict[str, str]:
+        """Override to omit Authorization header for local Ollama."""
+        return {
+            "Content-Type": "application/json",
+        }
+    
     async def chat(
         self,
         messages: List[Dict],
@@ -1326,14 +1284,9 @@ class OllamaProvider(BaseProvider):
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(full_messages)}")
         
+        # Use _call_api for retry support, but handle Ollama not running specially
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(
-                    f"{self.api_base}/api/chat",
-                    json=payload
-                )
-                response.raise_for_status()
-                data = response.json()
+            data = await self._call_api("/api/chat", payload)
         except httpx.ConnectError:
             if _is_debug_enabled():
                 logger.debug(f"=== [{self.name.upper()}] ERROR ===")
@@ -1345,10 +1298,7 @@ class OllamaProvider(BaseProvider):
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             }
         
-        # Debug: Log response
-        if _is_debug_enabled():
-            logger.debug(f"=== [{self.name.upper()}] RESPONSE ===")
-            logger.debug(f"Status: {response.status_code}")
+        # Debug: Log response (response is handled inside _call_api)
         
         # Parse and log result
         result = self._parse_response(data)
