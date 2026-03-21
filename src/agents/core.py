@@ -631,7 +631,9 @@ You have access to the following tools. When a user asks you to do something tha
         compaction_threshold = int(context_window * compaction_threshold_pct)
         
         # Keep track of messages for compaction during loop
-        # This list will be updated with tool results
+        # IMPORTANT: Start fresh for each request to avoid carrying over
+        # tool_calls and tool_results from previous requests/iterations.
+        # loop_messages will be rebuilt as we go through the tool loop.
         loop_messages = messages.copy()
         
         while iteration < max_tool_iterations:
