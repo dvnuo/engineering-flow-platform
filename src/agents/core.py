@@ -948,11 +948,21 @@ You have access to the following tools. When a user asks you to do something tha
                             "arguments": args_str
                         }
                     })
-                loop_messages.append({
+                assistant_msg = {
                     "role": "assistant",
                     "content": content,
                     "tool_calls": chat_format_tool_calls,
-                })
+                }
+                loop_messages.append(assistant_msg)
+                
+                # Save assistant message with tool_calls to session history FIRST
+                # This ensures proper ordering: assistant(with tool_calls) -> tool result
+                await session_manager.add_message(
+                    session_id, 
+                    "assistant", 
+                    content,
+                    extra={"tool_calls": chat_format_tool_calls}
+                )
             
             # Note: Tool execution info is sent via WebSocket events and saved 
             # to session metadata via tracer (thinking_events). No message is saved
