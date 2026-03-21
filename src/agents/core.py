@@ -1020,8 +1020,14 @@ You have access to the following tools. When a user asks you to do something tha
                     "tool_call_id": call_id,
                 })
                 
-                # Tool results are sent via WebSocket events and saved to tracer.
-                # No separate message saved - frontend displays via Thinking Process.
+                # Save tool result to session history (for persistence and API recovery)
+                # This ensures tool results are preserved across requests
+                await session_manager.add_message(
+                    session_id, 
+                    "tool", 
+                    str(tool_result),
+                    extra={"tool_call_id": call_id, "tool_name": tool_name}
+                )
                 
                 logger.info(f"Tool result: {truncate_with_count(str(tool_result), 200)}")
             
