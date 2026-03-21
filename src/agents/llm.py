@@ -1588,7 +1588,8 @@ class LLMClient:
                                 last_assistant_msg = {"role": "assistant", "content": ""}
                                 last_assistant_appended = False  # Reset for new pending message
                             # If assistant was already appended (without knowing about tool_calls yet),
-                            # we need to remove it so it can be re-added after all function_call_output items
+                            # we need to remove it so it can be re-added with all its tool_calls.
+                            # The correct order is: assistant(with tool_calls) -> tool_result -> ...
                             if last_assistant_appended and last_assistant_msg.get("tool_calls"):
                                 # Remove the assistant message from the end of chat_messages
                                 if chat_messages and chat_messages[-1].get("role") == "assistant":
@@ -1618,15 +1619,24 @@ class LLMClient:
                                 last_assistant_appended = True
                                 pending_assistant = False
                             
-                            # Find the position of the assistant message with the matching call_id in tool_calls
-                            # and insert the tool message right after it, not at the end
+                            # Find the assistant message with the matching call_id in tool_calls
+                            # and insert the tool message right after it
                             insert_pos = None
                             if call_id:
                                 for i, msg in enumerate(chat_messages):
                                     if msg.get("role") == "assistant" and msg.get("tool_calls"):
                                         for tc in msg.get("tool_calls", []):
                                             if tc.get("id") == call_id:
+                                                # Insert after this assistant message
+                                                # But also after any tool results that were already inserted for this assistant
                                                 insert_pos = i + 1
+                                                # Check if there are tool results already after this position
+                                                # that belong to this assistant (by checking tool_call_id)
+                                                while insert_pos < len(chat_messages):
+                                                    if chat_messages[insert_pos].get("role") == "tool":
+                                                        insert_pos += 1
+                                                    else:
+                                                        break
                                                 break
                                         if insert_pos is not None:
                                             break
@@ -1638,10 +1648,7 @@ class LLMClient:
                             }
                             
                             if insert_pos is not None:
-                                # Insert tool message right after the assistant with tool_calls
                                 chat_messages.insert(insert_pos, tool_msg)
-                                # Update positions for any subsequent messages that were shifted
-                                # (no action needed since we only insert once per function_call_output)
                             else:
                                 # Fallback: append at end if assistant not found
                                 chat_messages.append(tool_msg)
