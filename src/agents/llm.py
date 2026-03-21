@@ -1587,6 +1587,13 @@ class LLMClient:
                             if last_assistant_msg is None:
                                 last_assistant_msg = {"role": "assistant", "content": ""}
                                 last_assistant_appended = False  # Reset for new pending message
+                            # If assistant was already appended (without knowing about tool_calls yet),
+                            # we need to remove it so it can be re-added after all function_call_output items
+                            if last_assistant_appended and last_assistant_msg.get("tool_calls"):
+                                # Remove the assistant message from the end of chat_messages
+                                if chat_messages and chat_messages[-1].get("role") == "assistant":
+                                    chat_messages.pop()
+                                last_assistant_appended = False
                             # Convert Responses function_call to Chat tool_calls format
                             tc = {
                                 "id": item.get("call_id", ""),
