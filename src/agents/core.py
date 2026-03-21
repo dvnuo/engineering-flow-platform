@@ -955,14 +955,11 @@ You have access to the following tools. When a user asks you to do something tha
                 }
                 loop_messages.append(assistant_msg)
                 
-                # Save assistant message with tool_calls to session history FIRST
-                # This ensures proper ordering: assistant(with tool_calls) -> tool result
-                await session_manager.add_message(
-                    session_id, 
-                    "assistant", 
-                    content,
-                    extra={"tool_calls": chat_format_tool_calls}
-                )
+                # NOTE: Do NOT save assistant message with tool_calls to session history here.
+                # The final assistant response (without tool_calls) will be saved AFTER
+                # tool execution completes. Saving tool_calls to history causes issues
+                # because subsequent LLM calls see the tool_calls in history and return
+                # new tool_calls, creating duplicates.
             
             # Note: Tool execution info is sent via WebSocket events and saved 
             # to session metadata via tracer (thinking_events). No message is saved
@@ -1023,21 +1020,23 @@ You have access to the following tools. When a user asks you to do something tha
                     "success": tool_result.success
                 })
                 
-                # Also add to loop_messages for next compaction cycle
+                # Add tool result to loop_messages for the NEXT LLM call in the current request
+                # This is different from saving to session history - loop_messages is per-request
+                # and will NOT be persisted to disk
                 loop_messages.append({
                     "role": "tool",
                     "content": str(tool_result),
                     "tool_call_id": call_id,
                 })
                 
-                # Save tool result to session history (for persistence and API recovery)
-                # This ensures tool results are preserved across requests
-                await session_manager.add_message(
-                    session_id, 
-                    "tool", 
-                    str(tool_result),
-                    extra={"tool_call_id": call_id, "tool_name": tool_name}
-                )
+                # NOTE: We do NOT save tool results to session history.
+                # Tool results in session history cause ordering issues because:
+                # 1. Assistant message with tool_calls is NOT saved (to prevent duplicate tool_calls)
+                # 2. Tool result is saved separately
+                # 3. When history is loaded, the order becomes wrong: user -> tool -> assistant
+                # 
+                # Instead, tool results stay in loop_messages for the current request's
+                # execution context and are passed directly to subsequent LLM calls.
                 
                 logger.info(f"Tool result: {truncate_with_count(str(tool_result), 200)}")
             
