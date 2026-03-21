@@ -1023,35 +1023,24 @@ You have access to the following tools. When a user asks you to do something tha
                 })
                 
                 # Add tool result to loop_messages for the NEXT LLM call in the current request
-                # IMPORTANT: Insert tool result RIGHT AFTER the assistant message with tool_calls,
-                # NOT at the end of loop_messages. This ensures correct message ordering for the API:
-                #   assistant(tool_calls) -> tool_result -> user(next) [CORRECT]
-                #   assistant(tool_calls) -> user(next) -> tool_result [WRONG - API error]
+                # IMPORTANT: Append to the END of loop_messages, not a specific position.
+                # 
+                # The issue with inserting at a specific position (i+1 after assistant with tool_calls)
+                # is that loop_messages may contain old messages from conversation history.
+                # Inserting at i+1 would place the tool result BEFORE those old user messages,
+                # resulting in: assistant(tool_calls) -> tool_result -> user(history) [WRONG]
                 #
-                # Find the position of the assistant message with the matching tool_call_id
+                # By appending to the end, we get:
+                #   ... old messages ... -> assistant(tool_calls) -> tool_result [CORRECT]
+                # The tool result naturally comes after the assistant message in the iteration order.
                 tool_result_msg = {
                     "role": "tool",
                     "content": str(tool_result),
                     "tool_call_id": call_id,
                 }
                 
-                # Find the assistant message with this tool_call_id in its tool_calls
-                insert_position = None
-                for i, msg in enumerate(loop_messages):
-                    if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                        for tc in msg["tool_calls"]:
-                            if tc.get("id") == call_id:
-                                insert_position = i + 1
-                                break
-                        if insert_position is not None:
-                            break
-                
-                if insert_position is not None:
-                    # Insert tool result right after the assistant message with tool_calls
-                    loop_messages.insert(insert_position, tool_result_msg)
-                else:
-                    # Fallback: append at end if assistant message not found
-                    loop_messages.append(tool_result_msg)
+                # Append tool result to end of loop_messages
+                loop_messages.append(tool_result_msg)
                 
                 # NOTE: We do NOT save tool results to session history.
                 # Tool results in session history cause ordering issues because:
