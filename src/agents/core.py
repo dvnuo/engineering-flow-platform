@@ -631,7 +631,9 @@ You have access to the following tools. When a user asks you to do something tha
         compaction_threshold = int(context_window * compaction_threshold_pct)
         
         # Keep track of messages for compaction during loop
-        # This list will be updated with tool results
+        # IMPORTANT: Start fresh for each request to avoid carrying over
+        # tool_calls and tool_results from previous requests/iterations.
+        # loop_messages will be rebuilt as we go through the tool loop.
         loop_messages = messages.copy()
         
         while iteration < max_tool_iterations:
@@ -948,11 +950,18 @@ You have access to the following tools. When a user asks you to do something tha
                             "arguments": args_str
                         }
                     })
-                loop_messages.append({
+                assistant_msg = {
                     "role": "assistant",
                     "content": content,
                     "tool_calls": chat_format_tool_calls,
-                })
+                }
+                loop_messages.append(assistant_msg)
+                
+                # NOTE: Do NOT save assistant message with tool_calls to session history here.
+                # The final assistant response (without tool_calls) will be saved AFTER
+                # tool execution completes. Saving tool_calls to history causes issues
+                # because subsequent LLM calls see the tool_calls in history and return
+                # new tool_calls, creating duplicates.
             
             # Note: Tool execution info is sent via WebSocket events and saved 
             # to session metadata via tracer (thinking_events). No message is saved
@@ -1013,15 +1022,34 @@ You have access to the following tools. When a user asks you to do something tha
                     "success": tool_result.success
                 })
                 
-                # Also add to loop_messages for next compaction cycle
-                loop_messages.append({
+                # Add tool result to loop_messages for the NEXT LLM call in the current request
+                # IMPORTANT: Append to the END of loop_messages, not a specific position.
+                # 
+                # The issue with inserting at a specific position (i+1 after assistant with tool_calls)
+                # is that loop_messages may contain old messages from conversation history.
+                # Inserting at i+1 would place the tool result BEFORE those old user messages,
+                # resulting in: assistant(tool_calls) -> tool_result -> user(history) [WRONG]
+                #
+                # By appending to the end, we get:
+                #   ... old messages ... -> assistant(tool_calls) -> tool_result [CORRECT]
+                # The tool result naturally comes after the assistant message in the iteration order.
+                tool_result_msg = {
                     "role": "tool",
                     "content": str(tool_result),
                     "tool_call_id": call_id,
-                })
+                }
                 
-                # Tool results are sent via WebSocket events and saved to tracer.
-                # No separate message saved - frontend displays via Thinking Process.
+                # Append tool result to end of loop_messages
+                loop_messages.append(tool_result_msg)
+                
+                # NOTE: We do NOT save tool results to session history.
+                # Tool results in session history cause ordering issues because:
+                # 1. Assistant message with tool_calls is NOT saved (to prevent duplicate tool_calls)
+                # 2. Tool result is saved separately
+                # 3. When history is loaded, the order becomes wrong: user -> tool -> assistant
+                # 
+                # Instead, tool results stay in loop_messages for the current request's
+                # execution context and are passed directly to subsequent LLM calls.
                 
                 logger.info(f"Tool result: {truncate_with_count(str(tool_result), 200)}")
             

@@ -1587,6 +1587,15 @@ class LLMClient:
                             if last_assistant_msg is None:
                                 last_assistant_msg = {"role": "assistant", "content": ""}
                                 last_assistant_appended = False  # Reset for new pending message
+                            # If an assistant message was already appended AND it already has tool_calls
+                            # (meaning tool_calls were discovered after the assistant was added),
+                            # we need to remove it so it can be re-added with all its tool_calls.
+                            # The correct order is: assistant(with tool_calls) -> tool_result -> ...
+                            if last_assistant_appended and last_assistant_msg.get("tool_calls"):
+                                # Remove the assistant message from the end of chat_messages
+                                if chat_messages and chat_messages[-1].get("role") == "assistant":
+                                    chat_messages.pop()
+                                last_assistant_appended = False
                             # Convert Responses function_call to Chat tool_calls format
                             tc = {
                                 "id": item.get("call_id", ""),
@@ -1603,19 +1612,48 @@ class LLMClient:
                         
                         # Handle function_call_output -> convert to Chat tool result
                         elif item_type == "function_call_output":
+                            call_id = item.get("call_id", "")
+                            
                             # Flush pending assistant message first (only if not already appended)
                             if pending_assistant and last_assistant_msg and not last_assistant_appended:
                                 chat_messages.append(last_assistant_msg)
                                 last_assistant_appended = True
                                 pending_assistant = False
-                                last_assistant_msg = None
+                            
+                            # Find the assistant message with the matching call_id in tool_calls
+                            # and insert the tool message right after it
+                            insert_pos = None
+                            if call_id:
+                                for i, msg in enumerate(chat_messages):
+                                    if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                                        for tc in msg.get("tool_calls", []):
+                                            if tc.get("id") == call_id:
+                                                # Insert after this assistant message
+                                                # Also skip past any tool results that were already inserted
+                                                # to maintain execution order (call_1 result, call_2 result, ...)
+                                                insert_pos = i + 1
+                                                while insert_pos < len(chat_messages):
+                                                    if chat_messages[insert_pos].get("role") == "tool":
+                                                        insert_pos += 1
+                                                    else:
+                                                        break
+                                                break
+                                        if insert_pos is not None:
+                                            break
                             
                             tool_msg = {
                                 "role": "tool",
-                                "tool_call_id": item.get("call_id", ""),
+                                "tool_call_id": call_id,
                                 "content": item.get("output", ""),
                             }
-                            chat_messages.append(tool_msg)
+                            
+                            if insert_pos is not None:
+                                chat_messages.insert(insert_pos, tool_msg)
+                            else:
+                                # Fallback: append at end if assistant not found
+                                chat_messages.append(tool_msg)
+                            
+                            last_assistant_msg = None
                 
                 # Flush any remaining pending assistant message (only if not already appended)
                 if pending_assistant and last_assistant_msg and not last_assistant_appended:

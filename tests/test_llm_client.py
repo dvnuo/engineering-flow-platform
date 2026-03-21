@@ -690,6 +690,119 @@ class TestChatAPIFallback:
             assert tool_msg is not None
             assert tool_msg.get("tool_call_id") == "call_123"
 
+    @pytest.mark.asyncio
+    async def test_responses_fallback_multiple_tool_calls_ordering(self):
+        """Test that multiple function_call_outputs maintain correct ordering.
+        
+        When multiple tool calls are executed from the same assistant message,
+        the tool results should be inserted in execution order after the
+        assistant message with tool_calls, not reversed.
+        """
+        from src.agents.llm import LLMClient, OpenAIProvider
+        
+        provider = OpenAIProvider()
+        provider.default_model = "gpt-3.5-turbo"
+        provider.api_key = "test-key"
+        
+        client = LLMClient()
+        client.providers = {"openai": provider}
+        client.default_provider = "openai"
+        
+        # input_items with multiple function_calls and their outputs
+        input_items = [
+            {"type": "message", "role": "user", "content": "use tools"},
+            {"type": "function_call", "call_id": "call_1", "name": "func1", "arguments": "{}"},
+            {"type": "function_call", "call_id": "call_2", "name": "func2", "arguments": "{}"},
+            {"type": "function_call", "call_id": "call_3", "name": "func3", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "result_1"},
+            {"type": "function_call_output", "call_id": "call_2", "output": "result_2"},
+            {"type": "function_call_output", "call_id": "call_3", "output": "result_3"},
+        ]
+        
+        with patch.object(client, 'chat', new_callable=AsyncMock) as mock_chat:
+            mock_chat.return_value = {"content": "done"}
+            
+            await client.responses(
+                input_items=input_items,
+                model="gpt-3.5-turbo"
+            )
+            
+            mock_chat.assert_called_once()
+            messages = mock_chat.call_args.kwargs.get("messages", [])
+            
+            # Find the assistant message with tool_calls
+            assistant_idx = None
+            for i, m in enumerate(messages):
+                if m.get("role") == "assistant" and m.get("tool_calls"):
+                    assistant_idx = i
+                    break
+            assert assistant_idx is not None, "Should have assistant with tool_calls"
+            
+            # Get all tool messages after the assistant
+            tool_indices = []
+            for i, m in enumerate(messages):
+                if m.get("role") == "tool":
+                    tool_indices.append(i)
+            
+            # Should have exactly 3 tool messages
+            assert len(tool_indices) == 3, f"Should have 3 tool messages, got {len(tool_indices)}"
+            
+            # Verify ordering: call_1, call_2, call_3 results
+            tool_msgs = [messages[i] for i in tool_indices]
+            assert tool_msgs[0].get("tool_call_id") == "call_1", "First tool result should be call_1"
+            assert tool_msgs[1].get("tool_call_id") == "call_2", "Second tool result should be call_2"
+            assert tool_msgs[2].get("tool_call_id") == "call_3", "Third tool result should be call_3"
+            
+            # Verify outputs are in correct order
+            assert tool_msgs[0].get("content") == "result_1"
+            assert tool_msgs[1].get("content") == "result_2"
+            assert tool_msgs[2].get("content") == "result_3"
+
+    @pytest.mark.asyncio
+    async def test_responses_fallback_no_duplicate_assistant(self):
+        """Test that when tool_calls are discovered, no duplicate assistant is created.
+        
+        If an assistant message was already appended before tool_calls were discovered,
+        it should be replaced, not duplicated.
+        """
+        from src.agents.llm import LLMClient, OpenAIProvider
+        
+        provider = OpenAIProvider()
+        provider.default_model = "gpt-3.5-turbo"
+        provider.api_key = "test-key"
+        
+        client = LLMClient()
+        client.providers = {"openai": provider}
+        client.default_provider = "openai"
+        
+        # Simulate input where function_call appears after user message
+        input_items = [
+            {"type": "message", "role": "user", "content": "use a tool"},
+            {"type": "function_call", "call_id": "call_1", "name": "test_func", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "tool result"},
+        ]
+        
+        with patch.object(client, 'chat', new_callable=AsyncMock) as mock_chat:
+            mock_chat.return_value = {"content": "final response"}
+            
+            await client.responses(
+                input_items=input_items,
+                model="gpt-3.5-turbo"
+            )
+            
+            mock_chat.assert_called_once()
+            messages = mock_chat.call_args.kwargs.get("messages", [])
+            
+            # Count assistant messages with tool_calls
+            assistant_count = sum(
+                1 for m in messages 
+                if m.get("role") == "assistant" and m.get("tool_calls")
+            )
+            
+            # Should have exactly one assistant with tool_calls, not duplicates
+            assert assistant_count == 1, \
+                f"Should have exactly 1 assistant with tool_calls, got {assistant_count}"
+
 
 class TestGitHubCopilotProvider:
     """Tests for GitHub Copilot provider retry behavior."""
