@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # Models that don't support Responses API and should use Chat API instead
 # Pre-compute lowercase set for O(1) lookup
 USE_CHAT_API_MODELS = {
-    "openai": {"gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-4", "gpt-4-turbo"},
+    "openai": {"gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-4", "gpt-4-turbo", "gpt-4o",  "gpt-4.1"},
     "github_copilot": {"gpt-4.1", "gpt-4o", "gemini-2.5-pro"},  # All Copilot models support Responses API
     "claude": set(),  # Claude uses its own format
     "ollama": set(),  # Ollama uses its own API
