@@ -755,6 +755,43 @@ async def api_clear(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e)}, status=500)
 
 
+async def api_edit_message(request: web.Request) -> web.Response:
+    """Edit a message and delete all subsequent messages.
+    
+    POST /api/sessions/{session_id}/messages/{message_id}/edit
+    Body: {"new_content": "edited message content"}
+    """
+    try:
+        session_id = request.match_info.get('session_id')
+        message_id = request.match_info.get('message_id')
+        
+        if not session_id or not message_id:
+            return web.json_response({'error': 'Missing session_id or message_id'}, status=400)
+        
+        data = await request.json()
+        new_content = data.get('new_content', '')
+        
+        # Edit the message
+        edited = await session_manager.edit_message(session_id, message_id, new_content)
+        if not edited:
+            return web.json_response({'error': 'Message not found'}, status=404)
+        
+        # Delete all messages after the edited message
+        deleted_count = await session_manager.delete_messages_after(session_id, message_id)
+        
+        # Get updated history
+        history = await session_manager.get_history(session_id)
+        
+        return web.json_response({
+            'success': True,
+            'deleted_count': deleted_count,
+            'history': history
+        })
+            
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
+
+
 async def api_save_config(request: web.Request) -> web.Response:
     """Save configuration to config.yaml.
     
@@ -2077,6 +2114,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/files/read', api_read_file)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
+    app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/edit', api_edit_message)
     app.router.add_get('/api/config', api_get_config)
     app.router.add_post('/api/config/save', api_save_config)
     app.router.add_post('/api/ssh/generate', api_ssh_generate)
