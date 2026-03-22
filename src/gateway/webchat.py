@@ -808,6 +808,7 @@ async def api_delete_conversation_from(request: web.Request) -> web.Response:
     we delete it and send a new message with the edited content.
     
     POST /api/sessions/{session_id}/messages/{message_id}/delete-from-here
+    Body (optional): {"new_content": "..."} - if message_id is a local ID, we find the real message by matching content
     """
     try:
         session_id = request.match_info.get('session_id')
@@ -815,6 +816,13 @@ async def api_delete_conversation_from(request: web.Request) -> web.Response:
         
         if not session_id or not message_id:
             return web.json_response({'error': 'Missing session_id or message_id'}, status=400)
+        
+        # Get the request body for content matching
+        try:
+            body = await request.json()
+            new_content = body.get('new_content', '')
+        except:
+            new_content = ''
         
         # Delete this message and all messages after it
         # First get the message index, then delete from there
@@ -826,6 +834,14 @@ async def api_delete_conversation_from(request: web.Request) -> web.Response:
             if msg.get('id') == message_id:
                 msg_index = i
                 break
+        
+        # If not found by ID, and we have content, try to find by content
+        # This handles the case where frontend sends a local-xxx ID
+        if msg_index is None and new_content:
+            for i, msg in enumerate(history):
+                if msg.get('role') == 'user' and msg.get('content') == new_content:
+                    msg_index = i
+                    break
         
         if msg_index is None:
             return web.json_response({'error': 'Message not found'}, status=404)
