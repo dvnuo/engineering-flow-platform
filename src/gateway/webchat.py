@@ -756,7 +756,7 @@ async def api_clear(request: web.Request) -> web.Response:
 
 
 async def api_edit_message(request: web.Request) -> web.Response:
-    """Edit a message and delete all subsequent messages.
+    """Edit a message, delete subsequent messages, and send to LLM for new response.
     
     POST /api/sessions/{session_id}/messages/{message_id}/edit
     Body: {"new_content": "edited message content"}
@@ -779,13 +779,31 @@ async def api_edit_message(request: web.Request) -> web.Response:
         # Delete all messages after the edited message
         deleted_count = await session_manager.delete_messages_after(session_id, message_id)
         
+        # Initialize session manager if needed
+        if not session_manager._initialized:
+            await session_manager.initialize()
+        
+        # Get model from config
+        model = global_config.llm.get('model', 'gpt-5-mini')
+        
+        # Send the edited message to LLM for new response
+        agent = AgentCore(model=model)
+        result = await agent.process(
+            message=new_content,
+            session_id=session_id,
+            user_name="webchat-user",
+            track_usage=True,
+            attachments=data.get('attachments', [])
+        )
+        
         # Get updated history
         history = await session_manager.get_history(session_id)
         
         return web.json_response({
             'success': True,
             'deleted_count': deleted_count,
-            'history': history
+            'history': history,
+            'response': result.get('response', '')
         })
             
     except Exception as e:
