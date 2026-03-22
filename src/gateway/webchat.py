@@ -821,8 +821,10 @@ async def api_delete_conversation_from(request: web.Request) -> web.Response:
         try:
             body = await request.json()
             new_content = body.get('new_content', '')
+            original_content = body.get('original_content', '')
         except:
             new_content = ''
+            original_content = ''
         
         # Delete this message and all messages after it
         # First get the message index, then delete from there
@@ -835,11 +837,11 @@ async def api_delete_conversation_from(request: web.Request) -> web.Response:
                 msg_index = i
                 break
         
-        # If not found by ID, and we have content, try to find by content
+        # If not found by ID, and we have original_content, try to find by content
         # This handles the case where frontend sends a local-xxx ID
-        if msg_index is None and new_content:
+        if msg_index is None and original_content:
             for i, msg in enumerate(history):
-                if msg.get('role') == 'user' and msg.get('content') == new_content:
+                if msg.get('role') == 'user' and msg.get('content') == original_content:
                     msg_index = i
                     break
         
