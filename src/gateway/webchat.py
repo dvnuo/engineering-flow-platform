@@ -756,7 +756,10 @@ async def api_clear(request: web.Request) -> web.Response:
 
 
 async def api_edit_message(request: web.Request) -> web.Response:
-    """Edit a message, delete subsequent messages, and send to LLM for new response.
+    """Edit a message, delete subsequent messages.
+    
+    After editing, the frontend should reload the session to get the updated
+    state. A new LLM response will be generated when the user sends a message.
     
     POST /api/sessions/{session_id}/messages/{message_id}/edit
     Body: {"new_content": "edited message content"}
@@ -779,52 +782,13 @@ async def api_edit_message(request: web.Request) -> web.Response:
         # Delete all messages after the edited message
         deleted_count = await session_manager.delete_messages_after(session_id, message_id)
         
-        # Initialize session manager if needed
-        if not session_manager._initialized:
-            await session_manager.initialize()
-        
-        # Get model from config
-        model = global_config.llm.get('model', 'gpt-5-mini')
-        
-        # Build messages for LLM - use edited history without re-adding user message
-        history = await session_manager.get_history(session_id)
-        
-        # Create user message without adding to history (it's already there after edit)
-        user_message = {
-            "role": "user",
-            "content": new_content,
-            "id": message_id  # Keep same ID to avoid duplication
-        }
-        
-        # Get conversation context for LLM
-        from src.agents.llm import LLMClient
-        llm_client = LLMClient()
-        
-        # Call LLM directly without adding to history
-        # (the edited message is already in history)
-        llm_result = await llm_client.chat(
-            messages=history + [user_message],
-            system_prompt=None,  # Will be loaded from agent config
-            model=model
-        )
-        
-        # Add assistant response to history
-        assistant_response = llm_result.get('content', '')
-        if assistant_response:
-            await session_manager.add_message(
-                session_id, 
-                "assistant", 
-                assistant_response
-            )
-        
         # Get updated history
         history = await session_manager.get_history(session_id)
         
         return web.json_response({
             'success': True,
             'deleted_count': deleted_count,
-            'history': history,
-            'response': assistant_response
+            'history': history
         })
             
     except Exception as e:
