@@ -786,15 +786,36 @@ async def api_edit_message(request: web.Request) -> web.Response:
         # Get model from config
         model = global_config.llm.get('model', 'gpt-5-mini')
         
-        # Send the edited message to LLM for new response
-        agent = AgentCore(model=model)
-        result = await agent.process(
-            message=new_content,
-            session_id=session_id,
-            user_name="webchat-user",
-            track_usage=True,
-            attachments=data.get('attachments', [])
+        # Build messages for LLM - use edited history without re-adding user message
+        history = await session_manager.get_history(session_id)
+        
+        # Create user message without adding to history (it's already there after edit)
+        user_message = {
+            "role": "user",
+            "content": new_content,
+            "id": message_id  # Keep same ID to avoid duplication
+        }
+        
+        # Get conversation context for LLM
+        from src.agents.llm import LLMClient
+        llm_client = LLMClient()
+        
+        # Call LLM directly without adding to history
+        # (the edited message is already in history)
+        llm_result = await llm_client.chat(
+            messages=history + [user_message],
+            system_prompt=None,  # Will be loaded from agent config
+            model=model
         )
+        
+        # Add assistant response to history
+        assistant_response = llm_result.get('content', '')
+        if assistant_response:
+            await session_manager.add_message(
+                session_id, 
+                "assistant", 
+                assistant_response
+            )
         
         # Get updated history
         history = await session_manager.get_history(session_id)
@@ -803,7 +824,7 @@ async def api_edit_message(request: web.Request) -> web.Response:
             'success': True,
             'deleted_count': deleted_count,
             'history': history,
-            'response': result.get('response', '')
+            'response': assistant_response
         })
             
     except Exception as e:
