@@ -106,6 +106,12 @@ class Gateway:
         self.app.router.add_get("/api/settings/ollama/models", self.handle_ollama_models)
         self.app.router.add_post("/api/settings/ollama/pull", self.handle_ollama_pull)
 
+        # System prompt config routes
+        self.app.router.add_get("/api/agent/system-prompt/config", self.handle_system_prompt_config_get)
+        self.app.router.add_put("/api/agent/system-prompt/config", self.handle_system_prompt_config_put)
+        self.app.router.add_get("/api/agent/system-prompt/{name}", self.handle_system_prompt_get)
+        self.app.router.add_put("/api/agent/system-prompt/{name}", self.handle_system_prompt_put)
+
         # Webhook routes
         if self.jira_enabled:
             self.app.router.add_post("/webhook/jira", self.handle_jira_webhook)
@@ -320,6 +326,157 @@ class Gateway:
             await session_manager.clear_history(session_id)
             return web.json_response({"status": "cleared", "session_id": session_id})
         return web.json_response({"status": "error", "message": "session_id required"}, status=400)
+
+    # ============================================
+    # System Prompt Configuration Handlers
+    # ============================================
+    
+    async def handle_system_prompt_config_get(self, request: Request) -> web.Response:
+        """Get system prompt configuration (enabled states).
+        
+        GET /api/agent/system-prompt/config
+        Returns: {"soul": {"enabled": true}, "user": {...}, ...}
+        """
+        from src.config import config as runtime_config
+        
+        system_prompt = runtime_config.get("llm.system-prompt", {})
+        return web.json_response(system_prompt)
+    
+    async def handle_system_prompt_config_put(self, request: Request) -> web.Response:
+        """Update system prompt configuration.
+        
+        PUT /api/agent/system-prompt/config
+        Body: {"soul": {"enabled": true}, "user": {...}, ...}
+        """
+        from src.config import config as runtime_config
+        from pathlib import Path
+        from ruamel.yaml import YAML
+        import os
+        
+        try:
+            data = await request.json()
+            
+            # Load config.yaml directly
+            config_path = Path.home() / ".efp" / "config.yaml"
+            if not config_path.exists():
+                return web.json_response({"status": "error", "message": "Config not found"}, status=404)
+            
+            yaml = YAML()
+            yaml.preserve_quotes = True
+            yaml.indent(mapping=2, sequence=4, offset=2)
+            
+            with open(config_path, 'r') as f:
+                config_data = yaml.load(f) or {}
+            
+            # Update system-prompt section
+            if "llm" not in config_data:
+                config_data["llm"] = {}
+            if "system-prompt" not in config_data["llm"]:
+                config_data["llm"]["system-prompt"] = {}
+            
+            for name, settings in data.items():
+                if name not in config_data["llm"]["system-prompt"]:
+                    config_data["llm"]["system-prompt"][name] = {}
+                for k, v in settings.items():
+                    config_data["llm"]["system-prompt"][name][k] = v
+            
+            # Save
+            with open(config_path, 'w') as f:
+                yaml.dump(config_data, f)
+            
+            # Reload runtime config
+            runtime_config.reload()
+            
+            return web.json_response({"status": "ok"})
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=400)
+    
+    async def handle_system_prompt_get(self, request: Request) -> web.Response:
+        """Get system prompt file content and enabled state.
+        
+        GET /api/agent/system-prompt/{name}
+        name: soul, user, agents, memory
+        Returns: {"enabled": true, "content": "..."}
+        """
+        from src.config import config as runtime_config
+        from pathlib import Path
+        
+        name = request.match_info.get("name")
+        allowed = ["soul", "user", "agents", "memory"]
+        if name not in allowed:
+            return web.json_response({"error": "Invalid name"}, status=400)
+        
+        # Get enabled state
+        enabled = runtime_config.get(f"llm.system-prompt.{name}.enabled", True)
+        
+        # Get file path (fixed path)
+        workspace = Path.home() / ".efp" / "workspace"
+        file_path = workspace / f"{name.upper()}.md"
+        
+        content = ""
+        if file_path.exists():
+            content = file_path.read_text()
+        
+        return web.json_response({
+            "enabled": enabled,
+            "content": content
+        })
+    
+    async def handle_system_prompt_put(self, request: Request) -> web.Response:
+        """Update system prompt file content and/or enabled state.
+        
+        PUT /api/agent/system-prompt/{name}
+        Body: {"enabled": true, "content": "..."}
+        """
+        from src.config import config as runtime_config
+        from pathlib import Path
+        from ruamel.yaml import YAML
+        
+        name = request.match_info.get("name")
+        allowed = ["soul", "user", "agents", "memory"]
+        if name not in allowed:
+            return web.json_response({"error": "Invalid name"}, status=400)
+        
+        try:
+            data = await request.json()
+            
+            # Update file content if provided
+            if "content" in data:
+                workspace = Path.home() / ".efp" / "workspace"
+                workspace.mkdir(parents=True, exist_ok=True)
+                file_path = workspace / f"{name.upper()}.md"
+                file_path.write_text(data["content"])
+            
+            # Update enabled state if provided
+            if "enabled" in data:
+                config_path = Path.home() / ".efp" / "config.yaml"
+                if config_path.exists():
+                    yaml = YAML()
+                    yaml.preserve_quotes = True
+                    yaml.indent(mapping=2, sequence=4, offset=2)
+                    
+                    with open(config_path, 'r') as f:
+                        config_data = yaml.load(f) or {}
+                    
+                    if "llm" not in config_data:
+                        config_data["llm"] = {}
+                    if "system-prompt" not in config_data["llm"]:
+                        config_data["llm"]["system-prompt"] = {}
+                    if name not in config_data["llm"]["system-prompt"]:
+                        config_data["llm"]["system-prompt"][name] = {}
+                    
+                    config_data["llm"]["system-prompt"][name]["enabled"] = data["enabled"]
+                    
+                    with open(config_path, 'w') as f:
+                        yaml.dump(config_data, f)
+                    
+                    # Reload runtime config
+                    runtime_config.reload()
+            
+            return web.json_response({"status": "ok"})
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=400)
+
 
     async def handle_settings_get(self, request: Request) -> web.Response:
         """Get current settings.
