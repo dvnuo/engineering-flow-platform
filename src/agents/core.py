@@ -230,7 +230,7 @@ You have access to the following tools. When a user asks you to do something tha
         extra = {}
         if attachments:
             extra["attachments"] = attachments  # Save file IDs, not base64
-        await session_manager.add_message(
+        user_message_id = await session_manager.add_message(
             session_id, "user", message,
             extra=extra if extra else None
         )
@@ -266,7 +266,7 @@ You have access to the following tools. When a user asks you to do something tha
         if fastlane_response:
             # Fast lane command processed, return the response
             await session_manager.add_message(session_id, "assistant", fastlane_response)
-            return {"response": fastlane_response, "usage": usage_data}
+            return {"response": fastlane_response, "usage": usage_data, "user_message_id": user_message_id}
         # ===== END FAST LANE =====
 
         # ===== SKILL MATCHING (FR-1, FR-2) =====
@@ -801,7 +801,7 @@ You have access to the following tools. When a user asks you to do something tha
             # If no function calls, we're done - return the response
             if not tool_calls:
                 await session_manager.add_message(session_id, "assistant", content)
-                result = {"response": content, "usage": usage_data}
+                result = {"response": content, "usage": usage_data, "user_message_id": user_message_id}
                 if enable_reasoning:
                     reasoning_content = llm_result.get("reasoning", "")
                     result["reasoning"] = reasoning_content
@@ -919,6 +919,7 @@ You have access to the following tools. When a user asks you to do something tha
                     "content": content,
                     "role": "assistant",
                     "events": events,
+                    "user_message_id": user_message_id,
                 }
                 
                 # Add complete thinking flow to debug info
@@ -1077,7 +1078,7 @@ You have access to the following tools. When a user asks you to do something tha
         tracer_instance = get_tracer()
         events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
         
-        return {"response": "Task completed (max iterations reached)", "usage": usage_data or {}, "events": events}
+        return {"response": "Task completed (max iterations reached)", "usage": usage_data or {}, "events": events, "user_message_id": user_message_id}
 
     async def _execute_skill(
         self,

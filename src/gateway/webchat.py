@@ -309,6 +309,12 @@ async def api_chat(request: web.Request) -> web.Response:
             'usage': usage
         }
         
+        # Include user_message_id for frontend to update optimistic UI
+        if result and isinstance(result, dict):
+            user_msg_id = result.get("user_message_id")
+            if user_msg_id:
+                response_data['user_message_id'] = user_msg_id
+        
         # Include events for thinking process display
         events = result.get("events", []) if result else []
         if events:
