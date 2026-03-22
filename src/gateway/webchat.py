@@ -801,6 +801,54 @@ async def api_edit_message(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e)}, status=500)
 
 
+async def api_delete_conversation_from(request: web.Request) -> web.Response:
+    """Delete a message and all subsequent messages in the conversation.
+    
+    This is used when "editing" a message - instead of editing the original,
+    we delete it and send a new message with the edited content.
+    
+    POST /api/sessions/{session_id}/messages/{message_id}/delete-from-here
+    """
+    try:
+        session_id = request.match_info.get('session_id')
+        message_id = request.match_info.get('message_id')
+        
+        if not session_id or not message_id:
+            return web.json_response({'error': 'Missing session_id or message_id'}, status=400)
+        
+        # Delete this message and all messages after it
+        # First get the message index, then delete from there
+        history = await session_manager.get_history(session_id)
+        
+        # Find the message index
+        msg_index = None
+        for i, msg in enumerate(history):
+            if msg.get('id') == message_id:
+                msg_index = i
+                break
+        
+        if msg_index is None:
+            return web.json_response({'error': 'Message not found'}, status=404)
+        
+        # Delete messages from msg_index onwards
+        deleted_count = 0
+        if msg_index < len(history):
+            # Get IDs of messages to delete
+            ids_to_delete = [msg['id'] for msg in history[msg_index:]]
+            for mid in ids_to_delete:
+                success = await session_manager.delete_message(session_id, mid)
+                if success:
+                    deleted_count += 1
+        
+        return web.json_response({
+            'success': True,
+            'deleted_count': deleted_count
+        })
+            
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
+
+
 async def api_save_config(request: web.Request) -> web.Response:
     """Save configuration to config.yaml.
     
@@ -2124,6 +2172,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/edit', api_edit_message)
+    app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/delete-from-here', api_delete_conversation_from)
     app.router.add_get('/api/config', api_get_config)
     app.router.add_post('/api/config/save', api_save_config)
     app.router.add_post('/api/ssh/generate', api_ssh_generate)

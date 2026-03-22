@@ -301,6 +301,42 @@ class SessionManager:
                 return True
         return False
     
+    async def delete_message(self, session_id: str, message_id: str) -> bool:
+        """Delete a specific message by ID.
+        
+        Args:
+            session_id: The session ID
+            message_id: The message ID to delete
+            
+        Returns:
+            True if deleted, False if not found
+        """
+        session = await self.get_session(session_id)
+        if not session:
+            return False
+        
+        history = session.get("history", [])
+        
+        # Find and remove the message
+        for i, msg in enumerate(history):
+            if msg.get("id") == message_id:
+                history.pop(i)
+                session["updated_at"] = datetime.now().isoformat()
+                
+                # Auto-save after deletion
+                if self.auto_save and self.persistence_enabled:
+                    asyncio.create_task(
+                        session_persistence.save_session(
+                            session_id=session_id,
+                            channel=session.get("channel", ""),
+                            messages=history,
+                            metadata=session.get("metadata", {}),
+                        )
+                    )
+                return True
+        
+        return False
+    
     async def delete_messages_after(self, session_id: str, message_id: str) -> int:
         """Delete all messages after the specified message (exclusive).
         
