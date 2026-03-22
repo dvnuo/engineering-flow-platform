@@ -224,7 +224,7 @@ class SessionManager:
         
         return self.sessions[session_id]
     
-    async def add_message(self, session_id: str, role: str, content: str, wait_for_save: bool = False, extra: dict = None) -> str:
+    async def add_message(self, session_id: str, role: str, content: str, wait_for_save: bool = False, extra: dict = None, message_id: str = None) -> str:
         """Add a message to the session history.
         
         Args:
@@ -233,12 +233,14 @@ class SessionManager:
             content: Message content
             wait_for_save: If True, wait for persistence save to complete
             extra: Optional extra fields like tool_call_id for tool messages
+            message_id: Optional - if provided, use this ID instead of generating a new one
             
         Returns:
             The unique message ID that was created
         """
         session = await self.get_session(session_id)
-        message_id = str(uuid.uuid4())
+        if message_id is None:
+            message_id = str(uuid.uuid4())
         message = {
             "id": message_id,
             "role": role,
