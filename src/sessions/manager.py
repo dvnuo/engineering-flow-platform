@@ -302,7 +302,7 @@ class SessionManager:
         return False
     
     async def delete_messages_after(self, session_id: str, message_id: str) -> int:
-        """Delete all messages after the specified message (inclusive).
+        """Delete all messages after the specified message (exclusive).
         
         Args:
             session_id: The session ID
@@ -324,9 +324,9 @@ class SessionManager:
         if target_index == -1:
             return 0  # Message not found
         
-        # Delete all messages after and including the target
-        deleted_count = len(history) - target_index
-        session["history"] = history[:target_index]
+        # Delete all messages AFTER the target (keep the target message itself)
+        deleted_count = len(history) - target_index - 1
+        session["history"] = history[:target_index + 1]  # Keep up to and including target
         session["updated_at"] = datetime.now().isoformat()
         
         # Auto-save after deletion
