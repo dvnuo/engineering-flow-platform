@@ -804,8 +804,11 @@ async def api_edit_message(request: web.Request) -> web.Response:
 async def api_delete_conversation_from(request: web.Request) -> web.Response:
     """Delete a message and all subsequent messages in the conversation.
     
-    This is used when "editing" a message - instead of editing the original,
-    we delete it and send a new message with the edited content.
+    This endpoint truncates the conversation starting from the specified message.
+    Frontends can use it for workflows where "editing" a message is implemented
+    as delete-and-resend (delete the original and then send a new message with
+    the edited content). For in-place edits of an existing message, prefer
+    ``api_edit_message``.
     
     POST /api/sessions/{session_id}/messages/{message_id}/delete-from-here
     """
@@ -814,7 +817,7 @@ async def api_delete_conversation_from(request: web.Request) -> web.Response:
         message_id = request.match_info.get('message_id')
         
         if not session_id or not message_id:
-            return web.json_response({'error': 'Missing session_id or message_id'}, status=400)
+            return web.json_response({'error': 'Missing session_id or message_id', 'user_message_id': message_id}, status=400)
         
         # Delete this message and all messages after it
         # First get the message index, then delete from there
@@ -828,7 +831,7 @@ async def api_delete_conversation_from(request: web.Request) -> web.Response:
                 break
         
         if msg_index is None:
-            return web.json_response({'error': 'Message not found'}, status=404)
+            return web.json_response({'error': 'Message not found', 'user_message_id': message_id}, status=404)
         
         # Delete messages from msg_index onwards
         deleted_count = 0
@@ -846,7 +849,7 @@ async def api_delete_conversation_from(request: web.Request) -> web.Response:
         })
             
     except Exception as e:
-        return web.json_response({'error': str(e)}, status=500)
+        return web.json_response({'error': str(e), 'user_message_id': message_id}, status=500)
 
 
 async def api_save_config(request: web.Request) -> web.Response:
