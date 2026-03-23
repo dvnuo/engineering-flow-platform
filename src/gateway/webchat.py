@@ -777,7 +777,11 @@ async def api_edit_message(request: web.Request) -> web.Response:
         if not session_id or not message_id:
             return web.json_response({'error': 'Missing session_id or message_id'}, status=400)
         
-        data = await request.json()
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({'error': 'Invalid JSON in request body'}, status=400)
+        
         new_content = data.get('new_content', '')
         
         # Edit the message
