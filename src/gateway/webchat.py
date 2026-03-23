@@ -816,12 +816,11 @@ async def api_delete_conversation_from(request: web.Request) -> web.Response:
     POST /api/sessions/{session_id}/messages/{message_id}/delete-from-here
     Body (optional): {"new_content": "..."} - if message_id is a local ID, we find the real message by matching content
     """
-    print(f"[DELETE-FROM-HERE] request received, session_id={session_id}, message_id={message_id}")
     try:
         session_id = request.match_info.get('session_id')
         message_id = request.match_info.get('message_id')
         
-        print(f"[DELETE-FROM-HERE] session_id={session_id} (type={type(session_id).__name__})")
+        print(f"[DELETE-FROM-HERE] session_id={session_id}, message_id={message_id}")
         
         if not session_id or not message_id:
             return web.json_response({'error': 'Missing session_id or message_id'}, status=400)
