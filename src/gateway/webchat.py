@@ -833,8 +833,8 @@ async def api_delete_conversation_from(request: web.Request) -> web.Response:
         # Delete messages from msg_index onwards
         deleted_count = 0
         if msg_index < len(history):
-            # Get IDs of messages to delete
-            ids_to_delete = [msg['id'] for msg in history[msg_index:]]
+            # Get IDs of messages to delete, skipping any without an 'id'
+            ids_to_delete = [msg.get('id') for msg in history[msg_index:] if msg.get('id')]
             for mid in ids_to_delete:
                 success = await session_manager.delete_message(session_id, mid)
                 if success:
