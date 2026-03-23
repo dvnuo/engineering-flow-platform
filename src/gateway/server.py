@@ -339,7 +339,14 @@ class Gateway:
         """
         from src.config import config as runtime_config
         
-        system_prompt = runtime_config.get("llm.system-prompt", {})
+        # Return explicit object with all supported sections and their effective enabled state
+        # This ensures the UI always knows the current effective config
+        sections = ["soul", "user", "agents", "tools", "memory", "daily_notes"]
+        system_prompt = {}
+        for section in sections:
+            enabled = runtime_config.get(f"llm.system-prompt.{section}.enabled", True)
+            system_prompt[section] = {"enabled": bool(enabled)}
+        
         return web.json_response(system_prompt)
     
     async def handle_system_prompt_config_put(self, request: Request) -> web.Response:
@@ -460,6 +467,10 @@ class Gateway:
                 workspace.mkdir(parents=True, exist_ok=True)
                 file_path = workspace / f"{name.upper()}.md"
                 file_path.write_text(data["content"], encoding="utf-8")
+                
+                # Clear memory cache so changes take effect immediately
+                from src.agents.memory import memory_system
+                memory_system.clear_cache()
             
             # Update enabled state if provided
             if "enabled" in data:
