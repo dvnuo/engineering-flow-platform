@@ -512,10 +512,10 @@ class MemorySystem:
         """Check if a system prompt section is enabled via config.
         
         Args:
-            name: Section name (soul, user, agents, memory)
+            name: Section name (e.g., soul, user, agents, memory, daily_notes)
             
         Returns:
-            True if enabled (default True for soul/user/memory, False for agents)
+            True if enabled; defaults to True when the config key is not set
         """
         key = f"llm.system-prompt.{name}.enabled"
         return config.get(key, True)

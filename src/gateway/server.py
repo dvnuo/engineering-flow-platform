@@ -409,13 +409,13 @@ class Gateway:
         # Get enabled state
         enabled = runtime_config.get(f"llm.system-prompt.{name}.enabled", True)
         
-        # Get file path (fixed path)
-        workspace = Path.home() / ".efp" / "workspace"
-        file_path = workspace / f"{name.upper()}.md"
-        
+        # Get file path (fixed path) - not applicable for daily_notes
         content = ""
-        if file_path.exists():
-            content = file_path.read_text()
+        if name != "daily_notes":
+            workspace = Path.home() / ".efp" / "workspace"
+            file_path = workspace / f"{name.upper()}.md"
+            if file_path.exists():
+                content = file_path.read_text(encoding="utf-8")
         
         return web.json_response({
             "enabled": enabled,
@@ -433,7 +433,8 @@ class Gateway:
         from ruamel.yaml import YAML
         
         name = request.match_info.get("name")
-        allowed = ["soul", "user", "agents", "memory", "daily_notes"]
+        # Note: daily_notes is not included here - it's config-only, not a file
+        allowed = ["soul", "user", "agents", "memory"]
         if name not in allowed:
             return web.json_response({"error": "Invalid name"}, status=400)
         
@@ -445,15 +446,19 @@ class Gateway:
                 workspace = Path.home() / ".efp" / "workspace"
                 workspace.mkdir(parents=True, exist_ok=True)
                 file_path = workspace / f"{name.upper()}.md"
-                file_path.write_text(data["content"])
+                file_path.write_text(data["content"], encoding="utf-8")
             
             # Update enabled state if provided
             if "enabled" in data:
                 config_path = Path.home() / ".efp" / "config.yaml"
-                if config_path.exists():
-                    yaml = YAML()
-                    yaml.preserve_quotes = True
-                    yaml.indent(mapping=2, sequence=4, offset=2)
+                if not config_path.exists():
+                    return web.json_response(
+                        {"status": "error", "message": "Config file not found"},
+                        status=404
+                    )
+                yaml = YAML()
+                yaml.preserve_quotes = True
+                yaml.indent(mapping=2, sequence=4, offset=2)
                     
                     with open(config_path, 'r') as f:
                         config_data = yaml.load(f) or {}
