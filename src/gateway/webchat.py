@@ -787,7 +787,7 @@ async def api_edit_message(request: web.Request) -> web.Response:
         # Edit the message
         edited = await session_manager.edit_message(session_id, message_id, new_content)
         if not edited:
-            return web.json_response({'error': 'Message not found'}, status=404)
+            return web.json_response({'error': 'Message not found', 'user_message_id': message_id}, status=404)
         
         # Delete all messages after the edited message
         deleted_count = await session_manager.delete_messages_after(session_id, message_id)
