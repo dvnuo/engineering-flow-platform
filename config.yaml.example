@@ -56,9 +56,12 @@ llm:
       enabled: true
     # AGENTS.md - Workspace conventions and rules
     agents:
-      enabled: false
+      enabled: true
     # MEMORY.md - Long-term curated memory
     memory:
+      enabled: true
+    # Daily Notes - Automatically loaded from memory/ directory
+    daily_notes:
       enabled: true
 
 # ============================================
