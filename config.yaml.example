@@ -47,7 +47,7 @@ llm:
   # ============================================
   # Controls which workspace files are included in the system prompt.
   # These files are loaded from ~/.efp/workspace/ (SOUL.md, USER.md, AGENTS.md, MEMORY.md)
-  system_prompt:
+  system-prompt:
     # SOUL.md - Agent's personality and values (Who you are)
     soul:
       enabled: true
