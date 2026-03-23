@@ -459,24 +459,24 @@ class Gateway:
                 yaml = YAML()
                 yaml.preserve_quotes = True
                 yaml.indent(mapping=2, sequence=4, offset=2)
-                    
-                    with open(config_path, 'r') as f:
-                        config_data = yaml.load(f) or {}
-                    
-                    if "llm" not in config_data:
-                        config_data["llm"] = {}
-                    if "system-prompt" not in config_data["llm"]:
-                        config_data["llm"]["system-prompt"] = {}
-                    if name not in config_data["llm"]["system-prompt"]:
-                        config_data["llm"]["system-prompt"][name] = {}
-                    
-                    config_data["llm"]["system-prompt"][name]["enabled"] = data["enabled"]
-                    
-                    with open(config_path, 'w') as f:
-                        yaml.dump(config_data, f)
-                    
-                    # Reload runtime config
-                    runtime_config.reload()
+                
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_data = yaml.load(f) or {}
+                
+                if "llm" not in config_data:
+                    config_data["llm"] = {}
+                if "system-prompt" not in config_data["llm"]:
+                    config_data["llm"]["system-prompt"] = {}
+                if name not in config_data["llm"]["system-prompt"]:
+                    config_data["llm"]["system-prompt"][name] = {}
+                
+                config_data["llm"]["system-prompt"][name]["enabled"] = data["enabled"]
+                
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(config_data, f)
+                
+                # Reload runtime config
+                runtime_config.reload()
             
             return web.json_response({"status": "ok"})
         except Exception as e:
