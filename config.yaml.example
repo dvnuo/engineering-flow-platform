@@ -57,6 +57,9 @@ llm:
     # AGENTS.md - Workspace conventions and rules
     agents:
       enabled: true
+    # TOOLS.md - Tool configurations and constraints
+    tools:
+      enabled: true
     # MEMORY.md - Long-term curated memory
     memory:
       enabled: true

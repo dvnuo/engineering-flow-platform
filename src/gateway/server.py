@@ -374,18 +374,31 @@ class Gateway:
             if "system-prompt" not in config_data["llm"]:
                 config_data["llm"]["system-prompt"] = {}
             
+            # Validate and update settings
+            valid_sections = {"soul", "user", "agents", "memory", "daily_notes"}
             for name, settings in data.items():
+                if name not in valid_sections:
+                    return web.json_response(
+                        {"status": "error", "message": f"Invalid section: {name}"},
+                        status=400
+                    )
                 if name not in config_data["llm"]["system-prompt"]:
                     config_data["llm"]["system-prompt"][name] = {}
                 for k, v in settings.items():
+                    # Validate enabled is boolean
+                    if k == "enabled" and not isinstance(v, bool):
+                        return web.json_response(
+                            {"status": "error", "message": f"enabled must be boolean for section {name}"},
+                            status=400
+                        )
                     config_data["llm"]["system-prompt"][name][k] = v
             
             # Save
-            with open(config_path, 'w') as f:
+            with open(config_path, 'w', encoding='utf-8') as f:
                 yaml.dump(config_data, f)
             
             # Reload runtime config
-            runtime_config.reload()
+            runtime_config.reload(changed_sections=["llm"])
             
             return web.json_response({"status": "ok"})
         except Exception as e:
@@ -450,6 +463,12 @@ class Gateway:
             
             # Update enabled state if provided
             if "enabled" in data:
+                # Validate enabled is a boolean
+                if not isinstance(data["enabled"], bool):
+                    return web.json_response(
+                        {"status": "error", "message": "enabled must be a boolean"},
+                        status=400
+                    )
                 config_path = Path.home() / ".efp" / "config.yaml"
                 if not config_path.exists():
                     return web.json_response(
@@ -470,7 +489,7 @@ class Gateway:
                 if name not in config_data["llm"]["system-prompt"]:
                     config_data["llm"]["system-prompt"][name] = {}
                 
-                config_data["llm"]["system-prompt"][name]["enabled"] = data["enabled"]
+                config_data["llm"]["system-prompt"][name]["enabled"] = bool(data["enabled"])
                 
                 with open(config_path, 'w', encoding='utf-8') as f:
                     yaml.dump(config_data, f)

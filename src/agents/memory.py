@@ -547,6 +547,12 @@ class MemorySystem:
             if user:
                 parts.append(f"=== USER (Who You're Helping) ===\n{user}")
         
+        # Tools config - always include if present (controlled via config flag)
+        if self._is_system_prompt_enabled("tools"):
+            tools = self.load_tools_config()
+            if tools:
+                parts.append(f"=== TOOLS (Your Configuration) ===\n{tools}")
+        
         # Daily notes controlled by config (default: true)
         daily_notes = self.load_daily_notes() if self._is_system_prompt_enabled("daily_notes") else ""
         
