@@ -375,7 +375,7 @@ class Gateway:
                 config_data["llm"]["system-prompt"] = {}
             
             # Validate and update settings
-            valid_sections = {"soul", "user", "agents", "memory", "daily_notes"}
+            valid_sections = {"soul", "user", "agents", "tools", "memory", "daily_notes"}
             for name, settings in data.items():
                 if name not in valid_sections:
                     return web.json_response(
@@ -415,7 +415,7 @@ class Gateway:
         from pathlib import Path
         
         name = request.match_info.get("name")
-        allowed = ["soul", "user", "agents", "memory", "daily_notes"]
+        allowed = ["soul", "user", "agents", "tools", "memory", "daily_notes"]
         if name not in allowed:
             return web.json_response({"error": "Invalid name"}, status=400)
         
@@ -447,7 +447,7 @@ class Gateway:
         
         name = request.match_info.get("name")
         # Note: daily_notes is not included here - it's config-only, not a file
-        allowed = ["soul", "user", "agents", "memory"]
+        allowed = ["soul", "user", "agents", "tools", "memory"]
         if name not in allowed:
             return web.json_response({"error": "Invalid name"}, status=400)
         
