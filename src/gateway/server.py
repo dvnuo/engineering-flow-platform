@@ -475,8 +475,8 @@ class Gateway:
                 with open(config_path, 'w', encoding='utf-8') as f:
                     yaml.dump(config_data, f)
                 
-                # Reload runtime config
-                runtime_config.reload()
+                # Reload runtime config, forcing reload of the llm section
+                runtime_config.reload(changed_sections=["llm"])
             
             return web.json_response({"status": "ok"})
         except Exception as e:
