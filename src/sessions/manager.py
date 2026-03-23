@@ -312,8 +312,6 @@ class SessionManager:
             True if deleted, False if not found
         """
         session = await self.get_session(session_id)
-        if not session:
-            return False
         
         history = session.get("history", [])
         
