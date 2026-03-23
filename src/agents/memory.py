@@ -547,8 +547,8 @@ class MemorySystem:
             if user:
                 parts.append(f"=== USER (Who You're Helping) ===\n{user}")
         
-        # Daily notes are always included if present
-        daily_notes = self.load_daily_notes()
+        # Daily notes controlled by config (default: true)
+        daily_notes = self.load_daily_notes() if self._is_system_prompt_enabled("daily_notes") else ""
         
         # Memory is controlled by both config AND include_memory parameter
         memory_enabled = self._is_system_prompt_enabled("memory") and include_memory

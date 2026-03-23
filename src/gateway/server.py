@@ -402,7 +402,7 @@ class Gateway:
         from pathlib import Path
         
         name = request.match_info.get("name")
-        allowed = ["soul", "user", "agents", "memory"]
+        allowed = ["soul", "user", "agents", "memory", "daily_notes"]
         if name not in allowed:
             return web.json_response({"error": "Invalid name"}, status=400)
         
@@ -433,7 +433,7 @@ class Gateway:
         from ruamel.yaml import YAML
         
         name = request.match_info.get("name")
-        allowed = ["soul", "user", "agents", "memory"]
+        allowed = ["soul", "user", "agents", "memory", "daily_notes"]
         if name not in allowed:
             return web.json_response({"error": "Invalid name"}, status=400)
         
