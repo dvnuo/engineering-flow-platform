@@ -13,7 +13,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from aiohttp import web
+from aiohttp import web, ContentTypeError
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.file_parser.storage import init_storage, _file_metadata, StoredFileNotFoundError, get_metadata
@@ -21,7 +21,7 @@ init_storage()
 from src.utils.file_parser import parse_file
 from src.utils.truncate import truncate
 
-from aiohttp import web
+from aiohttp import web, ContentTypeError
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
@@ -777,12 +777,20 @@ async def api_edit_message(request: web.Request) -> web.Response:
         if not session_id or not message_id:
             return web.json_response({'error': 'Missing session_id or message_id'}, status=400)
         
+        # Initialize session_manager if needed
+        if not session_manager._initialized:
+            await session_manager.initialize()
+        
         try:
             data = await request.json()
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ContentTypeError):
             return web.json_response({'error': 'Invalid JSON in request body'}, status=400)
         
-        new_content = data.get('new_content', '')
+        new_content = data.get('new_content')
+        if new_content is None:
+            return web.json_response({'error': "Missing 'new_content' in request body"}, status=400)
+        if not isinstance(new_content, str):
+            return web.json_response({'error': "'new_content' must be a string"}, status=400)
         
         # Edit the message
         edited = await session_manager.edit_message(session_id, message_id, new_content)
