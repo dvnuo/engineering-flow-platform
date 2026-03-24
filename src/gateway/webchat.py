@@ -21,7 +21,6 @@ init_storage()
 from src.utils.file_parser import parse_file
 from src.utils.truncate import truncate
 
-from aiohttp import web, ContentTypeError
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
