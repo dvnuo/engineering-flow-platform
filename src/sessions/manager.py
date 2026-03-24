@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -223,7 +224,7 @@ class SessionManager:
         
         return self.sessions[session_id]
     
-    async def add_message(self, session_id: str, role: str, content: str, wait_for_save: bool = False, extra: dict = None) -> None:
+    async def add_message(self, session_id: str, role: str, content: str, wait_for_save: bool = False, extra: dict = None) -> str:
         """Add a message to the session history.
         
         Args:
@@ -232,9 +233,14 @@ class SessionManager:
             content: Message content
             wait_for_save: If True, wait for persistence save to complete
             extra: Optional extra fields like tool_call_id for tool messages
+            
+        Returns:
+            The unique message ID that was created
         """
         session = await self.get_session(session_id)
+        message_id = str(uuid.uuid4())
         message = {
+            "id": message_id,
             "role": role,
             "content": content,
             "timestamp": datetime.now().isoformat(),
@@ -262,6 +268,113 @@ class SessionManager:
             # Optionally wait for save to complete
             if wait_for_save:
                 await save_task
+        
+        return message_id  # Return the message ID for reference
+    
+    async def edit_message(self, session_id: str, message_id: str, new_content: str) -> bool:
+        """Edit a message in the session history.
+        
+        Args:
+            session_id: The session ID
+            message_id: The unique message ID to edit
+            new_content: The new content for the message
+            
+        Returns:
+            True if message was found and edited, False otherwise
+        """
+        session = await self.get_session(session_id)
+        for msg in session["history"]:
+            if msg.get("id") == message_id:
+                msg["content"] = new_content
+                msg["timestamp"] = datetime.now().isoformat()
+                session["updated_at"] = datetime.now().isoformat()
+                # Auto-save after editing
+                if self.auto_save and self.persistence_enabled:
+                    asyncio.create_task(
+                        session_persistence.save_session(
+                            session_id=session_id,
+                            channel=session.get("channel", ""),
+                            messages=session["history"],
+                            metadata=session.get("metadata", {}),
+                        )
+                    )
+                return True
+        return False
+    
+    async def delete_message(self, session_id: str, message_id: str) -> bool:
+        """Delete a specific message by ID.
+        
+        Args:
+            session_id: The session ID
+            message_id: The message ID to delete
+            
+        Returns:
+            True if deleted, False if not found
+        """
+        session = await self.get_session(session_id)
+        
+        history = session.get("history", [])
+        
+        # Find and remove the message
+        for i, msg in enumerate(history):
+            if msg.get("id") == message_id:
+                history.pop(i)
+                session["updated_at"] = datetime.now().isoformat()
+                
+                # Auto-save after deletion
+                if self.auto_save and self.persistence_enabled:
+                    asyncio.create_task(
+                        session_persistence.save_session(
+                            session_id=session_id,
+                            channel=session.get("channel", ""),
+                            messages=history,
+                            metadata=session.get("metadata", {}),
+                        )
+                    )
+                return True
+        
+        return False
+    
+    async def delete_messages_after(self, session_id: str, message_id: str) -> int:
+        """Delete all messages after the specified message (exclusive).
+        
+        Args:
+            session_id: The session ID
+            message_id: The message ID - all messages after this will be deleted
+            
+        Returns:
+            Number of messages deleted
+        """
+        session = await self.get_session(session_id)
+        history = session.get("history", [])
+        
+        # Find the index of the message
+        target_index = -1
+        for i, msg in enumerate(history):
+            if msg.get("id") == message_id:
+                target_index = i
+                break
+        
+        if target_index == -1:
+            return 0  # Message not found
+        
+        # Delete all messages AFTER the target (keep the target message itself)
+        deleted_count = len(history) - target_index - 1
+        session["history"] = history[:target_index + 1]  # Keep up to and including target
+        session["updated_at"] = datetime.now().isoformat()
+        
+        # Auto-save after deletion
+        if self.auto_save and self.persistence_enabled:
+            asyncio.create_task(
+                session_persistence.save_session(
+                    session_id=session_id,
+                    channel=session.get("channel", ""),
+                    messages=session["history"],
+                    metadata=session.get("metadata", {}),
+                )
+            )
+        
+        return deleted_count
     
     async def get_history(self, session_id: str) -> List[Dict[str, str]]:
         """Get conversation history for a session."""

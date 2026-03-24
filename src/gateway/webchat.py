@@ -13,7 +13,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from aiohttp import web
+from aiohttp import web, ContentTypeError
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.file_parser.storage import init_storage, _file_metadata, StoredFileNotFoundError, get_metadata
@@ -21,7 +21,6 @@ init_storage()
 from src.utils.file_parser import parse_file
 from src.utils.truncate import truncate
 
-from aiohttp import web
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
@@ -308,6 +307,12 @@ async def api_chat(request: web.Request) -> web.Response:
             'session_id': session_id,
             'usage': usage
         }
+        
+        # Include user_message_id for frontend to update optimistic UI
+        if result and isinstance(result, dict):
+            user_msg_id = result.get("user_message_id")
+            if user_msg_id:
+                response_data['user_message_id'] = user_msg_id
         
         # Include events for thinking process display
         events = result.get("events", []) if result else []
@@ -753,6 +758,109 @@ async def api_clear(request: web.Request) -> web.Response:
             
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_edit_message(request: web.Request) -> web.Response:
+    """Edit a message, delete subsequent messages.
+    
+    After editing, the frontend should reload the session to get the updated
+    state. A new LLM response will be generated when the user sends a message.
+    
+    POST /api/sessions/{session_id}/messages/{message_id}/edit
+    Body: {"new_content": "edited message content"}
+    """
+    try:
+        session_id = request.match_info.get('session_id')
+        message_id = request.match_info.get('message_id')
+        
+        if not session_id or not message_id:
+            return web.json_response({'error': 'Missing session_id or message_id'}, status=400)
+        
+        # Initialize session_manager if needed
+        if not session_manager._initialized:
+            await session_manager.initialize()
+        
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, ContentTypeError):
+            return web.json_response({'error': 'Invalid JSON in request body'}, status=400)
+        
+        new_content = data.get('new_content')
+        if new_content is None:
+            return web.json_response({'error': "Missing 'new_content' in request body"}, status=400)
+        if not isinstance(new_content, str):
+            return web.json_response({'error': "'new_content' must be a string"}, status=400)
+        
+        # Edit the message
+        edited = await session_manager.edit_message(session_id, message_id, new_content)
+        if not edited:
+            return web.json_response({'error': 'Message not found', 'user_message_id': message_id}, status=404)
+        
+        # Delete all messages after the edited message
+        deleted_count = await session_manager.delete_messages_after(session_id, message_id)
+        
+        # Get updated history
+        history = await session_manager.get_history(session_id)
+        
+        return web.json_response({
+            'success': True,
+            'deleted_count': deleted_count,
+            'messages': history
+        })
+            
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_delete_conversation_from(request: web.Request) -> web.Response:
+    """Delete a message and all subsequent messages in the conversation.
+    
+    This endpoint truncates the conversation starting from the specified message.
+    Frontends can use it for workflows where "editing" a message is implemented
+    as delete-and-resend (delete the original and then send a new message with
+    the edited content). For in-place edits of an existing message, prefer
+    ``api_edit_message``.
+    
+    POST /api/sessions/{session_id}/messages/{message_id}/delete-from-here
+    """
+    try:
+        session_id = request.match_info.get('session_id')
+        message_id = request.match_info.get('message_id')
+        
+        if not session_id or not message_id:
+            return web.json_response({'error': 'Missing session_id or message_id', 'user_message_id': message_id}, status=400)
+        
+        # Delete this message and all messages after it
+        # First get the message index, then delete from there
+        history = await session_manager.get_history(session_id)
+        
+        # Find the message index
+        msg_index = None
+        for i, msg in enumerate(history):
+            if msg.get('id') == message_id:
+                msg_index = i
+                break
+        
+        if msg_index is None:
+            return web.json_response({'error': 'Message not found', 'user_message_id': message_id}, status=404)
+        
+        # Delete messages from msg_index onwards
+        deleted_count = 0
+        if msg_index < len(history):
+            # Get IDs of messages to delete, skipping any without an 'id'
+            ids_to_delete = [msg.get('id') for msg in history[msg_index:] if msg.get('id')]
+            for mid in ids_to_delete:
+                success = await session_manager.delete_message(session_id, mid)
+                if success:
+                    deleted_count += 1
+        
+        return web.json_response({
+            'success': True,
+            'deleted_count': deleted_count
+        })
+            
+    except Exception as e:
+        return web.json_response({'error': str(e), 'user_message_id': message_id}, status=500)
 
 
 async def api_save_config(request: web.Request) -> web.Response:
@@ -2077,6 +2185,8 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/files/read', api_read_file)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
+    app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/edit', api_edit_message)
+    app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/delete-from-here', api_delete_conversation_from)
     app.router.add_get('/api/config', api_get_config)
     app.router.add_post('/api/config/save', api_save_config)
     app.router.add_post('/api/ssh/generate', api_ssh_generate)
