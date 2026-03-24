@@ -798,7 +798,7 @@ async def api_edit_message(request: web.Request) -> web.Response:
         return web.json_response({
             'success': True,
             'deleted_count': deleted_count,
-            'history': history
+            'messages': history
         })
             
     except Exception as e:
