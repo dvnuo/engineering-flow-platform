@@ -404,10 +404,12 @@ class Gateway:
             with open(config_path, 'w', encoding='utf-8') as f:
                 yaml.dump(config_data, f)
             
-            # Reload runtime config
-            runtime_config.reload(changed_sections=["llm"])
+            # Reload runtime config (without forcing LLM service reinit)
+            runtime_config.reload()
             
             return web.json_response({"status": "ok"})
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=400)
     
@@ -415,7 +417,7 @@ class Gateway:
         """Get system prompt file content and enabled state.
         
         GET /api/agent/system-prompt/{name}
-        name: soul, user, agents, memory
+        name: soul, user, agents, tools, memory, daily_notes
         Returns: {"enabled": true, "content": "..."}
         """
         from src.config import config as runtime_config
@@ -505,10 +507,12 @@ class Gateway:
                 with open(config_path, 'w', encoding='utf-8') as f:
                     yaml.dump(config_data, f)
                 
-                # Reload runtime config, forcing reload of the llm section
-                runtime_config.reload(changed_sections=["llm"])
+                # Reload runtime config
+                runtime_config.reload()
             
             return web.json_response({"status": "ok"})
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=400)
 
