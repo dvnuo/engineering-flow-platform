@@ -143,3 +143,18 @@ class TestWebChatDirectoryStructure:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_edit_delete_routes_registered():
+    """Test new edit/delete routes are registered."""
+    from aiohttp import web
+    from src.gateway.webchat import setup_webchat_routes
+    
+    app = web.Application()
+    setup_webchat_routes(app)
+    
+    routes = [r.resource.canonical for r in app.router.routes() if r.resource]
+    
+    # Check new routes exist
+    assert '/api/sessions/{session_id}/messages/{message_id}/edit' in routes
+    assert '/api/sessions/{session_id}/messages/{message_id}/delete-from-here' in routes

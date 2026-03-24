@@ -209,3 +209,138 @@ class TestSessionManagerEdgeCases:
         
         history = await fresh_session_manager.get_history(session_id)
         assert len(history) == 4
+
+
+class TestSessionManagerEditDelete:
+    """Tests for edit/delete functionality."""
+
+    @pytest.mark.asyncio
+    async def test_edit_message(self, fresh_session_manager):
+        """Test editing an existing message."""
+        import uuid
+        session_id = f"edit_{uuid.uuid4().hex[:8]}"
+        
+        await fresh_session_manager.clear_history(session_id)
+        msg_id = await fresh_session_manager.add_message(session_id, "user", "Original content")
+        
+        # Edit the message
+        result = await fresh_session_manager.edit_message(session_id, msg_id, "Edited content")
+        
+        assert result is True
+        history = await fresh_session_manager.get_history(session_id)
+        assert len(history) == 1
+        assert history[0]["content"] == "Edited content"
+        assert history[0]["id"] == msg_id
+
+    @pytest.mark.asyncio
+    async def test_edit_message_not_found(self, fresh_session_manager):
+        """Test editing a non-existent message returns False."""
+        import uuid
+        session_id = f"edit_{uuid.uuid4().hex[:8]}"
+        
+        await fresh_session_manager.clear_history(session_id)
+        await fresh_session_manager.add_message(session_id, "user", "Hello")
+        
+        result = await fresh_session_manager.edit_message(session_id, "non_existent_id", "New content")
+        
+        assert result is False
+        history = await fresh_session_manager.get_history(session_id)
+        assert len(history) == 1
+        assert history[0]["content"] == "Hello"
+
+    @pytest.mark.asyncio
+    async def test_delete_message(self, fresh_session_manager):
+        """Test deleting a specific message by ID."""
+        import uuid
+        session_id = f"delete_{uuid.uuid4().hex[:8]}"
+        
+        await fresh_session_manager.clear_history(session_id)
+        msg_id1 = await fresh_session_manager.add_message(session_id, "user", "First")
+        msg_id2 = await fresh_session_manager.add_message(session_id, "user", "Second")
+        
+        # Delete the first message
+        result = await fresh_session_manager.delete_message(session_id, msg_id1)
+        
+        assert result is True
+        history = await fresh_session_manager.get_history(session_id)
+        assert len(history) == 1
+        assert history[0]["id"] == msg_id2
+
+    @pytest.mark.asyncio
+    async def test_delete_message_not_found(self, fresh_session_manager):
+        """Test deleting a non-existent message returns False."""
+        import uuid
+        session_id = f"delete_{uuid.uuid4().hex[:8]}"
+        
+        await fresh_session_manager.clear_history(session_id)
+        await fresh_session_manager.add_message(session_id, "user", "Hello")
+        
+        result = await fresh_session_manager.delete_message(session_id, "non_existent_id")
+        
+        assert result is False
+        history = await fresh_session_manager.get_history(session_id)
+        assert len(history) == 1
+
+    @pytest.mark.asyncio
+    async def test_delete_messages_after(self, fresh_session_manager):
+        """Test deleting all messages after a specific message."""
+        import uuid
+        session_id = f"truncate_{uuid.uuid4().hex[:8]}"
+        
+        await fresh_session_manager.clear_history(session_id)
+        msg_id1 = await fresh_session_manager.add_message(session_id, "user", "First")
+        msg_id2 = await fresh_session_manager.add_message(session_id, "user", "Second")
+        msg_id3 = await fresh_session_manager.add_message(session_id, "user", "Third")
+        
+        # Delete all messages after the first one
+        deleted_count = await fresh_session_manager.delete_messages_after(session_id, msg_id1)
+        
+        assert deleted_count == 2
+        history = await fresh_session_manager.get_history(session_id)
+        assert len(history) == 1
+        assert history[0]["id"] == msg_id1
+
+    @pytest.mark.asyncio
+    async def test_delete_messages_after_not_found(self, fresh_session_manager):
+        """Test deleting after a non-existent message returns 0."""
+        import uuid
+        session_id = f"truncate_{uuid.uuid4().hex[:8]}"
+        
+        await fresh_session_manager.clear_history(session_id)
+        await fresh_session_manager.add_message(session_id, "user", "First")
+        
+        deleted_count = await fresh_session_manager.delete_messages_after(session_id, "non_existent")
+        
+        assert deleted_count == 0
+        history = await fresh_session_manager.get_history(session_id)
+        assert len(history) == 1
+
+    @pytest.mark.asyncio
+    async def test_delete_last_message(self, fresh_session_manager):
+        """Test deleting the last message in conversation."""
+        import uuid
+        session_id = f"delete_last_{uuid.uuid4().hex[:8]}"
+        
+        await fresh_session_manager.clear_history(session_id)
+        msg_id = await fresh_session_manager.add_message(session_id, "user", "Only message")
+        
+        deleted_count = await fresh_session_manager.delete_messages_after(session_id, msg_id)
+        
+        assert deleted_count == 0
+        history = await fresh_session_manager.get_history(session_id)
+        assert len(history) == 1
+
+    @pytest.mark.asyncio
+    async def test_message_id_in_history(self, fresh_session_manager):
+        """Test that added messages have an ID field."""
+        import uuid
+        session_id = f"id_{uuid.uuid4().hex[:8]}"
+        
+        await fresh_session_manager.clear_history(session_id)
+        msg_id = await fresh_session_manager.add_message(session_id, "user", "Hello")
+        
+        history = await fresh_session_manager.get_history(session_id)
+        assert "id" in history[0]
+        assert history[0]["id"] == msg_id
+        assert isinstance(msg_id, str)
+        assert len(msg_id) > 0
