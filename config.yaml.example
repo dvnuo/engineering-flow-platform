@@ -41,6 +41,31 @@ llm:
   temperature: 0.7
   max_retries: 3
   retry_delay: 1
+  
+  # ============================================
+  # System Prompt Configuration
+  # ============================================
+  # Controls which workspace files are included in the system prompt.
+  # These files are loaded from ~/.efp/workspace/ (SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, plus daily notes from memory/)
+  system-prompt:
+    # SOUL.md - Agent's personality and values (Who you are)
+    soul:
+      enabled: true
+    # USER.md - User information (Who you're helping)
+    user:
+      enabled: true
+    # AGENTS.md - Workspace conventions and rules
+    agents:
+      enabled: true
+    # TOOLS.md - Tool configurations and constraints
+    tools:
+      enabled: true
+    # MEMORY.md - Long-term curated memory
+    memory:
+      enabled: true
+    # Daily Notes - Automatically loaded from memory/ directory
+    daily_notes:
+      enabled: true
 
 # ============================================
 # Session Configuration (OPTIONAL)

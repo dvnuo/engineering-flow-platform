@@ -106,6 +106,12 @@ class Gateway:
         self.app.router.add_get("/api/settings/ollama/models", self.handle_ollama_models)
         self.app.router.add_post("/api/settings/ollama/pull", self.handle_ollama_pull)
 
+        # System prompt config routes
+        self.app.router.add_get("/api/agent/system-prompt/config", self.handle_system_prompt_config_get)
+        self.app.router.add_put("/api/agent/system-prompt/config", self.handle_system_prompt_config_put)
+        self.app.router.add_get("/api/agent/system-prompt/{name}", self.handle_system_prompt_get)
+        self.app.router.add_put("/api/agent/system-prompt/{name}", self.handle_system_prompt_put)
+
         # Webhook routes
         if self.jira_enabled:
             self.app.router.add_post("/webhook/jira", self.handle_jira_webhook)
@@ -320,6 +326,196 @@ class Gateway:
             await session_manager.clear_history(session_id)
             return web.json_response({"status": "cleared", "session_id": session_id})
         return web.json_response({"status": "error", "message": "session_id required"}, status=400)
+
+    # ============================================
+    # System Prompt Configuration Handlers
+    # ============================================
+    
+    async def handle_system_prompt_config_get(self, request: Request) -> web.Response:
+        """Get system prompt configuration (enabled states).
+        
+        GET /api/agent/system-prompt/config
+        Returns: {"soul": {"enabled": true}, "user": {...}, ...}
+        """
+        from src.config import config as runtime_config
+        
+        # Return explicit object with all supported sections and their effective enabled state
+        # This ensures the UI always knows the current effective config
+        sections = ["soul", "user", "agents", "tools", "memory", "daily_notes"]
+        system_prompt = {}
+        for section in sections:
+            enabled = runtime_config.get(f"llm.system-prompt.{section}.enabled", True)
+            system_prompt[section] = {"enabled": bool(enabled)}
+        
+        return web.json_response(system_prompt)
+    
+    async def handle_system_prompt_config_put(self, request: Request) -> web.Response:
+        """Update system prompt configuration.
+        
+        PUT /api/agent/system-prompt/config
+        Body: {"soul": {"enabled": true}, "user": {...}, ...}
+        """
+        from src.config import config as runtime_config
+        from pathlib import Path
+        from ruamel.yaml import YAML
+        import os
+        
+        try:
+            data = await request.json()
+            
+            # Load config.yaml directly
+            config_path = Path.home() / ".efp" / "config.yaml"
+            if not config_path.exists():
+                return web.json_response({"status": "error", "message": "Config not found"}, status=404)
+            
+            yaml = YAML()
+            yaml.preserve_quotes = True
+            yaml.indent(mapping=2, sequence=4, offset=2)
+            
+            with open(config_path, 'r') as f:
+                config_data = yaml.load(f) or {}
+            
+            # Update system-prompt section
+            if "llm" not in config_data:
+                config_data["llm"] = {}
+            if "system-prompt" not in config_data["llm"]:
+                config_data["llm"]["system-prompt"] = {}
+            
+            # Validate and update settings
+            valid_sections = {"soul", "user", "agents", "tools", "memory", "daily_notes"}
+            for name, settings in data.items():
+                if name not in valid_sections:
+                    return web.json_response(
+                        {"status": "error", "message": f"Invalid section: {name}"},
+                        status=400
+                    )
+                if name not in config_data["llm"]["system-prompt"]:
+                    config_data["llm"]["system-prompt"][name] = {}
+                for k, v in settings.items():
+                    # Validate enabled is boolean
+                    if k == "enabled" and not isinstance(v, bool):
+                        return web.json_response(
+                            {"status": "error", "message": f"enabled must be boolean for section {name}"},
+                            status=400
+                        )
+                    config_data["llm"]["system-prompt"][name][k] = v
+            
+            # Save
+            with open(config_path, 'w', encoding='utf-8') as f:
+                yaml.dump(config_data, f)
+            
+            # Reload runtime config (without forcing LLM service reinit)
+            runtime_config.reload()
+            
+            return web.json_response({"status": "ok"})
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=400)
+    
+    async def handle_system_prompt_get(self, request: Request) -> web.Response:
+        """Get system prompt file content and enabled state.
+        
+        GET /api/agent/system-prompt/{name}
+        name: soul, user, agents, tools, memory, daily_notes
+        Returns: {"enabled": true, "content": "..."}
+        """
+        from src.config import config as runtime_config
+        from pathlib import Path
+        
+        name = request.match_info.get("name")
+        allowed = ["soul", "user", "agents", "tools", "memory", "daily_notes"]
+        if name not in allowed:
+            return web.json_response({"error": "Invalid name"}, status=400)
+        
+        # Get enabled state
+        enabled = runtime_config.get(f"llm.system-prompt.{name}.enabled", True)
+        
+        # Get file path (fixed path) - not applicable for daily_notes
+        content = ""
+        if name != "daily_notes":
+            workspace = Path.home() / ".efp" / "workspace"
+            file_path = workspace / f"{name.upper()}.md"
+            if file_path.exists():
+                content = file_path.read_text(encoding="utf-8")
+        
+        return web.json_response({
+            "enabled": enabled,
+            "content": content
+        })
+    
+    async def handle_system_prompt_put(self, request: Request) -> web.Response:
+        """Update system prompt file content and/or enabled state.
+        
+        PUT /api/agent/system-prompt/{name}
+        Body: {"enabled": true, "content": "..."}
+        """
+        from src.config import config as runtime_config
+        from pathlib import Path
+        from ruamel.yaml import YAML
+        
+        name = request.match_info.get("name")
+        # Note: daily_notes is not included here - it's config-only, not a file
+        allowed = ["soul", "user", "agents", "tools", "memory"]
+        if name not in allowed:
+            return web.json_response({"error": "Invalid name"}, status=400)
+        
+        try:
+            data = await request.json()
+            
+            # Update file content if provided
+            if "content" in data:
+                workspace = Path.home() / ".efp" / "workspace"
+                workspace.mkdir(parents=True, exist_ok=True)
+                file_path = workspace / f"{name.upper()}.md"
+                file_path.write_text(data["content"], encoding="utf-8")
+                
+                # Clear memory cache so changes take effect immediately
+                from src.agents.memory import memory_system
+                memory_system.clear_cache()
+            
+            # Update enabled state if provided
+            if "enabled" in data:
+                # Validate enabled is a boolean
+                if not isinstance(data["enabled"], bool):
+                    return web.json_response(
+                        {"status": "error", "message": "enabled must be a boolean"},
+                        status=400
+                    )
+                config_path = Path.home() / ".efp" / "config.yaml"
+                if not config_path.exists():
+                    return web.json_response(
+                        {"status": "error", "message": "Config file not found"},
+                        status=404
+                    )
+                yaml = YAML()
+                yaml.preserve_quotes = True
+                yaml.indent(mapping=2, sequence=4, offset=2)
+                
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_data = yaml.load(f) or {}
+                
+                if "llm" not in config_data:
+                    config_data["llm"] = {}
+                if "system-prompt" not in config_data["llm"]:
+                    config_data["llm"]["system-prompt"] = {}
+                if name not in config_data["llm"]["system-prompt"]:
+                    config_data["llm"]["system-prompt"][name] = {}
+                
+                config_data["llm"]["system-prompt"][name]["enabled"] = bool(data["enabled"])
+                
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(config_data, f)
+                
+                # Reload runtime config
+                runtime_config.reload()
+            
+            return web.json_response({"status": "ok"})
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=400)
+
 
     async def handle_settings_get(self, request: Request) -> web.Response:
         """Get current settings.

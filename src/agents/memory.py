@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.utils.truncate import truncate
+from src.config import config
 
 # Default workspace paths
 DEFAULT_WORKSPACE = Path.home() / ".efp" / "workspace"
@@ -507,6 +508,18 @@ class MemorySystem:
         
         return "\n\n".join(notes) if notes else ""
     
+    def _is_system_prompt_enabled(self, name: str) -> bool:
+        """Check if a system prompt section is enabled via config.
+        
+        Args:
+            name: Section name (e.g., soul, user, agents, memory, daily_notes)
+            
+        Returns:
+            True if enabled; defaults to True when the config key is not set
+        """
+        key = f"llm.system-prompt.{name}.enabled"
+        return config.get(key, True)
+    
     def build_system_prompt(self, include_memory: bool = True) -> str:
         """Build complete system prompt from all memory files.
         
@@ -518,35 +531,43 @@ class MemorySystem:
         """
         parts = []
         
-        # Load core files
-        soul = self.load_soul()
-        agents = self.load_agents()
-        user = self.load_user()
-        tools = self.load_tools_config()
-        memory = self.load_memory() if include_memory else ""
-        daily_notes = self.load_daily_notes()
+        # Load core files based on enabled state from config
+        if self._is_system_prompt_enabled("soul"):
+            soul = self.load_soul()
+            if soul:
+                parts.append(f"=== SOUL (Who You Are) ===\n{soul}")
         
-        # Build prompt sections
-        if soul:
-            parts.append(f"=== SOUL (Who You Are) ===\n{soul}")
+        if self._is_system_prompt_enabled("agents"):
+            agents = self.load_agents()
+            if agents:
+                parts.append(f"=== AGENTS (Workspace Conventions) ===\n{agents}")
         
-        if agents:
-            parts.append(f"=== AGENTS (Workspace Conventions) ===\n{agents}")
+        if self._is_system_prompt_enabled("user"):
+            user = self.load_user()
+            if user:
+                parts.append(f"=== USER (Who You're Helping) ===\n{user}")
         
-        if user:
-            parts.append(f"=== USER (Who You're Helping) ===\n{user}")
+        # Tools config - always include if present (controlled via config flag)
+        if self._is_system_prompt_enabled("tools"):
+            tools = self.load_tools_config()
+            if tools:
+                parts.append(f"=== TOOLS (Your Configuration) ===\n{tools}")
         
-        if tools:
-            parts.append(f"=== TOOLS (Your Configuration) ===\n{tools}")
+        # Daily notes controlled by config (default: true)
+        daily_notes = self.load_daily_notes() if self._is_system_prompt_enabled("daily_notes") else ""
         
-        if include_memory and memory:
+        # Memory is controlled by both config AND include_memory parameter
+        memory_enabled = self._is_system_prompt_enabled("memory") and include_memory
+        memory = self.load_memory() if memory_enabled else ""
+        
+        if memory:
             parts.append(f"=== LONG-TERM MEMORY ===\n{memory}")
         
         if daily_notes:
             parts.append(f"=== RECENT CONTEXT (Daily Notes) ===\n{daily_notes}")
         
         return "\n\n".join(parts)
-    
+
     def build_context_with_search(
         self,
         query: str,

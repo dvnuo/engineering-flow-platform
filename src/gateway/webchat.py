@@ -260,7 +260,7 @@ async def api_chat(request: web.Request) -> web.Response:
         model = global_config.llm.get('model', 'gpt-5-mini')
         
         # Run agent (history is managed internally by session_manager)
-        agent = AgentCore(model=model)
+        agent = AgentCore(model=model, session_id=session_id)
         result = await agent.process(
             message=message,
             session_id=session_id,
@@ -430,7 +430,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         model = global_config.llm.get('model', 'gpt-5-mini')
         
         # Run agent and stream response
-        agent = AgentCore(model=model)
+        agent = AgentCore(model=model, session_id=session_id)
         
         # Pass the queue to the agent for real-time events
         result = await agent.process(
