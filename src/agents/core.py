@@ -777,6 +777,10 @@ You have access to the following tools. When a user asks you to do something tha
             if effective_model:
                 llm_kwargs["model"] = effective_model
             
+            # Pass provider to ensure correct LLM client routing
+            if provider:
+                llm_kwargs["provider"] = provider
+            
             llm_result = await llm_client.responses(**llm_kwargs)
             # Check for LLM configuration error
             if llm_result.get("error"):
