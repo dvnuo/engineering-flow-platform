@@ -18,6 +18,7 @@ from .api import (
     github_create_branch,
     github_get_file_content,
     github_create_pull_request,
+    github_create_or_update_file,
 )
 
 __all__ = [
@@ -279,6 +280,26 @@ def get_tools_schemas() -> list:
         {
             "type": "function",
             "function": {
+                "name": "github_create_or_update_file",
+                "description": "Create or update a file in a repository",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "owner": {"type": "string", "description": "Repository owner"},
+                        "repo": {"type": "string", "description": "Repository name"},
+                        "path": {"type": "string", "description": "File path"},
+                        "content": {"type": "string", "description": "File content"},
+                        "message": {"type": "string", "description": "Commit message"},
+                        "sha": {"type": "string", "description": "SHA of file being updated (optional)"},
+                        "branch": {"type": "string", "description": "Branch name (optional)"}
+                    },
+                    "required": ["owner", "repo", "path", "content", "message"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "github_search_issues",
                 "description": "Search GitHub issues and PRs",
                 "parameters": {
@@ -472,6 +493,26 @@ def get_tools_schemas() -> list:
                         "base": {"type": "string", "description": "Target branch (default: main)"}
                     },
                     "required": ["owner", "repo", "title", "body", "head"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "github_create_or_update_file",
+                "description": "Create or update a file in a repository",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "owner": {"type": "string", "description": "Repository owner"},
+                        "repo": {"type": "string", "description": "Repository name"},
+                        "path": {"type": "string", "description": "File path"},
+                        "content": {"type": "string", "description": "File content"},
+                        "message": {"type": "string", "description": "Commit message"},
+                        "sha": {"type": "string", "description": "SHA of file being updated (optional)"},
+                        "branch": {"type": "string", "description": "Branch name (optional)"}
+                    },
+                    "required": ["owner", "repo", "path", "content", "message"]
                 }
             }
         },

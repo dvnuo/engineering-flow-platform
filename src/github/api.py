@@ -501,23 +501,17 @@ class GitHubChannel:
     async def get_pr_diff(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
         """Get the diff of a pull request."""
         logger.info(f"Getting PR diff {owner}/{repo}#{pull_number}")
+        
+        # Use Accept header to request diff format
+        headers = {**self._headers, "Accept": "application/vnd.github.v3.diff"}
         url = f"{self.base_url}/repos/{owner}/{repo}/pulls/{pull_number}"
-        response = await self.client.get(url, headers=self._headers)
+        response = await self.client.get(url, headers=headers)
+        
         if response.status_code >= 400:
             raise Exception(f"GitHub API error: {response.status_code}")
         
-        pr_data = response.json()
-        merge_commit_sha = pr_data.get("merge_commit_sha")
-        
-        if merge_commit_sha:
-            diff_response = await self.client.get(
-                f"{self.base_url}/repos/{owner}/{repo}/compare/{merge_commit_sha}...{pr_data.get('head', {}).get('ref')}",
-                headers=self._headers
-            )
-            if diff_response.status_code == 200:
-                return {"diff": diff_response.text}
-        
-        return {"diff": ""}
+        # Response is now raw diff text
+        return {"diff": response.text}
     
     async def get_pr_comments(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
         """Get review comments on a pull request."""
@@ -540,14 +534,26 @@ class GitHubChannel:
         logger.info(f"Adding PR review comment {owner}/{repo}#{pull_number}")
         
         if path and line:
+            # For inline comments, we need a real commit SHA
+            commit_id_to_use = commit_id
+            if not commit_id_to_use:
+                pr = await self._request(
+                    "GET",
+                    f"/repos/{owner}/{repo}/pulls/{pull_number}",
+                )
+                commit_id_to_use = pr.get("head", {}).get("sha")
+                if not commit_id_to_use:
+                    raise ValueError("Unable to determine commit SHA for PR review comment")
+            
             return await self._request(
                 "POST",
                 f"/repos/{owner}/{repo}/pulls/{pull_number}/comments",
                 json={
                     "body": body,
-                    "commit_id": commit_id or "HEAD",
+                    "commit_id": commit_id_to_use,
                     "path": path,
-                    "line": line
+                    "line": line,
+                    "side": "RIGHT"
                 }
             )
         else:
@@ -868,3 +874,23 @@ async def github_create_pull_request(
         return f"PR created: **{title}** (#{pr_number})\n{pr_url}"
     except Exception as e:
         return f"Error creating PR: {e}"
+
+
+async def github_create_or_update_file(
+    owner: str,
+    repo: str,
+    path: str,
+    content: str,
+    message: str,
+    sha: Optional[str] = None,
+    branch: str = ""
+) -> str:
+    """Create or update a file in a repository."""
+    try:
+        result = await github_channel.create_or_update_file(
+            owner, repo, path, content, message, sha, branch
+        )
+        commit = result.get("commit", {})
+        return f"File {path} updated in {owner}/{repo}\nCommit: {commit.get('sha', 'unknown')[:7]}"
+    except Exception as e:
+        return f"Error updating file: {e}"
