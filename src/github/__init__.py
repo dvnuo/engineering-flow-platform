@@ -281,6 +281,7 @@ def get_tools_schemas() -> list:
         {
             "type": "function",
             "function": {
+                "name": "github_create_or_update_file",
                 "description": "Create or update a file in a repository",
                 "parameters": {
                     "type": "object",
