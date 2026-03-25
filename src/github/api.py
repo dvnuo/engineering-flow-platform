@@ -491,6 +491,154 @@ class GitHubChannel:
             params=params
         )
     
+    async def get_pr_files(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
+        """Get files changed in a pull request."""
+        logger.info(f"Getting PR files {owner}/{repo}#{pull_number}")
+        return await self._request(
+            "GET", f"/repos/{owner}/{repo}/pulls/{pull_number}/files"
+        )
+    
+    async def get_pr_diff(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
+        """Get the diff of a pull request."""
+        logger.info(f"Getting PR diff {owner}/{repo}#{pull_number}")
+        
+        # Use Accept header to request diff format
+        headers = {**self._headers, "Accept": "application/vnd.github.v3.diff"}
+        url = f"{self.base_url}/repos/{owner}/{repo}/pulls/{pull_number}"
+        response = await self.client.get(url, headers=headers)
+        
+        if response.status_code >= 400:
+            raise Exception(f"GitHub API error: {response.status_code}")
+        
+        # Response is now raw diff text
+        return {"diff": response.text}
+    
+    async def get_pr_comments(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
+        """Get review comments on a pull request."""
+        logger.info(f"Getting PR comments {owner}/{repo}#{pull_number}")
+        return await self._request(
+            "GET", f"/repos/{owner}/{repo}/pulls/{pull_number}/comments"
+        )
+    
+    async def add_pr_review_comment(
+        self,
+        owner: str,
+        repo: str,
+        pull_number: int,
+        body: str,
+        commit_id: Optional[str] = None,
+        path: Optional[str] = None,
+        line: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Add a review comment to a pull request."""
+        logger.info(f"Adding PR review comment {owner}/{repo}#{pull_number}")
+        
+        if path and line:
+            # For inline comments, we need a real commit SHA
+            commit_id_to_use = commit_id
+            if not commit_id_to_use:
+                pr = await self._request(
+                    "GET",
+                    f"/repos/{owner}/{repo}/pulls/{pull_number}",
+                )
+                commit_id_to_use = pr.get("head", {}).get("sha")
+                if not commit_id_to_use:
+                    raise ValueError("Unable to determine commit SHA for PR review comment")
+            
+            return await self._request(
+                "POST",
+                f"/repos/{owner}/{repo}/pulls/{pull_number}/comments",
+                json={
+                    "body": body,
+                    "commit_id": commit_id_to_use,
+                    "path": path,
+                    "line": line,
+                    "side": "RIGHT"
+                }
+            )
+        else:
+            return await self._request(
+                "POST",
+                f"/repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+                json={
+                    "body": body,
+                    "event": "COMMENT"
+                }
+            )
+    
+    async def list_pr_reviews(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
+        """List all reviews on a pull request."""
+        logger.info(f"Listing PR reviews {owner}/{repo}#{pull_number}")
+        return await self._request(
+            "GET", f"/repos/{owner}/{repo}/pulls/{pull_number}/reviews"
+        )
+    
+    async def list_branches(self, owner: str, repo: str) -> Dict[str, Any]:
+        """List branches in a repository."""
+        logger.info(f"Listing branches {owner}/{repo}")
+        return await self._request(
+            "GET", f"/repos/{owner}/{repo}/branches"
+        )
+    
+    async def get_repo(self, owner: str, repo: str) -> Dict[str, Any]:
+        """Get repository information."""
+        logger.info(f"Getting repo {owner}/{repo}")
+        return await self._request(
+            "GET", f"/repos/{owner}/{repo}"
+        )
+    
+    async def create_branch(
+        self,
+        owner: str,
+        repo: str,
+        branch_name: str,
+        from_branch: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Create a new branch."""
+        if not from_branch:
+            repo_info = await self.get_repo(owner, repo)
+            from_branch = repo_info.get("default_branch", "main")
+        
+        ref_response = await self._request(
+            "GET", f"/repos/{owner}/{repo}/git/refs/heads/{from_branch}"
+        )
+        sha = ref_response.get("object", {}).get("sha")
+        
+        if not sha:
+            raise Exception(f"Could not get SHA for branch {from_branch}")
+        
+        logger.info(f"Creating branch {branch_name} from {from_branch}")
+        return await self._request(
+            "POST",
+            f"/repos/{owner}/{repo}/git/refs",
+            json={
+                "ref": f"refs/heads/{branch_name}",
+                "sha": sha
+            }
+        )
+    
+    async def create_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        title: str,
+        body: str,
+        head: str,
+        base: str = "main"
+    ) -> Dict[str, Any]:
+        """Create a new pull request."""
+        logger.info(f"Creating PR {owner}/{repo}: {head} -> {base}")
+        return await self._request(
+            "POST",
+            f"/repos/{owner}/{repo}/pulls",
+            json={
+                "title": title,
+                "body": body,
+                "head": head,
+                "base": base
+            }
+        )
+    
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()
@@ -551,3 +699,198 @@ async def github_add_comment(owner: str, repo: str, issue_number: int, comment: 
         return f"Comment added: {owner}/{repo}#{issue_number} (ID: {comment_id})"
     except Exception as e:
         return f"Error adding comment: {e}"
+
+
+async def github_get_pr_files(owner: str, repo: str, pull_number: int) -> str:
+    """Get list of files changed in a PR."""
+    try:
+        result = await github_channel.get_pr_files(owner, repo, pull_number)
+        files = result if isinstance(result, list) else result.get("files", [])
+        
+        if not files:
+            return f"No files changed in PR #{pull_number}"
+        
+        lines = [f"**Files Changed** ({len(files)}):\n"]
+        for f in files:
+            status = f.get("status", "modified")
+            additions = f.get("additions", 0)
+            deletions = f.get("deletions", 0)
+            lines.append(f"- `{f.get('filename', '')}` [{status}] +{additions} -{deletions}")
+        
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error getting PR files: {e}"
+
+
+async def github_get_pr_diff(owner: str, repo: str, pull_number: int) -> str:
+    """Get the diff of a PR."""
+    try:
+        result = await github_channel.get_pr_diff(owner, repo, pull_number)
+        diff = result.get("diff", "") if isinstance(result, dict) else str(result)
+        
+        if not diff:
+            return f"No diff available for PR #{pull_number}"
+        
+        if len(diff) > 50000:
+            diff = diff[:50000] + f"\n\n... (truncated, total {len(diff)} chars)"
+        
+        return f"**PR #{pull_number} Diff:**\n\n{diff}"
+    except Exception as e:
+        return f"Error getting PR diff: {e}"
+
+
+async def github_get_pr_comments(owner: str, repo: str, pull_number: int) -> str:
+    """Get review comments on a PR."""
+    try:
+        result = await github_channel.get_pr_comments(owner, repo, pull_number)
+        comments = result if isinstance(result, list) else result.get("comments", [])
+        
+        if not comments:
+            return f"No comments on PR #{pull_number}"
+        
+        lines = [f"**Review Comments** ({len(comments)}):\n"]
+        for c in comments:
+            user = c.get("user", {}).get("login", "unknown")
+            body = c.get("body", "")[:200]
+            path = c.get("path", "")
+            line = c.get("line", c.get("original_line", ""))
+            lines.append(f"- **{user}** at `{path}:{line}`: {body}...")
+        
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error getting PR comments: {e}"
+
+
+async def github_add_pr_review_comment(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    body: str,
+    commit_id: Optional[str] = None,
+    path: Optional[str] = None,
+    line: Optional[int] = None
+) -> str:
+    """Add a review comment to a PR."""
+    try:
+        result = await github_channel.add_pr_review_comment(
+            owner, repo, pull_number, body, commit_id, path, line
+        )
+        return f"Review comment added to PR #{pull_number}"
+    except Exception as e:
+        return f"Error adding review comment: {e}"
+
+
+async def github_list_pr_reviews(owner: str, repo: str, pull_number: int) -> str:
+    """List all reviews on a PR."""
+    try:
+        result = await github_channel.list_pr_reviews(owner, repo, pull_number)
+        reviews = result if isinstance(result, list) else result.get("reviews", [])
+        
+        if not reviews:
+            return f"No reviews on PR #{pull_number}"
+        
+        lines = [f"**Reviews** ({len(reviews)}):\n"]
+        for r in reviews:
+            user = r.get("user", {}).get("login", "unknown")
+            state = r.get("state", "")
+            lines.append(f"- **{user}**: {state}")
+        
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error listing PR reviews: {e}"
+
+
+async def github_list_branches(owner: str, repo: str) -> str:
+    """List branches in a repository."""
+    try:
+        result = await github_channel.list_branches(owner, repo)
+        branches = result if isinstance(result, list) else result.get("branches", [])
+        
+        if not branches:
+            return f"No branches found in {owner}/{repo}"
+        
+        lines = [f"**Branches** ({len(branches)}):\n"]
+        for b in branches[:20]:
+            name = b.get("name", "")
+            protected = "🔒" if b.get("protected") else ""
+            lines.append(f"- {name} {protected}")
+        
+        if len(branches) > 20:
+            lines.append(f"\n... and {len(branches) - 20} more")
+        
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error listing branches: {e}"
+
+
+async def github_get_default_branch(owner: str, repo: str) -> str:
+    """Get the default branch of a repository."""
+    try:
+        result = await github_channel.get_repo(owner, repo)
+        default_branch = result.get("default_branch", "main")
+        return f"Default branch for {owner}/{repo}: **{default_branch}**"
+    except Exception as e:
+        return f"Error getting default branch: {e}"
+
+
+async def github_create_branch(owner: str, repo: str, branch_name: str, from_branch: Optional[str] = None) -> str:
+    """Create a new branch."""
+    try:
+        result = await github_channel.create_branch(owner, repo, branch_name, from_branch)
+        return f"Branch `{branch_name}` created in {owner}/{repo}"
+    except Exception as e:
+        return f"Error creating branch: {e}"
+
+
+async def github_get_file_content(owner: str, repo: str, path: str, branch: Optional[str] = None) -> str:
+    """Get file content from a repository."""
+    try:
+        result = await github_channel.get_file(owner, repo, path, branch)
+        content = result.get("content", "")
+        if content:
+            import base64
+            decoded = base64.b64decode(content).decode("utf-8")
+            if len(decoded) > 10000:
+                decoded = decoded[:10000] + "\n\n... (truncated)"
+            return f"**File:** {owner}/{repo}/{path}\n\n```\n{decoded}\n```"
+        return f"No content found for {path}"
+    except Exception as e:
+        return f"Error getting file: {e}"
+
+
+async def github_create_pull_request(
+    owner: str,
+    repo: str,
+    title: str,
+    body: str,
+    head: str,
+    base: str = "main"
+) -> str:
+    """Create a new pull request."""
+    try:
+        result = await github_channel.create_pull_request(owner, repo, title, body, head, base)
+        pr_url = result.get("html_url", "")
+        pr_number = result.get("number", "")
+        return f"PR created: **{title}** (#{pr_number})\n{pr_url}"
+    except Exception as e:
+        return f"Error creating PR: {e}"
+
+
+async def github_create_or_update_file(
+    owner: str,
+    repo: str,
+    path: str,
+    content: str,
+    message: str,
+    sha: Optional[str] = None,
+    branch: str = ""
+) -> str:
+    """Create or update a file in a repository."""
+    try:
+        result = await github_channel.create_or_update_file(
+            owner, repo, path, content, message, sha, branch
+        )
+        commit = result.get("commit", {})
+        return f"File {path} updated in {owner}/{repo}\nCommit: {commit.get('sha', 'unknown')[:7]}"
+    except Exception as e:
+        return f"Error updating file: {e}"

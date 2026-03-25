@@ -307,6 +307,98 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await github_module.github_add_comment(owner, repo, issue_number, comment)
         return ToolResult(success="Error" not in result, content=result)
     
+    elif name == "github_get_pr_files":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        pull_number = kwargs.get("pull_number", 0)
+        result = await github_module.github_get_pr_files(owner, repo, pull_number)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "github_get_pr_diff":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        pull_number = kwargs.get("pull_number", 0)
+        result = await github_module.github_get_pr_diff(owner, repo, pull_number)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "github_get_pr_comments":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        pull_number = kwargs.get("pull_number", 0)
+        result = await github_module.github_get_pr_comments(owner, repo, pull_number)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "github_add_pr_review_comment":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        pull_number = kwargs.get("pull_number", 0)
+        body = kwargs.get("body", "")
+        commit_id = kwargs.get("commit_id")
+        path = kwargs.get("path")
+        line = kwargs.get("line")
+        result = await github_module.github_add_pr_review_comment(
+            owner, repo, pull_number, body, commit_id, path, line
+        )
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "github_list_pr_reviews":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        pull_number = kwargs.get("pull_number", 0)
+        result = await github_module.github_list_pr_reviews(owner, repo, pull_number)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "github_list_branches":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        result = await github_module.github_list_branches(owner, repo)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "github_get_default_branch":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        result = await github_module.github_get_default_branch(owner, repo)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "github_create_branch":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        branch_name = kwargs.get("branch_name", "")
+        from_branch = kwargs.get("from_branch")
+        result = await github_module.github_create_branch(owner, repo, branch_name, from_branch)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "github_get_file_content":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        path = kwargs.get("path", "")
+        branch = kwargs.get("branch")
+        result = await github_module.github_get_file_content(owner, repo, path, branch)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "github_create_pull_request":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        title = kwargs.get("title", "")
+        body = kwargs.get("body", "")
+        head = kwargs.get("head", "")
+        base = kwargs.get("base", "main")
+        result = await github_module.github_create_pull_request(owner, repo, title, body, head, base)
+        return ToolResult(success="Error" not in result, content=result)
+    
+    elif name == "github_create_or_update_file":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        path = kwargs.get("path", "")
+        content = kwargs.get("content", "")
+        message = kwargs.get("message", "")
+        sha = kwargs.get("sha")
+        branch = kwargs.get("branch", "")
+        result = await github_module.github_create_or_update_file(
+            owner, repo, path, content, message, sha, branch
+        )
+        return ToolResult(success="Error" not in result, content=result)
+    
     # Confluence tools
     elif name == "confluence_get_page":
         page_id = kwargs.get("page_id", "")
