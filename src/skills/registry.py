@@ -52,6 +52,21 @@ class Skill:
         """Check if skill defines workflow-based execution."""
         return len(self.workflow) > 0
     
+    def to_dict(self) -> Dict:
+        """Convert skill to dictionary for serialization."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "version": self.version,
+            "owner": self.owner,
+            "triggers": self.triggers,
+            "tools": self.tools,
+            "strategy": self.strategy,
+            "workflow": self.workflow,
+            "output_format": self.output_format,
+            "deprecated": self.deprecated,
+        }
+    
     @classmethod
     def from_dict(cls, data: Dict) -> "Skill":
         """Create Skill from dictionary (parsed YAML)."""

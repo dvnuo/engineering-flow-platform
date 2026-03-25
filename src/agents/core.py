@@ -294,6 +294,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Build skill prompt if matched (FR-3: Dynamic Skill Injection)
         skill_prompt = ""
+        skill_workflow = None  # Issue #362: Step-orchestrated workflow for skills
         
         if matched_skills:
             # Use the best match
@@ -305,12 +306,24 @@ You have access to the following tools. When a user asks you to do something tha
                 set_skill_workdir(best_skill.path)
                 logger.info(f"[Skill] Workdir: {best_skill.path}")
             
-            skill_prompt = skill_registry.get_skill_prompt(best_skill)
+            # Issue #362: Check if skill has workflow definition
+            if best_skill.has_workflow:
+                from src.skills import parse_skill_as_workflow
+                skill_workflow = parse_skill_as_workflow(best_skill.to_dict() if hasattr(best_skill, 'to_dict') else {
+                    "name": best_skill.name,
+                    "workflow": best_skill.workflow,
+                })
+                logger.info(f"[Skill] Using workflow execution: {len(skill_workflow)} steps")
+                # Don't use prompt injection for workflow skills
+                skill_prompt = ""
+            else:
+                skill_prompt = skill_registry.get_skill_prompt(best_skill)
+            
             # Log matched skill
             tracer.log_tool_call(
                 tool_name="skill_matched",
                 arguments={"skill": best_skill.name},
-                result=f"Matched skill: {best_skill.name}",
+                result=f"Matched skill: {best_skill.name}" + (f" (workflow: {len(skill_workflow)} steps)" if skill_workflow else ""),
             )
         # ===== END SKILL MATCHING =====
 
