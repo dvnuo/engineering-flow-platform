@@ -24,20 +24,33 @@ _yaml = YAML()
 
 @dataclass
 class Skill:
-    """Skill definition from YAML file."""
+    """Skill definition from YAML file.
+    
+    Supports two execution modes:
+    1. Legacy (strategy-based): Single prompt injection via strategy list
+    2. Workflow (workflow-based): Step-orchestrated execution via workflow steps
+    
+    Workflow mode takes precedence if both are defined.
+    """
     name: str
     description: str
     version: str = "1.0.0"
     owner: str = ""
     triggers: List[str] = field(default_factory=list)
     tools: List[str] = field(default_factory=list)
-    strategy: List[str] = field(default_factory=list)
+    strategy: List[str] = field(default_factory=list)  # Legacy: single-prompt injection
+    workflow: List[Dict] = field(default_factory=list)  # New: workflow steps
     output_format: str = "markdown"
     deprecated: bool = False
     path: str = ""  # Directory containing skill.md
     
     # Compiled patterns for fast matching
     trigger_patterns: List[re.Pattern] = field(default_factory=list)
+    
+    @property
+    def has_workflow(self) -> bool:
+        """Check if skill defines workflow-based execution."""
+        return len(self.workflow) > 0
     
     @classmethod
     def from_dict(cls, data: Dict) -> "Skill":
@@ -54,6 +67,7 @@ class Skill:
             triggers=triggers,
             tools=data.get("tools", []),
             strategy=data.get("strategy", []),
+            workflow=data.get("workflow", []),  # New: workflow support
             output_format=data.get("output_format", "markdown"),
             deprecated=data.get("deprecated", False),
             trigger_patterns=patterns,
