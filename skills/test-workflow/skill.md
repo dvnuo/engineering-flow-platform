@@ -16,10 +16,11 @@ steps:
       - Use the web_search tool to find information related to the user's query
       - Collect at least 3 search results
       - Extract key facts and URLs from results
+      - Return JSON with status, summary, and artifacts containing search_results
     allowed_tools:
       - web_search
     completion_check:
-      - artifacts.search_results exists
+      - artifacts.search_results
     next_step: analyze_results
 
   - id: analyze_results
@@ -29,11 +30,11 @@ steps:
       - Review the search results from the previous step
       - Identify patterns, contradictions, or key themes
       - Summarize the top 3 findings
+      - Return JSON with status, summary, and artifacts containing top_findings
     allowed_tools:
       - web_search
     completion_check:
-      - artifacts.top_findings exists
-      - summary is not empty
+      - artifacts.top_findings
     next_step: generate_report
 
   - id: generate_report
@@ -43,9 +44,10 @@ steps:
       - Combine all findings from previous steps
       - Format as markdown with clear sections
       - Include all relevant artifacts
+      - Return JSON with status, summary, and next_step=null
     allowed_tools: []
     completion_check:
-      - summary is not empty
+      - summary
     next_step: null
 ---
 
@@ -57,15 +59,14 @@ This skill demonstrates the step-orchestrated workflow execution feature (Issue 
 
 ### Step 1: Gather Information
 - Uses `web_search` tool to collect information
-- Results are stored in `artifacts.search_results`
+- Results stored in `artifacts.search_results`
 
 ### Step 2: Analyze Results
 - Analyzes the gathered information
-- Extracts key findings into `artifacts.top_findings`
+- Outputs `artifacts.top_findings`
 
 ### Step 3: Generate Report
-- Creates a final structured markdown report
-- Combines all previous step outputs
+- Creates final markdown report
 
 ## Usage
 
@@ -75,25 +76,14 @@ This skill demonstrates the step-orchestrated workflow execution feature (Issue 
 test workflow execution
 ```
 
-## Key Features (Issue #362)
+## Expected Output
 
-- **Step Orchestration**: Each step executed sequentially
-- **Tool Filtering**: Only `web_search` available in steps 1-2
-- **Step Validation**: Results validated before advancing
-- **Structured JSON Output**: Each step returns JSON with status, summary, artifacts
-- **Progressive Context**: Each step sees previous outputs via artifacts
-- **Reference Loading**: Reference files loaded per step (if specified)
-
-## Expected Step Output Format
-
-Each step should return:
+Each step returns JSON:
 ```json
 {
   "status": "success",
-  "summary": "Brief description of what was done",
-  "artifacts": {
-    "key": "value"
-  },
+  "summary": "What was done",
+  "artifacts": {"key": "value"},
   "next_step": "next_step_id"
 }
 ```

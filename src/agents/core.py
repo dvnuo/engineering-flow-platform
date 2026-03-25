@@ -1348,14 +1348,22 @@ You have access to the following tools. When a user asks you to do something tha
             artifacts = step_result.get("artifacts", {})
             for check in step.completion_check:
                 # Format: "artifacts.key" or "field"
-                if "." in check:
-                    key = check.split(".")[1] if "." in check else check
-                    if key not in artifacts:
-                        return (False, f"Completion check failed: '{check}' - required artifact '{key}' not found")
+                # Remove "exists" suffix if present
+                check_clean = check.strip()
+                if check_clean.endswith(" exists"):
+                    check_clean = check_clean[:-7].strip()
+                
+                if "." in check_clean:
+                    # artifacts.key format
+                    parts = check_clean.split(".")
+                    if len(parts) >= 2 and parts[0] == "artifacts":
+                        key = parts[1]
+                        if key not in artifacts:
+                            return (False, f"Completion check failed: '{check}' - required artifact '{key}' not found")
                 else:
-                    # Simple field check
-                    if check not in step_result and check not in artifacts:
-                        return (False, f"Completion check failed: required field '{check}' not found")
+                    # Simple field check (summary, status, etc.)
+                    if check_clean not in step_result:
+                        return (False, f"Completion check failed: required field '{check_clean}' not found")
         
         return (True, "Validation passed")
 
