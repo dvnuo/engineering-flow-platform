@@ -11,14 +11,14 @@ output_format: json
 steps:
   - id: gather_info
     title: Gather Information
-    objective: Search for relevant information using web search
+    objective: Search GitHub for relevant issues or PRs related to the query
     instructions:
-      - Use the web_search tool to find information related to the user's query
-      - Collect at least 3 search results
-      - Extract key facts and URLs from results
+      - Use the github_search_issues tool to search for relevant information
+      - Search for issues related to the user's query
+      - Collect the results
       - Return JSON with status, summary, and artifacts containing search_results
     allowed_tools:
-      - web_search
+      - github_search_issues
     completion_check:
       - artifacts.search_results
     next_step: analyze_results
@@ -29,10 +29,10 @@ steps:
     instructions:
       - Review the search results from the previous step
       - Identify patterns, contradictions, or key themes
-      - Summarize the top 3 findings
+      - Summarize the top findings
       - Return JSON with status, summary, and artifacts containing top_findings
     allowed_tools:
-      - web_search
+      - github_search_issues
     completion_check:
       - artifacts.top_findings
     next_step: generate_report
@@ -58,7 +58,7 @@ This skill demonstrates the step-orchestrated workflow execution feature (Issue 
 ## Workflow Steps
 
 ### Step 1: Gather Information
-- Uses `web_search` tool to collect information
+- Uses `github_search_issues` tool to search GitHub
 - Results stored in `artifacts.search_results`
 
 ### Step 2: Analyze Results
