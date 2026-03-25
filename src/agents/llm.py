@@ -1739,24 +1739,48 @@ service_reload_manager.register('llm', llm_client.reinit)
 USE_VISION_MODELS = {
     "openai": {"gpt-4o", "gpt-4o-mini", "gpt-5-mini", "gpt-5"},
     "github_copilot": {"gpt-4o", "gpt-5-mini", "gpt-5", "gemini-2.5-pro"},
-    "claude": {"claude-sonnet-4", "claude-haiku-4", "claude-opus-4"},
+    "claude": {"claude-sonnet", "claude-haiku", "claude-opus"},
+    "anthropic": {"claude-sonnet", "claude-haiku", "claude-opus"},  # Alias for claude
     "ollama": set(),  # Ollama vision support varies
 }
 
 
 def get_vision_fallback_model(provider: str) -> Optional[str]:
     """Get a fallback model that supports vision for a provider."""
+    # Normalize provider alias
+    if provider == "anthropic":
+        provider = "claude"
+    
     vision_fallbacks = {
         "openai": "gpt-5-mini",
         "github_copilot": "gpt-5-mini",
-        "claude": "claude-haiku-4",
+        "claude": "claude-haiku-4-20250514",
         "ollama": None,
     }
     return vision_fallbacks.get(provider)
 
 
 def is_vision_model(provider: str, model: str) -> bool:
-    """Check if a model supports vision/image input."""
+    """Check if a model supports vision/image input.
+    
+    Supports prefix matching for versioned model names (e.g., claude-sonnet-4-20250514).
+    """
+    # Normalize provider alias
+    if provider == "anthropic":
+        provider = "claude"
+    
     if provider not in USE_VISION_MODELS:
         return False
-    return model.lower() in USE_VISION_MODELS[provider]
+    
+    model_lower = model.lower()
+    
+    # Check exact match first
+    if model_lower in USE_VISION_MODELS[provider]:
+        return True
+    
+    # Check prefix match for versioned models
+    for base_name in USE_VISION_MODELS[provider]:
+        if model_lower.startswith(base_name.lower()):
+            return True
+    
+    return False
