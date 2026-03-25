@@ -1744,10 +1744,31 @@ USE_VISION_MODELS = {
 }
 
 
+def _normalize_provider_key(provider: Optional[str]) -> Optional[str]:
+    """Normalize provider name to internal key used in USE_VISION_MODELS."""
+    if provider is None:
+        return None
+    normalized = provider.strip().lower()
+    if not normalized:
+        return None
+    alias_map = {
+        "anthropic": "claude",
+        "claude": "claude",
+        "openai": "openai",
+        "github": "github_copilot",
+        "github-copilot": "github_copilot",
+        "copilot": "github_copilot",
+        "github_copilot": "github_copilot",
+        "ollama": "ollama",
+    }
+    return alias_map.get(normalized, normalized)
+
+
 def get_vision_fallback_model(provider: str) -> Optional[str]:
     """Get a fallback model that supports vision for a provider."""
-    # Normalize provider alias
-        provider = "claude"
+    normalized_provider = _normalize_provider_key(provider)
+    if not normalized_provider:
+        return None
     
     vision_fallbacks = {
         "openai": "gpt-5-mini",
@@ -1755,7 +1776,7 @@ def get_vision_fallback_model(provider: str) -> Optional[str]:
         "claude": "claude-haiku-4-20250514",
         "ollama": None,
     }
-    return vision_fallbacks.get(provider)
+    return vision_fallbacks.get(normalized_provider)
 
 
 def is_vision_model(provider: str, model: str) -> bool:
@@ -1763,20 +1784,18 @@ def is_vision_model(provider: str, model: str) -> bool:
     
     Supports prefix matching for versioned model names (e.g., claude-sonnet-4-20250514).
     """
-    # Normalize provider alias
-        provider = "claude"
-    
-    if provider not in USE_VISION_MODELS:
+    normalized_provider = _normalize_provider_key(provider)
+    if not normalized_provider or normalized_provider not in USE_VISION_MODELS:
         return False
     
     model_lower = model.lower()
     
     # Check exact match first
-    if model_lower in USE_VISION_MODELS[provider]:
+    if model_lower in USE_VISION_MODELS[normalized_provider]:
         return True
     
     # Check prefix match for versioned models
-    for base_name in USE_VISION_MODELS[provider]:
+    for base_name in USE_VISION_MODELS[normalized_provider]:
         if model_lower.startswith(base_name.lower()):
             return True
     

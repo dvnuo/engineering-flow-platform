@@ -731,7 +731,7 @@ You have access to the following tools. When a user asks you to do something tha
             if config_provider and isinstance(config_provider, str) and config_provider.strip():
                 provider = config_provider.lower()
             else:
-                provider = getattr(llm_client, "default_provider", "openai")
+                provider = (getattr(llm_client, "default_provider", None) or "openai").lower()
             
             # Check if messages contain images (handle both top-level and nested in content)
             has_images = False
