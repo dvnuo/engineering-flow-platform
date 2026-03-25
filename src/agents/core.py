@@ -10,7 +10,12 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from src.agents.heartbeat import get_heartbeat, start_heartbeat, stop_heartbeat
-from src.agents.llm import llm_client
+from src.agents.llm import (
+    _normalize_provider_key,
+    llm_client,
+    is_vision_model,
+    get_vision_fallback_model,
+)
 from src.agents.memory import memory_system
 from src.memory.update_manager import MemoryUpdateManager
 from src.agents.thinking import ThinkLevel, normalize_think_level, format_runtime_info
@@ -718,13 +723,66 @@ You have access to the following tools. When a user asks you to do something tha
             
             logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM with {len(input_items)} input_items")
             
-            llm_result = await llm_client.responses(
+            # Check if any message contains images - if so, use vision model
+            # Use model explicitly set in agent, otherwise let provider decide
+            current_model = self.model or config.llm.get("model")
+            
+            # Resolve provider: use config if set, otherwise use llm_client's default
+            config_provider = config.llm.get("provider")
+            if config_provider and isinstance(config_provider, str) and config_provider.strip():
+                provider = config_provider.lower()
+            else:
+                provider = (getattr(llm_client, "default_provider", None) or "openai").lower()
+            
+            # Check if messages contain images (handle both top-level and nested in content)
+            has_images = False
+            for item in input_items:
+                # Handle top-level image items
+                if item.get("type") == "input_image":
+                    has_images = True
+                    break
+                # Handle images nested inside a message's content list
+                content = item.get("content")
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "input_image":
+                            has_images = True
+                            break
+                    if has_images:
+                        break
+            
+            # Switch to vision model if current model doesn't support images
+            effective_model = current_model
+            if has_images:
+                if current_model:
+                    # Explicit model set but may not support vision
+                    if not is_vision_model(provider, current_model):
+                        fallback = get_vision_fallback_model(provider)
+                        if fallback:
+                            logger.info(f"[Tool Loop] Message contains images, switching from {current_model} to {fallback}")
+                            effective_model = fallback
+                else:
+                    # No explicit model, use provider's vision default
+                    fallback = get_vision_fallback_model(provider)
+                    if fallback:
+                        logger.info(f"[Tool Loop] Message contains images, using vision fallback {fallback}")
+                        effective_model = fallback
+            
+            # Only pass model if explicitly set
+            llm_kwargs = dict(
                 input_items=input_items,
                 system_prompt=effective_system_prompt,
                 tools=self.tools,
                 reasoning_replay=enable_reasoning,
             )
+            if effective_model:
+                llm_kwargs["model"] = effective_model
             
+            # Pass provider to ensure correct LLM client routing
+            if provider:
+                llm_kwargs["provider"] = _normalize_provider_key(provider)
+            
+            llm_result = await llm_client.responses(**llm_kwargs)
             # Check for LLM configuration error
             if llm_result.get("error"):
                 error_info = llm_result["error"]
