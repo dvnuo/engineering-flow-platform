@@ -718,11 +718,32 @@ You have access to the following tools. When a user asks you to do something tha
             
             logger.debug(f"[Tool Loop] Iteration {iteration}: Calling LLM with {len(input_items)} input_items")
             
+            # Check if any message contains images - if so, use vision model
+            from src.agents.llm import is_vision_model, get_vision_fallback_model
+            current_model = self.model or config.llm.get("model", "gpt-5-mini")
+            provider = config.llm.get("provider", "").lower()
+            
+            # Check if messages contain images
+            has_images = False
+            for item in input_items:
+                if item.get("type") == "input_image":
+                    has_images = True
+                    break
+            
+            # Switch to vision model if current model doesn't support images
+            effective_model = current_model
+            if has_images and not is_vision_model(provider, current_model):
+                fallback = get_vision_fallback_model(provider)
+                if fallback:
+                    logger.info(f"[Tool Loop] Message contains images, switching from {current_model} to {fallback}")
+                    effective_model = fallback
+            
             llm_result = await llm_client.responses(
                 input_items=input_items,
                 system_prompt=effective_system_prompt,
                 tools=self.tools,
                 reasoning_replay=enable_reasoning,
+                model=effective_model,  # Pass the effective model
             )
             
             # Check for LLM configuration error

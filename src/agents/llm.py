@@ -1734,3 +1734,29 @@ llm_client = LLMClient()
 # Register for config reload
 from src.config import service_reload_manager
 service_reload_manager.register('llm', llm_client.reinit)
+
+# Models that support vision/image input
+USE_VISION_MODELS = {
+    "openai": {"gpt-4o", "gpt-4o-mini", "gpt-5-mini", "gpt-5"},
+    "github_copilot": {"gpt-4o", "gpt-5-mini", "gpt-5", "gemini-2.5-pro"},
+    "claude": {"claude-sonnet-4", "claude-haiku-4", "claude-opus-4"},
+    "ollama": set(),  # Ollama vision support varies
+}
+
+
+def get_vision_fallback_model(provider: str) -> Optional[str]:
+    """Get a fallback model that supports vision for a provider."""
+    vision_fallbacks = {
+        "openai": "gpt-5-mini",
+        "github_copilot": "gpt-5-mini",
+        "claude": "claude-haiku-4",
+        "ollama": None,
+    }
+    return vision_fallbacks.get(provider)
+
+
+def is_vision_model(provider: str, model: str) -> bool:
+    """Check if a model supports vision/image input."""
+    if provider not in USE_VISION_MODELS:
+        return False
+    return model.lower() in USE_VISION_MODELS[provider]
