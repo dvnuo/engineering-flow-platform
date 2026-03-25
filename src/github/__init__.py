@@ -37,6 +37,7 @@ __all__ = [
     "github_create_branch",
     "github_get_file_content",
     "github_create_pull_request",
+    "github_create_or_update_file",
     "get_tools_schemas",
 ]
 
@@ -280,6 +281,7 @@ def get_tools_schemas() -> list:
         {
             "type": "function",
             "function": {
+                "name": "github_create_or_update_file",
                 "description": "Create or update a file in a repository",
                 "parameters": {
                     "type": "object",
