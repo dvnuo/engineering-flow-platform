@@ -437,8 +437,43 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== BUILD EFFECTIVE SYSTEM PROMPT (with Skill Guidance + Semantic Context) =====
         effective_system_prompt = self.system_prompt
         
-        # FR-3: Dynamic Skill Injection - Include skill prompt from FIRST call
-        if skill_prompt:
+        # Issue #362: Workflow-based skill execution
+        workflow_step_index = 0  # Current step in workflow
+        workflow_context = None   # Workflow execution context
+        
+        if skill_workflow:
+            # Workflow mode: inject step-specific guidance
+            from src.skills import workflow_executor
+            workflow_context = workflow_executor.create_context(
+                workflow_id=f"wf_{session_id[:8]}",
+                skill_name=matched_skills[0].name,
+                user_message=message,
+                session_id=session_id,
+            )
+            workflow_executor.register_context(workflow_context)
+            
+            # Build step guidance for first step
+            current_step = skill_workflow[0]
+            step_guidance = f"""## Skill Workflow Mode (Issue #362)
+
+You are executing a step-orchestrated workflow for skill: {matched_skills[0].name}
+
+Current step: {current_step.name}
+Description: {current_step.description}
+
+"""
+            if current_step.required_tools:
+                step_guidance += f"**Allowed tools for this step:** {', '.join(current_step.required_tools)}\n\n"
+            if current_step.prompt_template:
+                step_guidance += f"{current_step.prompt_template}\n\n"
+            
+            step_guidance += "Complete this step by calling the necessary tools. When done, respond with 'STEP_COMPLETE' to move to the next step."
+            
+            effective_system_prompt = f"{self.system_prompt}\n\n{step_guidance}"
+            logger.info(f"[Workflow] Starting workflow '{matched_skills[0].name}' with {len(skill_workflow)} steps")
+            logger.info(f"[Workflow] Step 1: {current_step.name}")
+        elif skill_prompt:
+            # Legacy prompt injection mode
             effective_system_prompt = f"{self.system_prompt}\n\n## Skill Guidance\n\n{skill_prompt}"
             logger.info(f"[Skill] Injected skill guidance for: {matched_skills[0].name}")
         
@@ -834,6 +869,49 @@ You have access to the following tools. When a user asks you to do something tha
             content = (llm_result.get("content") or "").strip()
             function_calls = llm_result.get("function_calls", [])
             tool_calls = function_calls  # alias
+            
+            # Issue #362: Workflow step completion detection
+            # Only move to next step if STEP_COMPLETE is found AND there are no pending tool calls
+            # This ensures tool execution for current step completes before step transition
+            step_complete_pending = skill_workflow and workflow_context and "STEP_COMPLETE" in content.upper() and not tool_calls
+            
+            if step_complete_pending:
+                workflow_step_index += 1
+                
+                if workflow_step_index >= len(skill_workflow):
+                    # Workflow complete
+                    logger.info(f"[Workflow] All {len(skill_workflow)} steps completed")
+                    # Remove step guidance from prompt for final response
+                    effective_system_prompt = self.system_prompt
+                    # Mark workflow as done
+                    skill_workflow = None
+                else:
+                    # Move to next step
+                    current_step = skill_workflow[workflow_step_index]
+                    logger.info(f"[Workflow] Step {workflow_step_index + 1}/{len(skill_workflow)}: {current_step.name}")
+                    
+                    # Build new guidance for next step
+                    step_guidance = f"""## Skill Workflow - Step {workflow_step_index + 1}
+
+Skill: {matched_skills[0].name}
+Current step: {current_step.name}
+Description: {current_step.description}
+
+"""
+                    if current_step.required_tools:
+                        step_guidance += f"**Allowed tools for this step:** {', '.join(current_step.required_tools)}\n\n"
+                    if current_step.prompt_template:
+                        step_guidance += f"{current_step.prompt_template}\n\n"
+                    step_guidance += "Complete this step by calling the necessary tools. When done, respond with 'STEP_COMPLETE' to move to the next step."
+                    
+                    effective_system_prompt = f"{self.system_prompt}\n\n{step_guidance}"
+                    
+                    # Also log step transition to tracer
+                    tracer.log_tool_call(
+                        tool_name="workflow_step_complete",
+                        arguments={"step": workflow_step_index, "step_name": current_step.name},
+                        result=f"Completed step {workflow_step_index}: {current_step.name}",
+                    )
             
             # Save intermediate chatlog after EVERY LLM call (for recovery on interruption)
             # Use asyncio.to_thread to avoid blocking the event loop
