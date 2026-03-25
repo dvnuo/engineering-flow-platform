@@ -23,14 +23,44 @@ _yaml = YAML()
 
 
 @dataclass
+class SkillStep:
+    """A single step in a skill workflow (Issue #362).
+    
+    Aligns with Issue #362's proposed design.
+    """
+    id: str
+    title: str
+    objective: str
+    instructions: List[str] = field(default_factory=list)
+    allowed_tools: List[str] = field(default_factory=list)
+    references: List[str] = field(default_factory=list)  # Files to load for this step
+    completion_check: List[str] = field(default_factory=list)  # Validation rules
+    next_step: Optional[str] = None  # ID of next step, or None if final
+    
+    @classmethod
+    def from_dict(cls, data: Dict) -> "SkillStep":
+        """Create SkillStep from dictionary."""
+        return cls(
+            id=data.get("id", ""),
+            title=data.get("title", data.get("name", "")),
+            objective=data.get("objective", data.get("description", "")),
+            instructions=data.get("instructions", []),
+            allowed_tools=data.get("allowed_tools", data.get("required_tools", [])),
+            references=data.get("references", []),
+            completion_check=data.get("completion_check", data.get("validation", [])),
+            next_step=data.get("next_step"),
+        )
+
+
+@dataclass
 class Skill:
     """Skill definition from YAML file.
     
     Supports two execution modes:
     1. Legacy (strategy-based): Single prompt injection via strategy list
-    2. Workflow (workflow-based): Step-orchestrated execution via workflow steps
+    2. Step-based (steps): Step-orchestrated execution via steps
     
-    Workflow mode takes precedence if both are defined.
+    Step mode takes precedence if both are defined.
     """
     name: str
     description: str
@@ -39,7 +69,7 @@ class Skill:
     triggers: List[str] = field(default_factory=list)
     tools: List[str] = field(default_factory=list)
     strategy: List[str] = field(default_factory=list)  # Legacy: single-prompt injection
-    workflow: List[Dict] = field(default_factory=list)  # New: workflow steps
+    steps: List[SkillStep] = field(default_factory=list)  # Step-based execution (Issue #362)
     output_format: str = "markdown"
     deprecated: bool = False
     path: str = ""  # Directory containing skill.md
@@ -48,9 +78,26 @@ class Skill:
     trigger_patterns: List[re.Pattern] = field(default_factory=list)
     
     @property
+    def has_steps(self) -> bool:
+        """Check if skill defines step-based execution (Issue #362)."""
+        return len(self.steps) > 0
+    
+    # Backward compatibility alias
+    @property
     def has_workflow(self) -> bool:
-        """Check if skill defines workflow-based execution."""
-        return len(self.workflow) > 0
+        """Check if skill defines step-based execution (backward compat alias)."""
+        return self.has_steps
+    
+    def get_step(self, step_id: str) -> Optional[SkillStep]:
+        """Get step by ID."""
+        for step in self.steps:
+            if step.id == step_id:
+                return step
+        return None
+    
+    def get_first_step(self) -> Optional[SkillStep]:
+        """Get the first step in the workflow."""
+        return self.steps[0] if self.steps else None
     
     def to_dict(self) -> Dict:
         """Convert skill to dictionary for serialization."""
@@ -62,7 +109,19 @@ class Skill:
             "triggers": self.triggers,
             "tools": self.tools,
             "strategy": self.strategy,
-            "workflow": self.workflow,
+            "steps": [
+                {
+                    "id": s.id,
+                    "title": s.title,
+                    "objective": s.objective,
+                    "instructions": s.instructions,
+                    "allowed_tools": s.allowed_tools,
+                    "references": s.references,
+                    "completion_check": s.completion_check,
+                    "next_step": s.next_step,
+                }
+                for s in self.steps
+            ],
             "output_format": self.output_format,
             "deprecated": self.deprecated,
         }
@@ -74,6 +133,10 @@ class Skill:
         triggers = data.get("trigger") or data.get("triggers", [])
         patterns = [re.compile(re.escape(t), re.IGNORECASE) for t in triggers]
         
+        # Parse steps (Issue #362) - support both "steps" and "workflow" for backward compat
+        steps_data = data.get("steps", data.get("workflow", []))
+        steps = [SkillStep.from_dict(s) for s in steps_data]
+        
         return cls(
             name=data.get("name", "unknown"),
             description=data.get("description", ""),
@@ -82,7 +145,7 @@ class Skill:
             triggers=triggers,
             tools=data.get("tools", []),
             strategy=data.get("strategy", []),
-            workflow=data.get("workflow", []),  # New: workflow support
+            steps=steps,
             output_format=data.get("output_format", "markdown"),
             deprecated=data.get("deprecated", False),
             trigger_patterns=patterns,
@@ -360,6 +423,147 @@ class SkillRegistry:
         ])
         
         return "\n".join(prompt_parts)
+    
+    def get_step_prompt(
+        self,
+        skill: Skill,
+        step: SkillStep,
+        context: Dict[str, Any] = None,
+    ) -> str:
+        """Issue #362: Generate step-specific prompt for workflow execution.
+        
+        Builds a prompt that includes:
+        - skill name
+        - current step id/title
+        - objective
+        - instructions
+        - allowed tools
+        - relevant references (loaded from files)
+        - completion criteria
+        - required output schema (JSON)
+        
+        Args:
+            skill: The skill this step belongs to
+            step: The step to generate prompt for
+            context: Optional context dict with previous step results
+            
+        Returns:
+            Formatted prompt string for the step
+        """
+        context = context or {}
+        prompt_parts = []
+        
+        # Header
+        prompt_parts.append(f"## Skill: {skill.name}")
+        prompt_parts.append(f"### Current Step: {step.id} - {step.title}")
+        prompt_parts.append("")
+        
+        # Objective
+        prompt_parts.append("### Objective")
+        prompt_parts.append(step.objective)
+        prompt_parts.append("")
+        
+        # Instructions
+        if step.instructions:
+            prompt_parts.append("### Instructions")
+            for i, instruction in enumerate(step.instructions, 1):
+                prompt_parts.append(f"{i}. {instruction}")
+            prompt_parts.append("")
+        
+        # Allowed tools
+        if step.allowed_tools:
+            prompt_parts.append("### Allowed Tools")
+            prompt_parts.append("You MUST only use these tools for this step:")
+            for tool in step.allowed_tools:
+                prompt_parts.append(f"- `{tool}`")
+            prompt_parts.append("")
+        
+        # References - Issue #362: Progressive reference loading
+        if step.references and skill.path:
+            prompt_parts.append("### References")
+            prompt_parts.append("Load and consider the following reference files:")
+            for ref_file in step.references:
+                ref_path = Path(skill.path) / ref_file
+                if ref_path.exists():
+                    try:
+                        with open(ref_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        prompt_parts.append(f"\n#### {ref_file}")
+                        prompt_parts.append(f"```\n{content[:2000]}...\n```" if len(content) > 2000 else f"```\n{content}\n```")
+                    except Exception as e:
+                        logger.warning(f"[Skill] Failed to load reference {ref_file}: {e}")
+                        prompt_parts.append(f"- {ref_file} (failed to load)")
+                else:
+                    prompt_parts.append(f"- {ref_file} (not found)")
+            prompt_parts.append("")
+        
+        # Completion criteria
+        if step.completion_check:
+            prompt_parts.append("### Completion Criteria")
+            prompt_parts.append("Before responding, verify:")
+            for check in step.completion_check:
+                prompt_parts.append(f"- [ ] {check}")
+            prompt_parts.append("")
+        
+        # Previous step context
+        if context.get("previous_results"):
+            prompt_parts.append("### Previous Step Results")
+            for prev_step_id, prev_result in context["previous_results"].items():
+                prompt_parts.append(f"**From {prev_step_id}:**")
+                if isinstance(prev_result, dict):
+                    for key, value in prev_result.items():
+                        prompt_parts.append(f"- {key}: {str(value)[:500]}")
+                else:
+                    prompt_parts.append(f"- {str(prev_result)[:500]}")
+            prompt_parts.append("")
+        
+        # Output schema (Issue #362)
+        prompt_parts.append("### Required Output Format")
+        prompt_parts.append("You MUST respond with valid JSON in this exact format:")
+        prompt_parts.append("""
+```json
+{
+  "status": "success|needs_retry|failed",
+  "summary": "Brief summary of what was accomplished in this step",
+  "artifacts": {
+    // Key-value pairs of outputs from this step
+  },
+  "next_step": "next_step_id"  // or null if this is the final step
+}
+```""")
+        prompt_parts.append("")
+        
+        # Important instruction
+        prompt_parts.append("**Important:** Complete ONLY this step. Do not finish the entire task in one response.")
+        prompt_parts.append("")
+        
+        return "\n".join(prompt_parts)
+    
+    def get_step_references(self, skill: Skill, step: SkillStep) -> Dict[str, str]:
+        """Issue #362: Load reference files for a step.
+        
+        Args:
+            skill: The skill this step belongs to
+            step: The step to load references for
+            
+        Returns:
+            Dict mapping filename to content
+        """
+        references = {}
+        
+        if not step.references or not skill.path:
+            return references
+        
+        for ref_file in step.references:
+            ref_path = Path(skill.path) / ref_file
+            if ref_path.exists():
+                try:
+                    with open(ref_path, 'r', encoding='utf-8') as f:
+                        references[ref_file] = f.read()
+                except Exception as e:
+                    logger.warning(f"[Skill] Failed to load reference {ref_file}: {e}")
+        
+        return references
     
     def get_all_skill_summaries(self) -> List[Dict]:
         """Get summary of all skills for frontend/UI."""

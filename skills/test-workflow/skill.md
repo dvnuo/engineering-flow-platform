@@ -1,38 +1,52 @@
 ---
 name: test-workflow
-description: Test skill demonstrating workflow orchestration (Issue #362)
+description: Test skill demonstrating step-orchestrated workflow execution (Issue #362)
 version: 1.0.0
 owner: dev-team
 triggers:
   - /skill test-workflow
   - /test-workflow
   - test workflow
-workflow:
-  - id: step_1
-    name: Gather Info
-    description: Search for relevant information using web search
-    tool: web_search
-    outputs: [search_results]
-    validation: must not be empty
-    required_tools:
+output_format: json
+steps:
+  - id: gather_info
+    title: Gather Information
+    objective: Search for relevant information using web search
+    instructions:
+      - Use the web_search tool to find information related to the user's query
+      - Collect at least 3 search results
+      - Extract key facts and URLs from results
+    allowed_tools:
       - web_search
-  - id: step_2
-    name: Analyze Results
-    description: Analyze the search results and extract key insights
-    prompt_template: |
-      Based on the search results from step 1, analyze and summarize:
-      1. What are the top 3 key findings?
-      2. Are there any contradictions or disagreements?
-      3. What additional questions arise?
-    required_tools:
+    completion_check:
+      - artifacts.search_results exists
+    next_step: analyze_results
+
+  - id: analyze_results
+    title: Analyze Results
+    objective: Analyze the search results and extract key insights
+    instructions:
+      - Review the search results from the previous step
+      - Identify patterns, contradictions, or key themes
+      - Summarize the top 3 findings
+    allowed_tools:
       - web_search
-  - id: step_3
-    name: Generate Output
-    description: Generate a structured report with the analysis
-    prompt_template: |
-      Create a structured report combining all previous steps.
-      Format as markdown with clear sections.
-output_format: markdown
+    completion_check:
+      - artifacts.top_findings exists
+      - summary is not empty
+    next_step: generate_report
+
+  - id: generate_report
+    title: Generate Report
+    objective: Create a structured report with the analysis
+    instructions:
+      - Combine all findings from previous steps
+      - Format as markdown with clear sections
+      - Include all relevant artifacts
+    allowed_tools: []
+    completion_check:
+      - summary is not empty
+    next_step: null
 ---
 
 # Skill: Test Workflow
@@ -41,16 +55,17 @@ This skill demonstrates the step-orchestrated workflow execution feature (Issue 
 
 ## Workflow Steps
 
-### Step 1: Gather Info
-- Uses `web_search` tool to search for information
-- Output is validated to ensure it's not empty
+### Step 1: Gather Information
+- Uses `web_search` tool to collect information
+- Results are stored in `artifacts.search_results`
 
 ### Step 2: Analyze Results
-- LLM analyzes the gathered information
-- Extracts key insights and patterns
+- Analyzes the gathered information
+- Extracts key findings into `artifacts.top_findings`
 
-### Step 3: Generate Output
-- Creates a structured final report
+### Step 3: Generate Report
+- Creates a final structured markdown report
+- Combines all previous step outputs
 
 ## Usage
 
@@ -60,9 +75,25 @@ This skill demonstrates the step-orchestrated workflow execution feature (Issue 
 test workflow execution
 ```
 
-## Key Features Demonstrated
+## Key Features (Issue #362)
 
-- **Step Orchestration**: Each step is executed sequentially
-- **Tool Filtering**: Only specific tools are available per step
-- **Step Validation**: Results are validated before advancing
-- **Progressive Context**: Each step sees output from previous steps
+- **Step Orchestration**: Each step executed sequentially
+- **Tool Filtering**: Only `web_search` available in steps 1-2
+- **Step Validation**: Results validated before advancing
+- **Structured JSON Output**: Each step returns JSON with status, summary, artifacts
+- **Progressive Context**: Each step sees previous outputs via artifacts
+- **Reference Loading**: Reference files loaded per step (if specified)
+
+## Expected Step Output Format
+
+Each step should return:
+```json
+{
+  "status": "success",
+  "summary": "Brief description of what was done",
+  "artifacts": {
+    "key": "value"
+  },
+  "next_step": "next_step_id"
+}
+```

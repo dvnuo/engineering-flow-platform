@@ -306,14 +306,11 @@ You have access to the following tools. When a user asks you to do something tha
                 set_skill_workdir(best_skill.path)
                 logger.info(f"[Skill] Workdir: {best_skill.path}")
             
-            # Issue #362: Check if skill has workflow definition
-            if best_skill.has_workflow:
-                from src.skills import parse_skill_as_workflow
-                skill_workflow = parse_skill_as_workflow(best_skill.to_dict() if hasattr(best_skill, 'to_dict') else {
-                    "name": best_skill.name,
-                    "workflow": best_skill.workflow,
-                })
-                logger.info(f"[Skill] Using workflow execution: {len(skill_workflow)} steps")
+            # Issue #362: Check if skill has step-based workflow
+            if best_skill.has_steps:
+                # Use Skill's steps directly (list of SkillStep objects)
+                skill_workflow = best_skill.steps
+                logger.info(f"[Skill] Using step-based workflow: {len(skill_workflow)} steps")
                 # Don't use prompt injection for workflow skills
                 skill_prompt = ""
             else:
@@ -437,12 +434,12 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== BUILD EFFECTIVE SYSTEM PROMPT (with Skill Guidance + Semantic Context) =====
         effective_system_prompt = self.system_prompt
         
-        # Issue #362: Workflow-based skill execution
-        workflow_step_index = 0  # Current step in workflow
-        workflow_context = None   # Workflow execution context
+        # Issue #362: Step-based skill execution
+        workflow_step_index = 0  # Current step index
+        workflow_context = {}    # Workflow execution context for passing data between steps
         
         if skill_workflow:
-            # Workflow mode: inject step-specific guidance
+            # Step-based mode: Use get_step_prompt() for structured execution
             from src.skills import workflow_executor
             workflow_context = workflow_executor.create_context(
                 workflow_id=f"wf_{session_id[:8]}",
@@ -452,26 +449,17 @@ You have access to the following tools. When a user asks you to do something tha
             )
             workflow_executor.register_context(workflow_context)
             
-            # Build step guidance for first step
+            # Build step prompt using registry's get_step_prompt (Issue #362)
             current_step = skill_workflow[0]
-            step_guidance = f"""## Skill Workflow Mode (Issue #362)
-
-You are executing a step-orchestrated workflow for skill: {matched_skills[0].name}
-
-Current step: {current_step.name}
-Description: {current_step.description}
-
-"""
-            if current_step.required_tools:
-                step_guidance += f"**Allowed tools for this step:** {', '.join(current_step.required_tools)}\n\n"
-            if current_step.prompt_template:
-                step_guidance += f"{current_step.prompt_template}\n\n"
+            step_prompt = skill_registry.get_step_prompt(
+                skill=matched_skills[0],
+                step=current_step,
+                context={"previous_results": workflow_context.get_all_outputs() if hasattr(workflow_context, 'get_all_outputs') else {}}
+            )
             
-            step_guidance += "Complete this step by calling the necessary tools. When done, respond with 'STEP_COMPLETE' to move to the next step."
-            
-            effective_system_prompt = f"{self.system_prompt}\n\n{step_guidance}"
+            effective_system_prompt = f"{self.system_prompt}\n\n{step_prompt}"
             logger.info(f"[Workflow] Starting workflow '{matched_skills[0].name}' with {len(skill_workflow)} steps")
-            logger.info(f"[Workflow] Step 1: {current_step.name}")
+            logger.info(f"[Workflow] Step 1: {current_step.id} - {current_step.title}")
         elif skill_prompt:
             # Legacy prompt injection mode
             effective_system_prompt = f"{self.system_prompt}\n\n## Skill Guidance\n\n{skill_prompt}"
@@ -821,11 +809,11 @@ Description: {current_step.description}
             effective_tools = self.tools
             if skill_workflow and workflow_step_index < len(skill_workflow):
                 current_step = skill_workflow[workflow_step_index]
-                if current_step.required_tools:
-                    # Filter to only allowed tools for this step
-                    allowed = set(current_step.required_tools)
+                if current_step.allowed_tools:
+                    # Filter to only allowed tools for this step (Issue #362)
+                    allowed = set(current_step.allowed_tools)
                     effective_tools = [t for t in self.tools if t.get("function", {}).get("name", "") in allowed]
-                    logger.info(f"[Workflow] Step {workflow_step_index + 1}: Filtering tools to {current_step.required_tools}")
+                    logger.info(f"[Workflow] Step {workflow_step_index + 1}: Filtering tools to {current_step.allowed_tools}")
             
             llm_kwargs = dict(
                 input_items=input_items,
@@ -880,69 +868,105 @@ Description: {current_step.description}
             function_calls = llm_result.get("function_calls", [])
             tool_calls = function_calls  # alias
             
-            # Issue #362: Workflow step completion detection
-            # Only move to next step if STEP_COMPLETE is found AND there are no pending tool calls
-            # This ensures tool execution for current step completes before step transition
-            step_complete_pending = skill_workflow and workflow_context and "STEP_COMPLETE" in content.upper() and not tool_calls
+            # Issue #362: Step-based execution - Parse structured JSON result
+            # Only process step transition when there are no pending tool calls
+            step_result_data = None
+            step_needs_retry = False
             
-            if step_complete_pending:
-                # Get the completed step for validation
-                completed_step = skill_workflow[workflow_step_index] if workflow_step_index < len(skill_workflow) else None
+            if skill_workflow and workflow_context and not tool_calls:
+                # Try to parse JSON result from LLM response
+                step_result_data = self._parse_step_result(content)
                 
-                # Issue #362: Step validation
-                if completed_step and completed_step.validation:
-                    # Validate step output against validation rule
-                    validation_passed, validation_msg = self._validate_step_output(
-                        content, completed_step.validation
-                    )
-                    if not validation_passed:
-                        logger.warning(f"[Workflow] Step {workflow_step_index + 1} validation failed: {validation_msg}")
-                        # Don't advance - ask LLM to retry
-                        content = f"Step validation failed: {validation_msg}\n\nPlease try again and ensure your output meets the requirements."
-                        send_event("workflow_validation_failed", {
-                            "step": workflow_step_index + 1,
-                            "step_name": completed_step.name,
-                            "message": validation_msg,
-                        })
-                        step_complete_pending = False  # Don't advance
-                
-                if step_complete_pending:
-                    workflow_step_index += 1
+                if step_result_data:
+                    status = step_result_data.get("status", "")
+                    summary = step_result_data.get("summary", "")
+                    artifacts = step_result_data.get("artifacts", {})
+                    next_step_id = step_result_data.get("next_step")
                     
+                    logger.info(f"[Workflow] Step {workflow_step_index + 1} result: status={status}, summary={summary[:100]}")
+                    
+                    # Store artifacts in workflow context for next steps
+                    if hasattr(workflow_context, 'shared_state') and artifacts:
+                        workflow_context.shared_state.update(artifacts)
+                    
+                    # Check if step needs retry
+                    if status == "needs_retry":
+                        step_needs_retry = True
+                        logger.warning(f"[Workflow] Step {workflow_step_index + 1} requested retry: {summary}")
+                    elif status == "success":
+                        # Validate completion criteria
+                        completed_step = skill_workflow[workflow_step_index] if workflow_step_index < len(skill_workflow) else None
+                        validation_passed, validation_msg = self._validate_step_result(step_result_data, completed_step)
+                        
+                        if not validation_passed:
+                            step_needs_retry = True
+                            logger.warning(f"[Workflow] Step {workflow_step_index + 1} validation failed: {validation_msg}")
+                        
+                        # Determine next step
+                        if not step_needs_retry:
+                            # Move to next step
+                            if next_step_id:
+                                # Find next step by ID
+                                for i, s in enumerate(skill_workflow):
+                                    if s.id == next_step_id:
+                                        workflow_step_index = i
+                                        break
+                                else:
+                                    # Next step ID not found, advance by index
+                                    workflow_step_index += 1
+                            else:
+                                # No next_step specified, advance by index
+                                workflow_step_index += 1
+                            
+                            if workflow_step_index >= len(skill_workflow):
+                                # Workflow complete
+                                logger.info(f"[Workflow] All {len(skill_workflow)} steps completed")
+                                effective_system_prompt = self.system_prompt
+                                skill_workflow = None
+                            else:
+                                # Move to next step
+                                current_step = skill_workflow[workflow_step_index]
+                                logger.info(f"[Workflow] Step {workflow_step_index + 1}/{len(skill_workflow)}: {current_step.id} - {current_step.title}")
+                                
+                                # Build next step prompt using registry's get_step_prompt
+                                step_prompt = skill_registry.get_step_prompt(
+                                    skill=matched_skills[0],
+                                    step=current_step,
+                                    context={"previous_results": workflow_context.get_all_outputs() if hasattr(workflow_context, 'get_all_outputs') else {}}
+                                )
+                                effective_system_prompt = f"{self.system_prompt}\n\n{step_prompt}"
+                                
+                                # Log step transition
+                                tracer.log_tool_call(
+                                    tool_name="workflow_step_complete",
+                                    arguments={"step": workflow_step_index, "step_id": current_step.id, "step_name": current_step.title},
+                                    result=f"Completed step {workflow_step_index}: {current_step.title}",
+                                )
+                
+                elif "STEP_COMPLETE" in content.upper():
+                    # Backward compatibility: treat STEP_COMPLETE as success
+                    workflow_step_index += 1
                     if workflow_step_index >= len(skill_workflow):
-                        # Workflow complete
                         logger.info(f"[Workflow] All {len(skill_workflow)} steps completed")
-                        # Remove step guidance from prompt for final response
                         effective_system_prompt = self.system_prompt
-                        # Mark workflow as done
                         skill_workflow = None
                     else:
-                        # Move to next step
                         current_step = skill_workflow[workflow_step_index]
-                        logger.info(f"[Workflow] Step {workflow_step_index + 1}/{len(skill_workflow)}: {current_step.name}")
-                        
-                        # Build new guidance for next step
-                        step_guidance = f"""## Skill Workflow - Step {workflow_step_index + 1}
-
-Skill: {matched_skills[0].name}
-Current step: {current_step.name}
-Description: {current_step.description}
-
-"""
-                        if current_step.required_tools:
-                            step_guidance += f"**Allowed tools for this step:** {', '.join(current_step.required_tools)}\n\n"
-                        if current_step.prompt_template:
-                            step_guidance += f"{current_step.prompt_template}\n\n"
-                        step_guidance += "Complete this step by calling the necessary tools. When done, respond with 'STEP_COMPLETE' to move to the next step."
-                        
-                        effective_system_prompt = f"{self.system_prompt}\n\n{step_guidance}"
-                        
-                        # Also log step transition to tracer
-                        tracer.log_tool_call(
-                            tool_name="workflow_step_complete",
-                            arguments={"step": workflow_step_index, "step_name": current_step.name},
-                            result=f"Completed step {workflow_step_index}: {current_step.name}",
+                        step_prompt = skill_registry.get_step_prompt(
+                            skill=matched_skills[0],
+                            step=current_step,
+                            context={}
                         )
+                        effective_system_prompt = f"{self.system_prompt}\n\n{step_prompt}"
+            
+            # Issue #362: Retry logic - if step needs retry, inject error message
+            if step_needs_retry:
+                retry_msg = f"Step validation failed: {validation_msg}\n\nPlease fix the issues and retry. Return JSON with status 'success' when complete."
+                content = retry_msg  # This will be added to the next LLM call
+                send_event("workflow_validation_failed", {
+                    "step": workflow_step_index + 1,
+                    "message": validation_msg,
+                })
             
             # Save intermediate chatlog after EVERY LLM call (for recovery on interruption)
             # Use asyncio.to_thread to avoid blocking the event loop
@@ -1260,8 +1284,83 @@ Description: {current_step.description}
         
         return {"response": "Task completed (max iterations reached)", "usage": usage_data or {}, "events": events, "user_message_id": user_message_id}
 
+    def _parse_step_result(self, content: str) -> Optional[Dict]:
+        """Issue #362: Parse structured JSON result from LLM step response.
+        
+        Args:
+            content: Raw LLM response content
+            
+        Returns:
+            Parsed dict with status, summary, artifacts, next_step, or None if not valid JSON
+        """
+        if not content:
+            return None
+        
+        import re
+        
+        # Try to extract JSON from content
+        # Handle: ```json ... ``` or plain JSON
+        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            # Try plain JSON
+            json_str = content.strip()
+        
+        try:
+            result = json.loads(json_str)
+            # Validate required fields
+            if not isinstance(result, dict):
+                return None
+            if "status" not in result:
+                logger.warning(f"[Workflow] Step result missing 'status' field")
+                return None
+            return result
+        except json.JSONDecodeError as e:
+            logger.debug(f"[Workflow] Failed to parse step result JSON: {e}")
+            return None
+
+    def _validate_step_result(self, step_result: Dict, step: Any) -> tuple:
+        """Issue #362: Validate step result against completion criteria.
+        
+        Args:
+            step_result: Parsed step result dict with status, summary, artifacts
+            step: SkillStep being validated
+            
+        Returns:
+            (passed, message) tuple
+        """
+        if not step:
+            return (True, "No step to validate")
+        
+        # Validate status field
+        status = step_result.get("status", "")
+        if status not in ("success", "needs_retry", "failed"):
+            return (False, f"Invalid status '{status}'. Must be 'success', 'needs_retry', or 'failed'")
+        
+        # Validate summary exists
+        summary = step_result.get("summary", "")
+        if not summary or len(summary.strip()) < 5:
+            return (False, "Summary is missing or too short (min 5 chars)")
+        
+        # Validate completion_check criteria
+        if step.completion_check:
+            artifacts = step_result.get("artifacts", {})
+            for check in step.completion_check:
+                # Format: "artifacts.key" or "field"
+                if "." in check:
+                    key = check.split(".")[1] if "." in check else check
+                    if key not in artifacts:
+                        return (False, f"Completion check failed: '{check}' - required artifact '{key}' not found")
+                else:
+                    # Simple field check
+                    if check not in step_result and check not in artifacts:
+                        return (False, f"Completion check failed: required field '{check}' not found")
+        
+        return (True, "Validation passed")
+
     def _validate_step_output(self, content: str, validation_rule: str) -> tuple:
-        """Issue #362: Validate step output against validation rule.
+        """Issue #362: Validate step output against validation rule (legacy).
         
         Args:
             content: The step output to validate

@@ -386,7 +386,8 @@ def parse_skill_as_workflow(skill_data: Dict) -> List[WorkflowStep]:
             description: Analyze the results
             required_tools: [github_search]
     """
-    workflow_config = skill_data.get("workflow", [])
+    # Support both "steps" (Issue #362) and "workflow" (backward compat)
+    workflow_config = skill_data.get("steps", skill_data.get("workflow", []))
     
     if not workflow_config:
         # No workflow defined - return empty, fallback to prompt injection
@@ -394,18 +395,24 @@ def parse_skill_as_workflow(skill_data: Dict) -> List[WorkflowStep]:
     
     steps = []
     for i, step_def in enumerate(workflow_config):
-        step = WorkflowStep(
-            id=step_def.get("id", f"step_{i+1}"),
-            name=step_def.get("name", f"Step {i+1}"),
-            description=step_def.get("description", ""),
-            tool=step_def.get("tool"),
-            inputs=step_def.get("inputs", []),
-            outputs=step_def.get("outputs", []),
-            validation=step_def.get("validation"),
-            required_tools=step_def.get("required_tools", []),
-            prompt_template=step_def.get("prompt_template"),
-        )
-        steps.append(step)
+        # Handle both dict and SkillStep objects
+        if hasattr(step_def, 'id'):
+            # It's already a SkillStep object, just use it
+            steps.append(step_def)
+        else:
+            # It's a dict, convert to WorkflowStep
+            step = WorkflowStep(
+                id=step_def.get("id", f"step_{i+1}"),
+                name=step_def.get("name", step_def.get("title", f"Step {i+1}")),
+                description=step_def.get("description", step_def.get("objective", "")),
+                tool=step_def.get("tool"),
+                inputs=step_def.get("inputs", []),
+                outputs=step_def.get("outputs", step_def.get("artifacts", [])),
+                validation=step_def.get("validation", step_def.get("completion_check", None)),
+                required_tools=step_def.get("required_tools", step_def.get("allowed_tools", [])),
+                prompt_template=step_def.get("prompt_template"),
+            )
+            steps.append(step)
     
     return steps
 

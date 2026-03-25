@@ -15,7 +15,7 @@ Example Skill:
 - review-pr.skill.yaml: Reviews GitHub PRs using github tools
 """
 
-from .registry import Skill, SkillRegistry, skill_registry, load_all_skills
+from .registry import Skill, SkillStep, SkillRegistry, skill_registry, load_all_skills
 from .tracer import ExecutionTracer, SkillExecution, ToolCall, execution_tracer, get_tracer
 from .workflows import (
     WorkflowExecutor,
@@ -31,6 +31,7 @@ from .workflows import (
 __all__ = [
     # Registry
     "Skill",
+    "SkillStep",
     "SkillRegistry", 
     "skill_registry",
     "load_all_skills",
