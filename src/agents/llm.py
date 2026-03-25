@@ -1740,7 +1740,6 @@ USE_VISION_MODELS = {
     "openai": {"gpt-4o", "gpt-4o-mini", "gpt-5-mini", "gpt-5"},
     "github_copilot": {"gpt-4o", "gpt-5-mini", "gpt-5", "gemini-2.5-pro"},
     "claude": {"claude-sonnet", "claude-haiku", "claude-opus"},
-    "anthropic": {"claude-sonnet", "claude-haiku", "claude-opus"},  # Alias for claude
     "ollama": set(),  # Ollama vision support varies
 }
 
@@ -1748,7 +1747,6 @@ USE_VISION_MODELS = {
 def get_vision_fallback_model(provider: str) -> Optional[str]:
     """Get a fallback model that supports vision for a provider."""
     # Normalize provider alias
-    if provider == "anthropic":
         provider = "claude"
     
     vision_fallbacks = {
@@ -1766,7 +1764,6 @@ def is_vision_model(provider: str, model: str) -> bool:
     Supports prefix matching for versioned model names (e.g., claude-sonnet-4-20250514).
     """
     # Normalize provider alias
-    if provider == "anthropic":
         provider = "claude"
     
     if provider not in USE_VISION_MODELS:

@@ -725,7 +725,13 @@ You have access to the following tools. When a user asks you to do something tha
             # Check if any message contains images - if so, use vision model
             # Use model explicitly set in agent, otherwise let provider decide
             current_model = self.model or config.llm.get("model")
-            provider = config.llm.get("provider", "").lower()
+            
+            # Resolve provider: use config if set, otherwise use llm_client's default
+            config_provider = config.llm.get("provider")
+            if config_provider and isinstance(config_provider, str) and config_provider.strip():
+                provider = config_provider.lower()
+            else:
+                provider = getattr(llm_client, "default_provider", "openai")
             
             # Check if messages contain images (handle both top-level and nested in content)
             has_images = False
