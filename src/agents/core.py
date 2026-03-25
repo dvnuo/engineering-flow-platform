@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from src.agents.heartbeat import get_heartbeat, start_heartbeat, stop_heartbeat
 from src.agents.llm import (
+    _normalize_provider_key,
     llm_client,
     is_vision_model,
     get_vision_fallback_model,
@@ -779,7 +780,7 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Pass provider to ensure correct LLM client routing
             if provider:
-                llm_kwargs["provider"] = provider
+                llm_kwargs["provider"] = _normalize_provider_key(provider)
             
             llm_result = await llm_client.responses(**llm_kwargs)
             # Check for LLM configuration error
