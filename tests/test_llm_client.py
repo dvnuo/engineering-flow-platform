@@ -905,3 +905,107 @@ class TestOllamaProvider:
         # Should not have Authorization header for local Ollama
         assert "Authorization" not in headers
         assert "Content-Type" in headers
+
+
+class TestVisionModelSelection:
+    """Tests for vision model detection and fallback selection."""
+
+    def test_normalize_provider_key_anthropic(self):
+        """Test that anthropic is normalized to claude."""
+        from src.agents.llm import _normalize_provider_key
+        assert _normalize_provider_key("anthropic") == "claude"
+        assert _normalize_provider_key("Anthropic") == "claude"
+        assert _normalize_provider_key("ANTHROPIC") == "claude"
+
+    def test_normalize_provider_key_github(self):
+        """Test that github aliases are normalized."""
+        from src.agents.llm import _normalize_provider_key
+        assert _normalize_provider_key("github") == "github_copilot"
+        assert _normalize_provider_key("github-copilot") == "github_copilot"
+        assert _normalize_provider_key("copilot") == "github_copilot"
+        assert _normalize_provider_key("GitHub_Copilot") == "github_copilot"
+
+    def test_normalize_provider_key_openai(self):
+        """Test that openai is normalized correctly."""
+        from src.agents.llm import _normalize_provider_key
+        assert _normalize_provider_key("openai") == "openai"
+        assert _normalize_provider_key("OpenAI") == "openai"
+
+    def test_normalize_provider_key_none_empty(self):
+        """Test that None and empty strings return None."""
+        from src.agents.llm import _normalize_provider_key
+        assert _normalize_provider_key(None) is None
+        assert _normalize_provider_key("") is None
+        assert _normalize_provider_key("   ") is None
+
+    def test_is_vision_model_openai(self):
+        """Test vision model detection for OpenAI provider."""
+        from src.agents.llm import is_vision_model
+        # Vision models
+        assert is_vision_model("openai", "gpt-4o") is True
+        assert is_vision_model("openai", "gpt-4o-mini") is True
+        assert is_vision_model("openai", "gpt-5-mini") is True
+        assert is_vision_model("openai", "gpt-5") is True
+        # Non-vision models
+        assert is_vision_model("openai", "gpt-4.1") is False
+        assert is_vision_model("openai", "gpt-3.5-turbo") is False
+        assert is_vision_model("openai", "o1") is False
+
+    def test_is_vision_model_github_copilot(self):
+        """Test vision model detection for GitHub Copilot provider."""
+        from src.agents.llm import is_vision_model
+        # Vision models
+        assert is_vision_model("github_copilot", "gpt-4o") is True
+        assert is_vision_model("github_copilot", "gpt-5-mini") is True
+        assert is_vision_model("github_copilot", "gpt-5") is True
+        assert is_vision_model("github_copilot", "gemini-2.5-pro") is True
+        # Non-vision models
+        assert is_vision_model("github_copilot", "gpt-4.1") is False
+
+    def test_is_vision_model_claude_with_version_suffix(self):
+        """Test that versioned Claude models are detected as vision-capable."""
+        from src.agents.llm import is_vision_model
+        # Versioned Claude models should match via prefix
+        assert is_vision_model("claude", "claude-sonnet-4-20250514") is True
+        assert is_vision_model("claude", "claude-haiku-4-20250514") is True
+        assert is_vision_model("claude", "claude-opus-4-20250514") is True
+
+    def test_is_vision_model_claude_alias(self):
+        """Test that anthropic alias works for Claude models."""
+        from src.agents.llm import is_vision_model
+        assert is_vision_model("anthropic", "claude-sonnet-4-20250514") is True
+        assert is_vision_model("anthropic", "claude-haiku-4") is True
+
+    def test_is_vision_model_unknown_provider(self):
+        """Test that unknown providers return False."""
+        from src.agents.llm import is_vision_model
+        assert is_vision_model("unknown_provider", "gpt-4o") is False
+        assert is_vision_model(None, "gpt-4o") is False
+
+    def test_get_vision_fallback_model_openai(self):
+        """Test fallback model for OpenAI."""
+        from src.agents.llm import get_vision_fallback_model
+        assert get_vision_fallback_model("openai") == "gpt-5-mini"
+
+    def test_get_vision_fallback_model_github_copilot(self):
+        """Test fallback model for GitHub Copilot."""
+        from src.agents.llm import get_vision_fallback_model
+        assert get_vision_fallback_model("github_copilot") == "gpt-5-mini"
+        assert get_vision_fallback_model("github") == "gpt-5-mini"
+
+    def test_get_vision_fallback_model_claude(self):
+        """Test fallback model for Claude."""
+        from src.agents.llm import get_vision_fallback_model
+        assert get_vision_fallback_model("claude") == "claude-haiku-4-20250514"
+        assert get_vision_fallback_model("anthropic") == "claude-haiku-4-20250514"
+
+    def test_get_vision_fallback_model_ollama(self):
+        """Test fallback model for Ollama."""
+        from src.agents.llm import get_vision_fallback_model
+        assert get_vision_fallback_model("ollama") is None
+
+    def test_get_vision_fallback_model_unknown(self):
+        """Test fallback model for unknown provider."""
+        from src.agents.llm import get_vision_fallback_model
+        assert get_vision_fallback_model("unknown") is None
+        assert get_vision_fallback_model(None) is None
