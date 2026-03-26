@@ -1986,14 +1986,16 @@ You have access to the following tools. When a user asks you to do something tha
                     logger.info(f"[Workflow] First message: {str(messages[0])[:100]}")
                 
                 # Build call kwargs
-                call_kwargs = {
-                    "input_items": messages,
-                    "system_prompt": effective_system_prompt,
-                    "tools": tools,
-                }
-                logger.info(f"[Workflow] About to call llm_client.responses")
+                input_items_arg = messages
+                system_prompt_arg = effective_system_prompt
+                tools_arg = tools
+                logger.info(f"[Workflow] About to call llm_client.responses with input_items type: {type(input_items_arg)}")
                 
-                llm_result = await llm_client.responses(**call_kwargs)
+                llm_result = await llm_client.responses(
+                    input_items=input_items_arg,
+                    system_prompt=system_prompt_arg,
+                    tools=tools_arg,
+                )
                 logger.info(f"[Workflow] LLM call returned")
             
             content = (llm_result.get("content") or "").strip()
