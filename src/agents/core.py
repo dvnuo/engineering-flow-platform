@@ -2072,6 +2072,9 @@ You have access to the following tools. When a user asks you to do something tha
                         desc = prop_def.get("description", "")
                         if desc:
                             compact_prop["description"] = desc[:50] + "..." if len(desc) > 50 else desc
+                        # Preserve 'items' for array types (required for valid JSON Schema)
+                        if prop_def.get("type") == "array" and "items" in prop_def:
+                            compact_prop["items"] = prop_def.get("items")
                         compact_params["properties"][prop_name] = compact_prop
             
             compact_tool = {
