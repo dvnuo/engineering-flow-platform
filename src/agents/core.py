@@ -1849,6 +1849,7 @@ You have access to the following tools. When a user asks you to do something tha
             )
         
         # Handle step result
+        logger.info(f"[Workflow] >>> Handling step result: step={current_step.id}, status={step_result.status}, validation_passed={step_result.validation_passed}")
         logger.info(f"[Workflow] Step {current_step.id} result: status={step_result.status}, validation_passed={step_result.validation_passed}")
         if step_result.validation_message:
             logger.info(f"[Workflow] Step {current_step.id} validation_message: {step_result.validation_message}")
@@ -1957,6 +1958,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         else:
             # Step failed (non-retryable error)
+            logger.warning(f"[Workflow] Step {current_step.id} failed (non-retryable), status={step_result.status}")
             return await self._finalize_workflow_failure(
                 session_id=session_id,
                 skill=skill,
@@ -1965,6 +1967,7 @@ You have access to the following tools. When a user asks you to do something tha
             )
         
         # End of while loop
+        logger.info(f"[Workflow] >>> End of while loop reached, steps_executed={steps_executed}")
     
     async def _execute_workflow_step(
         self,
