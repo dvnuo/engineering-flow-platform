@@ -2280,19 +2280,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         step_id = step.id
         
-        # Check LLM budget for this step
-        current_llm_count = workflow.get_llm_request_count(step_id)
-        if current_llm_count >= WorkflowProtectionConfig.MAX_LLM_REQUESTS_PER_STEP:
-            logger.warning(f"[Workflow] Step {step_id}: LLM budget exhausted")
-            workflow.transient_failure = True
-            return StepExecutionResult(
-                step_id=step_id,
-                status="needs_retry",
-                summary="Step temporarily unavailable due to rate limits. Please try again in a few moments.",
-                validation_passed=False,
-                validation_message="LLM budget exhausted",
-            )
-        
+        # Tool-direct mode doesn't use LLM, so no budget check needed
         try:
             # Build context for the step
             context = {
@@ -2310,26 +2298,21 @@ You have access to the following tools. When a user asks you to do something tha
             # Build tool arguments from step config
             tool_args = {"query": query} if query else {}
             
-            # Acquire semaphore for concurrency control
-            async with get_llm_semaphore():
-                # Increment LLM request count
-                current_llm_count = workflow.increment_llm_request(step_id)
-                logger.info(f"[Workflow] Tool-direct step {step_id}: executing {tool_name} (request #{current_llm_count})")
-                
-                # Execute the tool directly
-                try:
-                    result = await execute_tool_by_name(tool_name, **tool_args)
-                    tool_output = result.output if hasattr(result, 'output') else str(result)
-                except Exception as e:
-                    tool_output = f"Error: {str(e)}"
-                    logger.error(f"[Workflow] Tool error in {step_id}: {e}")
-                    return StepExecutionResult(
-                        step_id=step_id,
-                        status="failed",
-                        summary=f"Tool execution failed: {str(e)}",
-                        validation_passed=False,
-                        validation_message=str(e),
-                    )
+            # Execute the tool directly (no LLM call, no semaphore needed)
+            logger.info(f"[Workflow] Tool-direct step {step_id}: executing {tool_name}")
+            try:
+                result = await execute_tool_by_name(tool_name, **tool_args)
+                tool_output = result.output if hasattr(result, 'output') else str(result)
+            except Exception as e:
+                tool_output = f"Error: {str(e)}"
+                logger.error(f"[Workflow] Tool error in {step_id}: {e}")
+                return StepExecutionResult(
+                    step_id=step_id,
+                    status="failed",
+                    summary=f"Tool execution failed: {str(e)}",
+                    validation_passed=False,
+                    validation_message=str(e),
+                )
             
             # Parse tool output and construct StepExecutionResult
             # Most search/fetch tools return structured data (JSON)
