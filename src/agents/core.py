@@ -1683,6 +1683,15 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Reconstruct ActiveWorkflow from state with defensive checks
         try:
+            # Validate workflow_state is a dict
+            if not isinstance(workflow_state, dict):
+                logger.error(f"[Workflow] workflow_state is not a dict: {type(workflow_state)}")
+                return {
+                    "response": f"Workflow state error: expected dict, got {type(workflow_state)}",
+                    "usage": {},
+                    "user_message_id": None,
+                }
+            
             active_workflow = ActiveWorkflow(
                 workflow_id=workflow_state.get("workflow_id", f"wf_{session_id[:8]}_unknown"),
                 skill_name=workflow_state.get("skill_name", "unknown"),
@@ -1695,6 +1704,8 @@ You have access to the following tools. When a user asks you to do something tha
             )
         except Exception as e:
             logger.error(f"[Workflow] Failed to reconstruct workflow: {e}")
+            import traceback
+            logger.error(f"[Workflow] Traceback: {traceback.format_exc()}")
             return {
                 "response": f"Workflow state error: {str(e)}",
                 "usage": {},
