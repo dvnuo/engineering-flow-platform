@@ -533,6 +533,7 @@ class OpenAIProvider(BaseProvider):
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
         reasoning_replay: Optional[bool] = None,
+        response_format: Optional[Dict[str, str]] = None,  # e.g. {"type": "json_object"}
     ) -> Dict[str, Any]:
         """Call OpenAI Responses API (/responses endpoint)."""
         # Fall back to chat() when reasoning_replay is needed (not supported)
@@ -568,10 +569,9 @@ class OpenAIProvider(BaseProvider):
             "text": {"format": {"type": "text"}},
         }
         
-        # Add tools if provided (Responses API format)
-        if converted_tools:
-            payload["tools"] = converted_tools
-            payload["tool_choice"] = "auto"
+        # Add response_format for JSON mode (e.g., workflow step output)
+        if response_format:
+            payload["response_format"] = response_format
         
         # Debug: Log request details (before calling _call_api)
         if _is_debug_enabled():
@@ -855,6 +855,7 @@ class GitHubCopilotProvider(BaseProvider):
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
         reasoning_replay: Optional[bool] = None,
+        response_format: Optional[Dict[str, str]] = None,  # e.g. {"type": "json_object"}
     ) -> Dict[str, Any]:
         """Call GitHub Copilot Responses API (/responses endpoint).
         
@@ -914,10 +915,9 @@ class GitHubCopilotProvider(BaseProvider):
             "text": {"format": {"type": "text"}},
         }
         
-        # Add tools if provided (Responses API format)
-        if converted_tools:
-            payload["tools"] = converted_tools
-            payload["tool_choice"] = "auto"
+        # Add response_format for JSON mode (e.g., workflow step output)
+        if response_format:
+            payload["response_format"] = response_format
         
         # Debug: Log request details (before calling _call_api)
         if _is_debug_enabled():
@@ -1498,6 +1498,7 @@ class LLMClient:
         max_tokens: Optional[int] = None,
         provider: Optional[str] = None,
         reasoning_replay: Optional[bool] = None,
+        response_format: Optional[Dict[str, str]] = None,  # e.g. {"type": "json_object"}
     ) -> Dict[str, Any]:
         """Call LLM using Responses API (/responses endpoint)."""
         provider = provider or self.default_provider or 'openai'
@@ -1691,6 +1692,7 @@ class LLMClient:
             model=model,
             max_tokens=max_tokens,
             reasoning_replay=reasoning_replay,
+            response_format=response_format,
         )
     
     def list_models(self, provider: Optional[str] = None) -> List[str]:
