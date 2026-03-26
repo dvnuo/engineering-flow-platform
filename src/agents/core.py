@@ -1488,6 +1488,13 @@ You have access to the following tools. When a user asks you to do something tha
         if not summary or len(summary.strip()) < 5:
             return (False, "Summary is missing or too short (min 5 chars)")
         
+        # Check for error indicators in summary (LLM might return error as "success")
+        error_indicators = ["not available", "error:", "failed:", "exception", "traceback", "not found", "invalid"]
+        summary_lower = summary.lower()
+        for indicator in error_indicators:
+            if indicator.lower() in summary_lower:
+                return (False, f"Summary contains error indicator '{indicator}': {summary[:100]}")
+        
         # Validate completion_check criteria
         if step.completion_check:
             artifacts = step_result.get("artifacts", {})
