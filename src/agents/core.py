@@ -1748,6 +1748,20 @@ You have access to the following tools. When a user asks you to do something tha
         steps_executed = 0
         all_responses = []
         
+        # Re-entrancy protection: if workflow is already being executed, return early
+        # This prevents duplicate execution when HTTP requests timeout and are retried
+        if active_workflow.shared_state.get("_workflow_executing"):
+            logger.info(f"[Workflow] Already executing, returning early")
+            return {
+                "response": "Workflow is being processed. Please wait...",
+                "usage": {},
+                "user_message_id": None,
+            }
+        
+        # Mark as executing and save state immediately
+        active_workflow.shared_state["_workflow_executing"] = True
+        await self._save_workflow_state(session_id, active_workflow)
+        
         while (active_workflow.current_step_index < len(skill.steps) and 
                steps_executed < WorkflowProtectionConfig.MAX_STEPS_PER_REQUEST):
             
@@ -1834,6 +1848,7 @@ You have access to the following tools. When a user asks you to do something tha
                 next_step_index = active_workflow.current_step_index + 1
             else:
                 # Last step - workflow complete
+                active_workflow.shared_state.pop("_workflow_executing", None)
                 return await self._finalize_workflow_success(
                     session_id=session_id,
                     skill=skill,
