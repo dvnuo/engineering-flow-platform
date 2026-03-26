@@ -323,7 +323,8 @@ You have access to the following tools. When a user asks you to do something tha
         """
         # Issue #362: Check for active workflow state first
         workflow_state = await session_manager.get_workflow_state(session_id)
-        if workflow_state and workflow_state.get("mode") == ExecutionMode.WORKFLOW.value:
+        logger.info(f"[Workflow] process() - workflow_state type: {type(workflow_state)}, value: {str(workflow_state)[:200] if workflow_state else 'None'}")
+        if workflow_state and isinstance(workflow_state, dict) and workflow_state.get("mode") == ExecutionMode.WORKFLOW.value:
             # Continue active workflow
             return await self._continue_active_workflow(
                 message=message,
