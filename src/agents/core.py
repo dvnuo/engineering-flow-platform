@@ -1044,6 +1044,7 @@ You have access to the following tools. When a user asks you to do something tha
                         effective_model = fallback
             
             # Only pass model if explicitly set
+            effective_tools = self.tools  # Default to all tools for normal chat
             llm_kwargs = dict(
                 input_items=input_items,
                 system_prompt=effective_system_prompt,
@@ -1781,11 +1782,11 @@ You have access to the following tools. When a user asks you to do something tha
                 session_id=session_id,
                 user_name=user_name,
                 track_usage=track_usage,
-            reasoning_replay=reasoning_replay,
-            stream_callback=stream_callback,
-            attached_images=attached_images,
-            attachments=attachments,
-        )
+                reasoning_replay=reasoning_replay,
+                stream_callback=stream_callback,
+                attached_images=attached_images,
+                attachments=attachments,
+            )
         
         # Handle step result
         if step_result.status == "success" and step_result.validation_passed:
