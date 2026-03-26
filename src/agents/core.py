@@ -1830,8 +1830,13 @@ You have access to the following tools. When a user asks you to do something tha
             )
         
         # Handle step result
+        logger.info(f"[Workflow] Step {current_step.id} result: status={step_result.status}, validation_passed={step_result.validation_passed}")
+        if step_result.validation_message:
+            logger.info(f"[Workflow] Step {current_step.id} validation_message: {step_result.validation_message}")
+        
         if step_result.status == "success" and step_result.validation_passed:
             # Step succeeded, save outputs
+            logger.info(f"[Workflow] Step {current_step.id} SUCCEEDED, saving outputs")
             active_workflow.step_outputs[current_step.id] = {
                 "summary": step_result.summary,
                 "artifacts": step_result.artifacts,
@@ -1872,13 +1877,16 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Advance to next step
             active_workflow.reset_llm_request_count(current_step.id)  # Reset LLM count for new step
+            logger.info(f"[Workflow] BEFORE ADVANCE: current_step_index={active_workflow.current_step_index}, next_step_index={next_step_index}")
             active_workflow.current_step_index = next_step_index
             await self._save_workflow_state(session_id, active_workflow)
+            logger.info(f"[Workflow] AFTER ADVANCE: current_step_index={active_workflow.current_step_index}, step_outputs keys={list(active_workflow.step_outputs.keys())}, steps_executed={steps_executed}")
             steps_executed += 1
             
             # Check if we've hit max steps per request
             if steps_executed >= WorkflowProtectionConfig.MAX_STEPS_PER_REQUEST:
-                logger.info(f"[Workflow] Reached max steps per request ({WorkflowProtectionConfig.MAX_STEPS_PER_REQUEST})")
+                logger.info(f"[Workflow] Reached max steps per request ({WorkflowProtectionConfig.MAX_STEPS_PER_REQUEST}), returning early")
+                logger.info(f"[Workflow] BEFORE EARLY RETURN: current_step_index={active_workflow.current_step_index}, step_outputs={list(active_workflow.step_outputs.keys())}, lock_set={'_workflow_executing' in active_workflow.shared_state}")
                 # Clear executing lock before returning
                 active_workflow.shared_state.pop("_workflow_executing", None)
                 # Save transient failure state if any
@@ -1895,9 +1903,11 @@ You have access to the following tools. When a user asks you to do something tha
                 }
         
         elif step_result.status == "needs_retry":
+            logger.warning(f"[Workflow] Step {current_step.id} needs_retry, validation_message: {step_result.validation_message}")
             # Check retry count
             retry_count = active_workflow.increment_retry(current_step.id)
             if retry_count > MAX_RETRIES_PER_STEP:
+                logger.warning(f"[Workflow] Step {current_step.id} max retries exceeded")
                 # Clear lock before finalize
                 active_workflow.shared_state.pop("_workflow_executing", None)
                 return await self._finalize_workflow_failure(
@@ -1911,6 +1921,7 @@ You have access to the following tools. When a user asks you to do something tha
             active_workflow.shared_state.pop("_workflow_executing", None)
             # Save retry count
             await self._save_workflow_state(session_id, active_workflow)
+            logger.info(f"[Workflow] Step {current_step.id} retry count: {retry_count}, will retry on next request")
             
             # If we executed some steps already, include them in the response
             if all_responses:
@@ -2347,6 +2358,8 @@ You MUST respond with ONLY valid JSON. No markdown, no explanations, no text out
             step_result.validation_passed = validation_passed
             step_result.validation_message = validation_msg
             
+            logger.info(f"[Workflow] Step {step_id} validation: passed={validation_passed}, message={validation_msg}")
+            
             if not validation_passed:
                 step_result.status = "needs_retry"
             
@@ -2354,6 +2367,9 @@ You MUST respond with ONLY valid JSON. No markdown, no explanations, no text out
             
         except Exception as e:
             error_str = str(e)
+            logger.error(f"[Workflow] Step {step_id} EXCEPTION: {error_str}")
+            import traceback
+            logger.error(f"[Workflow] Step {step_id} traceback: {traceback.format_exc()}")
             if _is_retryable_error(error_str):
                 # Transient failure
                 logger.warning(f"[Workflow] Transient error in step execution: {error_str[:100]}")
