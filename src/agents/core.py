@@ -1887,6 +1887,16 @@ You have access to the following tools. When a user asks you to do something tha
             
             current_step = skill.steps[active_workflow.current_step_index]
             
+            # Check if step was already completed (in case of re-entrancy after partial execution)
+            if current_step.id in active_workflow.step_outputs:
+                logger.info(f"[Workflow] Step {current_step.id} already completed, advancing...")
+                # Advance to next step
+                if active_workflow.current_step_index < len(skill.steps) - 1:
+                    active_workflow.current_step_index += 1
+                    await self._save_workflow_state(session_id, active_workflow)
+                    steps_executed += 1
+                continue
+            
             # Log step continuation
             logger.info(f"[Workflow] Step {active_workflow.current_step_index + 1}/{len(skill.steps)}: {current_step.id} (exec #{steps_executed + 1})")
             
