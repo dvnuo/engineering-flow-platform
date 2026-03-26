@@ -218,7 +218,9 @@ class SkillRegistry:
         
         # Log summary
         override_msg = f" ({len(overridden)} overridden)" if overridden else ""
-        logger.info(f"Skill registry: {len(self.skills)} skills ({project_count} project + {user_count} user{override_msg})")
+        skill_names = list(self.skills.keys())
+        logger.info(f"Skill registry: {len(self.skills)} skills loaded: {skill_names}")
+        logger.info(f"  ({project_count} project + {user_count} user{override_msg})")
         
         if overridden:
             logger.info(f"  Overridden skills: {', '.join(overridden)}")
@@ -356,7 +358,12 @@ class SkillRegistry:
     
     def get_skill(self, name: str) -> Optional[Skill]:
         """Get skill by name."""
-        return self.skills.get(name)
+        skill = self.skills.get(name)
+        if skill:
+            logger.debug(f"get_skill('{name}'): found, has_steps={skill.has_steps}")
+        else:
+            logger.warning(f"get_skill('{name}'): NOT FOUND, available={list(self.skills.keys())}")
+        return skill
     
     def list_skills(self) -> List[Skill]:
         """List all loaded skills."""

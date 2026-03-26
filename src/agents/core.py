@@ -1728,15 +1728,30 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Get skill (ensure registry is initialized first)
         if not skill_registry._initialized:
+            logger.warning(f"[Workflow] skill_registry not initialized, loading now...")
             skill_registry.load_skills()
-        skill = skill_registry.get_skill(active_workflow.skill_name)
-        if not skill or not skill.has_steps:
-            # Skill not found or not step-based, fail workflow
+        
+        skill_name = active_workflow.skill_name
+        skill = skill_registry.get_skill(skill_name)
+        all_skills = list(skill_registry._skills.keys()) if hasattr(skill_registry, '_skills') else []
+        logger.info(f"[Workflow] Resuming workflow: skill_name='{skill_name}', skill_found={skill is not None}, all_available_skills={all_skills}")
+        
+        if not skill:
+            logger.error(f"[Workflow] Skill '{skill_name}' not found in registry")
+            return await self._finalize_workflow_failure(
+                session_id=session_id,
+                skill=None,
+                workflow=active_workflow,
+                error_message=f"Skill '{skill_name}' not found in registry. Available: {all_skills}",
+            )
+        
+        if not skill.has_steps:
+            logger.error(f"[Workflow] Skill '{skill_name}' is not step-based (has_steps=False)")
             return await self._finalize_workflow_failure(
                 session_id=session_id,
                 skill=skill,
                 workflow=active_workflow,
-                error_message=f"Skill '{active_workflow.skill_name}' not found or not step-based",
+                error_message=f"Skill '{skill_name}' is not step-based",
             )
         
         # Get current step
