@@ -196,11 +196,17 @@ class SessionManager:
             persisted = await session_persistence.load_session(session_id)
             
             if persisted:
+                metadata = persisted.get("metadata", {})
+                wf_in_metadata = "workflow_state" in metadata
+                logger.info(f"[SessionManager] Loading persisted session {session_id}: has_workflow_state_in_metadata={wf_in_metadata}, metadata_keys={list(metadata.keys()) if metadata else []}")
+                if wf_in_metadata:
+                    logger.info(f"[SessionManager]   workflow_state in metadata: step_index={metadata['workflow_state'].get('current_step_index')}")
+                
                 self.sessions[session_id] = {
                     "history": persisted.get("messages", []),
                     "user_id": persisted.get("user_id", ""),
                     "channel": persisted.get("channel", ""),
-                    "metadata": persisted.get("metadata", {}),
+                    "metadata": metadata,
                     "created_at": persisted.get("created_at", datetime.now().isoformat()),
                     "updated_at": persisted.get("updated_at", datetime.now().isoformat()),
                     "_persisted": True,
@@ -413,16 +419,26 @@ class SessionManager:
             Workflow state dict or None if no active workflow.
         """
         session = await self.get_session(session_id)
-        # Check both top-level (new) and metadata (persisted) locations
+        
+        # Check top-level first (for in-memory sessions)
         workflow_state = session.get("workflow_state")
-        if not workflow_state and session.get("metadata"):
-            workflow_state = session["metadata"].get("workflow_state")
-        if not workflow_state and session.get("metadata", {}).get("workflow_state"):
-            workflow_state = session["metadata"]["workflow_state"]
-        logger.info(f"[SessionManager] get_workflow_state({session_id}): found={'yes' if workflow_state else 'NO'}, session_keys={list(session.keys())}")
         if workflow_state:
-            logger.info(f"[SessionManager]   step_index={workflow_state.get('current_step_index')}, completed={list(workflow_state.get('step_outputs', {}).keys())}")
-        return workflow_state
+            logger.info(f"[SessionManager] get_workflow_state({session_id}): FOUND at top-level, step_index={workflow_state.get('current_step_index')}")
+            return workflow_state
+        
+        # Check metadata (for persisted sessions)
+        metadata = session.get("metadata", {})
+        if "workflow_state" in metadata:
+            workflow_state = metadata["workflow_state"]
+            logger.info(f"[SessionManager] get_workflow_state({session_id}): FOUND in metadata, step_index={workflow_state.get('current_step_index')}")
+            # Also copy to top-level for next lookup
+            session["workflow_state"] = workflow_state
+            return workflow_state
+        
+        logger.info(f"[SessionManager] get_workflow_state({session_id}): NOT FOUND, session_keys={list(session.keys())}")
+        if metadata:
+            logger.info(f"[SessionManager]   metadata_keys={list(metadata.keys())}")
+        return None
     
     async def set_workflow_state(self, session_id: str, workflow_state: Optional[Dict[str, Any]]) -> None:
         """Set workflow state for a session (Issue #362).
