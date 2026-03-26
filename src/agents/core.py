@@ -1828,7 +1828,7 @@ You have access to the following tools. When a user asks you to do something tha
             if enable_reasoning:
                 llm_kwargs["reasoning_replay"] = True
             
-            llm_result = await llm_client.generate(**llm_kwargs)
+            llm_result = await llm_client.responses(**llm_kwargs)
             
             content = (llm_result.get("content") or "").strip()
             tool_calls = llm_result.get("function_calls", [])
@@ -1858,7 +1858,7 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 # Call LLM again with tool results
                 llm_kwargs["input_items"] = transformed_messages
-                llm_result = await llm_client.generate(**llm_kwargs)
+                llm_result = await llm_client.responses(**llm_kwargs)
                 content = (llm_result.get("content") or "").strip()
             
             # Parse JSON result
