@@ -1695,45 +1695,90 @@ You have access to the following tools. When a user asks you to do something tha
             active_workflow.step_outputs[current_step.id] = step_result.artifacts
             active_workflow.shared_state.update(step_result.artifacts)
             
-            # Determine next step
-            next_step_index = None
-            if step_result.next_step:
-                # Explicit next_step provided - must find it
-                found = False
-                for i, s in enumerate(skill.steps):
-                    if s.id == step_result.next_step:
-                        next_step_index = i
-                        found = True
-                        break
-                if not found:
-                    return await self._finalize_workflow_failure(
+            # Check if this is the first execution (user hasn't responded yet)
+            # If so, return step instructions and wait for user
+            first_execution = workflow_state.get("_awaiting_response", False) is False
+            
+            if first_execution:
+                # First time executing this step - return instructions and wait
+                await self._save_workflow_state(session_id, active_workflow)
+                return {
+                    "response": f"**Workflow: {skill.name}**\n\n"
+                               f"**Step {active_workflow.current_step_index + 1}/{len(skill.steps)}: {current_step.title}**\n\n"
+                               f"{current_step.objective}\n\n"
+                               f"Please provide your input for this step. The system will validate the response and proceed.",
+                    "usage": {},
+                    "user_message_id": None,
+                }
+            
+            # User has responded - this is a continuation
+            # Try to parse JSON from the user's response
+            json_result = self._parse_step_result(message)
+            
+            if json_result:
+                # Valid JSON - validate and advance
+                step_result = StepExecutionResult.from_json(current_step.id, json_result, message)
+                validation_passed, validation_msg = self._validate_step_result(json_result, current_step)
+                step_result.validation_passed = validation_passed
+                step_result.validation_message = validation_msg
+                
+                if not validation_passed:
+                    # Validation failed
+                    retry_count = active_workflow.increment_retry(current_step.id)
+                    if retry_count > MAX_RETRIES_PER_STEP:
+                        return await self._finalize_workflow_failure(
+                            session_id=session_id,
+                            skill=skill,
+                            workflow=active_workflow,
+                            error_message=f"Max retries exceeded: {validation_msg}",
+                        )
+                    return {
+                        "response": f"Validation failed: {validation_msg}\n\nPlease try again. (Retry {retry_count}/{MAX_RETRIES_PER_STEP})",
+                        "usage": {},
+                        "user_message_id": None,
+                    }
+                
+                # Validation passed - determine next step
+                next_step_index = None
+                if step_result.next_step:
+                    # Explicit next_step
+                    for i, s in enumerate(skill.steps):
+                        if s.id == step_result.next_step:
+                            next_step_index = i
+                            break
+                    if next_step_index is None:
+                        return await self._finalize_workflow_failure(
+                            session_id=session_id,
+                            skill=skill,
+                            workflow=active_workflow,
+                            error_message=f"Next step '{step_result.next_step}' not found",
+                        )
+                elif active_workflow.current_step_index < len(skill.steps) - 1:
+                    next_step_index = active_workflow.current_step_index + 1
+                else:
+                    # Last step
+                    return await self._finalize_workflow_success(
                         session_id=session_id,
                         skill=skill,
                         workflow=active_workflow,
-                        error_message=f"Next step '{step_result.next_step}' not found",
                     )
-            elif active_workflow.current_step_index < len(skill.steps) - 1:
-                # No explicit next, advance by index
-                next_step_index = active_workflow.current_step_index + 1
+                
+                # Advance to next step
+                active_workflow.current_step_index = next_step_index
+                await self._save_workflow_state(session_id, active_workflow)
+                
+                return {
+                    "response": f"Step completed: {current_step.title}\n\nProceeding to next step...",
+                    "usage": {},
+                    "user_message_id": None,
+                }
             else:
-                # Last step, workflow complete
-                return await self._finalize_workflow_success(
-                    session_id=session_id,
-                    skill=skill,
-                    workflow=active_workflow,
-                )
-            
-            # Update and save workflow state
-            active_workflow.current_step_index = next_step_index
-            await self._save_workflow_state(session_id, active_workflow)
-            
-            # Return step summary
-            next_step_name = skill.steps[next_step_index].title if next_step_index < len(skill.steps) else "complete"
-            return {
-                "response": f"Step '{current_step.title}' completed. {step_result.summary}\n\nReady for next step: {next_step_name}",
-                "usage": {},
-                "user_message_id": None,
-            }
+                # No valid JSON - prompt user to provide JSON
+                return {
+                    "response": f"Please provide the step result as JSON.\n\nRequired format:\n```json\n{{\"status\": \"success\", \"summary\": \"...\", \"artifacts\": {{...}}}}\n```",
+                    "usage": {},
+                    "user_message_id": None,
+                }
         
         elif step_result.status == "needs_retry":
             # Check retry count
@@ -1780,39 +1825,37 @@ You have access to the following tools. When a user asks you to do something tha
     ) -> StepExecutionResult:
         """Execute a single workflow step (Issue #362).
         
-        This method injects the step context into the session and lets
-        the existing tool loop handle the actual LLM execution.
+        This simplified version prepares the step context for the user to respond.
         """
         from src.skills import skill_registry
         
-        # Build step prompt for context
+        # Build step prompt
         context = {
             "previous_results": workflow.step_outputs,
             "shared_state": workflow.shared_state,
         }
         step_prompt = skill_registry.get_step_prompt(skill, step, context)
         
-        # Add step context as a system message to the session
-        # This will be picked up by the normal tool loop
-        step_context = f"[WORKFLOW STEP {workflow.current_step_index + 1}/{len(skill.steps)}: {step.title}]\n\n{step_prompt}"
-        await session_manager.add_message(session_id, "system", step_context)
-        
-        # Store step metadata for validation after execution
+        # Store step metadata and mark as awaiting response
         workflow.shared_state["_current_step_id"] = step.id
         workflow.shared_state["_current_step_prompt"] = step_prompt
         workflow.shared_state["_allowed_tools"] = step.allowed_tools
+        workflow.shared_state["_step_title"] = step.title
+        workflow.shared_state["_step_objective"] = step.objective
         workflow.shared_state["_step_index"] = workflow.current_step_index
+        workflow_state["_awaiting_response"] = True  # Mark to validate on next call
         
-        # Save updated workflow state
-        await self._save_workflow_state(session_id, workflow)
+        # Save state with _awaiting_response
+        await self._save_workflow_state(session_id, workflow, _awaiting_response=True)
         
-        # Return instructions for the step
+        # Return the step prompt as the result
         return StepExecutionResult(
             step_id=step.id,
-            status="needs_retry",
-            summary=f"Step context prepared. System prompt updated with: {step.objective}",
+            status="success",
+            summary=f"**Step {workflow.current_step_index + 1}: {step.title}**\n\n{step.objective}",
+            artifacts={"step_prompt": step_prompt},
             validation_passed=True,
-            validation_message="Step context injected, normal flow will execute",
+            validation_message="Step prepared",
         )
     
     async def _finalize_workflow_success(
@@ -1897,9 +1940,9 @@ You have access to the following tools. When a user asks you to do something tha
             "user_message_id": None,
         }
     
-    async def _save_workflow_state(self, session_id: str, workflow: ActiveWorkflow) -> None:
+    async def _save_workflow_state(self, session_id: str, workflow: ActiveWorkflow, **kwargs) -> None:
         """Save workflow state to session (Issue #362)."""
-        await session_manager.set_workflow_state(session_id, {
+        state = {
             "mode": ExecutionMode.WORKFLOW.value,
             "workflow_id": workflow.workflow_id,
             "skill_name": workflow.skill_name,
@@ -1909,7 +1952,10 @@ You have access to the following tools. When a user asks you to do something tha
             "step_outputs": workflow.step_outputs,
             "retry_counts": workflow.retry_counts,
             "status": workflow.status,
-        })
+        }
+        # Include any additional kwargs
+        state.update(kwargs)
+        await session_manager.set_workflow_state(session_id, state)
     
     async def process_with_context(
         self,
