@@ -1880,22 +1880,31 @@ You have access to the following tools. When a user asks you to do something tha
         while (active_workflow.current_step_index < len(skill.steps) and 
                steps_executed < WorkflowProtectionConfig.MAX_STEPS_PER_REQUEST):
             
-            # Check if workflow was marked as having transient failure
+            # Clear transient failure when we're about to retry
             if active_workflow.transient_failure:
-                logger.info(f"[Workflow] Transient failure flag set, stopping auto-advance")
-                break
+                logger.info(f"[Workflow] Clearing transient failure flag to retry")
+                active_workflow.transient_failure = False
             
             current_step = skill.steps[active_workflow.current_step_index]
             
             # Check if step was already completed (in case of re-entrancy after partial execution)
             if current_step.id in active_workflow.step_outputs:
                 logger.info(f"[Workflow] Step {current_step.id} already completed, advancing...")
+                # Reset LLM budget for this step
+                active_workflow.reset_llm_request_count(current_step.id)
+                active_workflow.retry_counts[current_step.id] = 0
                 # Advance to next step
                 if active_workflow.current_step_index < len(skill.steps) - 1:
                     active_workflow.current_step_index += 1
                     await self._save_workflow_state(session_id, active_workflow)
                     steps_executed += 1
                 continue
+            
+            # Reset LLM budget for this step (in case we're retrying after a failure)
+            current_llm_count = workflow.get_llm_request_count(current_step.id)
+            if current_llm_count > 0:
+                logger.info(f"[Workflow] Resetting LLM budget for {current_step.id} (was {current_llm_count})")
+                workflow.reset_llm_request_count(current_step.id)
             
             # Log step continuation
             logger.info(f"[Workflow] Step {active_workflow.current_step_index + 1}/{len(skill.steps)}: {current_step.id} (exec #{steps_executed + 1})")
