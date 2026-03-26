@@ -2152,31 +2152,13 @@ You have access to the following tools. When a user asks you to do something tha
                     current_llm_count = workflow.increment_llm_request(step_id)
                     logger.info(f"[Workflow] LLM call {iteration} for step {step_id} (request #{current_llm_count})")
                     
-                    try:
-                        # Call LLM with retry for rate limit errors
-                        llm_result = await _retry_with_backoff(
-                            llm_client.responses,
-                            input_items=input_items,
-                            system_prompt=system_with_step,
-                            tools=tools,
-                            max_retries=WorkflowProtectionConfig.MAX_RETRIES,
-                        )
-                    except Exception as e:
-                        error_str = str(e)
-                        if _is_retryable_error(error_str):
-                            # Transient failure - mark and return needs_retry
-                            logger.warning(f"[Workflow] Transient error in step {step_id}: {error_str[:100]}")
-                            workflow.transient_failure = True
-                            return StepExecutionResult(
-                                step_id=step_id,
-                                status="needs_retry",
-                                summary="Step temporarily unavailable due to rate limits. Please try again in a moment.",
-                                validation_passed=False,
-                                validation_message=error_str,
-                            )
-                        else:
-                            # Non-retryable error
-                            raise
+                    # Note: llm_client.responses() already has internal retry logic (3 retries with backoff)
+                    # so we don't need to wrap it with _retry_with_backoff
+                    llm_result = await llm_client.responses(
+                        input_items=input_items,
+                        system_prompt=system_with_step,
+                        tools=tools,
+                    )
                 
                 content = (llm_result.get("content") or "").strip()
                 function_calls = llm_result.get("function_calls", [])
