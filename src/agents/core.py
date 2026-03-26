@@ -1986,11 +1986,11 @@ You have access to the following tools. When a user asks you to do something tha
                         tool_output = f"Error: {str(e)}"
                         logger.error(f"[Workflow] Tool error: {e}")
                     
-                    # Add tool result to messages
+                    # Add tool result using function_call_output format (Responses API format)
                     messages.append({
-                        "role": "tool",
-                        "content": tool_output,
-                        "tool_call_id": call.get("call_id"),
+                        "type": "function_call_output",
+                        "call_id": call.get("call_id"),
+                        "output": str(tool_output),
                     })
                 
                 # Keep system prompt but it can be shorter on subsequent calls (context in messages)
