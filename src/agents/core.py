@@ -1947,7 +1947,7 @@ You have access to the following tools. When a user asks you to do something tha
             )
             
             content = (llm_result.get("content") or "").strip()
-            logger.info(f"[Workflow] LLM returned: {content[:200]}")
+            logger.info(f"[Workflow] LLM raw returned type: {type(content)}, value: {repr(content)[:500]}")
             
             # Parse JSON result
             json_result = self._parse_step_result(content)
