@@ -432,7 +432,15 @@ class SessionManager:
         # Persist workflow state immediately so it survives restarts
         if self.persistence_enabled:
             try:
-                await session_persistence.save_session(session_id, session)
+                # save_session requires channel and messages separately
+                messages = session.get("messages", [])
+                channel = session.get("channel", "webchat")
+                await session_persistence.save_session(
+                    session_id=session_id,
+                    channel=channel,
+                    messages=messages,
+                    metadata=session,
+                )
             except Exception as e:
                 logger.warning(f"[Session] Failed to persist workflow state: {e}")
     
