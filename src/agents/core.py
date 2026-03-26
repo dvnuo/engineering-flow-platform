@@ -1726,7 +1726,9 @@ You have access to the following tools. When a user asks you to do something tha
                 "user_message_id": None,
             }
         
-        # Get skill
+        # Get skill (ensure registry is initialized first)
+        if not skill_registry._initialized:
+            skill_registry.load_skills()
         skill = skill_registry.get_skill(active_workflow.skill_name)
         if not skill or not skill.has_steps:
             # Skill not found or not step-based, fail workflow
