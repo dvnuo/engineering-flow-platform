@@ -1918,18 +1918,15 @@ You have access to the following tools. When a user asks you to do something tha
                 logger.info(f"[Workflow] Step {step.id}: tools filtered to {step.allowed_tools}")
             
             # Call LLM with extended timeout for workflow steps
-            llm_kwargs = {
-                "input_items": transformed_messages,
-                "system_prompt": effective_system_prompt,
-                "tools": tools,
-            }
-            
             enable_reasoning = reasoning_replay if reasoning_replay is not None else config.llm.get("reasoning_replay", False)
-            if enable_reasoning:
-                llm_kwargs["reasoning_replay"] = True
             
             # Execute LLM call (may involve multiple tool call loops)
-            llm_content = await self._call_llm_with_tools(llm_kwargs)
+            llm_content = await self._call_llm_with_tools(
+                messages=transformed_messages,
+                system_prompt=effective_system_prompt,
+                tools=tools,
+                reasoning_replay=enable_reasoning,
+            )
             
             # Parse JSON result from LLM output
             json_result = self._parse_step_result(llm_content)
@@ -1957,16 +1954,20 @@ You have access to the following tools. When a user asks you to do something tha
                 summary=f"Step execution error: {str(e)}",
             )
     
-    async def _call_llm_with_tools(self, llm_kwargs: Dict) -> str:
+    async def _call_llm_with_tools(
+        self,
+        messages: List[Dict],
+        system_prompt: str,
+        tools: List,
+        reasoning_replay: bool = False,
+    ) -> str:
         """Call LLM with tool execution loop (Issue #362).
         
         This handles the back-and-forth between LLM and tool execution.
         """
         max_iterations = 10  # Prevent infinite loops
         iteration = 0
-        messages = llm_kwargs.get("input_items", [])
-        system_prompt = llm_kwargs.get("system_prompt", "")
-        tools = llm_kwargs.get("tools", [])
+        effective_system_prompt = system_prompt
         effective_system_prompt = system_prompt
         
         while iteration < max_iterations:
@@ -2111,8 +2112,8 @@ Provide your review in JSON format:
         try:
             # Call LLM for review
             messages = [{"role": "user", "content": review_prompt}]
-            llm_result = await llm_client.responses(
-                input_items=messages,
+            llm_content = await self._call_llm_with_tools(
+                messages=messages,
                 system_prompt=self.system_prompt,
                 tools=self.tools,
             )
