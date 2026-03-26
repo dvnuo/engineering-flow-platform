@@ -487,14 +487,32 @@ class SkillRegistry:
                 prompt_parts.append(f"- `{tool}`")
             prompt_parts.append("")
         
-        # References - Issue #362: Progressive reference loading
+        # References - Issue #362: Progressive reference loading (with security fixes)
         if step.references and skill.path:
             prompt_parts.append("### References")
             prompt_parts.append("Load and consider the following reference files:")
+            MAX_REF_SIZE = 10000  # 10KB per file cap
             for ref_file in step.references:
-                ref_path = Path(skill.path) / ref_file
+                # Security: reject absolute paths
+                if Path(ref_file).is_absolute():
+                    prompt_parts.append(f"- {ref_file} (rejected: absolute path not allowed)")
+                    continue
+                
+                # Security: resolve path and verify it's within skill.path (no traversal)
+                ref_path = (Path(skill.path) / ref_file).resolve()
+                skill_path_resolved = Path(skill.path).resolve()
+                if not str(ref_path).startswith(str(skill_path_resolved) + str(Path.sep)):
+                    prompt_parts.append(f"- {ref_file} (rejected: path traversal not allowed)")
+                    continue
+                
                 if ref_path.exists():
                     try:
+                        # Security: check file size before reading
+                        file_size = ref_path.stat().st_size
+                        if file_size > MAX_REF_SIZE:
+                            prompt_parts.append(f"- {ref_file} (skipped: file too large, {file_size} bytes)")
+                            continue
+                        
                         with open(ref_path, 'r', encoding='utf-8') as f:
                             content = f.read()
                         prompt_parts.append(f"\n#### {ref_file}")

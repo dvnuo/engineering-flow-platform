@@ -200,38 +200,58 @@ User: /my-workflow
 ```yaml
 ---
 name: test-case-generator
-description: Generate test cases from requirements
+description: Generate Java/Cucumber test cases from requirements (Gherkin feature files + step definitions)
 triggers:
   - create tests
   - generate test cases
+  - generate cucumber
+  - generate gherkin
 output_format: json
 
 steps:
-  - id: extract_requirements
-    title: Extract Requirements
-    objective: Extract testable requirements from input
+  - id: analyze_requirements
+    title: Analyze Requirements
+    objective: Analyze user requirements and identify testable scenarios
     instructions:
-      - Analyze user input
-      - Identify testable scenarios
+      - Understand the feature/scenario to test
+      - Identify key user interactions
+      - List expected behaviors
     allowed_tools: []
     completion_check:
-      - artifacts.requirements
-    next_step: generate_tests
+      - artifacts.scenarios
+    next_step: generate_feature
 
-  - id: generate_tests
-    title: Generate Test Code
-    objective: Generate pytest tests
+  - id: generate_feature
+    title: Generate Feature File
+    objective: Generate Gherkin feature file with scenarios
     instructions:
-      - Use extracted requirements
-      - Generate pytest code
+      - Write Given-When-Then scenarios
+      - Include Example tables if needed
     allowed_tools: []
     completion_check:
-      - artifacts.test_code
+      - artifacts.feature_file
+    next_step: generate_steps
+
+  - id: generate_steps
+    title: Generate Step Definitions
+    objective: Generate Java Cucumber step definitions
+    instructions:
+      - Create @Given, @When, @Then methods
+      - Use JUnit assertions
+    allowed_tools: []
+    completion_check:
+      - artifacts.step_definitions
     next_step: finalize
 
   - id: finalize
     title: Finalize
     objective: Prepare final response
+    instructions:
+      - Summarize generated artifacts
+      - Provide usage instructions
+    allowed_tools: []
+    completion_check: []
+    next_step: null
     instructions:
       - Summarize results
       - Format code

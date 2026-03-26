@@ -451,6 +451,14 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Validate workflow_state is a dict with expected keys
         if workflow_state and isinstance(workflow_state, dict) and "mode" in workflow_state and workflow_state.get("mode") == ExecutionMode.WORKFLOW.value:
+            # Save user message to history before continuing workflow
+            await session_manager.add_message(
+                session_id=session_id,
+                role="user",
+                content=message,
+                metadata={"source": "workflow_trigger"},
+            )
+            
             # Continue active workflow
             return await self._continue_active_workflow(
                 message=message,
@@ -703,6 +711,11 @@ You have access to the following tools. When a user asks you to do something tha
         
         # ===== BUILD EFFECTIVE SYSTEM PROMPT (with Skill Guidance + Semantic Context) =====
         effective_system_prompt = self.system_prompt
+        
+        # Inject skill guidance for legacy (non-step-based) skills
+        if skill_prompt:
+            effective_system_prompt = f"{effective_system_prompt}\n\n## Skill Guidance\n\n{skill_prompt}"
+            logger.info(f"[Skill] Injected legacy skill guidance")
         
         # Semantic Context Search - Find relevant memory context
         semantic_context = ""
@@ -2017,6 +2030,9 @@ You have access to the following tools. When a user asks you to do something tha
             full_tool = tools_by_name[allowed_name]
             func = full_tool.get("function", {})
             
+            # Initialize compact_params with safe default
+            compact_params = {"type": "object", "properties": {}, "required": []}
+            
             params = func.get("parameters", {})
             if isinstance(params, dict):
                 properties = params.get("properties", {})
@@ -2073,13 +2089,18 @@ You have access to the following tools. When a user asks you to do something tha
             parts.append(objective_section)
             remaining_budget -= len(objective_section)
         
-        # 3. Step instructions (truncated)
-        step_prompt = ""
-        if hasattr(step, 'prompt') and step.prompt:
-            step_prompt = f"\n## Instructions\n{step.prompt[:500]}\n"
-            if len(step_prompt) < remaining_budget:
-                parts.append(step_prompt)
-                remaining_budget -= len(step_prompt)
+        # 3. Step instructions (truncated) - use instructions list, not prompt
+        step_instructions = ""
+        if hasattr(step, 'instructions') and step.instructions:
+            # Join list of instructions into a single string
+            if isinstance(step.instructions, list):
+                instructions_text = "\n".join(str(i) for i in step.instructions)
+            else:
+                instructions_text = str(step.instructions)
+            step_instructions = f"\n## Instructions\n{instructions_text[:500]}\n"
+            if len(step_instructions) < remaining_budget:
+                parts.append(step_instructions)
+                remaining_budget -= len(step_instructions)
         
         # 4. Completion criteria
         if step.completion_check and remaining_budget > 100:
@@ -2242,6 +2263,14 @@ You MUST respond with ONLY valid JSON. No markdown, no explanations, no text out
                         tool_output = f"Error: {str(e)}"
                         logger.error(f"[Workflow] Tool error: {e}")
                     
+                    # Add function_call item before the output (Responses API requires both)
+                    input_items.append({
+                        "type": "function_call",
+                        "call_id": call.get("call_id"),
+                        "name": name,
+                        "arguments": args if isinstance(args, str) else json.dumps(args),
+                    })
+                    
                     # Add tool result using function_call_output format (Responses API format)
                     input_items.append({
                         "type": "function_call_output",
@@ -2387,17 +2416,9 @@ You MUST respond with ONLY valid JSON. No markdown, no explanations, no text out
             else:
                 artifacts_key = "result"
             
-            # Determine next step
+            # Determine next step and build summary
             # If there are completion criteria not met, need_review
             # Otherwise proceed to next step
-            validation_passed, validation_msg = self._validate_step_result(
-                {"artifacts": {artifacts_key: parsed_output}}, step
-            )
-            
-            # Get next step from step config or determine from workflow
-            next_step = step.next_step
-            
-            # Construct summary
             if isinstance(parsed_output, list):
                 summary = f"Found {len(parsed_output)} results"
             elif isinstance(parsed_output, dict):
@@ -2409,6 +2430,14 @@ You MUST respond with ONLY valid JSON. No markdown, no explanations, no text out
                     summary = f"Retrieved data successfully"
             else:
                 summary = f"Executed {tool_name}"
+            
+            # Validate with complete result including status and summary
+            validation_passed, validation_msg = self._validate_step_result(
+                {"status": "success", "summary": summary, "artifacts": {artifacts_key: parsed_output}}, step
+            )
+            
+            # Get next step from step config or determine from workflow
+            next_step = step.next_step
             
             return StepExecutionResult(
                 step_id=step_id,

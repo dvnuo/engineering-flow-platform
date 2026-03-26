@@ -428,6 +428,13 @@ class SessionManager:
         else:
             session["workflow_state"] = workflow_state
         session["updated_at"] = datetime.now().isoformat()
+        
+        # Persist workflow state immediately so it survives restarts
+        if self.persistence_enabled:
+            try:
+                await session_persistence.save_session(session_id, session)
+            except Exception as e:
+                logger.warning(f"[Session] Failed to persist workflow state: {e}")
     
     async def save_all(self):
         """Manually save all sessions to persistence layer."""
