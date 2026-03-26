@@ -413,7 +413,9 @@ class SessionManager:
             Workflow state dict or None if no active workflow.
         """
         session = await self.get_session(session_id)
-        return session.get("workflow_state")
+        workflow_state = session.get("workflow_state")
+        logger.debug(f"[SessionManager] get_workflow_state({session_id}): {'found' if workflow_state else 'None'}, step_index={workflow_state.get('current_step_index') if workflow_state else None}")
+        return workflow_state
     
     async def set_workflow_state(self, session_id: str, workflow_state: Optional[Dict[str, Any]]) -> None:
         """Set workflow state for a session (Issue #362).
@@ -424,8 +426,12 @@ class SessionManager:
         """
         session = await self.get_session(session_id)
         if workflow_state is None:
+            logger.info(f"[SessionManager] set_workflow_state({session_id}): CLEARING workflow state")
             session.pop("workflow_state", None)
         else:
+            step_idx = workflow_state.get("current_step_index", "?")
+            completed = list(workflow_state.get("step_outputs", {}).keys())
+            logger.info(f"[SessionManager] set_workflow_state({session_id}): step_index={step_idx}, completed={completed}")
             session["workflow_state"] = workflow_state
         session["updated_at"] = datetime.now().isoformat()
         
@@ -433,7 +439,8 @@ class SessionManager:
         if self.persistence_enabled:
             try:
                 # save_session requires channel and messages separately
-                messages = session.get("messages", [])
+                # Note: session uses "history" for messages
+                messages = session.get("history", [])
                 channel = session.get("channel", "webchat")
                 await session_persistence.save_session(
                     session_id=session_id,
@@ -441,6 +448,7 @@ class SessionManager:
                     messages=messages,
                     metadata=session,
                 )
+                logger.debug(f"[SessionManager] Workflow state persisted for {session_id}")
             except Exception as e:
                 logger.warning(f"[Session] Failed to persist workflow state: {e}")
     
