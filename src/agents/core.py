@@ -1907,7 +1907,7 @@ You have access to the following tools. When a user asks you to do something tha
         track_usage: bool = True,
         reasoning_replay: Optional[bool] = None,
     ) -> StepExecutionResult:
-        """Execute an LLM-based workflow step (Issue #362)."""
+        """Execute an LLM-based workflow step with tool execution loop (Issue #362)."""
         from src.skills import skill_registry
         
         try:
@@ -1928,8 +1928,8 @@ You have access to the following tools. When a user asks you to do something tha
             user_content += f"Step objective: {step.objective}\n"
             user_content += "Only respond with the JSON object, nothing else."
             
-            # Build messages
-            input_items = [{"role": "user", "content": user_content}]
+            # Build messages for tool loop
+            messages = [{"role": "user", "content": user_content}]
             
             # Filter tools by allowed_tools
             tools = self.tools
@@ -1938,29 +1938,65 @@ You have access to the following tools. When a user asks you to do something tha
                 tools = [t for t in self.tools if t.get("function", {}).get("name", "") in allowed_set]
                 logger.info(f"[Workflow] Step {step.id}: using tools {step.allowed_tools}")
             
-            # Call LLM
-            logger.info(f"[Workflow] Calling LLM for step {step.id}")
-            llm_result = await llm_client.responses(
-                input_items=input_items,
-                system_prompt=system_with_step,
-                tools=tools,
-            )
+            # Tool execution loop
+            max_iterations = 10
+            iteration = 0
+            final_content = ""
             
-            # Log full llm_result for debugging
-            logger.info(f"[Workflow] LLM result keys: {llm_result.keys() if hasattr(llm_result, 'keys') else 'N/A'}")
-            logger.info(f"[Workflow] LLM result type: {type(llm_result)}")
-            logger.info(f"[Workflow] LLM result: {str(llm_result)[:1000]}")
+            while iteration < max_iterations:
+                iteration += 1
+                
+                # Call LLM
+                logger.info(f"[Workflow] LLM call {iteration} for step {step.id}")
+                llm_result = await llm_client.responses(
+                    input_items=messages,
+                    system_prompt=system_with_step,
+                    tools=tools,
+                )
+                
+                content = (llm_result.get("content") or "").strip()
+                function_calls = llm_result.get("function_calls", [])
+                
+                logger.info(f"[Workflow] LLM returned: content_len={len(content)}, tool_calls={len(function_calls)}")
+                
+                # If no tool calls, this is the final response
+                if not function_calls:
+                    final_content = content
+                    break
+                
+                # Execute tool calls
+                for call in function_calls:
+                    func = call.get("function", {})
+                    name = func.get("name", "")
+                    args = func.get("arguments", {})
+                    if isinstance(args, str):
+                        args = json.loads(args)
+                    
+                    logger.info(f"[Workflow] Executing tool: {name}")
+                    try:
+                        result = await execute_tool_by_name(name, **args)
+                        tool_output = result.output if hasattr(result, 'output') else str(result)
+                    except Exception as e:
+                        tool_output = f"Error: {str(e)}"
+                        logger.error(f"[Workflow] Tool error: {e}")
+                    
+                    # Add tool result to messages
+                    messages.append({
+                        "role": "tool",
+                        "content": tool_output,
+                        "tool_call_id": call.get("call_id"),
+                    })
+                
+                # Clear system prompt after first call (context is in messages)
+                system_with_step = None
             
-            content = (llm_result.get("content") or "").strip()
-            logger.info(f"[Workflow] LLM content: {repr(content)[:500]}")
-            
-            # Parse JSON result
-            json_result = self._parse_step_result(content)
+            # Parse JSON result from final content
+            json_result = self._parse_step_result(final_content)
             if not json_result:
-                return StepExecutionResult.parse_error(step.id, "Output is not valid JSON", content)
+                return StepExecutionResult.parse_error(step.id, "Output is not valid JSON", final_content)
             
             # Create step result
-            step_result = StepExecutionResult.from_json(step.id, json_result, content)
+            step_result = StepExecutionResult.from_json(step.id, json_result, final_content)
             
             # Validate completion_check
             validation_passed, validation_msg = self._validate_step_result(json_result, step)
