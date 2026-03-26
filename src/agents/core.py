@@ -2082,6 +2082,183 @@ You have access to the following tools. When a user asks you to do something tha
                 summary=f"Step execution error: {str(e)}",
             )
     
+    # =============================================================================
+    # Workflow Step Prompt Builders (Issue #362 - Compact prompts for workflow steps)
+    # =============================================================================
+    
+    # Budget for workflow step prompts (characters)
+    WORKFLOW_STEP_PROMPT_BUDGET = 8000
+    WORKFLOW_STEP_CONTEXT_BUDGET = 1000
+    
+    def _build_step_context_summary(
+        self,
+        workflow: ActiveWorkflow,
+        current_step_id: str,
+        max_chars: int = 1000
+    ) -> str:
+        """Build a compact summary of previous step results relevant to current step.
+        
+        Only includes output from the most recent relevant steps, not all history.
+        Truncates to stay within budget.
+        """
+        if not workflow.step_outputs:
+            return ""
+        
+        # Get recent steps (last 2) that have outputs
+        recent_outputs = []
+        for step_id, output in workflow.step_outputs.items():
+            if step_id == current_step_id:
+                continue
+            recent_outputs.append((step_id, output))
+        
+        recent_outputs = recent_outputs[-2:]  # Last 2
+        
+        if not recent_outputs:
+            return ""
+        
+        # Build compact summary
+        parts = ["## Previous Step Results\n"]
+        for step_id, output in recent_outputs:
+            summary = output.get("summary", "")
+            artifacts = output.get("artifacts", {})
+            
+            parts.append(f"### {step_id}\n")
+            if summary:
+                parts.append(f"Summary: {summary[:200]}\n")
+            if artifacts:
+                artifact_keys = list(artifacts.keys())[:5]
+                parts.append(f"Artifacts: {', '.join(artifact_keys)}\n")
+        
+        result = "".join(parts)
+        
+        if len(result) > max_chars:
+            result = result[:max_chars] + "... [truncated]"
+        
+        return result
+    
+    def _build_compact_step_tools(self, step) -> List[Dict]:
+        """Build a compact tool list for workflow step execution.
+        
+        Only includes allowed tools with minimal schema (no long descriptions/examples).
+        """
+        if not step.allowed_tools:
+            return []
+        
+        tools_by_name = {}
+        for tool in self.tools:
+            func = tool.get("function", {})
+            name = func.get("name", "")
+            if name:
+                tools_by_name[name] = tool
+        
+        compact_tools = []
+        for allowed_name in step.allowed_tools:
+            if allowed_name not in tools_by_name:
+                continue
+            
+            full_tool = tools_by_name[allowed_name]
+            func = full_tool.get("function", {})
+            
+            params = func.get("parameters", {})
+            if isinstance(params, dict):
+                properties = params.get("properties", {})
+                required = params.get("required", [])
+                
+                compact_params = {
+                    "type": "object",
+                    "properties": {},
+                    "required": required,
+                }
+                
+                for prop_name, prop_def in properties.items():
+                    if isinstance(prop_def, dict):
+                        compact_prop = {"type": prop_def.get("type", "string")}
+                        desc = prop_def.get("description", "")
+                        if desc:
+                            compact_prop["description"] = desc[:50] + "..." if len(desc) > 50 else desc
+                        compact_params["properties"][prop_name] = compact_prop
+            
+            compact_tool = {
+                "type": "function",
+                "function": {
+                    "name": func.get("name", ""),
+                    "description": (func.get("description", "")[:100] + "...") if len(func.get("description", "")) > 100 else func.get("description", ""),
+                    "parameters": compact_params,
+                }
+            }
+            compact_tools.append(compact_tool)
+        
+        return compact_tools
+    
+    def _build_workflow_step_system_prompt(
+        self,
+        skill,
+        step,
+        workflow: ActiveWorkflow,
+    ) -> str:
+        """Build a compact system prompt for workflow step execution.
+        
+        Does NOT include full MEMORY, long-term history, full tool list, etc.
+        Designed for fast JSON output stability and avoiding 504 timeouts.
+        """
+        parts = []
+        remaining_budget = self.WORKFLOW_STEP_PROMPT_BUDGET
+        
+        # 1. Minimal identity
+        identity = "You are a workflow execution assistant. Complete the current step and respond with JSON."
+        parts.append(identity)
+        remaining_budget -= len(identity) + 10
+        
+        # 2. Step title and objective
+        objective_section = f"## Current Step: {step.title}\n\n**Objective:** {step.objective}\n"
+        if len(objective_section) < remaining_budget:
+            parts.append(objective_section)
+            remaining_budget -= len(objective_section)
+        
+        # 3. Step instructions (truncated)
+        step_prompt = ""
+        if hasattr(step, 'prompt') and step.prompt:
+            step_prompt = f"\n## Instructions\n{step.prompt[:500]}\n"
+            if len(step_prompt) < remaining_budget:
+                parts.append(step_prompt)
+                remaining_budget -= len(step_prompt)
+        
+        # 4. Completion criteria
+        if step.completion_check and remaining_budget > 100:
+            criteria_section = "\n## Completion Criteria\n"
+            for check in step.completion_check[:5]:
+                criteria_section += f"- {check}\n"
+            if len(criteria_section) < remaining_budget:
+                parts.append(criteria_section)
+                remaining_budget -= len(criteria_section)
+        
+        # 5. Previous context (with truncation)
+        if remaining_budget > 100:
+            context = self._build_step_context_summary(
+                workflow, step.id, max_chars=min(remaining_budget - 100, self.WORKFLOW_STEP_CONTEXT_BUDGET)
+            )
+            if context:
+                parts.append("\n" + context)
+                remaining_budget -= len(context)
+        
+        # 6. JSON output schema (always included)
+        json_schema = '''
+## Required Output Format
+
+You MUST respond with ONLY valid JSON. No markdown, no explanations, no text outside the JSON.
+
+{"status": "success|needs_retry|failed", "summary": "...", "artifacts": {}, "next_step": "next_step_id_or_null"}
+
+**Critical:**
+- Return ONLY the JSON object
+- Do NOT wrap in code fences
+- Do NOT include any text before or after the JSON
+- Do NOT explain your reasoning
+'''
+        parts.append(json_schema)
+        
+        return "".join(parts)
+    
     async def _execute_step_llm(
         self,
         skill,
@@ -2121,32 +2298,23 @@ You have access to the following tools. When a user asks you to do something tha
                 )
         
         try:
-            # Build step prompt
-            context = {
-                "previous_results": workflow.step_outputs,
-                "shared_state": workflow.shared_state,
-            }
-            step_prompt = skill_registry.get_step_prompt(skill, step, context)
+            # Build compact system prompt for workflow step
+            # This replaces self.system_prompt with a minimal, fast-responding prompt
+            system_with_step = self._build_workflow_step_system_prompt(skill, step, workflow)
             
-            # Build system prompt with step guidance
-            system_with_step = f"{self.system_prompt}\n\n{step_prompt}" if step_prompt else self.system_prompt
+            # Build compact tools list
+            tools = self._build_compact_step_tools(step)
+            if tools:
+                logger.info(f"[Workflow] Step {step.id}: using {len(tools)} compact tools")
             
-            # Build user message with context
-            user_content = f"User request: {message}\n\n" if message else ""
-            user_content += "You must respond with ONLY JSON, no other text. Required format:\n"
-            user_content += '{"status": "success", "summary": "brief description of what was done", "artifacts": {"key": "value"}, "next_step": "next_step_id"}\n\n'
-            user_content += f"Step objective: {step.objective}\n"
-            user_content += "Only respond with the JSON object, nothing else."
+            # Build minimal user message
+            user_content = ""
+            if message:
+                user_content = f"User request: {message}\n\n"
+            user_content += "Respond with ONLY valid JSON for this step."
             
             # Build input_items for tool loop (Responses API format)
             input_items = [{"role": "user", "content": [{"type": "input_text", "text": user_content}]}]
-            
-            # Filter tools by allowed_tools
-            tools = self.tools
-            if step.allowed_tools:
-                allowed_set = set(step.allowed_tools)
-                tools = [t for t in self.tools if t.get("function", {}).get("name", "") in allowed_set]
-                logger.info(f"[Workflow] Step {step.id}: using tools {step.allowed_tools}")
             
             # Tool execution loop with retry support
             max_iterations = 10
