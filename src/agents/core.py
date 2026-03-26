@@ -416,26 +416,24 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Issue #362: Check if skill has step-based workflow
             if best_skill.has_steps:
-                # Create and save workflow state
+                # Create workflow state
                 workflow_id = f"wf_{session_id[:8]}_{uuid.uuid4().hex[:8]}"
-                active_workflow = ActiveWorkflow(
-                    workflow_id=workflow_id,
-                    skill_name=best_skill.name,
-                    step_ids=[step.id for step in best_skill.steps],
-                    current_step_index=0,
-                    status="active",
-                )
-                await session_manager.set_workflow_state(session_id, {
+                step_ids = [step.id for step in best_skill.steps]
+                workflow_state = {
                     "mode": ExecutionMode.WORKFLOW.value,
                     "workflow_id": workflow_id,
                     "skill_name": best_skill.name,
-                    "step_ids": active_workflow.step_ids,
+                    "step_ids": step_ids,
                     "current_step_index": 0,
                     "shared_state": {},
                     "step_outputs": {},
                     "retry_counts": {},
                     "status": "active",
-                })
+                }
+                
+                # Save workflow state
+                await session_manager.set_workflow_state(session_id, workflow_state)
+                
                 logger.info(f"[Skill] Created workflow: {best_skill.name} ({workflow_id}) with {len(best_skill.steps)} steps")
                 
                 # Log workflow start
@@ -455,6 +453,7 @@ You have access to the following tools. When a user asks you to do something tha
                     stream_callback=stream_callback,
                     attached_images=attached_images,
                     attachments=attachments,
+                    workflow_state=workflow_state,
                 )
             else:
                 skill_prompt = skill_registry.get_skill_prompt(best_skill)
