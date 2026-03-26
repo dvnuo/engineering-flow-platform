@@ -1751,6 +1751,7 @@ You have access to the following tools. When a user asks you to do something tha
         # Re-entrancy protection: if workflow is already being executed, return early
         # This prevents duplicate execution when HTTP requests timeout and are retried
         # But allow re-entry if the lock has expired (5 minutes TTL)
+        LOCK_TTL_SECS = 300  # 5 minutes
         executing_info = active_workflow.shared_state.get("_workflow_executing")
         if executing_info:
             if isinstance(executing_info, str):
@@ -1758,12 +1759,18 @@ You have access to the following tools. When a user asks you to do something tha
                 logger.info(f"[Workflow] Already executing (old lock format), clearing and continuing")
                 active_workflow.shared_state.pop("_workflow_executing", None)
             else:
-                logger.info(f"[Workflow] Already executing, returning early to avoid duplicate")
-                return {
-                    "response": "Workflow is being processed. Please wait...",
-                    "usage": {},
-                    "user_message_id": None,
-                }
+                # Check if lock has expired (TTL)
+                lock_age = time.time() - executing_info
+                if lock_age < LOCK_TTL_SECS:
+                    logger.info(f"[Workflow] Already executing (lock age: {lock_age:.0f}s < {LOCK_TTL_SECS}s), returning early")
+                    return {
+                        "response": "Workflow is being processed. Please wait...",
+                        "usage": {},
+                        "user_message_id": None,
+                    }
+                else:
+                    logger.info(f"[Workflow] Lock expired (age: {lock_age:.0f}s), clearing and continuing")
+                    active_workflow.shared_state.pop("_workflow_executing", None)
         
         # Mark as executing with timestamp and save state immediately
         active_workflow.shared_state["_workflow_executing"] = time.time()
@@ -1872,6 +1879,8 @@ You have access to the following tools. When a user asks you to do something tha
             # Check if we've hit max steps per request
             if steps_executed >= WorkflowProtectionConfig.MAX_STEPS_PER_REQUEST:
                 logger.info(f"[Workflow] Reached max steps per request ({WorkflowProtectionConfig.MAX_STEPS_PER_REQUEST})")
+                # Clear executing lock before returning
+                active_workflow.shared_state.pop("_workflow_executing", None)
                 # Save transient failure state if any
                 if active_workflow.transient_failure:
                     await self._save_workflow_state(session_id, active_workflow)
@@ -1889,6 +1898,8 @@ You have access to the following tools. When a user asks you to do something tha
             # Check retry count
             retry_count = active_workflow.increment_retry(current_step.id)
             if retry_count > MAX_RETRIES_PER_STEP:
+                # Clear lock before finalize
+                active_workflow.shared_state.pop("_workflow_executing", None)
                 return await self._finalize_workflow_failure(
                     session_id=session_id,
                     skill=skill,
@@ -1896,6 +1907,8 @@ You have access to the following tools. When a user asks you to do something tha
                     error_message=f"Max retries ({MAX_RETRIES_PER_STEP}) exceeded for step '{current_step.title}'",
                 )
             
+            # Clear lock for retry - it's ok to retry
+            active_workflow.shared_state.pop("_workflow_executing", None)
             # Save retry count
             await self._save_workflow_state(session_id, active_workflow)
             
@@ -2251,19 +2264,28 @@ You MUST respond with ONLY valid JSON. No markdown, no explanations, no text out
                     # Note: llm_client.responses() already has internal retry logic (3 retries with backoff)
                     # so we don't need to wrap it with _retry_with_backoff
                     # Increased max_tokens to 12800 for workflow steps to avoid truncation
-                    # response_format={"type": "json_object"} ensures JSON output for gpt-5-mini
                     llm_result = await llm_client.responses(
                         input_items=input_items,
                         system_prompt=system_with_step,
                         tools=tools,
                         max_tokens=12800,
-                        response_format={"type": "json_object"},
                     )
                 
                 content = (llm_result.get("content") or "").strip()
                 function_calls = llm_result.get("function_calls", [])
                 
-                logger.info(f"[Workflow] LLM returned: content_len={len(content)}, tool_calls={len(function_calls)}")
+                logger.info(f"[Workflow] Step {step_id} LLM result: content_len={len(content)}, tool_calls={len(function_calls)}")
+                
+                # DEBUG: Log full LLM result for debugging
+                if _is_debug_enabled():
+                    logger.debug(f"[Workflow] Step {step_id} LLM result keys: {llm_result.keys()}")
+                    logger.debug(f"[Workflow] Step {step_id} content preview: {content[:500] if content else 'EMPTY'}")
+                
+                # If no tool calls, this is the final response
+                if not function_calls:
+                    final_content = content
+                    logger.info(f"[Workflow] Step {step_id}: No tool calls, final_content length: {len(final_content)}")
+                    break
                 
                 # If no tool calls, this is the final response
                 if not function_calls:
@@ -2310,9 +2332,12 @@ You MUST respond with ONLY valid JSON. No markdown, no explanations, no text out
                 # Keep system prompt but it can be shorter on subsequent calls (context in messages)
             
             # Parse JSON result from final content
+            logger.info(f"[Workflow] Step {step_id}: Parsing final_content (len={len(final_content)})")
             json_result = self._parse_step_result(final_content)
             if not json_result:
+                logger.warning(f"[Workflow] Step {step_id}: _parse_step_result failed, final_content preview: {final_content[:200] if final_content else 'EMPTY'}")
                 return StepExecutionResult.parse_error(step.id, "Output is not valid JSON", final_content)
+            logger.info(f"[Workflow] Step {step_id}: _parse_step_result succeeded, keys={list(json_result.keys())}")
             
             # Create step result
             step_result = StepExecutionResult.from_json(step.id, json_result, final_content)
@@ -2606,12 +2631,10 @@ Respond with ONLY valid JSON:
             input_items = [{"role": "user", "content": [{"type": "input_text", "text": review_content}]}]
             
             # Call LLM (no tools needed for review)
-            # response_format={"type": "json_object"} ensures JSON output
             llm_result = await llm_client.responses(
                 input_items=input_items,
                 system_prompt=system_prompt,
                 tools=[],
-                response_format={"type": "json_object"},
             )
             
             content = (llm_result.get("content") or "").strip()
@@ -2707,6 +2730,9 @@ Respond with ONLY valid JSON:
         workflow.final_summary = final_summary
         workflow.status = "completed"
         
+        # Clear executing lock
+        workflow.shared_state.pop("_workflow_executing", None)
+        
         # Log completion
         tracer = get_tracer()
         tracer.log_tool_call(
@@ -2772,6 +2798,9 @@ Respond with ONLY valid JSON:
         final_summary = "\n".join(summary_parts)
         workflow.status = "failed"
         workflow.final_summary = final_summary
+        
+        # Clear executing lock
+        workflow.shared_state.pop("_workflow_executing", None)
         
         # Log failure
         tracer = get_tracer()
