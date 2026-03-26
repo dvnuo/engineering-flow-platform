@@ -1836,35 +1836,16 @@ You have access to the following tools. When a user asks you to do something tha
     ) -> StepExecutionResult:
         """Execute a single workflow step (Issue #362).
         
-        This method actually calls the LLM to execute the step:
-        - llm type: Build step prompt and call LLM, parse JSON result
-        - tool type: Execute a specific tool
-        - user_input type: Wait for user input
-        - review type: LLM reviews previous output
+        For now, we ask the user to provide the step result as JSON.
+        TODO: Implement actual LLM calling in _execute_step_llm
         """
         from src.skills import skill_registry
         
         logger.info(f"[Workflow] Executing step type={step.type}, step_id={step.id}")
         
-        # Handle different step types
-        if step.type == "user_input":
-            # Wait for user to provide input
-            return await self._execute_step_user_input(step, workflow)
-        
-        elif step.type == "tool":
-            # Execute a specific tool
-            return await self._execute_step_tool(step, workflow, message)
-        
-        elif step.type == "review":
-            # LLM reviews the previous step output
-            return await self._execute_step_review(skill, step, workflow, message, session_id)
-        
-        else:  # Default: llm
-            # Call LLM to execute the step
-            return await self._execute_step_llm(
-                skill, step, workflow, message, session_id,
-                user_name, track_usage, reasoning_replay
-            )
+        # For all step types, we currently wait for user JSON input
+        # TODO: Implement actual LLM calling
+        return await self._execute_step_user_input(step, workflow)
     
     async def _execute_step_llm(
         self,
