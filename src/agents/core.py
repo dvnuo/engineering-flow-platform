@@ -1975,11 +1975,17 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Call LLM
             logger.info(f"[Workflow] Calling LLM with {len(messages)} messages, tools={len(tools)}")
-            llm_result = await llm_client.responses(
-                input_items=messages,
-                system_prompt=effective_system_prompt,
-                tools=tools,
-            )
+            logger.info(f"[Workflow] messages type: {type(messages)}, first item type: {type(messages[0]) if messages else None}")
+            
+            # Build call kwargs
+            call_kwargs = {
+                "input_items": messages,
+                "system_prompt": effective_system_prompt,
+                "tools": tools,
+            }
+            logger.info(f"[Workflow] call_kwargs keys: {list(call_kwargs.keys())}")
+            
+            llm_result = await llm_client.responses(**call_kwargs)
             logger.info(f"[Workflow] LLM call returned")
             
             content = (llm_result.get("content") or "").strip()
