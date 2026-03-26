@@ -25,7 +25,8 @@ class WorkflowProtectionConfig:
     MAX_STEPS_PER_REQUEST = 2
     
     # Max LLM requests per step (including retries)
-    MAX_LLM_REQUESTS_PER_STEP = 3
+    # Set higher to handle re-entrant execution scenarios
+    MAX_LLM_REQUESTS_PER_STEP = 10
     
     # Retry settings
     MAX_RETRIES = 3
@@ -554,6 +555,8 @@ You have access to the following tools. When a user asks you to do something tha
                     "shared_state": {},
                     "step_outputs": {},
                     "retry_counts": {},
+                    "llm_request_counts": {},
+                    "transient_failure": False,
                     "status": "active",
                 }
                 
@@ -1836,6 +1839,8 @@ You have access to the following tools. When a user asks you to do something tha
                 shared_state=workflow_state.get("shared_state", {}),
                 step_outputs=workflow_state.get("step_outputs", {}),
                 retry_counts=workflow_state.get("retry_counts", {}),
+                llm_request_counts=workflow_state.get("llm_request_counts", {}),
+                transient_failure=workflow_state.get("transient_failure", False),
                 status=workflow_state.get("status", "active"),
             )
         except Exception as e:
@@ -2676,6 +2681,8 @@ Provide your review in JSON format:
             "shared_state": workflow.shared_state,
             "step_outputs": workflow.step_outputs,
             "retry_counts": workflow.retry_counts,
+            "llm_request_counts": workflow.llm_request_counts,
+            "transient_failure": workflow.transient_failure,
             "status": workflow.status,
             "_awaiting_response": workflow.shared_state.get("_awaiting_response", False),
         }
