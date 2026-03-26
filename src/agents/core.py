@@ -2207,11 +2207,15 @@ You have access to the following tools. When a user asks you to do something tha
         json_schema = '''
 ## Required Output Format
 
-You MUST respond with ONLY valid JSON. No markdown, no explanations, no text outside the JSON.
+**You have access to tools** - use them to complete the step objective before responding!
+
+1. First, use the available tools to gather information or perform actions
+2. Then respond with ONLY valid JSON
 
 {"status": "success|needs_retry|failed", "summary": "...", "artifacts": {}, "next_step": "next_step_id_or_null"}
 
 **Critical:**
+- Use tools first if the step requires data gathering or external actions
 - Return ONLY the JSON object
 - Do NOT wrap in code fences
 - Do NOT include any text before or after the JSON
