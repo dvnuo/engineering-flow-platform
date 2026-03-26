@@ -27,10 +27,17 @@ class SkillStep:
     """A single step in a skill workflow (Issue #362).
     
     Aligns with Issue #362's proposed design.
+    
+    Step Types:
+    - llm: Default. LLM reasoning with optional tools (tool calls allowed)
+    - tool: Execute a specific tool and return result
+    - user_input: Wait for user to provide input
+    - review: LLM reviews output and decides pass/fail
     """
     id: str
     title: str
     objective: str
+    type: str = "llm"  # llm, tool, user_input, review
     instructions: List[str] = field(default_factory=list)
     allowed_tools: List[str] = field(default_factory=list)
     references: List[str] = field(default_factory=list)  # Files to load for this step
@@ -44,6 +51,7 @@ class SkillStep:
             id=data.get("id", ""),
             title=data.get("title", data.get("name", "")),
             objective=data.get("objective", data.get("description", "")),
+            type=data.get("type", "llm"),  # Default to llm
             instructions=data.get("instructions", []),
             allowed_tools=data.get("allowed_tools", data.get("required_tools", [])),
             references=data.get("references", []),
@@ -114,6 +122,7 @@ class Skill:
                     "id": s.id,
                     "title": s.title,
                     "objective": s.objective,
+                    "type": s.type,
                     "instructions": s.instructions,
                     "allowed_tools": s.allowed_tools,
                     "references": s.references,

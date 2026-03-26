@@ -1744,93 +1744,52 @@ You have access to the following tools. When a user asks you to do something tha
         # Handle step result
         if step_result.status == "success" and step_result.validation_passed:
             # Step succeeded, save outputs
-            active_workflow.step_outputs[current_step.id] = step_result.artifacts
+            active_workflow.step_outputs[current_step.id] = {
+                "summary": step_result.summary,
+                "artifacts": step_result.artifacts,
+                "raw_content": step_result.raw_content,
+            }
             active_workflow.shared_state.update(step_result.artifacts)
             
-            # Check if this is the first execution (user hasn't responded yet)
-            # If so, return step instructions and wait for user
-            first_execution = not workflow_state.get("_awaiting_response", False)
+            # Determine next step
+            next_step_index = None
+            next_step_id = step_result.next_step or current_step.next_step
             
-            if first_execution:
-                # First time executing this step - return instructions and wait
-                await self._save_workflow_state(session_id, active_workflow)
-                return {
-                    "response": f"**Workflow: {skill.name}**\n\n"
-                               f"**Step {active_workflow.current_step_index + 1}/{len(skill.steps)}: {current_step.title}**\n\n"
-                               f"{current_step.objective}\n\n"
-                               f"Please provide your input for this step. The system will validate the response and proceed.",
-                    "usage": {},
-                    "user_message_id": None,
-                }
-            
-            # User has responded - this is a continuation
-            # Try to parse JSON from the user's response
-            json_result = self._parse_step_result(message)
-            
-            if json_result:
-                # Valid JSON - validate and advance
-                step_result = StepExecutionResult.from_json(current_step.id, json_result, message)
-                validation_passed, validation_msg = self._validate_step_result(json_result, current_step)
-                step_result.validation_passed = validation_passed
-                step_result.validation_message = validation_msg
-                
-                if not validation_passed:
-                    # Validation failed
-                    retry_count = active_workflow.increment_retry(current_step.id)
-                    if retry_count > MAX_RETRIES_PER_STEP:
-                        return await self._finalize_workflow_failure(
-                            session_id=session_id,
-                            skill=skill,
-                            workflow=active_workflow,
-                            error_message=f"Max retries exceeded: {validation_msg}",
-                        )
-                    return {
-                        "response": f"Validation failed: {validation_msg}\n\nPlease try again. (Retry {retry_count}/{MAX_RETRIES_PER_STEP})",
-                        "usage": {},
-                        "user_message_id": None,
-                    }
-                
-                # Validation passed - determine next step
-                next_step_index = None
-                if step_result.next_step:
-                    # Explicit next_step
-                    for i, s in enumerate(skill.steps):
-                        if s.id == step_result.next_step:
-                            next_step_index = i
-                            break
-                    if next_step_index is None:
-                        return await self._finalize_workflow_failure(
-                            session_id=session_id,
-                            skill=skill,
-                            workflow=active_workflow,
-                            error_message=f"Next step '{step_result.next_step}' not found",
-                        )
-                elif active_workflow.current_step_index < len(skill.steps) - 1:
-                    next_step_index = active_workflow.current_step_index + 1
-                else:
-                    # Last step
-                    return await self._finalize_workflow_success(
+            if next_step_id:
+                # Explicit next_step by ID
+                for i, s in enumerate(skill.steps):
+                    if s.id == next_step_id:
+                        next_step_index = i
+                        break
+                if next_step_index is None:
+                    return await self._finalize_workflow_failure(
                         session_id=session_id,
                         skill=skill,
                         workflow=active_workflow,
+                        error_message=f"Next step '{next_step_id}' not found",
                     )
-                
-                # Advance to next step
-                active_workflow.current_step_index = next_step_index
-                await self._save_workflow_state(session_id, active_workflow)
-                
-                return {
-                    "response": f"Step completed: {current_step.title}\n\nProceeding to next step...",
-                    "usage": {},
-                    "user_message_id": None,
-                }
+            elif active_workflow.current_step_index < len(skill.steps) - 1:
+                # No explicit next, advance by index
+                next_step_index = active_workflow.current_step_index + 1
             else:
-                # No valid JSON - prompt user to provide JSON
-                return {
-                    "response": f"Please provide the step result as JSON.\n\nRequired format:\n```json\n{{\"status\": \"success\", \"summary\": \"...\", \"artifacts\": {{...}}}}\n```",
-                    "usage": {},
-                    "user_message_id": None,
-                }
+                # Last step - workflow complete
+                return await self._finalize_workflow_success(
+                    session_id=session_id,
+                    skill=skill,
+                    workflow=active_workflow,
+                    step_summary=step_result.summary,
+                )
+            
+            # Advance to next step
+            active_workflow.current_step_index = next_step_index
+            await self._save_workflow_state(session_id, active_workflow)
+            
+            # Return response showing what was completed
+            return {
+                "response": f"**Step '{current_step.title}' completed.**\n\n{step_result.summary}\n\nAdvancing to next step...",
+                "usage": {},
+                "user_message_id": None,
+            }
         
         elif step_result.status == "needs_retry":
             # Check retry count
@@ -1877,55 +1836,365 @@ You have access to the following tools. When a user asks you to do something tha
     ) -> StepExecutionResult:
         """Execute a single workflow step (Issue #362).
         
-        This simplified version prepares the step context for the user to respond.
+        This method actually calls the LLM to execute the step:
+        - llm type: Build step prompt and call LLM, parse JSON result
+        - tool type: Execute a specific tool
+        - user_input type: Wait for user input
+        - review type: LLM reviews previous output
         """
         from src.skills import skill_registry
         
-        # Build step prompt
-        context = {
-            "previous_results": workflow.step_outputs,
-            "shared_state": workflow.shared_state,
-        }
-        step_prompt = skill_registry.get_step_prompt(skill, step, context)
+        logger.info(f"[Workflow] Executing step type={step.type}, step_id={step.id}")
         
-        # Store step metadata and mark as awaiting response
+        # Handle different step types
+        if step.type == "user_input":
+            # Wait for user to provide input
+            return await self._execute_step_user_input(step, workflow)
+        
+        elif step.type == "tool":
+            # Execute a specific tool
+            return await self._execute_step_tool(step, workflow, message)
+        
+        elif step.type == "review":
+            # LLM reviews the previous step output
+            return await self._execute_step_review(skill, step, workflow, message, session_id)
+        
+        else:  # Default: llm
+            # Call LLM to execute the step
+            return await self._execute_step_llm(
+                skill, step, workflow, message, session_id,
+                user_name, track_usage, reasoning_replay
+            )
+    
+    async def _execute_step_llm(
+        self,
+        skill,
+        step,
+        workflow: ActiveWorkflow,
+        message: str,
+        session_id: str,
+        user_name: Optional[str] = None,
+        track_usage: bool = True,
+        reasoning_replay: Optional[bool] = None,
+    ) -> StepExecutionResult:
+        """Execute an LLM-based workflow step (Issue #362)."""
+        from src.skills import skill_registry
+        
+        try:
+            # Build step prompt
+            context = {
+                "previous_results": workflow.step_outputs,
+                "shared_state": workflow.shared_state,
+            }
+            step_prompt = skill_registry.get_step_prompt(skill, step, context)
+            
+            # Build effective system prompt with step guidance
+            effective_system_prompt = self.system_prompt
+            if step_prompt:
+                effective_system_prompt = f"{self.system_prompt}\n\n{step_prompt}"
+            
+            # Get conversation history
+            messages = await session_manager.get_history(session_id)
+            
+            # Transform messages (recent ones only)
+            transformed_messages = []
+            for msg in messages[-10:]:
+                transformed = {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+                if msg.get("tool_calls"):
+                    transformed["tool_calls"] = msg["tool_calls"]
+                if msg.get("tool_call_id"):
+                    transformed["tool_call_id"] = msg["tool_call_id"]
+                transformed_messages.append(transformed)
+            
+            # Add user message
+            if message:
+                transformed_messages.append({"role": "user", "content": message})
+            
+            # Filter tools by allowed_tools
+            tools = self.tools
+            if step.allowed_tools:
+                allowed_set = set(step.allowed_tools)
+                tools = [t for t in self.tools if t.get("function", {}).get("name", "") in allowed_set]
+                logger.info(f"[Workflow] Step {step.id}: tools filtered to {step.allowed_tools}")
+            
+            # Call LLM with extended timeout for workflow steps
+            llm_kwargs = {
+                "input_items": transformed_messages,
+                "system_prompt": effective_system_prompt,
+                "tools": tools,
+            }
+            
+            enable_reasoning = reasoning_replay if reasoning_replay is not None else config.llm.get("reasoning_replay", False)
+            if enable_reasoning:
+                llm_kwargs["reasoning_replay"] = True
+            
+            # Execute LLM call (may involve multiple tool call loops)
+            llm_content = await self._call_llm_with_tools(llm_kwargs)
+            
+            # Parse JSON result from LLM output
+            json_result = self._parse_step_result(llm_content)
+            if not json_result:
+                return StepExecutionResult.parse_error(step.id, "Output is not valid JSON", llm_content)
+            
+            # Create step result
+            step_result = StepExecutionResult.from_json(step.id, json_result, llm_content)
+            
+            # Validate completion_check
+            validation_passed, validation_msg = self._validate_step_result(json_result, step)
+            step_result.validation_passed = validation_passed
+            step_result.validation_message = validation_msg
+            
+            if not validation_passed:
+                step_result.status = "needs_retry"
+            
+            return step_result
+            
+        except Exception as e:
+            logger.error(f"[Workflow] Step execution error: {e}")
+            return StepExecutionResult(
+                step_id=step.id,
+                status="failed",
+                summary=f"Step execution error: {str(e)}",
+            )
+    
+    async def _call_llm_with_tools(self, llm_kwargs: Dict) -> str:
+        """Call LLM with tool execution loop (Issue #362).
+        
+        This handles the back-and-forth between LLM and tool execution.
+        """
+        max_iterations = 10  # Prevent infinite loops
+        iteration = 0
+        messages = llm_kwargs.get("input_items", [])
+        system_prompt = llm_kwargs.get("system_prompt", "")
+        tools = llm_kwargs.get("tools", [])
+        effective_system_prompt = system_prompt
+        
+        while iteration < max_iterations:
+            iteration += 1
+            
+            # Call LLM
+            llm_result = await llm_client.responses(
+                input_items=messages,
+                system_prompt=effective_system_prompt,
+                tools=tools,
+            )
+            
+            content = (llm_result.get("content") or "").strip()
+            tool_calls = llm_result.get("function_calls", [])
+            
+            # If no tool calls, return the content
+            if not tool_calls:
+                return content
+            
+            # Execute tool calls
+            for call in tool_calls:
+                func = call.get("function", {})
+                name = func.get("name", "")
+                args = func.get("arguments", {})
+                if isinstance(args, str):
+                    args = json.loads(args)
+                
+                try:
+                    result = await execute_tool_by_name(name, **args)
+                    tool_output = result.output if hasattr(result, 'output') else str(result)
+                except Exception as e:
+                    tool_output = f"Error: {str(e)}"
+                
+                # Add tool result to messages
+                messages.append({
+                    "role": "tool",
+                    "content": tool_output,
+                    "tool_call_id": call.get("id"),
+                })
+            
+            # Update system prompt to null after first call (context is in messages)
+            effective_system_prompt = None
+        
+        # Max iterations reached
+        return content + "\n\n[Max tool iterations reached]"
+    
+    async def _execute_step_user_input(
+        self,
+        step,
+        workflow: ActiveWorkflow,
+    ) -> StepExecutionResult:
+        """Handle user_input step type - wait for user to provide input."""
+        # Store step metadata
         workflow.shared_state["_current_step_id"] = step.id
-        workflow.shared_state["_current_step_prompt"] = step_prompt
-        workflow.shared_state["_allowed_tools"] = step.allowed_tools
         workflow.shared_state["_step_title"] = step.title
         workflow.shared_state["_step_objective"] = step.objective
-        workflow.shared_state["_step_index"] = workflow.current_step_index
-        workflow.shared_state["_awaiting_response"] = True  # Mark to validate on next call
         
-        # Save state
-        await self._save_workflow_state(session_id, workflow)
-        
-        # Return the step prompt as the result
         return StepExecutionResult(
             step_id=step.id,
             status="success",
-            summary=f"**Step {workflow.current_step_index + 1}: {step.title}**\n\n{step.objective}",
-            artifacts={"step_prompt": step_prompt},
+            summary=f"**Step: {step.title}**\n\n{step.objective}\n\nWaiting for your input...",
             validation_passed=True,
-            validation_message="Step prepared",
+            validation_message="Awaiting user input",
         )
+    
+    async def _execute_step_tool(
+        self,
+        step,
+        workflow: ActiveWorkflow,
+        message: str,
+    ) -> StepExecutionResult:
+        """Handle tool step type - execute a specific tool and return result."""
+        # For tool type, we expect a tool name in the step config or message
+        tool_name = step.allowed_tools[0] if step.allowed_tools else None
+        
+        if not tool_name and message:
+            # Try to extract tool name from message
+            tool_name = message.strip().split()[0] if message.strip() else None
+        
+        if not tool_name:
+            return StepExecutionResult(
+                step_id=step.id,
+                status="needs_retry",
+                summary=f"Tool step requires a tool name. Please specify which tool to use.",
+                validation_passed=False,
+                validation_message="No tool specified",
+            )
+        
+        try:
+            result = await execute_tool_by_name(tool_name)
+            tool_output = result.output if hasattr(result, 'output') else str(result)
+            
+            return StepExecutionResult(
+                step_id=step.id,
+                status="success",
+                summary=f"Tool '{tool_name}' executed successfully",
+                artifacts={tool_name: tool_output},
+                validation_passed=True,
+                validation_message="Tool execution successful",
+            )
+        except Exception as e:
+            return StepExecutionResult(
+                step_id=step.id,
+                status="failed",
+                summary=f"Tool execution failed: {str(e)}",
+                validation_passed=False,
+                validation_message=str(e),
+            )
+    
+    async def _execute_step_review(
+        self,
+        skill,
+        step,
+        workflow: ActiveWorkflow,
+        message: str,
+        session_id: str,
+    ) -> StepExecutionResult:
+        """Handle review step type - LLM reviews previous step output."""
+        # Get previous step output to review
+        previous_output = None
+        if workflow.step_outputs:
+            # Get the last step's output
+            last_step_id = list(workflow.step_outputs.keys())[-1] if workflow.step_outputs else None
+            if last_step_id:
+                previous_output = workflow.step_outputs[last_step_id]
+        
+        # Build review prompt
+        review_prompt = f"""## Review Step: {step.title}
+
+Please review the previous step's output and determine if it meets the requirements.
+
+Previous Output:
+{json.dumps(previous_output, indent=2) if previous_output else 'No previous output'}
+
+Your Task:
+{step.objective}
+
+Provide your review in JSON format:
+{{"status": "pass|fail", "summary": "Brief review summary", "feedback": "Specific feedback if any"}}
+"""
+        
+        try:
+            # Call LLM for review
+            messages = [{"role": "user", "content": review_prompt}]
+            llm_result = await llm_client.responses(
+                input_items=messages,
+                system_prompt=self.system_prompt,
+                tools=self.tools,
+            )
+            
+            content = (llm_result.get("content") or "").strip()
+            
+            # Parse review JSON
+            json_result = self._parse_step_result(content)
+            if not json_result:
+                return StepExecutionResult.parse_error(step.id, "Review output is not valid JSON", content)
+            
+            status = json_result.get("status", "fail")
+            
+            return StepExecutionResult(
+                step_id=step.id,
+                status="success" if status == "pass" else "needs_retry",
+                summary=json_result.get("summary", ""),
+                artifacts={"review_status": status, "feedback": json_result.get("feedback", "")},
+                validation_passed=(status == "pass"),
+                validation_message=json_result.get("feedback", ""),
+            )
+            
+        except Exception as e:
+            return StepExecutionResult(
+                step_id=step.id,
+                status="failed",
+                summary=f"Review step error: {str(e)}",
+                validation_passed=False,
+                validation_message=str(e),
+            )
     
     async def _finalize_workflow_success(
         self,
         session_id: str,
         skill,
         workflow: ActiveWorkflow,
-        error_message: str = None,
+        step_summary: str = None,
     ) -> Dict[str, Any]:
-        """Finalize workflow with success status (Issue #362)."""
+        """Finalize workflow with success status (Issue #362).
+        
+        Outputs:
+        - Skill name
+        - Each step's summary
+        - Key artifacts
+        - Final user-readable result
+        """
         from src.skills import get_tracer
         
-        # Build final summary
-        summary_parts = [f"# Workflow Completed: {skill.name}\n"]
+        # Build detailed final summary
+        summary_parts = [f"# ✅ Workflow Completed: {skill.name}\n"]
         summary_parts.append(f"Successfully completed {len(workflow.step_ids)} steps.\n")
-        summary_parts.append("## Steps Completed:")
+        
+        # Step details
+        summary_parts.append("## Steps Completed:\n")
         for i, step_id in enumerate(workflow.step_ids):
-            summary_parts.append(f"{i+1}. {step_id}")
+            step_info = workflow.step_outputs.get(step_id, {})
+            step_summary_text = step_info.get("summary", "No summary") if isinstance(step_info, dict) else str(step_info)
+            summary_parts.append(f"**Step {i+1}: {step_id}**")
+            summary_parts.append(f"  {step_summary_text[:200]}")
+            
+            # Show key artifacts
+            if isinstance(step_info, dict) and step_info.get("artifacts"):
+                artifacts = step_info.get("artifacts", {})
+                for key, value in list(artifacts.items())[:3]:
+                    summary_parts.append(f"  - {key}: {str(value)[:100]}")
+            summary_parts.append("")
+        
+        # Key artifacts across all steps
+        all_artifacts = {}
+        for step_id, step_info in workflow.step_outputs.items():
+            if isinstance(step_info, dict) and step_info.get("artifacts"):
+                all_artifacts.update(step_info.get("artifacts", {}))
+        
+        if all_artifacts:
+            summary_parts.append("## Key Artifacts Generated:\n")
+            for key, value in list(all_artifacts.items())[:5]:
+                summary_parts.append(f"- **{key}**: {str(value)[:150]}")
+            summary_parts.append("")
+        
+        # Final summary from last step
+        if step_summary:
+            summary_parts.append(f"## Final Result\n{step_summary}\n")
         
         final_summary = "\n".join(summary_parts)
         workflow.final_summary = final_summary
@@ -1935,7 +2204,11 @@ You have access to the following tools. When a user asks you to do something tha
         tracer = get_tracer()
         tracer.log_tool_call(
             tool_name="workflow_completed",
-            arguments={"workflow_id": workflow.workflow_id, "steps": len(workflow.step_ids)},
+            arguments={
+                "workflow_id": workflow.workflow_id, 
+                "steps": len(workflow.step_ids),
+                "step_outputs": list(workflow.step_outputs.keys()),
+            },
             result="Workflow completed successfully",
         )
         
@@ -1960,22 +2233,50 @@ You have access to the following tools. When a user asks you to do something tha
         workflow: ActiveWorkflow,
         error_message: str,
     ) -> Dict[str, Any]:
-        """Finalize workflow with failure status (Issue #362)."""
+        """Finalize workflow with failure status (Issue #362).
+        
+        Outputs:
+        - Failed step
+        - Error reason
+        - Completed steps
+        - Last validation message
+        """
         from src.skills import get_tracer
         
-        summary_parts = [f"# Workflow Failed: {skill.name if skill else workflow.skill_name}\n"]
-        summary_parts.append(f"Error: {error_message}\n")
-        summary_parts.append(f"Completed {len(workflow.step_outputs)} out of {len(workflow.step_ids)} steps.")
+        summary_parts = [f"# ❌ Workflow Failed: {skill.name if skill else workflow.skill_name}\n"]
+        
+        # Failed step
+        failed_step_id = workflow.step_ids[workflow.current_step_index] if workflow.current_step_index < len(workflow.step_ids) else "unknown"
+        summary_parts.append(f"**Failed at step**: {failed_step_id}\n")
+        summary_parts.append(f"**Error**: {error_message}\n")
+        
+        # Completed steps
+        summary_parts.append(f"## Completed Steps ({len(workflow.step_outputs)}/{len(workflow.step_ids)})\n")
+        for i, step_id in enumerate(workflow.step_ids):
+            if step_id in workflow.step_outputs:
+                step_info = workflow.step_outputs.get(step_id, {})
+                step_summary = step_info.get("summary", "No summary")[:100] if isinstance(step_info, dict) else str(step_info)
+                summary_parts.append(f"{i+1}. **{step_id}** ✓\n   {step_summary}")
+        
+        # Last validation info
+        if workflow.retry_counts.get(failed_step_id, 0) > 0:
+            summary_parts.append(f"\n**Validation failed after {workflow.retry_counts.get(failed_step_id, 0)} retries**")
         
         final_summary = "\n".join(summary_parts)
         workflow.status = "failed"
+        workflow.final_summary = final_summary
         
         # Log failure
         tracer = get_tracer()
         tracer.log_tool_call(
             tool_name="workflow_failed",
-            arguments={"workflow_id": workflow.workflow_id, "error": error_message},
-            result="Workflow failed",
+            arguments={
+                "workflow_id": workflow.workflow_id, 
+                "error": error_message,
+                "failed_step": failed_step_id,
+                "completed_steps": list(workflow.step_outputs.keys()),
+            },
+            result=f"Workflow failed at step {failed_step_id}: {error_message}",
         )
         
         # Clear workflow state
