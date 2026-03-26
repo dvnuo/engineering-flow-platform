@@ -445,8 +445,17 @@ You have access to the following tools. When a user asks you to do something tha
                     result=f"Started workflow: {best_skill.name}",
                 )
                 
-                # Don't use prompt injection for workflow skills - will be handled by _execute_workflow_step
-                skill_workflow = None
+                # Immediately continue workflow execution
+                return await self._continue_active_workflow(
+                    message=message,
+                    session_id=session_id,
+                    user_name=user_name,
+                    track_usage=track_usage,
+                    reasoning_replay=reasoning_replay,
+                    stream_callback=stream_callback,
+                    attached_images=attached_images,
+                    attachments=attachments,
+                )
             else:
                 skill_prompt = skill_registry.get_skill_prompt(best_skill)
                 skill_workflow = None
