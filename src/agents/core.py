@@ -1974,11 +1974,13 @@ You have access to the following tools. When a user asks you to do something tha
             iteration += 1
             
             # Call LLM
+            logger.info(f"[Workflow] Calling LLM with {len(messages)} messages, tools={len(tools)}")
             llm_result = await llm_client.responses(
                 input_items=messages,
                 system_prompt=effective_system_prompt,
                 tools=tools,
             )
+            logger.info(f"[Workflow] LLM call returned")
             
             content = (llm_result.get("content") or "").strip()
             tool_calls = llm_result.get("function_calls", [])
