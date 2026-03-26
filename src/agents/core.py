@@ -1928,8 +1928,8 @@ You have access to the following tools. When a user asks you to do something tha
             user_content += f"Step objective: {step.objective}\n"
             user_content += "Only respond with the JSON object, nothing else."
             
-            # Build messages for tool loop
-            messages = [{"role": "user", "content": user_content}]
+            # Build input_items for tool loop (Responses API format)
+            input_items = [{"role": "user", "content": [{"type": "input_text", "text": user_content}]}]
             
             # Filter tools by allowed_tools
             tools = self.tools
@@ -1949,7 +1949,7 @@ You have access to the following tools. When a user asks you to do something tha
                 # Call LLM
                 logger.info(f"[Workflow] LLM call {iteration} for step {step.id}")
                 llm_result = await llm_client.responses(
-                    input_items=messages,
+                    input_items=input_items,
                     system_prompt=system_with_step,
                     tools=tools,
                 )
@@ -1987,7 +1987,7 @@ You have access to the following tools. When a user asks you to do something tha
                         logger.error(f"[Workflow] Tool error: {e}")
                     
                     # Add tool result using function_call_output format (Responses API format)
-                    messages.append({
+                    input_items.append({
                         "type": "function_call_output",
                         "call_id": call.get("call_id"),
                         "output": str(tool_output),
