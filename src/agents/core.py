@@ -458,7 +458,7 @@ You have access to the following tools. When a user asks you to do something tha
                 session_id=session_id,
                 role="user",
                 content=message,
-                metadata={"source": "workflow_trigger"},
+                extra={"source": "workflow_trigger"},
             )
             
             # Continue active workflow
