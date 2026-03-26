@@ -1969,7 +1969,11 @@ You have access to the following tools. When a user asks you to do something tha
         iteration = 0
         effective_system_prompt = system_prompt
         
-        logger.info(f"[Workflow] _call_llm_with_tools START - messages type: {type(messages)}")
+        # Force type check
+        logger.info(f"[Workflow] _call_llm_with_tools START - type(messages)={type(messages)}")
+        if not isinstance(messages, list):
+            logger.error(f"[Workflow] messages is not a list! It is {type(messages)}: {str(messages)[:200]}")
+            raise TypeError(f"messages must be a list, got {type(messages)}")
         effective_system_prompt = system_prompt
         
         try:
