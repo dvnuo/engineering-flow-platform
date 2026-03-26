@@ -1974,8 +1974,9 @@ You have access to the following tools. When a user asks you to do something tha
             iteration += 1
             
             # Call LLM
-            logger.info(f"[Workflow] Calling LLM with {len(messages)} messages, tools={len(tools)}")
-            logger.info(f"[Workflow] messages type: {type(messages)}, first item type: {type(messages[0]) if messages else None}")
+            logger.info(f"[Workflow] Calling LLM with messages type: {type(messages)}")
+            if messages and hasattr(messages[0], '__getitem__'):
+                logger.info(f"[Workflow] First message keys: {list(messages[0].keys()) if isinstance(messages[0], dict) else 'not a dict'}")
             
             # Build call kwargs
             call_kwargs = {
@@ -1983,7 +1984,7 @@ You have access to the following tools. When a user asks you to do something tha
                 "system_prompt": effective_system_prompt,
                 "tools": tools,
             }
-            logger.info(f"[Workflow] call_kwargs keys: {list(call_kwargs.keys())}")
+            logger.info(f"[Workflow] About to call llm_client.responses")
             
             llm_result = await llm_client.responses(**call_kwargs)
             logger.info(f"[Workflow] LLM call returned")
