@@ -1778,113 +1778,42 @@ You have access to the following tools. When a user asks you to do something tha
         attached_images: Optional[List[str]] = None,
         attachments: Optional[List[str]] = None,
     ) -> StepExecutionResult:
-        """Execute a single workflow step (Issue #362)."""
+        """Execute a single workflow step (Issue #362).
+        
+        This method injects the step context into the session and lets
+        the existing tool loop handle the actual LLM execution.
+        """
         from src.skills import skill_registry
         
-        # Build step prompt
+        # Build step prompt for context
         context = {
             "previous_results": workflow.step_outputs,
             "shared_state": workflow.shared_state,
         }
         step_prompt = skill_registry.get_step_prompt(skill, step, context)
         
-        # Build effective system prompt with step guidance
-        effective_system_prompt = self.system_prompt
-        if step_prompt:
-            effective_system_prompt = f"{self.system_prompt}\n\n{step_prompt}"
+        # Add step context as a system message to the session
+        # This will be picked up by the normal tool loop
+        step_context = f"[WORKFLOW STEP {workflow.current_step_index + 1}/{len(skill.steps)}: {step.title}]\n\n{step_prompt}"
+        await session_manager.add_message(session_id, "system", step_context)
         
-        # Get conversation history
-        messages = await session_manager.get_history(session_id)
+        # Store step metadata for validation after execution
+        workflow.shared_state["_current_step_id"] = step.id
+        workflow.shared_state["_current_step_prompt"] = step_prompt
+        workflow.shared_state["_allowed_tools"] = step.allowed_tools
+        workflow.shared_state["_step_index"] = workflow.current_step_index
         
-        # Transform messages (recent ones only)
-        transformed_messages = []
-        for msg in messages[-10:]:
-            transformed = {"role": msg.get("role", "user"), "content": msg.get("content", "")}
-            if msg.get("tool_calls"):
-                transformed["tool_calls"] = msg["tool_calls"]
-            if msg.get("tool_call_id"):
-                transformed["tool_call_id"] = msg["tool_call_id"]
-            transformed_messages.append(transformed)
+        # Save updated workflow state
+        await self._save_workflow_state(session_id, workflow)
         
-        # Add user message
-        transformed_messages.append({"role": "user", "content": message})
-        
-        # Filter tools by allowed_tools
-        tools = self.tools
-        if step.allowed_tools:
-            allowed_set = set(step.allowed_tools)
-            tools = [t for t in self.tools if t.get("function", {}).get("name", "") in allowed_set]
-            logger.info(f"[Workflow] Step {step.id}: tools filtered to {step.allowed_tools}")
-        
-        # Call LLM
-        llm_kwargs = {
-            "input_items": transformed_messages,
-            "system_prompt": effective_system_prompt,
-            "tools": tools,
-        }
-        
-        try:
-            enable_reasoning = reasoning_replay if reasoning_replay is not None else config.llm.get("reasoning_replay", False)
-            if enable_reasoning:
-                llm_kwargs["reasoning_replay"] = True
-            
-            llm_result = await llm_client.responses(**llm_kwargs)
-            
-            content = (llm_result.get("content") or "").strip()
-            tool_calls = llm_result.get("function_calls", [])
-            
-            # Execute tools if present
-            if tool_calls:
-                tool_results = []
-                for call in tool_calls:
-                    func = call.get("function", {})
-                    name = func.get("name", "")
-                    args = func.get("arguments", {})
-                    if isinstance(args, str):
-                        args = json.loads(args)
-                    
-                    result = await execute_tool_by_name(name, **args)
-                    tool_results.append({
-                        "tool": name,
-                        "result": result.output if hasattr(result, 'output') else str(result),
-                    })
-                
-                # Add tool results to messages
-                for tr in tool_results:
-                    transformed_messages.append({
-                        "role": "tool",
-                        "content": tr["result"],
-                    })
-                
-                # Call LLM again with tool results
-                llm_kwargs["input_items"] = transformed_messages
-                llm_result = await llm_client.responses(**llm_kwargs)
-                content = (llm_result.get("content") or "").strip()
-            
-            # Parse JSON result
-            json_result = self._parse_step_result(content)
-            if not json_result:
-                return StepExecutionResult.parse_error(step.id, "Output is not valid JSON", content)
-            
-            step_result = StepExecutionResult.from_json(step.id, json_result, content)
-            
-            # Validate completion_check
-            validation_passed, validation_msg = self._validate_step_result(json_result, step)
-            step_result.validation_passed = validation_passed
-            step_result.validation_message = validation_msg
-            
-            if not validation_passed:
-                step_result.status = "needs_retry"
-            
-            return step_result
-            
-        except Exception as e:
-            logger.error(f"[Workflow] Step execution error: {e}")
-            return StepExecutionResult(
-                step_id=step.id,
-                status="failed",
-                summary=f"Step execution error: {str(e)}",
-            )
+        # Return instructions for the step
+        return StepExecutionResult(
+            step_id=step.id,
+            status="needs_retry",
+            summary=f"Step context prepared. System prompt updated with: {step.objective}",
+            validation_passed=True,
+            validation_message="Step context injected, normal flow will execute",
+        )
     
     async def _finalize_workflow_success(
         self,
