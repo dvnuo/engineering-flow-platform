@@ -6,11 +6,119 @@ import json
 import logging
 import os
 import platform
+import random
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
+
+
+# =============================================================================
+# Workflow Protection Configuration (Issue #362 - Rate Limit Protection)
+# =============================================================================
+class WorkflowProtectionConfig:
+    """Protection limits for workflow execution."""
+    
+    # Max steps to auto-advance per user request
+    MAX_STEPS_PER_REQUEST = 2
+    
+    # Max LLM requests per step (including retries)
+    MAX_LLM_REQUESTS_PER_STEP = 3
+    
+    # Retry settings
+    MAX_RETRIES = 3
+    BASE_BACKOFF_SECS = 1.0
+    MAX_BACKOFF_SECS = 10.0
+    JITTER_FACTOR = 0.25
+    
+    # Throttling between steps
+    STEP_THROTTLE_SECS = 0.5
+    
+    # Retryable error codes
+    RETRYABLE_ERROR_CODES: Set[str] = {
+        "429", "rate_limit", "rate_limit_exceeded", 
+        "temporary_unavailable", "service_unavailable",
+        "503", "502", "504",
+    }
+
+
+# Global semaphore for LLM concurrency control
+_llm_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def get_llm_semaphore(max_concurrent: int = 5) -> asyncio.Semaphore:
+    """Get or create the LLM semaphore for concurrency control."""
+    global _llm_semaphore
+    if _llm_semaphore is None:
+        _llm_semaphore = asyncio.Semaphore(max_concurrent)
+    return _llm_semaphore
+
+
+def _is_retryable_error(error_msg: str, status_code: str = "") -> bool:
+    """Check if an error is retryable (rate limit, temporary unavailable, etc.)."""
+    error_lower = error_msg.lower()
+    status_lower = status_code.lower()
+    
+    for code in WorkflowProtectionConfig.RETRYABLE_ERROR_CODES:
+        if code in error_lower or code in status_lower:
+            return True
+    return False
+
+
+async def _retry_with_backoff(
+    coro_func: Callable,
+    *args,
+    max_retries: int = WorkflowProtectionConfig.MAX_RETRIES,
+    base_backoff: float = WorkflowProtectionConfig.BASE_BACKOFF_SECS,
+    max_backoff: float = WorkflowProtectionConfig.MAX_BACKOFF_SECS,
+    **kwargs
+):
+    """Execute coroutine with exponential backoff + jitter for retryable errors.
+    
+    Args:
+        coro_func: Async function to execute
+        *args: Positional arguments for coro_func
+        max_retries: Maximum number of retry attempts
+        base_backoff: Initial backoff time in seconds
+        max_backoff: Maximum backoff time in seconds
+        **kwargs: Keyword arguments for coro_func
+        
+    Returns:
+        Result from coro_func
+        
+    Raises:
+        Last exception if all retries exhausted
+    """
+    last_error = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            return await coro_func(*args, **kwargs)
+        except Exception as e:
+            last_error = e
+            error_str = str(e)
+            
+            # Check if error is retryable
+            if not _is_retryable_error(error_str):
+                # Non-retryable error, raise immediately
+                raise
+            
+            if attempt >= max_retries:
+                logger.warning(f"[Retry] Max retries ({max_retries}) exhausted for {coro_func.__name__}")
+                raise
+            
+            # Calculate backoff with exponential increase and jitter
+            backoff = min(base_backoff * (2 ** attempt), max_backoff)
+            jitter = backoff * WorkflowProtectionConfig.JITTER_FACTOR * random.random()
+            sleep_time = backoff + jitter
+            
+            logger.warning(f"[Retry] Attempt {attempt + 1}/{max_retries} failed: {error_str[:100]}")
+            logger.info(f"[Retry] Sleeping {sleep_time:.2f}s before retry...")
+            await asyncio.sleep(sleep_time)
+    
+    raise last_error
 
 from src.agents.heartbeat import get_heartbeat, start_heartbeat, stop_heartbeat
 from src.agents.llm import (
@@ -57,8 +165,10 @@ class ActiveWorkflow:
     shared_state: Dict[str, Any] = field(default_factory=dict)
     step_outputs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     retry_counts: Dict[str, int] = field(default_factory=dict)
+    llm_request_counts: Dict[str, int] = field(default_factory=dict)  # Track LLM calls per step
     status: str = "active"  # active, completed, failed, cancelled
     final_summary: Optional[str] = None
+    transient_failure: bool = False  # Flag for transient (retryable) failures
     
     @property
     def current_step_id(self) -> Optional[str]:
@@ -80,6 +190,19 @@ class ActiveWorkflow:
         """Increment retry count and return new count."""
         self.retry_counts[step_id] = self.get_retry_count(step_id) + 1
         return self.retry_counts[step_id]
+    
+    def get_llm_request_count(self, step_id: str) -> int:
+        """Get LLM request count for a step."""
+        return self.llm_request_counts.get(step_id, 0)
+    
+    def increment_llm_request(self, step_id: str) -> int:
+        """Increment LLM request count and return new count."""
+        self.llm_request_counts[step_id] = self.get_llm_request_count(step_id) + 1
+        return self.llm_request_counts[step_id]
+    
+    def reset_llm_request_count(self, step_id: str) -> None:
+        """Reset LLM request count for a step."""
+        self.llm_request_counts[step_id] = 0
 
 
 @dataclass
@@ -1745,20 +1868,38 @@ You have access to the following tools. When a user asks you to do something tha
                 workflow=active_workflow,
             )
         
-        current_step = skill.steps[active_workflow.current_step_index]
+        # Issue #362: Loop to execute up to MAX_STEPS_PER_REQUEST steps per user request
+        steps_executed = 0
+        all_responses = []
         
-        # Log step continuation
-        logger.info(f"[Workflow] Continuing: step {active_workflow.current_step_index + 1}/{len(skill.steps)}: {current_step.id}")
-        
-        # Execute the step
-        step_result = await self._execute_workflow_step(
-            skill=skill,
-            step=current_step,
-            workflow=active_workflow,
-            message=message,
-            session_id=session_id,
-            user_name=user_name,
-            track_usage=track_usage,
+        while (active_workflow.current_step_index < len(skill.steps) and 
+               steps_executed < WorkflowProtectionConfig.MAX_STEPS_PER_REQUEST):
+            
+            # Check if workflow was marked as having transient failure
+            if active_workflow.transient_failure:
+                logger.info(f"[Workflow] Transient failure flag set, stopping auto-advance")
+                break
+            
+            current_step = skill.steps[active_workflow.current_step_index]
+            
+            # Log step continuation
+            logger.info(f"[Workflow] Step {active_workflow.current_step_index + 1}/{len(skill.steps)}: {current_step.id} (exec #{steps_executed + 1})")
+            
+            # Throttle before executing step (avoid rapid-fire LLM calls)
+            if steps_executed > 0:
+                throttle_time = WorkflowProtectionConfig.STEP_THROTTLE_SECS
+                logger.info(f"[Workflow] Throttling: sleeping {throttle_time}s between steps")
+                await asyncio.sleep(throttle_time)
+            
+            # Execute the step
+            step_result = await self._execute_workflow_step(
+                skill=skill,
+                step=current_step,
+                workflow=active_workflow,
+                message=message if steps_executed == 0 else "",  # Only pass message to first step
+                session_id=session_id,
+                user_name=user_name,
+                track_usage=track_usage,
             reasoning_replay=reasoning_replay,
             stream_callback=stream_callback,
             attached_images=attached_images,
@@ -1774,6 +1915,7 @@ You have access to the following tools. When a user asks you to do something tha
                 "raw_content": step_result.raw_content,
             }
             active_workflow.shared_state.update(step_result.artifacts)
+            all_responses.append(f"**Step {steps_executed + 1}: {current_step.title}**\n\n{step_result.summary}")
             
             # Determine next step
             next_step_index = None
@@ -1801,19 +1943,29 @@ You have access to the following tools. When a user asks you to do something tha
                     session_id=session_id,
                     skill=skill,
                     workflow=active_workflow,
-                    step_summary=step_result.summary,
+                    step_summary="\n\n".join(all_responses),
                 )
             
             # Advance to next step
             active_workflow.current_step_index = next_step_index
             await self._save_workflow_state(session_id, active_workflow)
+            steps_executed += 1
             
-            # Return response showing what was completed
-            return {
-                "response": f"**Step '{current_step.title}' completed.**\n\n{step_result.summary}\n\nAdvancing to next step...",
-                "usage": {},
-                "user_message_id": None,
-            }
+            # Check if we've hit max steps per request
+            if steps_executed >= WorkflowProtectionConfig.MAX_STEPS_PER_REQUEST:
+                logger.info(f"[Workflow] Reached max steps per request ({WorkflowProtectionConfig.MAX_STEPS_PER_REQUEST})")
+                # Save transient failure state if any
+                if active_workflow.transient_failure:
+                    await self._save_workflow_state(session_id, active_workflow)
+                # Return response showing what was completed and that more is pending
+                remaining_steps = len(skill.steps) - active_workflow.current_step_index
+                response_text = "\n\n---\n\n".join(all_responses)
+                response_text += f"\n\n*({remaining_steps} more step{'s' if remaining_steps > 1 else ''} remaining. Send another message to continue.)*"
+                return {
+                    "response": response_text,
+                    "usage": {},
+                    "user_message_id": None,
+                }
         
         elif step_result.status == "needs_retry":
             # Check retry count
@@ -1829,20 +1981,29 @@ You have access to the following tools. When a user asks you to do something tha
             # Save retry count
             await self._save_workflow_state(session_id, active_workflow)
             
+            # If we executed some steps already, include them in the response
+            if all_responses:
+                response_text = "\n\n---\n\n".join(all_responses)
+                response_text += f"\n\n**Note:** {step_result.summary}\nPlease try again. (Retry {retry_count}/{MAX_RETRIES_PER_STEP})"
+            else:
+                response_text = f"Step validation failed: {step_result.validation_message}\n\nPlease try again. (Retry {retry_count}/{MAX_RETRIES_PER_STEP})"
+            
             return {
-                "response": f"Step validation failed: {step_result.validation_message}\n\nPlease try again. (Retry {retry_count}/{MAX_RETRIES_PER_STEP})",
+                "response": response_text,
                 "usage": {},
                 "user_message_id": None,
             }
         
         else:
-            # Step failed
+            # Step failed (non-retryable error)
             return await self._finalize_workflow_failure(
                 session_id=session_id,
                 skill=skill,
                 workflow=active_workflow,
                 error_message=step_result.summary,
             )
+        
+        # End of while loop
     
     async def _execute_workflow_step(
         self,
@@ -1907,8 +2068,32 @@ You have access to the following tools. When a user asks you to do something tha
         track_usage: bool = True,
         reasoning_replay: Optional[bool] = None,
     ) -> StepExecutionResult:
-        """Execute an LLM-based workflow step with tool execution loop (Issue #362)."""
+        """Execute an LLM-based workflow step with tool execution loop (Issue #362).
+        
+        Features:
+        - Retry with exponential backoff for 429/rate limit errors
+        - LLM request count tracking for budget control
+        - Transient failure handling (don't mark workflow as failed on 429)
+        - Tool-direct mode for single-tool steps that return structured data
+        """
         from src.skills import skill_registry
+        
+        # Check if step has single search/fetch tool - use tool-direct mode
+        if step.allowed_tools and len(step.allowed_tools) == 1:
+            tool_name = step.allowed_tools[0]
+            # List of tools that return structured data we can process directly
+            direct_output_tools = {
+                "github_search_issues", "github_get_issue", "github_get_pr_files",
+                "github_get_pr_diff", "github_list_branches", "github_get_file_content",
+                "jira_search", "jira_get_issue", "jira_get_comments",
+                "confluence_search", "confluence_get_page", "confluence_list_pages",
+                "confluence_get_space", "run_command", "git_status",
+            }
+            if tool_name in direct_output_tools:
+                logger.info(f"[Workflow] Step {step.id}: using tool-direct mode for {tool_name}")
+                return await self._execute_step_tool_direct(
+                    skill, step, workflow, message, tool_name
+                )
         
         try:
             # Build step prompt
@@ -1938,21 +2123,59 @@ You have access to the following tools. When a user asks you to do something tha
                 tools = [t for t in self.tools if t.get("function", {}).get("name", "") in allowed_set]
                 logger.info(f"[Workflow] Step {step.id}: using tools {step.allowed_tools}")
             
-            # Tool execution loop
+            # Tool execution loop with retry support
             max_iterations = 10
             iteration = 0
             final_content = ""
+            step_id = step.id
+            current_llm_count = workflow.get_llm_request_count(step_id)
             
             while iteration < max_iterations:
                 iteration += 1
                 
-                # Call LLM
-                logger.info(f"[Workflow] LLM call {iteration} for step {step.id}")
-                llm_result = await llm_client.responses(
-                    input_items=input_items,
-                    system_prompt=system_with_step,
-                    tools=tools,
-                )
+                # Check LLM budget
+                if current_llm_count >= WorkflowProtectionConfig.MAX_LLM_REQUESTS_PER_STEP:
+                    logger.warning(f"[Workflow] Step {step_id}: LLM budget exhausted ({current_llm_count}/{WorkflowProtectionConfig.MAX_LLM_REQUESTS_PER_STEP})")
+                    workflow.transient_failure = True
+                    return StepExecutionResult(
+                        step_id=step_id,
+                        status="needs_retry",
+                        summary="Step temporarily unavailable due to rate limits. Please try again in a few moments.",
+                        validation_passed=False,
+                        validation_message="LLM budget exhausted",
+                    )
+                
+                # Acquire semaphore for concurrency control
+                async with get_llm_semaphore():
+                    # Increment LLM request count
+                    current_llm_count = workflow.increment_llm_request(step_id)
+                    logger.info(f"[Workflow] LLM call {iteration} for step {step_id} (request #{current_llm_count})")
+                    
+                    try:
+                        # Call LLM with retry for rate limit errors
+                        llm_result = await _retry_with_backoff(
+                            llm_client.responses,
+                            input_items=input_items,
+                            system_prompt=system_with_step,
+                            tools=tools,
+                            max_retries=WorkflowProtectionConfig.MAX_RETRIES,
+                        )
+                    except Exception as e:
+                        error_str = str(e)
+                        if _is_retryable_error(error_str):
+                            # Transient failure - mark and return needs_retry
+                            logger.warning(f"[Workflow] Transient error in step {step_id}: {error_str[:100]}")
+                            workflow.transient_failure = True
+                            return StepExecutionResult(
+                                step_id=step_id,
+                                status="needs_retry",
+                                summary="Step temporarily unavailable due to rate limits. Please try again in a moment.",
+                                validation_passed=False,
+                                validation_message=error_str,
+                            )
+                        else:
+                            # Non-retryable error
+                            raise
                 
                 content = (llm_result.get("content") or "").strip()
                 function_calls = llm_result.get("function_calls", [])
@@ -2014,14 +2237,187 @@ You have access to the following tools. When a user asks you to do something tha
             return step_result
             
         except Exception as e:
-            logger.error(f"[Workflow] Step execution error: {e}")
-            import traceback
-            logger.error(f"[Workflow] Traceback: {traceback.format_exc()}")
+            error_str = str(e)
+            if _is_retryable_error(error_str):
+                # Transient failure
+                logger.warning(f"[Workflow] Transient error in step execution: {error_str[:100]}")
+                workflow.transient_failure = True
+                return StepExecutionResult(
+                    step_id=step.id,
+                    status="needs_retry",
+                    summary="Step temporarily unavailable due to rate limits. Please try again in a moment.",
+                    validation_passed=False,
+                    validation_message=error_str,
+                )
+            else:
+                logger.error(f"[Workflow] Step execution error: {e}")
+                import traceback
+                logger.error(f"[Workflow] Traceback: {traceback.format_exc()}")
+                return StepExecutionResult(
+                    step_id=step.id,
+                    status="failed",
+                    summary=f"Step execution error: {str(e)}",
+                )
+    
+    async def _execute_step_tool_direct(
+        self,
+        skill,
+        step,
+        workflow: ActiveWorkflow,
+        message: str,
+        tool_name: str,
+    ) -> StepExecutionResult:
+        """Execute a step using tool-direct mode - no extra LLM call needed.
+        
+        For steps that use a single tool returning structured data (search, fetch, list, etc.),
+        we can construct the StepExecutionResult directly from the tool output without
+        an additional LLM call to wrap it in JSON.
+        
+        This saves API calls and avoids rate limit issues.
+        """
+        from src.skills import skill_registry
+        
+        step_id = step.id
+        
+        # Check LLM budget for this step
+        current_llm_count = workflow.get_llm_request_count(step_id)
+        if current_llm_count >= WorkflowProtectionConfig.MAX_LLM_REQUESTS_PER_STEP:
+            logger.warning(f"[Workflow] Step {step_id}: LLM budget exhausted")
+            workflow.transient_failure = True
             return StepExecutionResult(
-                step_id=step.id,
-                status="failed",
-                summary=f"Step execution error: {str(e)}",
+                step_id=step_id,
+                status="needs_retry",
+                summary="Step temporarily unavailable due to rate limits. Please try again in a few moments.",
+                validation_passed=False,
+                validation_message="LLM budget exhausted",
             )
+        
+        try:
+            # Build context for the step
+            context = {
+                "previous_results": workflow.step_outputs,
+                "shared_state": workflow.shared_state,
+            }
+            step_prompt = skill_registry.get_step_prompt(skill, step, context)
+            
+            # Extract query from message or shared_state
+            query = message or workflow.shared_state.get("query", "")
+            if not query and step_prompt:
+                # Try to extract from prompt
+                query = step_prompt.split("\n")[0] if step_prompt else ""
+            
+            # Build tool arguments from step config
+            tool_args = {"query": query} if query else {}
+            
+            # Acquire semaphore for concurrency control
+            async with get_llm_semaphore():
+                # Increment LLM request count
+                current_llm_count = workflow.increment_llm_request(step_id)
+                logger.info(f"[Workflow] Tool-direct step {step_id}: executing {tool_name} (request #{current_llm_count})")
+                
+                # Execute the tool directly
+                try:
+                    result = await execute_tool_by_name(tool_name, **tool_args)
+                    tool_output = result.output if hasattr(result, 'output') else str(result)
+                except Exception as e:
+                    tool_output = f"Error: {str(e)}"
+                    logger.error(f"[Workflow] Tool error in {step_id}: {e}")
+                    return StepExecutionResult(
+                        step_id=step_id,
+                        status="failed",
+                        summary=f"Tool execution failed: {str(e)}",
+                        validation_passed=False,
+                        validation_message=str(e),
+                    )
+            
+            # Parse tool output and construct StepExecutionResult
+            # Most search/fetch tools return structured data (JSON)
+            try:
+                # Try to parse as JSON
+                parsed_output = json.loads(tool_output) if isinstance(tool_output, str) else tool_output
+            except json.JSONDecodeError:
+                # If not JSON, treat as plain text
+                parsed_output = {"raw_output": tool_output}
+            
+            # Determine artifacts key based on tool type
+            if "github_search" in tool_name or "jira_search" in tool_name or "confluence_search" in tool_name:
+                artifacts_key = "search_results"
+            elif "issues" in tool_name or "issue" in tool_name:
+                artifacts_key = "issue_data"
+            elif "pr_files" in tool_name or "pr_diff" in tool_name:
+                artifacts_key = "pr_data"
+            elif "list_branches" in tool_name:
+                artifacts_key = "branches"
+            elif "file_content" in tool_name:
+                artifacts_key = "file_content"
+            elif "comments" in tool_name:
+                artifacts_key = "comments"
+            elif "list_pages" in tool_name:
+                artifacts_key = "pages"
+            elif "space" in tool_name:
+                artifacts_key = "space_data"
+            elif "run_command" in tool_name or "git_status" in tool_name:
+                artifacts_key = "command_output"
+            else:
+                artifacts_key = "result"
+            
+            # Determine next step
+            # If there are completion criteria not met, need_review
+            # Otherwise proceed to next step
+            validation_passed, validation_msg = self._validate_step_result(
+                {"artifacts": {artifacts_key: parsed_output}}, step
+            )
+            
+            # Get next step from step config or determine from workflow
+            next_step = step.next_step
+            
+            # Construct summary
+            if isinstance(parsed_output, list):
+                summary = f"Found {len(parsed_output)} results"
+            elif isinstance(parsed_output, dict):
+                if "items" in parsed_output:
+                    summary = f"Found {len(parsed_output.get('items', []))} items"
+                elif "total" in parsed_output:
+                    summary = f"Found {parsed_output.get('total', 0)} total results"
+                else:
+                    summary = f"Retrieved data successfully"
+            else:
+                summary = f"Executed {tool_name}"
+            
+            return StepExecutionResult(
+                step_id=step_id,
+                status="success" if validation_passed else "needs_retry",
+                summary=summary,
+                artifacts={artifacts_key: parsed_output},
+                next_step=next_step,
+                raw_content=str(parsed_output)[:500],
+                validation_passed=validation_passed,
+                validation_message=validation_msg,
+            )
+            
+        except Exception as e:
+            error_str = str(e)
+            if _is_retryable_error(error_str):
+                logger.warning(f"[Workflow] Transient error in tool-direct step {step_id}: {error_str[:100]}")
+                workflow.transient_failure = True
+                return StepExecutionResult(
+                    step_id=step_id,
+                    status="needs_retry",
+                    summary="Step temporarily unavailable due to rate limits. Please try again in a moment.",
+                    validation_passed=False,
+                    validation_message=error_str,
+                )
+            else:
+                logger.error(f"[Workflow] Tool-direct step error: {e}")
+                import traceback
+                logger.error(f"[Workflow] Traceback: {traceback.format_exc()}")
+                return StepExecutionResult(
+                    step_id=step_id,
+                    status="failed",
+                    summary=f"Step execution error: {str(e)}",
+                    validation_passed=False,
+                    validation_message=str(e),
+                )
     
     async def _execute_step_user_input(
         self,
