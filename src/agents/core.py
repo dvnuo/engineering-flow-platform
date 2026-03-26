@@ -1654,9 +1654,10 @@ You have access to the following tools. When a user asks you to do something tha
         except Exception as e:
             logger.error(f"[Workflow] Error in _continue_active_workflow: {e}")
             import traceback
-            traceback.print_exc()
+            tb = traceback.format_exc()
+            logger.error(f"[Workflow] Traceback: {tb}")
             return {
-                "response": f"Workflow error: {str(e)}",
+                "response": f"Workflow error: {str(e)}\n\nPlease check logs for details.",
                 "usage": {},
                 "user_message_id": None,
             }
@@ -1681,17 +1682,25 @@ You have access to the following tools. When a user asks you to do something tha
         """
         from src.skills import skill_registry, get_tracer
         
-        # Reconstruct ActiveWorkflow from state
-        active_workflow = ActiveWorkflow(
-            workflow_id=workflow_state["workflow_id"],
-            skill_name=workflow_state["skill_name"],
-            step_ids=workflow_state["step_ids"],
-            current_step_index=workflow_state.get("current_step_index", 0),
-            shared_state=workflow_state.get("shared_state", {}),
-            step_outputs=workflow_state.get("step_outputs", {}),
-            retry_counts=workflow_state.get("retry_counts", {}),
-            status=workflow_state.get("status", "active"),
-        )
+        # Reconstruct ActiveWorkflow from state with defensive checks
+        try:
+            active_workflow = ActiveWorkflow(
+                workflow_id=workflow_state.get("workflow_id", f"wf_{session_id[:8]}_unknown"),
+                skill_name=workflow_state.get("skill_name", "unknown"),
+                step_ids=workflow_state.get("step_ids", []),
+                current_step_index=workflow_state.get("current_step_index", 0),
+                shared_state=workflow_state.get("shared_state", {}),
+                step_outputs=workflow_state.get("step_outputs", {}),
+                retry_counts=workflow_state.get("retry_counts", {}),
+                status=workflow_state.get("status", "active"),
+            )
+        except Exception as e:
+            logger.error(f"[Workflow] Failed to reconstruct workflow: {e}")
+            return {
+                "response": f"Workflow state error: {str(e)}",
+                "usage": {},
+                "user_message_id": None,
+            }
         
         # Get skill
         skill = skill_registry.get_skill(active_workflow.skill_name)
