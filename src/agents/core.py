@@ -1901,10 +1901,10 @@ You have access to the following tools. When a user asks you to do something tha
                 continue
             
             # Reset LLM budget for this step (in case we're retrying after a failure)
-            current_llm_count = workflow.get_llm_request_count(current_step.id)
+            current_llm_count = active_workflow.get_llm_request_count(current_step.id)
             if current_llm_count > 0:
                 logger.info(f"[Workflow] Resetting LLM budget for {current_step.id} (was {current_llm_count})")
-                workflow.reset_llm_request_count(current_step.id)
+                active_workflow.reset_llm_request_count(current_step.id)
             
             # Log step continuation
             logger.info(f"[Workflow] Step {active_workflow.current_step_index + 1}/{len(skill.steps)}: {current_step.id} (exec #{steps_executed + 1})")
