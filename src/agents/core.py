@@ -451,6 +451,8 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Validate workflow_state is a dict with expected keys
         if workflow_state and isinstance(workflow_state, dict) and "mode" in workflow_state and workflow_state.get("mode") == ExecutionMode.WORKFLOW.value:
+            # Log workflow state for debugging
+            logger.info(f"[Workflow] Resuming workflow: skill={workflow_state.get('skill_name')}, step_index={workflow_state.get('current_step_index')}, completed_steps={list(workflow_state.get('step_outputs', {}).keys())}")
             # Save user message to history before continuing workflow
             await session_manager.add_message(
                 session_id=session_id,
@@ -570,7 +572,7 @@ You have access to the following tools. When a user asks you to do something tha
                 # Save workflow state
                 await session_manager.set_workflow_state(session_id, workflow_state)
                 
-                logger.info(f"[Skill] Created workflow: {best_skill.name} ({workflow_id}) with {len(best_skill.steps)} steps")
+                logger.info(f"[Skill] Created NEW workflow: {best_skill.name} ({workflow_id}), total_steps={len(best_skill.steps)}, starting at step_index=0")
                 
                 # Log workflow start
                 tracer.log_tool_call(
