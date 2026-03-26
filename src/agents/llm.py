@@ -916,8 +916,12 @@ class GitHubCopilotProvider(BaseProvider):
         }
         
         # Add response_format for JSON mode (e.g., workflow step output)
-        if response_format:
+        # Note: GitHub Copilot API may not support response_format the same way as OpenAI
+        # Only add it if explicitly provided and we're using OpenAI
+        if response_format and self.name == "openai":
             payload["response_format"] = response_format
+        elif response_format:
+            logger.debug(f"[GitHubCopilot] Skipping response_format={response_format} (not supported by Copilot API)")
         
         # Debug: Log request details (before calling _call_api)
         if _is_debug_enabled():
