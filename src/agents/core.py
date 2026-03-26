@@ -1488,12 +1488,17 @@ You have access to the following tools. When a user asks you to do something tha
         if not summary or len(summary.strip()) < 5:
             return (False, "Summary is missing or too short (min 5 chars)")
         
-        # Check for error indicators in summary (LLM might return error as "success")
-        error_indicators = ["not available", "error:", "failed:", "exception", "traceback", "not found", "invalid"]
-        summary_lower = summary.lower()
-        for indicator in error_indicators:
-            if indicator.lower() in summary_lower:
-                return (False, f"Summary contains error indicator '{indicator}': {summary[:100]}")
+        # If step has allowed_tools but the result came without any tool call (content-only),
+        # the LLM likely couldn't use the tool - this is suspicious
+        # We check this by seeing if summary looks like it came from a tool error
+        # rather than actual step execution
+        if step and step.allowed_tools and len(step.allowed_tools) > 0:
+            # Check if summary looks like a tool error message
+            tool_error_patterns = ["not available", "error:", "failed:", "could not", "unable to", "exception"]
+            summary_lower = summary.lower()
+            for pattern in tool_error_patterns:
+                if pattern.lower() in summary_lower:
+                    return (False, f"Step result appears to be a tool error: '{summary[:100]}'. Tool may not be available or configured.")
         
         # Validate completion_check criteria
         if step.completion_check:
