@@ -1946,8 +1946,13 @@ You have access to the following tools. When a user asks you to do something tha
                 tools=tools,
             )
             
+            # Log full llm_result for debugging
+            logger.info(f"[Workflow] LLM result keys: {llm_result.keys() if hasattr(llm_result, 'keys') else 'N/A'}")
+            logger.info(f"[Workflow] LLM result type: {type(llm_result)}")
+            logger.info(f"[Workflow] LLM result: {str(llm_result)[:1000]}")
+            
             content = (llm_result.get("content") or "").strip()
-            logger.info(f"[Workflow] LLM raw returned type: {type(content)}, value: {repr(content)[:500]}")
+            logger.info(f"[Workflow] LLM content: {repr(content)[:500]}")
             
             # Parse JSON result
             json_result = self._parse_step_result(content)
