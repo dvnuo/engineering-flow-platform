@@ -1966,9 +1966,15 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 # Execute tool calls
                 for call in function_calls:
+                    # Handle both formats: {function: {name, arguments}} and {name, arguments, call_id}
                     func = call.get("function", {})
-                    name = func.get("name", "")
-                    args = func.get("arguments", {})
+                    if func:
+                        name = func.get("name", "")
+                        args = func.get("arguments", {})
+                    else:
+                        name = call.get("name", "")
+                        args = call.get("arguments", {})
+                    
                     if isinstance(args, str):
                         args = json.loads(args)
                     
