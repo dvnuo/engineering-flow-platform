@@ -1923,9 +1923,10 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Build user message with context
             user_content = f"User request: {message}\n\n" if message else ""
-            user_content += "Please complete this workflow step and respond with JSON in this format:\n"
-            user_content += '{"status": "success", "summary": "...", "artifacts": {...}, "next_step": "step_id"}\n\n'
-            user_content += f"Step objective: {step.objective}"
+            user_content += "You must respond with ONLY JSON, no other text. Required format:\n"
+            user_content += '{"status": "success", "summary": "brief description of what was done", "artifacts": {"key": "value"}, "next_step": "next_step_id"}\n\n'
+            user_content += f"Step objective: {step.objective}\n"
+            user_content += "Only respond with the JSON object, nothing else."
             
             # Build messages
             input_items = [{"role": "user", "content": user_content}]
