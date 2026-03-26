@@ -406,6 +406,29 @@ class SessionManager:
         session["is_valid"] = self._is_valid_session(session_id)
         return session
     
+    async def get_workflow_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get workflow state for a session (Issue #362).
+        
+        Returns:
+            Workflow state dict or None if no active workflow.
+        """
+        session = await self.get_session(session_id)
+        return session.get("workflow_state")
+    
+    async def set_workflow_state(self, session_id: str, workflow_state: Optional[Dict[str, Any]]) -> None:
+        """Set workflow state for a session (Issue #362).
+        
+        Args:
+            session_id: The session ID
+            workflow_state: Workflow state dict or None to clear
+        """
+        session = await self.get_session(session_id)
+        if workflow_state is None:
+            session.pop("workflow_state", None)
+        else:
+            session["workflow_state"] = workflow_state
+        session["updated_at"] = datetime.now().isoformat()
+    
     async def save_all(self):
         """Manually save all sessions to persistence layer."""
         if not self.persistence_enabled:
