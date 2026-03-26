@@ -1987,8 +1987,7 @@ You have access to the following tools. When a user asks you to do something tha
                         "tool_call_id": call.get("call_id"),
                     })
                 
-                # Clear system prompt after first call (context is in messages)
-                system_with_step = None
+                # Keep system prompt but it can be shorter on subsequent calls (context in messages)
             
             # Parse JSON result from final content
             json_result = self._parse_step_result(final_content)
