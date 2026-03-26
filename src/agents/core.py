@@ -1697,7 +1697,7 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Check if this is the first execution (user hasn't responded yet)
             # If so, return step instructions and wait for user
-            first_execution = workflow_state.get("_awaiting_response", False) is False
+            first_execution = not workflow_state.get("_awaiting_response", False)
             
             if first_execution:
                 # First time executing this step - return instructions and wait
@@ -1843,10 +1843,10 @@ You have access to the following tools. When a user asks you to do something tha
         workflow.shared_state["_step_title"] = step.title
         workflow.shared_state["_step_objective"] = step.objective
         workflow.shared_state["_step_index"] = workflow.current_step_index
-        workflow_state["_awaiting_response"] = True  # Mark to validate on next call
+        workflow.shared_state["_awaiting_response"] = True  # Mark to validate on next call
         
-        # Save state with _awaiting_response
-        await self._save_workflow_state(session_id, workflow, _awaiting_response=True)
+        # Save state
+        await self._save_workflow_state(session_id, workflow)
         
         # Return the step prompt as the result
         return StepExecutionResult(
@@ -1952,9 +1952,8 @@ You have access to the following tools. When a user asks you to do something tha
             "step_outputs": workflow.step_outputs,
             "retry_counts": workflow.retry_counts,
             "status": workflow.status,
+            "_awaiting_response": workflow.shared_state.get("_awaiting_response", False),
         }
-        # Include any additional kwargs
-        state.update(kwargs)
         await session_manager.set_workflow_state(session_id, state)
     
     async def process_with_context(
