@@ -1638,6 +1638,41 @@ You have access to the following tools. When a user asks you to do something tha
         attachments: Optional[List[str]] = None,
         workflow_state: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
+        """Continue an active workflow (Issue #362)."""
+        try:
+            return await self._continue_active_workflow_impl(
+                message=message,
+                session_id=session_id,
+                user_name=user_name,
+                track_usage=track_usage,
+                reasoning_replay=reasoning_replay,
+                stream_callback=stream_callback,
+                attached_images=attached_images,
+                attachments=attachments,
+                workflow_state=workflow_state,
+            )
+        except Exception as e:
+            logger.error(f"[Workflow] Error in _continue_active_workflow: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "response": f"Workflow error: {str(e)}",
+                "usage": {},
+                "user_message_id": None,
+            }
+    
+    async def _continue_active_workflow_impl(
+        self,
+        message: str,
+        session_id: str,
+        user_name: Optional[str] = None,
+        track_usage: bool = True,
+        reasoning_replay: Optional[bool] = None,
+        stream_callback: Optional[Callable[[str], None]] = None,
+        attached_images: Optional[List[str]] = None,
+        attachments: Optional[List[str]] = None,
+        workflow_state: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
         """Continue an active workflow (Issue #362).
         
         This method handles continuing a workflow from where it left off.
