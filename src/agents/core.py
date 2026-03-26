@@ -324,7 +324,9 @@ You have access to the following tools. When a user asks you to do something tha
         # Issue #362: Check for active workflow state first
         workflow_state = await session_manager.get_workflow_state(session_id)
         logger.info(f"[Workflow] process() - workflow_state type: {type(workflow_state)}, value: {str(workflow_state)[:200] if workflow_state else 'None'}")
-        if workflow_state and isinstance(workflow_state, dict) and workflow_state.get("mode") == ExecutionMode.WORKFLOW.value:
+        
+        # Validate workflow_state is a dict with expected keys
+        if workflow_state and isinstance(workflow_state, dict) and "mode" in workflow_state and workflow_state.get("mode") == ExecutionMode.WORKFLOW.value:
             # Continue active workflow
             return await self._continue_active_workflow(
                 message=message,
@@ -1684,7 +1686,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Reconstruct ActiveWorkflow from state with defensive checks
         try:
-            # Validate workflow_state is a dict
+            # Validate workflow_state is a dict with required keys
             if not isinstance(workflow_state, dict):
                 logger.error(f"[Workflow] workflow_state is not a dict: {type(workflow_state)}")
                 return {
@@ -1692,6 +1694,16 @@ You have access to the following tools. When a user asks you to do something tha
                     "usage": {},
                     "user_message_id": None,
                 }
+            
+            required_keys = ["workflow_id", "skill_name", "step_ids"]
+            for key in required_keys:
+                if key not in workflow_state:
+                    logger.error(f"[Workflow] workflow_state missing required key: {key}")
+                    return {
+                        "response": f"Workflow state error: missing required key '{key}'",
+                        "usage": {},
+                        "user_message_id": None,
+                    }
             
             active_workflow = ActiveWorkflow(
                 workflow_id=workflow_state.get("workflow_id", f"wf_{session_id[:8]}_unknown"),
