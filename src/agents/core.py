@@ -2248,11 +2248,13 @@ You MUST respond with ONLY valid JSON. No markdown, no explanations, no text out
                     # Note: llm_client.responses() already has internal retry logic (3 retries with backoff)
                     # so we don't need to wrap it with _retry_with_backoff
                     # Increased max_tokens to 12800 for workflow steps to avoid truncation
+                    # response_format={"type": "json_object"} ensures JSON output for gpt-5-mini
                     llm_result = await llm_client.responses(
                         input_items=input_items,
                         system_prompt=system_with_step,
                         tools=tools,
                         max_tokens=12800,
+                        response_format={"type": "json_object"},
                     )
                 
                 content = (llm_result.get("content") or "").strip()
@@ -2601,10 +2603,12 @@ Respond with ONLY valid JSON:
             input_items = [{"role": "user", "content": [{"type": "input_text", "text": review_content}]}]
             
             # Call LLM (no tools needed for review)
+            # response_format={"type": "json_object"} ensures JSON output
             llm_result = await llm_client.responses(
                 input_items=input_items,
                 system_prompt=system_prompt,
                 tools=[],
+                response_format={"type": "json_object"},
             )
             
             content = (llm_result.get("content") or "").strip()
