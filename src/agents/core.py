@@ -2339,13 +2339,14 @@ You MUST respond with ONLY valid JSON. No markdown, no explanations, no text out
                     if isinstance(args, str):
                         args = json.loads(args)
                     
-                    logger.info(f"[Workflow] Executing tool: {name}")
+                    logger.info(f"[Workflow] Executing tool: {name} with args={args}")
                     try:
                         result = await execute_tool_by_name(name, **args)
                         tool_output = result.output if hasattr(result, 'output') else str(result)
+                        logger.info(f"[Workflow] Tool {name} result: {tool_output[:500] if tool_output else 'EMPTY'}")
                     except Exception as e:
                         tool_output = f"Error: {str(e)}"
-                        logger.error(f"[Workflow] Tool error: {e}")
+                        logger.error(f"[Workflow] Tool {name} exception: {e}")
                     
                     # Add function_call item before the output (Responses API requires both)
                     input_items.append({
