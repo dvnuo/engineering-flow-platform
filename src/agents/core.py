@@ -1947,6 +1947,7 @@ You have access to the following tools. When a user asks you to do something tha
                 )
             
             # Advance to next step
+            active_workflow.reset_llm_request_count(current_step.id)  # Reset LLM count for new step
             active_workflow.current_step_index = next_step_index
             await self._save_workflow_state(session_id, active_workflow)
             steps_executed += 1
