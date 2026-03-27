@@ -2356,12 +2356,14 @@ After using tools (if needed), respond with a JSON object:
                     # so we don't need to wrap it with _retry_with_backoff
                     # Increased max_tokens to 12800 for workflow steps to avoid truncation
                     logger.info(f"[Workflow] Step {step_id} API call: tools_count={len(tools) if tools else 0}, tool_names={[t.get('function',{}).get('name') for t in tools] if tools else []}")
+                    # Use reasoning_replay=True to force fallback to chat() which properly handles function calls
                     llm_result = await llm_client.responses(
                         input_items=input_items,
                         system_prompt=system_with_step,
                         tools=tools,
                         max_tokens=12800,
                         provider="openai",  # Pass provider like normal chat does
+                        reasoning_replay=True,  # Force chat() which supports function calls
                     )
                 
                 content = (llm_result.get("content") or "").strip()
