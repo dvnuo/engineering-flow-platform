@@ -2038,8 +2038,8 @@ You have access to the following tools. When a user asks you to do something tha
     # =============================================================================
     
     # Budget for workflow step prompts (characters)
-    WORKFLOW_STEP_PROMPT_BUDGET = 8000
-    WORKFLOW_STEP_CONTEXT_BUDGET = 1000
+    WORKFLOW_STEP_PROMPT_BUDGET = 80000  # Temporarily increased for debugging
+    WORKFLOW_STEP_CONTEXT_BUDGET = 10000  # Temporarily increased for debugging
     
     def _build_step_context_summary(
         self,
@@ -2165,58 +2165,43 @@ You have access to the following tools. When a user asks you to do something tha
         # 1. Minimal identity
         identity = "You are a workflow execution assistant. Complete the current step and respond with JSON."
         parts.append(identity)
-        remaining_budget -= len(identity) + 10
         
         # 1.5. Available tools (if any)
-        if tools and remaining_budget > 200:
+        if tools:
             tools_section = "\n## Available Tools\n"
-            for t in tools[:5]:  # Limit to 5 tools
+            for t in tools:  # No limit for debugging
                 func = t.get("function", {})
                 name = func.get("name", "unknown")
-                desc = func.get("description", "")[:80]
+                desc = func.get("description", "")[:100]
                 tools_section += f"- **{name}**: {desc}\n"
-            if len(tools_section) < remaining_budget:
-                parts.append(tools_section)
-                remaining_budget -= len(tools_section)
-        parts.append(identity)
-        remaining_budget -= len(identity) + 10
+            parts.append(tools_section)
         
         # 2. Step title and objective
         objective_section = f"## Current Step: {step.title}\n\n**Objective:** {step.objective}\n"
-        if len(objective_section) < remaining_budget:
-            parts.append(objective_section)
-            remaining_budget -= len(objective_section)
+        parts.append(objective_section)
         
-        # 3. Step instructions (truncated) - use instructions list, not prompt
-        step_instructions = ""
+        # 3. Step instructions (full, no truncation)
         if hasattr(step, 'instructions') and step.instructions:
-            # Join list of instructions into a single string
             if isinstance(step.instructions, list):
                 instructions_text = "\n".join(str(i) for i in step.instructions)
             else:
                 instructions_text = str(step.instructions)
-            step_instructions = f"\n## Instructions\n{instructions_text[:500]}\n"
-            if len(step_instructions) < remaining_budget:
-                parts.append(step_instructions)
-                remaining_budget -= len(step_instructions)
+            step_instructions = f"\n## Instructions\n{instructions_text}\n"
+            parts.append(step_instructions)
         
         # 4. Completion criteria
-        if step.completion_check and remaining_budget > 100:
+        if step.completion_check:
             criteria_section = "\n## Completion Criteria\n"
-            for check in step.completion_check[:5]:
+            for check in step.completion_check:
                 criteria_section += f"- {check}\n"
-            if len(criteria_section) < remaining_budget:
-                parts.append(criteria_section)
-                remaining_budget -= len(criteria_section)
+            parts.append(criteria_section)
         
-        # 5. Previous context (with truncation)
-        if remaining_budget > 100:
-            context = self._build_step_context_summary(
-                workflow, step.id, max_chars=min(remaining_budget - 100, self.WORKFLOW_STEP_CONTEXT_BUDGET)
-            )
-            if context:
-                parts.append("\n" + context)
-                remaining_budget -= len(context)
+        # 5. Previous context (full, no truncation)
+        context = self._build_step_context_summary(
+            workflow, step.id, max_chars=self.WORKFLOW_STEP_CONTEXT_BUDGET
+        )
+        if context:
+            parts.append("\n" + context)
         
         # 6. JSON output schema (always included)
         json_schema = '''
