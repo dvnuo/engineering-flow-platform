@@ -2038,54 +2038,72 @@ You have access to the following tools. When a user asks you to do something tha
     # =============================================================================
     
     # Budget for workflow step prompts (characters)
-    WORKFLOW_STEP_PROMPT_BUDGET = 80000  # Temporarily increased for debugging
-    WORKFLOW_STEP_CONTEXT_BUDGET = 10000  # Temporarily increased for debugging
+    WORKFLOW_STEP_PROMPT_BUDGET = 30000  # Max system prompt size for workflow steps
+    WORKFLOW_STEP_CONTEXT_BUDGET = 10000  # Max context summary size
     
     def _build_step_context_summary(
         self,
         workflow: ActiveWorkflow,
         current_step_id: str,
-        max_chars: int = 1000
+        max_chars: int = 10000
     ) -> str:
-        """Build a compact summary of previous step results relevant to current step.
+        """Build a summary of previous step results for current step context.
         
-        Only includes output from the most recent relevant steps, not all history.
-        Truncates to stay within budget.
+        Preserves full structure - keeps complete summaries and artifact keys.
+        Only truncates very long artifact values if total exceeds max_chars.
         """
         if not workflow.step_outputs:
             return ""
         
-        # Get recent steps (last 2) that have outputs
-        recent_outputs = []
+        # Get all previous steps (not just last 2 - context matters)
+        previous_outputs = []
         for step_id, output in workflow.step_outputs.items():
             if step_id == current_step_id:
                 continue
-            recent_outputs.append((step_id, output))
+            previous_outputs.append((step_id, output))
         
-        recent_outputs = recent_outputs[-2:]  # Last 2
-        
-        if not recent_outputs:
+        if not previous_outputs:
             return ""
         
-        # Build compact summary
+        # Build structured summary (preserve full info)
         parts = ["## Previous Step Results\n"]
-        for step_id, output in recent_outputs:
+        total_chars = len("".join(parts))
+        
+        for step_id, output in previous_outputs[-5:]:  # Last 5 steps max
             summary = output.get("summary", "")
             artifacts = output.get("artifacts", {})
+            raw_content = output.get("raw_content", "")
             
-            parts.append(f"### {step_id}\n")
+            step_text = f"### {step_id}\n"
             if summary:
-                parts.append(f"Summary: {summary[:200]}\n")
+                step_text += f"Summary: {summary}\n"
+            
+            # Handle artifacts - keep structure, truncate very long values
             if artifacts:
-                artifact_keys = list(artifacts.keys())[:5]
-                parts.append(f"Artifacts: {', '.join(artifact_keys)}\n")
+                step_text += "Artifacts:\n"
+                for key, value in artifacts.items():
+                    value_str = str(value)
+                    # Only truncate if single value is extremely long (>2000 chars)
+                    if len(value_str) > 2000:
+                        value_str = value_str[:2000] + f"... [truncated from {len(value_str)} chars]"
+                    step_text += f"  - {key}: {value_str}\n"
+            
+            # Check if adding this would exceed budget significantly
+            if total_chars + len(step_text) > max_chars * 1.2:  # Allow 20% overage
+                # Just add summary if we must truncate
+                if summary and total_chars < max_chars:
+                    remaining = max_chars - total_chars - 50
+                    if remaining > 100:
+                        step_text = f"### {step_id}\nSummary: {summary[:remaining]}...\n"
+                    else:
+                        break
+                else:
+                    break
+            
+            parts.append(step_text)
+            total_chars += len(step_text)
         
-        result = "".join(parts)
-        
-        if len(result) > max_chars:
-            result = result[:max_chars] + "... [truncated]"
-        
-        return result
+        return "".join(parts)
     
     def _build_compact_step_tools(self, step) -> List[Dict]:
         """Build a compact tool list for workflow step execution.
