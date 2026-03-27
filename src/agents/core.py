@@ -2152,10 +2152,11 @@ You have access to the following tools. When a user asks you to do something tha
         skill,
         step,
         workflow: ActiveWorkflow,
+        tools: List[Dict] = None,
     ) -> str:
         """Build a compact system prompt for workflow step execution.
         
-        Does NOT include full MEMORY, long-term history, full tool list, etc.
+        Does NOT include full MEMORY, long-term history, etc.
         Designed for fast JSON output stability and avoiding 504 timeouts.
         """
         parts = []
@@ -2163,6 +2164,20 @@ You have access to the following tools. When a user asks you to do something tha
         
         # 1. Minimal identity
         identity = "You are a workflow execution assistant. Complete the current step and respond with JSON."
+        parts.append(identity)
+        remaining_budget -= len(identity) + 10
+        
+        # 1.5. Available tools (if any)
+        if tools and remaining_budget > 200:
+            tools_section = "\n## Available Tools\n"
+            for t in tools[:5]:  # Limit to 5 tools
+                func = t.get("function", {})
+                name = func.get("name", "unknown")
+                desc = func.get("description", "")[:80]
+                tools_section += f"- **{name}**: {desc}\n"
+            if len(tools_section) < remaining_budget:
+                parts.append(tools_section)
+                remaining_budget -= len(tools_section)
         parts.append(identity)
         remaining_budget -= len(identity) + 10
         
@@ -2264,14 +2279,14 @@ You have access to the following tools. When a user asks you to do something tha
                 )
         
         try:
-            # Build compact system prompt for workflow step
-            # This replaces self.system_prompt with a minimal, fast-responding prompt
-            system_with_step = self._build_workflow_step_system_prompt(skill, step, workflow)
-            
-            # Build compact tools list
+            # Build compact tools list first (needed for system prompt)
             tools = self._build_compact_step_tools(step)
             if tools:
                 logger.info(f"[Workflow] Step {step.id}: using {len(tools)} compact tools")
+            
+            # Build compact system prompt for workflow step (includes tools info)
+            # This replaces self.system_prompt with a minimal, fast-responding prompt
+            system_with_step = self._build_workflow_step_system_prompt(skill, step, workflow, tools)
             
             # Build minimal user message
             user_content = ""
