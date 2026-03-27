@@ -2221,23 +2221,17 @@ You have access to the following tools. When a user asks you to do something tha
         if context:
             parts.append("\n" + context)
         
-        # 6. JSON output schema (always included)
+        # 6. JSON output schema (only if no tool call was made)
+        # Note: If tools are used, the response should be in tool call format, not JSON
         json_schema = '''
-## Required Output Format
+## Response Format
 
-**You have access to tools** - use them to complete the step objective before responding!
-
-1. First, use the available tools to gather information or perform actions
-2. Then respond with ONLY valid JSON
+After using tools (if needed), respond with a JSON object:
 
 {"status": "success|needs_retry|failed", "summary": "...", "artifacts": {}, "next_step": "next_step_id_or_null"}
 
-**Critical:**
-- Use tools first if the step requires data gathering or external actions
-- Return ONLY the JSON object
-- Do NOT wrap in code fences
-- Do NOT include any text before or after the JSON
-- Do NOT explain your reasoning
+- If the step required using tools, use the tool results as artifacts
+- Do NOT explain your reasoning outside the JSON
 '''
         parts.append(json_schema)
         
