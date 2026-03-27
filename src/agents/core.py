@@ -2335,6 +2335,7 @@ You have access to the following tools. When a user asks you to do something tha
                     # Note: llm_client.responses() already has internal retry logic (3 retries with backoff)
                     # so we don't need to wrap it with _retry_with_backoff
                     # Increased max_tokens to 12800 for workflow steps to avoid truncation
+                    logger.info(f"[Workflow] Step {step_id} API call: tools_count={len(tools) if tools else 0}, tool_names={[t.get('function',{}).get('name') for t in tools] if tools else []}")
                     llm_result = await llm_client.responses(
                         input_items=input_items,
                         system_prompt=system_with_step,
