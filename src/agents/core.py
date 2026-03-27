@@ -1442,28 +1442,54 @@ You have access to the following tools. When a user asks you to do something tha
             return None
         
         import re
+        import json
         
         # Try to extract JSON from content
-        # Handle: ```json ... ``` or plain JSON
+        # Handle: ```json ... ``` or plain JSON or JSON mixed with text
+        
+        # First try: markdown code block
         json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
         if json_match:
             json_str = json_match.group(1)
-        else:
-            # Try plain JSON
-            json_str = content.strip()
+            try:
+                result = json.loads(json_str)
+                if isinstance(result, dict) and "status" in result:
+                    return result
+            except json.JSONDecodeError:
+                pass
         
+        # Second try: find JSON object anywhere in content
+        json_match = re.search(r'\{[^{}]*"status"[^{}]*\}', content, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            try:
+                result = json.loads(json_str)
+                if isinstance(result, dict) and "status" in result:
+                    return result
+            except json.JSONDecodeError:
+                pass
+        
+        # Third try: try the whole content stripped
+        json_str = content.strip()
         try:
             result = json.loads(json_str)
-            # Validate required fields
-            if not isinstance(result, dict):
-                return None
-            if "status" not in result:
-                logger.warning(f"[Workflow] Step result missing 'status' field")
-                return None
-            return result
-        except json.JSONDecodeError as e:
-            logger.debug(f"[Workflow] Failed to parse step result JSON: {e}")
-            return None
+            if isinstance(result, dict) and "status" in result:
+                return result
+        except json.JSONDecodeError:
+            pass
+        
+        # Fourth try: find the first { and try progressively shorter suffixes
+        first_brace = content.find('{')
+        if first_brace >= 0:
+            for end in range(len(content), first_brace, -1):
+                try:
+                    result = json.loads(content[first_brace:end])
+                    if isinstance(result, dict) and "status" in result:
+                        return result
+                except json.JSONDecodeError:
+                    continue
+        
+        return None
 
     def _validate_step_result(self, step_result: Dict, step: Any) -> tuple:
         """Issue #362: Validate step result against completion criteria.
