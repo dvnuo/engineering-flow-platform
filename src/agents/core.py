@@ -2291,11 +2291,11 @@ You have access to the following tools. When a user asks you to do something tha
             # This replaces self.system_prompt with a minimal, fast-responding prompt
             system_with_step = self._build_workflow_step_system_prompt(skill, step, workflow, tools)
             
-            # Build minimal user message
+            # Build minimal user message (don't conflict with system prompt's tool instructions!)
             user_content = ""
             if message:
                 user_content = f"User request: {message}\n\n"
-            user_content += "Respond with ONLY valid JSON for this step."
+            user_content += "Complete the step using available tools if needed, then provide your response."
             
             # Build input_items for tool loop (Responses API format)
             input_items = [{"role": "user", "content": [{"type": "input_text", "text": user_content}]}]
