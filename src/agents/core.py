@@ -2341,6 +2341,7 @@ You have access to the following tools. When a user asks you to do something tha
                         system_prompt=system_with_step,
                         tools=tools,
                         max_tokens=12800,
+                        provider="openai",  # Pass provider like normal chat does
                     )
                 
                 content = (llm_result.get("content") or "").strip()
