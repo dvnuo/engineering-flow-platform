@@ -56,6 +56,7 @@ from .jira import get_tools_schemas as get_jira_tools
 from .confluence import get_tools_schemas as get_confluence_tools
 from .git import get_tools_schemas as get_git_tools
 from .bash_tools import get_tools_schemas as get_bash_tools
+from .tools import get_tools_schemas as get_test_tools
 
 # Also export raw functions for backward compatibility
 from . import github
@@ -73,6 +74,7 @@ def get_all_tools() -> list:
     tools.extend(get_jira_tools())
     tools.extend(get_confluence_tools())
     tools.extend(get_git_tools())
+    tools.extend(get_test_tools())   # Test tools for debugging
     return tools
 
 
@@ -101,6 +103,12 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     from . import jira as jira_module
     from . import github as github_module
     from . import confluence as confluence_module
+    from . import tools as tools_module
+    
+    # Test tools
+    if name == "test_echo":
+        result = await tools_module.test_echo(**kwargs)
+        return ToolResult(success=True, content=result)
     
     # Bash/Shell tools
     if name == "read":
