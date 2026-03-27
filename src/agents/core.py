@@ -2283,9 +2283,13 @@ You have access to the following tools. When a user asks you to do something tha
         
         try:
             # Build compact tools list first (needed for system prompt)
+            logger.info(f"[Workflow] Step {step.id}: step.allowed_tools = {step.allowed_tools}")
+            logger.info(f"[Workflow] Step {step.id}: self.tools has {len(self.tools)} tools, names = {[t.get('function', {}).get('name') for t in self.tools]}")
             tools = self._build_compact_step_tools(step)
+            logger.info(f"[Workflow] Step {step.id}: _build_compact_step_tools returned {len(tools)} tools")
             if tools:
-                logger.info(f"[Workflow] Step {step.id}: using {len(tools)} compact tools")
+                tool_names = [t.get("function", {}).get("name", "unknown") for t in tools]
+                logger.info(f"[Workflow] Step {step.id}: using {len(tools)} compact tools: {tool_names}")
             
             # Build compact system prompt for workflow step (includes tools info)
             # This replaces self.system_prompt with a minimal, fast-responding prompt
