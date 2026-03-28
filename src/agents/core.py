@@ -286,6 +286,7 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== SKILL MODE ROUTING =====
         from src.skills import skill_registry
 
+        # Initialize skill registry once (shared with skill matching below)
         if not skill_registry._initialized:
             skill_registry.load_skills()
 
@@ -312,11 +313,7 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== END SKILL MODE ROUTING =====
 
         # ===== SKILL MATCHING (FR-1, FR-2) =====
-        from src.skills import skill_registry, get_tracer
-        
-        # Initialize skill registry if needed
-        if not skill_registry._initialized:
-            skill_registry.load_skills()
+        from src.skills import get_tracer
         
         # Match user message against skill triggers
         matched_skills = skill_registry.match_skill(message)
@@ -1189,7 +1186,13 @@ You have access to the following tools. When a user asks you to do something tha
         if skill.path:
             set_skill_workdir(skill.path)
 
-        goal, steps = await generate_initial_skill_plan(skill, message, model=self.model)
+        # Generate initial plan (track usage)
+        plan_usage: Dict[str, Any] = {}
+        if track_usage:
+            goal, steps, plan_usage = await generate_initial_skill_plan(skill, message, model=self.model, return_usage=True)
+        else:
+            goal, steps = await generate_initial_skill_plan(skill, message, model=self.model)
+
         skill_session = SkillSession(
             skill_name=skill.name,
             original_user_request=message,
@@ -1199,6 +1202,14 @@ You have access to the following tools. When a user asks you to do something tha
         )
 
         await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
+
+        # Merge plan generation usage into usage_data
+        if plan_usage:
+            usage_data = {
+                "prompt_tokens": usage_data.get("prompt_tokens", 0) + plan_usage.get("prompt_tokens", 0),
+                "completion_tokens": usage_data.get("completion_tokens", 0) + plan_usage.get("completion_tokens", 0),
+                "total_tokens": usage_data.get("total_tokens", 0) + plan_usage.get("total_tokens", 0),
+            }
 
         return await self._continue_skill_mode(
             message=message,
@@ -1241,7 +1252,8 @@ You have access to the following tools. When a user asks you to do something tha
 
         provider = (config.llm.get("provider") or getattr(llm_client, "default_provider", "openai")).lower()
         max_skill_tool_rounds = 6
-        input_items: List[Dict[str, Any]] = [{"role": "user", "content": user_prompt}]
+        # Use consistent input format: input_text block for user content
+        input_items: List[Dict[str, Any]] = [{"role": "user", "content": [{"type": "input_text", "text": user_prompt}]}]
         raw_output = ""
 
         for _ in range(max_skill_tool_rounds):
@@ -1323,7 +1335,7 @@ You have access to the following tools. When a user asks you to do something tha
         action, body = _parse_skill_control_marker(raw_output)
 
         if action == "ask_user":
-            question = body.strip() or "请提供继续执行所需的最小必要信息。"
+            question = body.strip() or "Please provide the minimum necessary information to continue."
             skill_session.status = "waiting_user"
             skill_session.pending_question = question
             skill_session.memory_summary = _update_skill_memory_summary(skill_session, message, question)
@@ -1332,7 +1344,7 @@ You have access to the following tools. When a user asks you to do something tha
             return {"response": question, "usage": usage_data, "user_message_id": user_message_id}
 
         if action == "finish":
-            final_text = body.strip() or "该 skill 任务已完成。"
+            final_text = body.strip() or "Skill task completed."
             skill_session.status = "finished"
             skill_session.completed_steps.append({"type": "finish", "result": final_text})
             await session_manager.set_active_skill_session(session_id, None)
@@ -1342,7 +1354,7 @@ You have access to the following tools. When a user asks you to do something tha
         # default: execute
         result_text = body.strip() if body.strip() else raw_output
         if len(result_text) < 30:
-            result_text = f"{result_text}\n\n(继续推进该 skill，必要时我会继续询问最小必要信息。)"
+            result_text = f"{result_text}\n\n(Continuing skill execution, will ask if more info is needed.)"
 
         skill_session.status = "active"
         skill_session.pending_question = None

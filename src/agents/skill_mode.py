@@ -64,9 +64,10 @@ def _build_skill_plan_system_prompt(skill: Skill) -> str:
 
 
 def _build_skill_plan_user_prompt(skill: Skill, user_message: str) -> str:
+    strategy_hint = "\n".join(f"- {s}" for s in skill.strategy) if skill.strategy else "(none)"
     return (
         f"User request: {user_message}\n"
-        f"Skill strategy hints: {skill.strategy}\n"
+        f"Skill strategy hints:\n{strategy_hint}\n"
         "Generate the initial lightweight plan now."
     )
 
@@ -79,6 +80,9 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
         f"- [{step.get('type', 'execute')}] {step.get('title', '')}" for step in skill_session.plan
     ) or "(none)"
 
+    # Include skill strategy for ongoing sessions
+    strategy_hint = "\n".join(f"- {s}" for s in skill.strategy) if skill.strategy else "(none)"
+
     return (
         "You are running an active skill-mode session.\n"
         f"Skill: {skill.name}\n"
@@ -86,6 +90,7 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
         f"Plan:\n{plan}\n\n"
         f"Completed summary:\n{completed}\n\n"
         f"Memory summary:\n{skill_session.memory_summary or '(empty)'}\n\n"
+        f"Strategy hints:\n{strategy_hint}\n\n"
         "Output rules (STRICT):\n"
         "1) First line MUST be exactly one marker: [EXECUTE] or [ASK_USER] or [FINISH]\n"
         "2) No other prefix before first line\n"
@@ -148,13 +153,14 @@ def _normalize_plan(raw: Dict[str, Any], fallback_goal: str) -> Tuple[str, List[
     return goal, normalized_steps
 
 
-async def generate_initial_skill_plan(skill: Skill, user_message: str, model: Optional[str] = None) -> Tuple[str, List[Dict[str, str]]]:
+async def generate_initial_skill_plan(skill: Skill, user_message: str, model: Optional[str] = None, return_usage: bool = False) -> Tuple[str, List[Dict[str, str]], Dict[str, int]]:
     system_prompt = _build_skill_plan_system_prompt(skill)
     user_prompt = _build_skill_plan_user_prompt(skill, user_message)
 
     provider = (config.llm.get("provider") or getattr(llm_client, "default_provider", "openai")).lower()
+    # Use consistent input format: input_text block for user content
     kwargs = {
-        "input_items": [{"role": "user", "content": user_prompt}],
+        "input_items": [{"role": "user", "content": [{"type": "input_text", "text": user_prompt}]}],
         "system_prompt": system_prompt,
         "tools": [],
         "reasoning_replay": False,
@@ -166,12 +172,28 @@ async def generate_initial_skill_plan(skill: Skill, user_message: str, model: Op
     result = await llm_client.responses(**kwargs)
     content = (result.get("content") or "").strip()
 
+    # Extract usage if requested
+    usage_data = {}
+    if return_usage:
+        iter_usage = result.get("usage", {}) or {}
+        usage_data = {
+            "prompt_tokens": iter_usage.get("prompt_tokens", 0),
+            "completion_tokens": iter_usage.get("completion_tokens", 0),
+            "total_tokens": iter_usage.get("total_tokens", 0),
+        }
+
     try:
         raw_plan = _safe_json_loads(content)
-        return _normalize_plan(raw_plan, fallback_goal=skill.description)
+        plan_result = _normalize_plan(raw_plan, fallback_goal=skill.description)
+        if return_usage:
+            return plan_result[0], plan_result[1], usage_data
+        return plan_result
     except Exception as exc:
         logger.warning(f"[SkillMode] Failed to parse initial plan JSON, using fallback: {exc}")
-        return _normalize_plan({}, fallback_goal=skill.description)
+        plan_result = _normalize_plan({}, fallback_goal=skill.description)
+        if return_usage:
+            return plan_result[0], plan_result[1], usage_data
+        return plan_result
 
 
 def _parse_skill_control_marker(output: str) -> Tuple[str, str]:
