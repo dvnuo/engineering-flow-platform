@@ -6,6 +6,8 @@ import json
 import logging
 import os
 import platform
+import re
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
@@ -54,6 +56,39 @@ def get_skill_workdir() -> Optional[str]:
 # When DEBUG, complete input/output is logged (no truncation)
 
 _DEBUG_ENABLED = None  # Lazy initialization
+
+SKILL_CONTROL_TAG_PATTERN = re.compile(r"^\s*(\[(?:EXECUTE|ASK_USER|FINISH)\])\s*$", re.IGNORECASE)
+
+
+@dataclass
+class SkillSession:
+    """Lightweight skill session state for long-running skill mode."""
+    skill_name: str
+    original_user_request: str
+    status: str = "active"  # active / waiting_user / finished
+    goal: str = ""
+    plan: List[Dict[str, str]] = field(default_factory=list)
+    completed_steps: List[Dict[str, Any]] = field(default_factory=list)
+    memory_summary: str = ""
+    pending_question: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SkillSession":
+        """Build a SkillSession from session metadata."""
+        return cls(
+            skill_name=data.get("skill_name", ""),
+            original_user_request=data.get("original_user_request", ""),
+            status=data.get("status", "active"),
+            goal=data.get("goal", ""),
+            plan=data.get("plan", []) or [],
+            completed_steps=data.get("completed_steps", []) or [],
+            memory_summary=data.get("memory_summary", "") or "",
+            pending_question=data.get("pending_question"),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize SkillSession to JSON-compatible dict."""
+        return asdict(self)
 
 
 def _is_debug_enabled() -> bool:
@@ -202,6 +237,36 @@ You have access to the following tools. When a user asks you to do something tha
                     f"length={len(self.system_prompt)}, tools={len(self.tools)}, "
                     f"think_level={self.think_level.value}")
 
+    @staticmethod
+    def _extract_skill_control(content: str) -> (str, str):
+        """Extract skill control tag and cleaned body from model response."""
+        if not content:
+            return "EXECUTE", ""
+
+        lines = [line for line in content.splitlines()]
+        if not lines:
+            return "EXECUTE", ""
+
+        first_line = lines[0].strip()
+        match = SKILL_CONTROL_TAG_PATTERN.match(first_line)
+        if not match:
+            return "EXECUTE", content.strip()
+
+        tag = match.group(1).upper().strip("[]")
+        body = "\n".join(lines[1:]).strip()
+        return tag, body
+
+    @staticmethod
+    def _update_skill_memory_summary(skill_session: SkillSession, user_message: str, assistant_message: str) -> None:
+        """Keep a concise rolling summary for skill mode context."""
+        addition = f"U: {user_message.strip()}\nA: {assistant_message.strip()}"
+        if not skill_session.memory_summary:
+            skill_session.memory_summary = addition[:1200]
+            return
+
+        merged = f"{skill_session.memory_summary}\n{addition}"
+        skill_session.memory_summary = merged[-2000:]
+
     async def process(
         self,
         message: str,
@@ -274,15 +339,33 @@ You have access to the following tools. When a user asks you to do something tha
             return {"response": fastlane_response, "usage": usage_data, "user_message_id": user_message_id}
         # ===== END FAST LANE =====
 
-        # ===== SKILL MATCHING (FR-1, FR-2) =====
+        # ===== SKILL MATCHING + SKILL SESSION MODE =====
         from src.skills import skill_registry, get_tracer
         
         # Initialize skill registry if needed
         if not skill_registry._initialized:
             skill_registry.load_skills()
         
-        # Match user message against skill triggers
-        matched_skills = skill_registry.match_skill(message)
+        # Check if there is an active skill session first
+        active_skill_data = await session_manager.get_active_skill_session(session_id)
+        active_skill_session = SkillSession.from_dict(active_skill_data) if active_skill_data else None
+
+        matched_skills = []
+        if active_skill_session and active_skill_session.skill_name:
+            active_skill = skill_registry.get_skill(active_skill_session.skill_name)
+            if active_skill and active_skill_session.status != "finished":
+                matched_skills = [active_skill]
+                if active_skill_session.status == "waiting_user":
+                    active_skill_session.status = "active"
+                    active_skill_session.pending_question = None
+                    await session_manager.set_active_skill_session(session_id, active_skill_session.to_dict())
+            else:
+                await session_manager.clear_active_skill_session(session_id)
+                active_skill_session = None
+
+        # No active skill mode: try matching from current user input
+        if not matched_skills:
+            matched_skills = skill_registry.match_skill(message)
         
         # Start execution tracing
         tracer = get_tracer()
@@ -299,6 +382,17 @@ You have access to the following tools. When a user asks you to do something tha
             # Use the best match
             best_skill = matched_skills[0]
             logger.info(f"[Skill] Matched skill: {best_skill.name}")
+
+            # Initialize skill session mode if this is a new match
+            if not active_skill_session:
+                active_skill_session = SkillSession(
+                    skill_name=best_skill.name,
+                    original_user_request=message,
+                    goal=message,
+                    status="active",
+                )
+                await session_manager.set_active_skill_session(session_id, active_skill_session.to_dict())
+                logger.info(f"[Skill] Started skill session: {best_skill.name}")
             
             # Set skill workdir for exec tool (async-safe via contextvars)
             if best_skill.path:
@@ -306,13 +400,19 @@ You have access to the following tools. When a user asks you to do something tha
                 logger.info(f"[Skill] Workdir: {best_skill.path}")
             
             skill_prompt = skill_registry.get_skill_prompt(best_skill)
+            skill_mode_prompt = skill_registry.get_skill_mode_prompt(
+                best_skill,
+                original_request=active_skill_session.original_user_request if active_skill_session else message,
+                memory_summary=active_skill_session.memory_summary if active_skill_session else "",
+            )
+            skill_prompt = f"{skill_prompt}\n\n{skill_mode_prompt}"
             # Log matched skill
             tracer.log_tool_call(
                 tool_name="skill_matched",
                 arguments={"skill": best_skill.name},
                 result=f"Matched skill: {best_skill.name}",
             )
-        # ===== END SKILL MATCHING =====
+        # ===== END SKILL MATCHING + SKILL SESSION MODE =====
 
         # ===== MESSAGE COMPACTION =====
         # Check if messages need compaction to fit within token limits
@@ -858,8 +958,31 @@ You have access to the following tools. When a user asks you to do something tha
             
             # If no function calls, we're done - return the response
             if not tool_calls:
-                await session_manager.add_message(session_id, "assistant", content)
-                result = {"response": content, "usage": usage_data, "user_message_id": user_message_id}
+                response_content = content
+
+                # Skill mode: interpret lightweight control tags
+                if active_skill_session:
+                    control_tag, clean_body = self._extract_skill_control(content)
+                    response_content = clean_body or content
+
+                    if control_tag == "ASK_USER":
+                        active_skill_session.status = "waiting_user"
+                        active_skill_session.pending_question = response_content
+                    elif control_tag == "FINISH":
+                        active_skill_session.status = "finished"
+                        active_skill_session.pending_question = None
+                    else:
+                        active_skill_session.status = "active"
+                        active_skill_session.pending_question = None
+
+                    self._update_skill_memory_summary(active_skill_session, message, response_content)
+                    if active_skill_session.status == "finished":
+                        await session_manager.clear_active_skill_session(session_id)
+                    else:
+                        await session_manager.set_active_skill_session(session_id, active_skill_session.to_dict())
+
+                await session_manager.add_message(session_id, "assistant", response_content)
+                result = {"response": response_content, "usage": usage_data, "user_message_id": user_message_id}
                 if enable_reasoning:
                     reasoning_content = llm_result.get("reasoning", "")
                     result["reasoning"] = reasoning_content
@@ -894,12 +1017,12 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 # Send completion event
                 send_event("complete", {
-                    "response": truncate_with_count(content, 500),
+                    "response": truncate_with_count(response_content, 500),
                     "total_iterations": iteration
                 })
                 
                 # Complete execution tracing
-                tracer.complete_execution(content)
+                tracer.complete_execution(response_content)
                 
                 # Get events for UI
                 from src.skills import get_tracer
@@ -914,14 +1037,14 @@ You have access to the following tools. When a user asks you to do something tha
                     result["_llm_debug"] = {
                         "llm_request": llm_result["_llm_debug"],
                         "thinking_events": all_events,
-                        "final_response": content,
+                        "final_response": response_content,
                     }
                 
                 # Trigger memory update (async, fire and forget)
                 # We need to get the last user message and assistant response
                 recent_messages = await session_manager.get_history(session_id)
                 user_text = ""
-                assistant_text = content
+                assistant_text = response_content
                 for msg in reversed(recent_messages):
                     if msg.get("role") == "user":
                         user_text = msg.get("content", "")

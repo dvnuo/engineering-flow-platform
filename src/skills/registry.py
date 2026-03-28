@@ -331,6 +331,47 @@ class SkillRegistry:
         ])
         
         return "\n".join(prompt_parts)
+
+    def get_skill_mode_prompt(self, skill: Skill, original_request: str, memory_summary: str = "") -> str:
+        """Generate a lightweight, Claude Code-style skill-mode prompt.
+
+        This prompt asks the model to drive the workflow using simple control tags
+        instead of complex JSON workflow objects.
+        """
+        prompt_parts = [
+            f"You are now in SKILL MODE for `{skill.name}`.",
+            f"Skill description: {skill.description}",
+            "",
+            f"Original user request: {original_request}",
+        ]
+
+        if memory_summary:
+            prompt_parts.extend([
+                "",
+                "Skill memory summary from previous turns:",
+                memory_summary,
+            ])
+
+        if skill.strategy:
+            prompt_parts.extend([
+                "",
+                "Preferred strategy:",
+            ])
+            for step in skill.strategy:
+                prompt_parts.append(f"- {step}")
+
+        prompt_parts.extend([
+            "",
+            "Control protocol (MUST put one tag on the first line):",
+            "- [EXECUTE] : continue execution, may call tools when needed",
+            "- [ASK_USER] : pause and ask user for missing information",
+            "- [FINISH] : task is completed",
+            "",
+            "After the first-line tag, provide concise natural language details.",
+            "Do not output JSON workflow objects.",
+        ])
+
+        return "\n".join(prompt_parts)
     
     def get_all_skill_summaries(self) -> List[Dict]:
         """Get summary of all skills for frontend/UI."""

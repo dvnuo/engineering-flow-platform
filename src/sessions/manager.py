@@ -380,6 +380,47 @@ class SessionManager:
         """Get conversation history for a session."""
         session = await self.get_session(session_id)
         return session.get("history", [])
+
+    async def get_active_skill_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get active skill session data from session metadata."""
+        session = await self.get_session(session_id)
+        metadata = session.get("metadata", {})
+        return metadata.get("active_skill_session")
+
+    async def set_active_skill_session(self, session_id: str, skill_session: Dict[str, Any]) -> None:
+        """Set active skill session data in session metadata."""
+        session = await self.get_session(session_id)
+        metadata = session.setdefault("metadata", {})
+        metadata["active_skill_session"] = skill_session
+        session["updated_at"] = datetime.now().isoformat()
+
+        if self.auto_save and self.persistence_enabled:
+            asyncio.create_task(
+                session_persistence.save_session(
+                    session_id=session_id,
+                    channel=session.get("channel", ""),
+                    messages=session.get("history", []),
+                    metadata=metadata,
+                )
+            )
+
+    async def clear_active_skill_session(self, session_id: str) -> None:
+        """Clear active skill session data from session metadata."""
+        session = await self.get_session(session_id)
+        metadata = session.setdefault("metadata", {})
+        if "active_skill_session" in metadata:
+            del metadata["active_skill_session"]
+            session["updated_at"] = datetime.now().isoformat()
+
+            if self.auto_save and self.persistence_enabled:
+                asyncio.create_task(
+                    session_persistence.save_session(
+                        session_id=session_id,
+                        channel=session.get("channel", ""),
+                        messages=session.get("history", []),
+                        metadata=metadata,
+                    )
+                )
     
     async def clear_history(self, session_id: str) -> None:
         """Clear session history."""
