@@ -9,6 +9,15 @@ import platform
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
+from src.agents.skill_mode import (
+    SkillSession,
+    _build_skill_mode_system_prompt,
+    _build_skill_mode_user_prompt,
+    _parse_skill_control_marker,
+    _update_skill_memory_summary,
+    generate_initial_skill_plan,
+)
+
 from src.agents.heartbeat import get_heartbeat, start_heartbeat, stop_heartbeat
 from src.agents.llm import (
     _normalize_provider_key,
@@ -273,6 +282,34 @@ You have access to the following tools. When a user asks you to do something tha
             await session_manager.add_message(session_id, "assistant", fastlane_response)
             return {"response": fastlane_response, "usage": usage_data, "user_message_id": user_message_id}
         # ===== END FAST LANE =====
+
+        # ===== SKILL MODE ROUTING =====
+        from src.skills import skill_registry
+
+        if not skill_registry._initialized:
+            skill_registry.load_skills()
+
+        active_skill_state = await session_manager.get_active_skill_session(session_id)
+        if active_skill_state:
+            return await self._continue_skill_mode(
+                message=message,
+                session_id=session_id,
+                user_message_id=user_message_id,
+                skill_state=active_skill_state,
+                track_usage=track_usage,
+            )
+
+        matched_for_mode = skill_registry.match_skill(message)
+        if matched_for_mode:
+            return await self._start_skill_mode(
+                message=message,
+                session_id=session_id,
+                user_message_id=user_message_id,
+                skill=matched_for_mode[0],
+                track_usage=track_usage,
+            )
+
+        # ===== END SKILL MODE ROUTING =====
 
         # ===== SKILL MATCHING (FR-1, FR-2) =====
         from src.skills import skill_registry, get_tracer
@@ -1137,6 +1174,137 @@ You have access to the following tools. When a user asks you to do something tha
         events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
         
         return {"response": "Task completed (max iterations reached)", "usage": usage_data or {}, "events": events, "user_message_id": user_message_id}
+
+    async def _start_skill_mode(
+        self,
+        message: str,
+        session_id: str,
+        user_message_id: str,
+        skill: Any,
+        track_usage: bool = True,
+    ) -> Dict[str, Any]:
+        """Start a new lightweight skill-mode session."""
+        usage_data: Dict[str, Any] = {}
+
+        if skill.path:
+            set_skill_workdir(skill.path)
+
+        goal, steps = await generate_initial_skill_plan(skill, message, model=self.model)
+        skill_session = SkillSession(
+            skill_name=skill.name,
+            original_user_request=message,
+            goal=goal,
+            plan=steps,
+            status="active",
+        )
+
+        await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
+
+        return await self._continue_skill_mode(
+            message=message,
+            session_id=session_id,
+            user_message_id=user_message_id,
+            skill_state=skill_session.to_dict(),
+            track_usage=track_usage,
+            usage_data=usage_data,
+            skill=skill,
+        )
+
+    async def _continue_skill_mode(
+        self,
+        message: str,
+        session_id: str,
+        user_message_id: str,
+        skill_state: Dict[str, Any],
+        track_usage: bool = True,
+        usage_data: Optional[Dict[str, Any]] = None,
+        skill: Any = None,
+    ) -> Dict[str, Any]:
+        """Continue an existing lightweight skill-mode session."""
+        usage_data = usage_data or {}
+
+        from src.skills import skill_registry
+
+        skill_session = SkillSession.from_dict(skill_state)
+        skill = skill or skill_registry.get_skill(skill_session.skill_name)
+        if not skill:
+            await session_manager.set_active_skill_session(session_id, None)
+            fallback = "Skill session was cleared because the skill definition is unavailable."
+            await session_manager.add_message(session_id, "assistant", fallback)
+            return {"response": fallback, "usage": usage_data, "user_message_id": user_message_id}
+
+        if skill.path:
+            set_skill_workdir(skill.path)
+
+        system_prompt = _build_skill_mode_system_prompt(skill, skill_session)
+        user_prompt = _build_skill_mode_user_prompt(message, skill_session)
+
+        provider = (config.llm.get("provider") or getattr(llm_client, "default_provider", "openai")).lower()
+
+        llm_kwargs = {
+            "input_items": [{"role": "user", "content": user_prompt}],
+            "system_prompt": system_prompt,
+            "tools": self.tools,
+            "reasoning_replay": False,
+            "provider": _normalize_provider_key(provider),
+        }
+        if self.model:
+            llm_kwargs["model"] = self.model
+
+        llm_result = await llm_client.responses(**llm_kwargs)
+
+        if llm_result.get("error"):
+            error_info = llm_result["error"]
+            error_msg = error_info.get("message", "Unknown LLM error")
+            logger.error(f"[SkillMode] LLM error: {error_msg}")
+            return {
+                "error": error_msg,
+                "error_type": error_info.get("type", "llm_error"),
+                "code": error_info.get("code", ""),
+                "user_message_id": user_message_id,
+            }
+
+        if track_usage:
+            usage_data = llm_result.get("usage", {}) or usage_data
+
+        raw_output = (llm_result.get("content") or "").strip()
+        action, body = _parse_skill_control_marker(raw_output)
+
+        if action == "ask_user":
+            question = body.strip() or "请提供继续执行所需的最小必要信息。"
+            skill_session.status = "waiting_user"
+            skill_session.pending_question = question
+            skill_session.memory_summary = _update_skill_memory_summary(skill_session, message, question)
+            await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
+            await session_manager.add_message(session_id, "assistant", question)
+            return {"response": question, "usage": usage_data, "user_message_id": user_message_id}
+
+        if action == "finish":
+            final_text = body.strip() or "该 skill 任务已完成。"
+            skill_session.status = "finished"
+            skill_session.completed_steps.append({"type": "finish", "result": final_text})
+            await session_manager.set_active_skill_session(session_id, None)
+            await session_manager.add_message(session_id, "assistant", final_text)
+            return {"response": final_text, "usage": usage_data, "user_message_id": user_message_id}
+
+        # default: execute
+        result_text = body.strip() if body.strip() else raw_output
+        if len(result_text) < 30:
+            result_text = f"{result_text}\n\n(继续推进该 skill，必要时我会继续询问最小必要信息。)"
+
+        skill_session.status = "active"
+        skill_session.pending_question = None
+        skill_session.completed_steps.append(
+            {
+                "type": "execute",
+                "result": result_text,
+            }
+        )
+        skill_session.memory_summary = _update_skill_memory_summary(skill_session, message, result_text)
+
+        await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
+        await session_manager.add_message(session_id, "assistant", result_text)
+        return {"response": result_text, "usage": usage_data, "user_message_id": user_message_id}
 
     async def _execute_skill(
         self,

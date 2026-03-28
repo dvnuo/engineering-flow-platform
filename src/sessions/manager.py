@@ -381,6 +381,28 @@ class SessionManager:
         session = await self.get_session(session_id)
         return session.get("history", [])
     
+
+    async def get_active_skill_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get active skill session state for a chat session."""
+        session = await self.get_session(session_id)
+        return session.get("active_skill_session")
+
+    async def set_active_skill_session(self, session_id: str, skill_session: Optional[Dict[str, Any]]) -> None:
+        """Set or clear active skill session state for a chat session."""
+        session = await self.get_session(session_id)
+        session["active_skill_session"] = skill_session
+        session["updated_at"] = datetime.now().isoformat()
+
+        if self.auto_save and self.persistence_enabled:
+            asyncio.create_task(
+                session_persistence.save_session(
+                    session_id=session_id,
+                    channel=session.get("channel", ""),
+                    messages=session.get("history", []),
+                    metadata=session.get("metadata", {}),
+                )
+            )
+
     async def clear_history(self, session_id: str) -> None:
         """Clear session history."""
         if session_id in self.sessions:
