@@ -2367,7 +2367,9 @@ After using tools (if needed), respond with a JSON object:
                 content = (llm_result.get("content") or "").strip()
                 function_calls = llm_result.get("function_calls", [])
                 
-                logger.info(f"[Workflow] Step {step_id} LLM result: content_len={len(content)}, tool_calls={len(function_calls)}")
+                logger.info(f"[Workflow] Step {step_id} LLM result keys: {list(llm_result.keys())}")
+                logger.info(f"[Workflow] Step {step_id} LLM result: content_len={len(content) if content else 0}, function_calls={len(function_calls)}")
+                logger.info(f"[Workflow] Step {step_id} content preview: {content[:200] if content else 'EMPTY/NONE'}")
                 
                 # DEBUG: Log full LLM result for debugging
                 if _is_debug_enabled():
