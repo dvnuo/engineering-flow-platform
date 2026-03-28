@@ -52,8 +52,12 @@ def _build_skill_plan_system_prompt(skill: Skill) -> str:
         "Return JSON ONLY with this shape:\n"
         '{"goal":"...","steps":[{"id":"...","type":"execute|user_input_if_needed","title":"..."}]}'
         "\nRules:\n"
-        "- Keep 2-5 steps only\n"
+        "- If task is simple, output exactly 1 step\n"
+        "- If task needs interaction or multiple phases, output 2-5 steps\n"
         "- Allowed step.type: execute, user_input_if_needed\n"
+        "- Steps are lightweight references for later turns, not a strict workflow\n"
+        "- Do not over-split into tiny steps\n"
+        "- Do not output execution_style or any other control fields\n"
         "- Do not add extra keys\n"
         "- Do not wrap JSON in markdown\n"
     )
@@ -90,6 +94,9 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
         "5) If key missing info blocks progress -> [ASK_USER] and ask ONE minimal necessary question with brief reason\n"
         "6) If enough info and task can progress -> [EXECUTE]\n"
         "7) If goal is done -> [FINISH] with concise final summary\n"
+        "8) Tools should only be used when they clearly help progress the current skill\n"
+        "9) Do not call tools speculatively\n"
+        "10) If key user information is missing, ask user instead of over-searching with tools\n"
     )
 
 

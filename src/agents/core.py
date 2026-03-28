@@ -1240,34 +1240,86 @@ You have access to the following tools. When a user asks you to do something tha
         user_prompt = _build_skill_mode_user_prompt(message, skill_session)
 
         provider = (config.llm.get("provider") or getattr(llm_client, "default_provider", "openai")).lower()
+        max_skill_tool_rounds = 6
+        input_items: List[Dict[str, Any]] = [{"role": "user", "content": user_prompt}]
+        raw_output = ""
 
-        llm_kwargs = {
-            "input_items": [{"role": "user", "content": user_prompt}],
-            "system_prompt": system_prompt,
-            "tools": self.tools,
-            "reasoning_replay": False,
-            "provider": _normalize_provider_key(provider),
-        }
-        if self.model:
-            llm_kwargs["model"] = self.model
-
-        llm_result = await llm_client.responses(**llm_kwargs)
-
-        if llm_result.get("error"):
-            error_info = llm_result["error"]
-            error_msg = error_info.get("message", "Unknown LLM error")
-            logger.error(f"[SkillMode] LLM error: {error_msg}")
-            return {
-                "error": error_msg,
-                "error_type": error_info.get("type", "llm_error"),
-                "code": error_info.get("code", ""),
-                "user_message_id": user_message_id,
+        for _ in range(max_skill_tool_rounds):
+            llm_kwargs = {
+                "input_items": input_items,
+                "system_prompt": system_prompt,
+                "tools": self.tools,  # Keep full tool availability during skill-mode trial
+                "reasoning_replay": False,
+                "provider": _normalize_provider_key(provider),
             }
+            if self.model:
+                llm_kwargs["model"] = self.model
 
-        if track_usage:
-            usage_data = llm_result.get("usage", {}) or usage_data
+            llm_result = await llm_client.responses(**llm_kwargs)
 
-        raw_output = (llm_result.get("content") or "").strip()
+            if llm_result.get("error"):
+                error_info = llm_result["error"]
+                error_msg = error_info.get("message", "Unknown LLM error")
+                logger.error(f"[SkillMode] LLM error: {error_msg}")
+                return {
+                    "error": error_msg,
+                    "error_type": error_info.get("type", "llm_error"),
+                    "code": error_info.get("code", ""),
+                    "user_message_id": user_message_id,
+                }
+
+            if track_usage:
+                iter_usage = llm_result.get("usage", {}) or {}
+                usage_data = {
+                    "prompt_tokens": usage_data.get("prompt_tokens", 0) + iter_usage.get("prompt_tokens", 0),
+                    "completion_tokens": usage_data.get("completion_tokens", 0) + iter_usage.get("completion_tokens", 0),
+                    "total_tokens": usage_data.get("total_tokens", 0) + iter_usage.get("total_tokens", 0),
+                }
+
+            raw_output = (llm_result.get("content") or "").strip()
+            function_calls = llm_result.get("function_calls", []) or llm_result.get("tool_calls", []) or []
+
+            if not function_calls:
+                break
+
+            # Keep assistant text context if model returned text together with tool calls
+            if raw_output:
+                input_items.append({"role": "assistant", "content": raw_output})
+
+            for call in function_calls:
+                call_id = call.get("id") or call.get("call_id") or f"skill_call_{len(input_items)}"
+                function_payload = call.get("function", {}) or {}
+                tool_name = function_payload.get("name") or call.get("name", "")
+                args_raw = function_payload.get("arguments", {}) or call.get("arguments", {})
+                args_str = args_raw if isinstance(args_raw, str) else json.dumps(args_raw, ensure_ascii=False)
+
+                input_items.append({
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": tool_name,
+                    "arguments": args_str,
+                })
+
+                try:
+                    parsed_args = json.loads(args_str) if isinstance(args_str, str) and args_str.strip() else {}
+                except Exception:
+                    parsed_args = {}
+
+                try:
+                    tool_result: ToolResult = await execute_tool_by_name(tool_name, **parsed_args)
+                    output_text = str(tool_result)
+                except Exception as tool_exc:
+                    output_text = f"Error: Tool '{tool_name}' failed with {tool_exc}"
+
+                input_items.append({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": output_text,
+                })
+
+        if not raw_output:
+            raw_output = "I could not produce a final skill-mode response."
+
         action, body = _parse_skill_control_marker(raw_output)
 
         if action == "ask_user":
