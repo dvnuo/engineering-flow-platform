@@ -337,7 +337,7 @@ class SkillRegistry:
         skill: Skill,
         original_request: str,
         memory_summary: str = "",
-        plan: Optional[List[Dict[str, str]]] = None,
+        plan: Optional[List[Dict[str, Any]]] = None,
         completed_steps: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """Generate a lightweight, Claude Code-style skill-mode prompt.
@@ -360,13 +360,23 @@ class SkillRegistry:
             ])
 
         if plan:
+            focus_step = next((s for s in plan if s.get("status") == "pending"), None)
             prompt_parts.extend([
                 "",
                 "Execution plan (follow this incrementally):",
             ])
             for idx, step in enumerate(plan, start=1):
                 status = step.get("status", "pending")
-                prompt_parts.append(f"{idx}. [{status}] {step.get('step', '')}")
+                step_id = step.get("id", f"step{idx}")
+                step_type = step.get("type", "execute")
+                title = step.get("title", step.get("step", ""))
+                prompt_parts.append(f"{idx}. [{status}] ({step_id}, {step_type}) {title}")
+
+            if focus_step:
+                prompt_parts.extend([
+                    "",
+                    f"Current focus step: {focus_step.get('id', '')} - {focus_step.get('title', focus_step.get('step', ''))}",
+                ])
 
         if completed_steps:
             prompt_parts.extend([

@@ -268,34 +268,65 @@ You have access to the following tools. When a user asks you to do something tha
         skill_session.memory_summary = merged[-2000:]
 
     @staticmethod
-    def _parse_plan_text(plan_text: str) -> List[Dict[str, str]]:
-        """Parse model output into a lightweight plan list."""
+    def _parse_plan_json(plan_text: str) -> Tuple[str, List[Dict[str, str]]]:
+        """Parse planner JSON into (goal, steps)."""
+        text = plan_text.strip()
+        if not text:
+            return "", []
+
+        # Best effort: tolerate fenced JSON
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+
+        try:
+            data = json.loads(text)
+        except Exception:
+            return "", []
+
+        goal = str(data.get("goal", "")).strip()
+        raw_steps = data.get("steps", [])
+        if not isinstance(raw_steps, list):
+            return goal, []
+
         steps: List[Dict[str, str]] = []
-        for line in plan_text.splitlines():
-            cleaned = line.strip()
-            if not cleaned:
+        for idx, step in enumerate(raw_steps, start=1):
+            if not isinstance(step, dict):
                 continue
-            cleaned = re.sub(r"^\d+[.)]\s*", "", cleaned)
-            cleaned = re.sub(r"^[-*]\s*", "", cleaned)
-            cleaned = cleaned.strip()
-            if not cleaned:
+            step_id = str(step.get("id", f"step{idx}")).strip() or f"step{idx}"
+            step_type = str(step.get("type", "execute")).strip() or "execute"
+            title = str(step.get("title", "")).strip()
+            if not title:
                 continue
-            steps.append({"step": cleaned, "status": "pending"})
+            steps.append({
+                "id": step_id,
+                "type": step_type,
+                "title": title,
+                "status": "pending",
+            })
             if len(steps) >= 6:
                 break
-        return steps
+        return goal, steps
 
-    async def _generate_initial_skill_plan(self, skill: Any, user_request: str) -> List[Dict[str, str]]:
+    async def _generate_initial_skill_plan(self, skill: Any, user_request: str) -> Tuple[str, List[Dict[str, str]]]:
         """Generate a lightweight skill plan via one LLM call."""
         planning_system_prompt = (
             f"You are planning for skill `{skill.name}`.\n"
             f"Skill description: {skill.description}\n"
-            "Generate a concise execution plan as a numbered list (3-6 steps).\n"
+            "Generate a concise execution plan as strict JSON.\n"
+            "Output JSON format:\n"
+            "{\n"
+            '  "goal": "...",\n'
+            '  "steps": [\n'
+            '    {"id": "step1", "type": "execute", "title": "..."},\n'
+            '    {"id": "step2", "type": "user_input_if_needed", "title": "..."}\n'
+            "  ]\n"
+            "}\n"
             "Rules:\n"
-            "- Keep each step short and actionable\n"
-            "- Do not use JSON\n"
+            "- Keep 3-6 steps, short and actionable\n"
+            "- type must be execute or user_input_if_needed\n"
             "- Do not include [EXECUTE]/[ASK_USER]/[FINISH] tags\n"
-            "- Output only the plan list"
+            "- Output JSON only, no extra text"
         )
         plan_input_items = [{
             "role": "user",
@@ -310,13 +341,18 @@ You have access to the following tools. When a user asks you to do something tha
                 reasoning_replay=False,
             )
             plan_text = (plan_result.get("content") or "").strip()
-            plan = self._parse_plan_text(plan_text)
+            goal, plan = self._parse_plan_json(plan_text)
             if plan:
-                return plan
+                return goal, plan
         except Exception as e:
             logger.warning(f"[Skill] Failed to generate initial plan: {e}")
 
-        return [{"step": "Analyze request and execute skill workflow", "status": "pending"}]
+        return user_request, [{
+            "id": "step1",
+            "type": "execute",
+            "title": "Analyze request and execute skill workflow",
+            "status": "pending",
+        }]
 
     async def process(
         self,
@@ -442,7 +478,9 @@ You have access to the following tools. When a user asks you to do something tha
                     goal=message,
                     status="active",
                 )
-                active_skill_session.plan = await self._generate_initial_skill_plan(best_skill, message)
+                plan_goal, plan_steps = await self._generate_initial_skill_plan(best_skill, message)
+                active_skill_session.goal = plan_goal or message
+                active_skill_session.plan = plan_steps
                 await session_manager.set_active_skill_session(session_id, active_skill_session.to_dict())
                 logger.info(f"[Skill] Started skill session: {best_skill.name}")
             
@@ -1035,7 +1073,9 @@ You have access to the following tools. When a user asks you to do something tha
                             if step.get("status") == "pending":
                                 step["status"] = "completed"
                                 active_skill_session.completed_steps.append({
-                                    "step": step.get("step", ""),
+                                    "step": step.get("title", step.get("step", "")),
+                                    "id": step.get("id", ""),
+                                    "type": step.get("type", ""),
                                     "evidence": response_content[:300],
                                     "timestamp": datetime.utcnow().isoformat() + "Z",
                                 })
