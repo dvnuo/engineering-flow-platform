@@ -332,7 +332,14 @@ class SkillRegistry:
         
         return "\n".join(prompt_parts)
 
-    def get_skill_mode_prompt(self, skill: Skill, original_request: str, memory_summary: str = "") -> str:
+    def get_skill_mode_prompt(
+        self,
+        skill: Skill,
+        original_request: str,
+        memory_summary: str = "",
+        plan: Optional[List[Dict[str, str]]] = None,
+        completed_steps: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
         """Generate a lightweight, Claude Code-style skill-mode prompt.
 
         This prompt asks the model to drive the workflow using simple control tags
@@ -352,6 +359,23 @@ class SkillRegistry:
                 memory_summary,
             ])
 
+        if plan:
+            prompt_parts.extend([
+                "",
+                "Execution plan (follow this incrementally):",
+            ])
+            for idx, step in enumerate(plan, start=1):
+                status = step.get("status", "pending")
+                prompt_parts.append(f"{idx}. [{status}] {step.get('step', '')}")
+
+        if completed_steps:
+            prompt_parts.extend([
+                "",
+                "Already completed steps:",
+            ])
+            for item in completed_steps[-5:]:
+                prompt_parts.append(f"- {item.get('step', '')}")
+
         if skill.strategy:
             prompt_parts.extend([
                 "",
@@ -367,6 +391,7 @@ class SkillRegistry:
             "- [ASK_USER] : pause and ask user for missing information",
             "- [FINISH] : task is completed",
             "",
+            "Use the plan as your guide and advance one meaningful step at a time.",
             "After the first-line tag, provide concise natural language details.",
             "Do not output JSON workflow objects.",
         ])

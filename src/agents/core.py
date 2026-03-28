@@ -9,7 +9,7 @@ import platform
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.agents.heartbeat import get_heartbeat, start_heartbeat, stop_heartbeat
 from src.agents.llm import (
@@ -238,7 +238,7 @@ You have access to the following tools. When a user asks you to do something tha
                     f"think_level={self.think_level.value}")
 
     @staticmethod
-    def _extract_skill_control(content: str) -> (str, str):
+    def _extract_skill_control(content: str) -> Tuple[str, str]:
         """Extract skill control tag and cleaned body from model response."""
         if not content:
             return "EXECUTE", ""
@@ -266,6 +266,57 @@ You have access to the following tools. When a user asks you to do something tha
 
         merged = f"{skill_session.memory_summary}\n{addition}"
         skill_session.memory_summary = merged[-2000:]
+
+    @staticmethod
+    def _parse_plan_text(plan_text: str) -> List[Dict[str, str]]:
+        """Parse model output into a lightweight plan list."""
+        steps: List[Dict[str, str]] = []
+        for line in plan_text.splitlines():
+            cleaned = line.strip()
+            if not cleaned:
+                continue
+            cleaned = re.sub(r"^\d+[.)]\s*", "", cleaned)
+            cleaned = re.sub(r"^[-*]\s*", "", cleaned)
+            cleaned = cleaned.strip()
+            if not cleaned:
+                continue
+            steps.append({"step": cleaned, "status": "pending"})
+            if len(steps) >= 6:
+                break
+        return steps
+
+    async def _generate_initial_skill_plan(self, skill: Any, user_request: str) -> List[Dict[str, str]]:
+        """Generate a lightweight skill plan via one LLM call."""
+        planning_system_prompt = (
+            f"You are planning for skill `{skill.name}`.\n"
+            f"Skill description: {skill.description}\n"
+            "Generate a concise execution plan as a numbered list (3-6 steps).\n"
+            "Rules:\n"
+            "- Keep each step short and actionable\n"
+            "- Do not use JSON\n"
+            "- Do not include [EXECUTE]/[ASK_USER]/[FINISH] tags\n"
+            "- Output only the plan list"
+        )
+        plan_input_items = [{
+            "role": "user",
+            "content": [{"type": "input_text", "text": f"User request: {user_request}"}],
+        }]
+
+        try:
+            plan_result = await llm_client.responses(
+                input_items=plan_input_items,
+                system_prompt=planning_system_prompt,
+                tools=[],
+                reasoning_replay=False,
+            )
+            plan_text = (plan_result.get("content") or "").strip()
+            plan = self._parse_plan_text(plan_text)
+            if plan:
+                return plan
+        except Exception as e:
+            logger.warning(f"[Skill] Failed to generate initial plan: {e}")
+
+        return [{"step": "Analyze request and execute skill workflow", "status": "pending"}]
 
     async def process(
         self,
@@ -391,6 +442,7 @@ You have access to the following tools. When a user asks you to do something tha
                     goal=message,
                     status="active",
                 )
+                active_skill_session.plan = await self._generate_initial_skill_plan(best_skill, message)
                 await session_manager.set_active_skill_session(session_id, active_skill_session.to_dict())
                 logger.info(f"[Skill] Started skill session: {best_skill.name}")
             
@@ -404,6 +456,8 @@ You have access to the following tools. When a user asks you to do something tha
                 best_skill,
                 original_request=active_skill_session.original_user_request if active_skill_session else message,
                 memory_summary=active_skill_session.memory_summary if active_skill_session else "",
+                plan=active_skill_session.plan if active_skill_session else None,
+                completed_steps=active_skill_session.completed_steps if active_skill_session else None,
             )
             skill_prompt = f"{skill_prompt}\n\n{skill_mode_prompt}"
             # Log matched skill
@@ -974,6 +1028,18 @@ You have access to the following tools. When a user asks you to do something tha
                     else:
                         active_skill_session.status = "active"
                         active_skill_session.pending_question = None
+
+                    # Lightweight plan progression: close the next pending step when progressing.
+                    if control_tag in {"EXECUTE", "FINISH"} and active_skill_session.plan:
+                        for step in active_skill_session.plan:
+                            if step.get("status") == "pending":
+                                step["status"] = "completed"
+                                active_skill_session.completed_steps.append({
+                                    "step": step.get("step", ""),
+                                    "evidence": response_content[:300],
+                                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                                })
+                                break
 
                     self._update_skill_memory_summary(active_skill_session, message, response_content)
                     if active_skill_session.status == "finished":
