@@ -1183,13 +1183,21 @@ You have access to the following tools. When a user asks you to do something tha
         track_usage: bool = True,
     ) -> Dict[str, Any]:
         """Start a new lightweight skill-mode session."""
+        from src.skills import get_tracer
+        tracer = get_tracer()
+        
         usage_data: Dict[str, Any] = {}
 
         if skill.path:
             set_skill_workdir(skill.path)
 
+        # Log skill mode entry
+        tracer.log_skill_mode_entry(skill.name, message)
+
         # Generate initial plan (always returns 3-tuple: goal, steps, usage)
+        tracer.log_skill_mode_step("GENERATE_PLAN", "started", f"Creating plan for: {message[:50]}...")
         goal, steps, plan_usage = await generate_initial_skill_plan(skill, message, model=self.model)
+        tracer.log_skill_mode_step("GENERATE_PLAN", "completed", f"Goal: {goal[:50]}...")
 
         skill_session = SkillSession(
             skill_name=skill.name,
@@ -1334,17 +1342,24 @@ You have access to the following tools. When a user asks you to do something tha
                     "call_id": call_id,
                     "output": output_text,
                 })
+                
+                # Log tool call for skill mode
+                tracer.log_tool_call(tool_name, args_str, output_text)
 
         if not raw_output:
             raw_output = "I could not produce a final skill-mode response."
 
         action, body = _parse_skill_control_marker(raw_output)
+        
+        # Log skill mode action
+        tracer.log_skill_mode_action(action, body)
 
         if action == "ask_user":
             question = body.strip() or "Please provide the minimum necessary information to continue."
             skill_session.status = "waiting_user"
             skill_session.pending_question = question
             skill_session.memory_summary = _update_skill_memory_summary(skill_session, message, question)
+            tracer.log_skill_mode_step("ASK_USER", "completed", f"Question: {question[:50]}...")
             await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
             await session_manager.add_message(session_id, "assistant", question)
             return {"response": question, "usage": usage_data, "user_message_id": user_message_id}
@@ -1353,6 +1368,8 @@ You have access to the following tools. When a user asks you to do something tha
             final_text = body.strip() or "Skill task completed."
             skill_session.status = "finished"
             skill_session.completed_steps.append({"type": "finish", "result": final_text})
+            tracer.log_skill_mode_step("FINISH", "completed", f"Result: {final_text[:50]}...")
+            tracer.log_skill_mode_complete(final_text)
             await session_manager.set_active_skill_session(session_id, None)
             await session_manager.add_message(session_id, "assistant", final_text)
             return {"response": final_text, "usage": usage_data, "user_message_id": user_message_id}
@@ -1360,6 +1377,7 @@ You have access to the following tools. When a user asks you to do something tha
         # default: execute
         was_waiting_user = skill_session.status == "waiting_user"
         result_text = body.strip() if body.strip() else raw_output
+        tracer.log_skill_mode_step("EXECUTE", "completed", f"Result preview: {result_text[:50]}...")
         if len(result_text) < 30:
             result_text = f"{result_text}\n\n(Continuing skill execution, will ask if more info is needed.)"
 
