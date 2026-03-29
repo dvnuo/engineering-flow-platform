@@ -431,7 +431,7 @@ def extract_acceptance_criteria(description: str) -> List[str]:
     patterns = [
         r'(?:^|\n)\s*(?:\d+[\.\)]\s*)(.*?)(?=\n(?:\d+\s|$))',
         r'(?:^|\n)\s*[-*]\s*(.*?)(?=\n(?:[-*]\s|$))',
-        r'(?:^|\n)(?:AC|Acceptance Criteria|验收标准)[:\s]*(.*?)(?=\n\n|$)',
+        r'(?:^|\n)(?:AC|Acceptance Criteria)[:\s]*(.*?)(?=\n\n|$)',
     ]
     
     for pattern in patterns:

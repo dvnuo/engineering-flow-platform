@@ -1,6 +1,6 @@
-# 代码模板
+# Code Templates
 
-## 1. Cucumber Feature 模板
+## 1. Cucumber Feature Template
 
 ```gherkin
 @{ticket}
@@ -27,7 +27,7 @@ Feature: {Feature Name}
       | invalid | email | error message |
 ```
 
-## 2. Step Definitions 模板
+## 2. Step Definitions Template
 
 ```java
 package {package}.steps;
@@ -82,7 +82,7 @@ public class {FeatureName}Steps {
 }
 ```
 
-## 3. DeviceStepDriver Interface 模板
+## 3. DeviceStepDriver Interface Template
 
 ```java
 package {package}.driver;
@@ -126,7 +126,7 @@ public interface DeviceStepDriver {
 }
 ```
 
-## 4. Common Implementation 模板
+## 4. Common Implementation Template
 
 ```java
 package {package}.driver.impl.common;
@@ -213,7 +213,7 @@ public abstract class CommonDeviceStepDriver implements DeviceStepDriver {
 }
 ```
 
-## 5. iOS Implementation 模板
+## 5. iOS Implementation Template
 
 ```java
 package {package}.driver.impl.ios;
@@ -321,7 +321,7 @@ public class IOSDeviceStepDriver extends CommonDeviceStepDriver {
 }
 ```
 
-## 6. Android Implementation 模板
+## 6. Android Implementation Template
 
 ```java
 package {package}.driver.impl.android;
@@ -431,7 +431,7 @@ public class AndroidDeviceStepDriver extends CommonDeviceStepDriver {
 }
 ```
 
-## 7. Cucumber Runner 模板
+## 7. Cucumber Runner Template
 
 ```java
 package {package};
@@ -453,10 +453,10 @@ public class CucumberRunner {{
 }}
 ```
 
-## 注意事项
+## Notes
 
-1. **{package}** - 替换为实际包名，如 `com.example.mobile.login`
-2. **{ticket}** - 替换为 Jira ticket ID，如 `EFP-123`
-3. **{ios-app-bundle-id}** - 替换为 iOS App Bundle ID
-4. **{android-app-package}** - 替换为 Android App Package
-5. **{android-main-activity}** - 替换为 Android Main Activity
+1. **{package}** - Replace with actual package name, e.g., `com.example.mobile.login`
+2. **{ticket}** - Replace with Jira ticket ID, e.g., `EFP-123`
+3. **{ios-app-bundle-id}** - Replace with iOS App Bundle ID
+4. **{android-app-package}** - Replace with Android App Package
+5. **{android-main-activity}** - Replace with Android Main Activity
