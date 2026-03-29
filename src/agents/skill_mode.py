@@ -111,6 +111,7 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
         "8) Tools should only be used when they clearly help progress the current skill\n"
         "9) Do not call tools speculatively\n"
         "10) If key user information is missing, ask user instead of over-searching with tools\n"
+        "11) If you create or update a file, mention the filename clearly\n"
     )
 
 
@@ -253,6 +254,38 @@ _FILE_PATH_PATTERN = re.compile(
 _ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 
 
+def _looks_like_file_content(text: str) -> bool:
+    """Heuristic check for code/feature/config-like output content."""
+    if not text or len(text.strip()) < 10:
+        return False
+
+    lowered = text.lower()
+    content_signals = (
+        "```",
+        "def ",
+        "class ",
+        "import ",
+        "from ",
+        "public class ",
+        "feature:",
+        "scenario:",
+        "given ",
+        "when ",
+        "then ",
+        "{",
+        "}",
+        ":",
+        "version:",
+    )
+    if any(signal in lowered for signal in content_signals):
+        return True
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) >= 2 and all(len(line) < 200 for line in lines[:8]):
+        return True
+    return False
+
+
 def _extract_skill_artifacts(
     skill_session: SkillSession,
     user_message: str,
@@ -264,6 +297,9 @@ def _extract_skill_artifacts(
     full_text = f"{user_message}\n{latest_result}"
     files_created: List[str] = []
     files_updated: List[str] = []
+    requested_files = [m.group(1) for m in _FILE_PATH_PATTERN.finditer(user_message or "")]
+    if requested_files:
+        artifacts["requested_files"] = requested_files
 
     for line in full_text.splitlines():
         line_paths = [m.group(1) for m in _FILE_PATH_PATTERN.finditer(line)]
@@ -282,6 +318,15 @@ def _extract_skill_artifacts(
         artifacts["files_created"] = files_created
     if files_updated:
         artifacts["files_updated"] = files_updated
+
+    # Fallback inference: infer target files from user-requested paths when output looks like file content.
+    if requested_files and not files_created and not files_updated and _looks_like_file_content(latest_result):
+        lowered_user = (user_message or "").lower()
+        update_intent = any(token in lowered_user for token in ("update", "modify", "edit", "fix", "patch", "refactor"))
+        if update_intent:
+            artifacts["files_updated"] = requested_files
+        else:
+            artifacts["files_created"] = requested_files
 
     issue_keys = sorted(set(_ISSUE_KEY_PATTERN.findall(full_text)))
     if issue_keys:
@@ -354,7 +399,7 @@ def _build_artifacts_summary(skill_session: SkillSession, max_items: int = 3, ma
         return "(none)"
 
     lines: List[str] = []
-    for key in ("files_created", "files_updated", "issue_keys", "confirmed_facts"):
+    for key in ("requested_files", "files_created", "files_updated", "issue_keys", "confirmed_facts"):
         value = artifacts.get(key)
         if not value:
             continue
