@@ -1251,7 +1251,8 @@ You have access to the following tools. When a user asks you to do something tha
             await session_manager.set_active_skill_session(session_id, None)
             fallback = "Skill session was cleared because the skill definition is unavailable."
             await session_manager.add_message(session_id, "assistant", fallback)
-            return {"response": fallback, "usage": usage_data, "user_message_id": user_message_id}
+            events = tracer.get_events_for_ui(limit=10, session_id=session_id)
+            return {"response": fallback, "usage": usage_data, "events": events, "user_message_id": user_message_id}
 
         if skill.path:
             set_skill_workdir(skill.path)
@@ -1365,7 +1366,9 @@ You have access to the following tools. When a user asks you to do something tha
             tracer.log_skill_mode_step("ASK_USER", "completed", f"Question: {question[:50]}...")
             await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
             await session_manager.add_message(session_id, "assistant", question)
-            return {"response": question, "usage": usage_data, "user_message_id": user_message_id}
+            # Get events for UI
+            events = tracer.get_events_for_ui(limit=10, session_id=session_id)
+            return {"response": question, "usage": usage_data, "events": events, "user_message_id": user_message_id}
 
         if action == "finish":
             final_text = body.strip() or "Skill task completed."
@@ -1375,7 +1378,9 @@ You have access to the following tools. When a user asks you to do something tha
             tracer.log_skill_mode_complete(final_text)
             await session_manager.set_active_skill_session(session_id, None)
             await session_manager.add_message(session_id, "assistant", final_text)
-            return {"response": final_text, "usage": usage_data, "user_message_id": user_message_id}
+            # Get events for UI
+            events = tracer.get_events_for_ui(limit=10, session_id=session_id)
+            return {"response": final_text, "usage": usage_data, "events": events, "user_message_id": user_message_id}
 
         # default: execute
         was_waiting_user = skill_session.status == "waiting_user"
@@ -1406,7 +1411,9 @@ You have access to the following tools. When a user asks you to do something tha
 
         await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
         await session_manager.add_message(session_id, "assistant", result_text)
-        return {"response": result_text, "usage": usage_data, "user_message_id": user_message_id}
+        # Get events for UI
+        events = tracer.get_events_for_ui(limit=10, session_id=session_id)
+        return {"response": result_text, "usage": usage_data, "events": events, "user_message_id": user_message_id}
 
     async def _execute_skill(
         self,
