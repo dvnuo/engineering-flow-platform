@@ -13,6 +13,8 @@ from src.agents.skill_mode import (
     SkillSession,
     _build_skill_mode_system_prompt,
     _build_skill_mode_user_prompt,
+    _extract_skill_artifacts,
+    _merge_skill_artifacts,
     _parse_skill_control_marker,
     _update_skill_memory_summary,
     generate_initial_skill_plan,
@@ -1356,6 +1358,7 @@ You have access to the following tools. When a user asks you to do something tha
             return {"response": final_text, "usage": usage_data, "user_message_id": user_message_id}
 
         # default: execute
+        was_waiting_user = skill_session.status == "waiting_user"
         result_text = body.strip() if body.strip() else raw_output
         if len(result_text) < 30:
             result_text = f"{result_text}\n\n(Continuing skill execution, will ask if more info is needed.)"
@@ -1368,6 +1371,16 @@ You have access to the following tools. When a user asks you to do something tha
                 "result": result_text,
             }
         )
+        try:
+            turn_artifacts = _extract_skill_artifacts(
+                skill_session=skill_session,
+                user_message=message,
+                latest_result=result_text,
+                was_waiting_user=was_waiting_user,
+            )
+            skill_session.artifacts = _merge_skill_artifacts(skill_session.artifacts, turn_artifacts)
+        except Exception as artifact_exc:
+            logger.warning(f"[SkillMode] Artifact extraction failed: {artifact_exc}")
         skill_session.memory_summary = _update_skill_memory_summary(skill_session, message, result_text)
 
         await session_manager.set_active_skill_session(session_id, skill_session.to_dict())

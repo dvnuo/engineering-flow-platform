@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -88,6 +89,7 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
 
     # Include skill strategy for ongoing sessions
     strategy_hint = "\n".join(f"- {s}" for s in skill.strategy) if skill.strategy else "(none)"
+    artifacts_summary = _build_artifacts_summary(skill_session)
 
     return (
         "You are running an active skill-mode session.\n"
@@ -96,6 +98,7 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
         f"Plan:\n{plan}\n\n"
         f"Completed summary:\n{completed}\n\n"
         f"Memory summary:\n{skill_session.memory_summary or '(empty)'}\n\n"
+        f"Known artifacts:\n{artifacts_summary}\n\n"
         f"Strategy hints:\n{strategy_hint}\n\n"
         "Output rules (STRICT):\n"
         "1) First line MUST be exactly one marker: [EXECUTE] or [ASK_USER] or [FINISH]\n"
@@ -241,3 +244,133 @@ def _update_skill_memory_summary(skill_session: SkillSession, user_message: str,
     if len(merged) > max_chars:
         merged = merged[-max_chars:]
     return merged
+
+
+_FILE_PATH_PATTERN = re.compile(
+    r"(?<![\w/.-])([A-Za-z0-9_./-]+\.(?:feature|java|xml|json|ya?ml|md))(?![\w.-])",
+    re.IGNORECASE,
+)
+_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
+
+
+def _extract_skill_artifacts(
+    skill_session: SkillSession,
+    user_message: str,
+    latest_result: str,
+    was_waiting_user: bool = False,
+) -> Dict[str, Any]:
+    """Extract lightweight structured artifacts from current turn."""
+    artifacts: Dict[str, Any] = {}
+    full_text = f"{user_message}\n{latest_result}"
+    files_created: List[str] = []
+    files_updated: List[str] = []
+
+    for line in full_text.splitlines():
+        line_paths = [m.group(1) for m in _FILE_PATH_PATTERN.finditer(line)]
+        if not line_paths:
+            continue
+        lowered = line.lower()
+        if any(token in lowered for token in ("create", "created", "generate", "generated", "new file", "wrote")):
+            files_created.extend(line_paths)
+        elif any(token in lowered for token in ("update", "updated", "modify", "modified", "edit", "edited", "patch")):
+            files_updated.extend(line_paths)
+        else:
+            # Default to created for explicit file references in execution outputs.
+            files_created.extend(line_paths)
+
+    if files_created:
+        artifacts["files_created"] = files_created
+    if files_updated:
+        artifacts["files_updated"] = files_updated
+
+    issue_keys = sorted(set(_ISSUE_KEY_PATTERN.findall(full_text)))
+    if issue_keys:
+        artifacts["issue_keys"] = issue_keys
+
+    feature_match = re.search(r"\bfeature(?:_name)?\s*[:=]\s*['\"]?([^\n,'\"]+)", full_text, re.IGNORECASE)
+    if not feature_match:
+        feature_match = re.search(r"^\s*Feature:\s*(.+)$", full_text, re.IGNORECASE | re.MULTILINE)
+    if feature_match:
+        artifacts["feature_name"] = feature_match.group(1).strip()
+
+    scenario_match = re.search(r"^\s*Scenario:\s*(.+)$", full_text, re.IGNORECASE | re.MULTILINE)
+    if scenario_match:
+        artifacts["scenario_name"] = scenario_match.group(1).strip()
+
+    for field in ("api_name", "module_name"):
+        match = re.search(rf"\b{field}\s*[:=]\s*['\"]?([^\n,'\"]+)", full_text, re.IGNORECASE)
+        if match:
+            artifacts[field] = match.group(1).strip()
+
+    confirmed_facts: List[str] = []
+    normalized_user = user_message.strip()
+    if was_waiting_user and normalized_user:
+        confirmed_facts.append(normalized_user)
+    if "expected" in normalized_user.lower() or "should" in normalized_user.lower():
+        confirmed_facts.append(normalized_user)
+
+    if confirmed_facts:
+        artifacts["confirmed_facts"] = confirmed_facts
+
+    return artifacts
+
+
+def _merge_skill_artifacts(existing: Dict[str, Any], new_artifacts: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge artifacts conservatively without overriding existing key facts."""
+    merged: Dict[str, Any] = dict(existing or {})
+
+    for key, value in (new_artifacts or {}).items():
+        if value in (None, "", [], {}):
+            continue
+        if isinstance(value, list):
+            current = merged.get(key, [])
+            if not isinstance(current, list):
+                current = []
+            seen = {str(item) for item in current}
+            for item in value:
+                marker = str(item)
+                if marker not in seen:
+                    current.append(item)
+                    seen.add(marker)
+            merged[key] = current
+            continue
+        if isinstance(value, dict):
+            current = merged.get(key, {})
+            if not isinstance(current, dict):
+                current = {}
+            current.update({k: v for k, v in value.items() if v is not None})
+            merged[key] = current
+            continue
+        if key not in merged or not merged.get(key):
+            merged[key] = value
+
+    return merged
+
+
+def _build_artifacts_summary(skill_session: SkillSession, max_items: int = 3, max_chars: int = 400) -> str:
+    """Build a compact artifacts summary for prompt context."""
+    artifacts = skill_session.artifacts or {}
+    if not artifacts:
+        return "(none)"
+
+    lines: List[str] = []
+    for key in ("files_created", "files_updated", "issue_keys", "confirmed_facts"):
+        value = artifacts.get(key)
+        if not value:
+            continue
+        if isinstance(value, list):
+            preview = ", ".join(str(v) for v in value[:max_items])
+            if len(value) > max_items:
+                preview += ", ..."
+            lines.append(f"- {key}: {preview}")
+        else:
+            lines.append(f"- {key}: {value}")
+
+    for key in ("feature_name", "scenario_name", "api_name", "module_name"):
+        if key in artifacts and artifacts[key]:
+            lines.append(f"- {key}: {artifacts[key]}")
+
+    summary = "\n".join(lines) if lines else "(none)"
+    if len(summary) > max_chars:
+        summary = summary[: max_chars - 3] + "..."
+    return summary
