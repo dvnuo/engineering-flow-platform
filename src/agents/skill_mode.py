@@ -5,13 +5,17 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.agents.llm import _normalize_provider_key, llm_client
 from src.config import config
 from src.skills.registry import Skill
 
 logger = logging.getLogger(__name__)
+
+
+# Type alias for consistent return shape (goal, steps, usage)
+SkillPlanResult = Tuple[str, List[Dict[str, str]], Dict[str, int]]
 
 
 @dataclass
@@ -153,7 +157,19 @@ def _normalize_plan(raw: Dict[str, Any], fallback_goal: str) -> Tuple[str, List[
     return goal, normalized_steps
 
 
-async def generate_initial_skill_plan(skill: Skill, user_message: str, model: Optional[str] = None, return_usage: bool = False) -> Tuple[str, List[Dict[str, str]], Dict[str, int]]:
+async def generate_initial_skill_plan(skill: Skill, user_message: str, model: Optional[str] = None, return_usage: bool = False) -> Union[SkillPlanResult, Tuple[str, List[Dict[str, str]]]]:
+    """Generate initial skill plan.
+    
+    Args:
+        skill: The skill to generate plan for
+        user_message: User's request message
+        model: Optional model override
+        return_usage: If True, always returns 3-tuple including usage
+    
+    Returns:
+        If return_usage=True: (goal, steps, usage_dict)
+        If return_usage=False: (goal, steps) - for backward compatibility
+    """
     system_prompt = _build_skill_plan_system_prompt(skill)
     user_prompt = _build_skill_plan_user_prompt(skill, user_message)
 
@@ -172,28 +188,23 @@ async def generate_initial_skill_plan(skill: Skill, user_message: str, model: Op
     result = await llm_client.responses(**kwargs)
     content = (result.get("content") or "").strip()
 
-    # Extract usage if requested
-    usage_data = {}
-    if return_usage:
-        iter_usage = result.get("usage", {}) or {}
-        usage_data = {
-            "prompt_tokens": iter_usage.get("prompt_tokens", 0),
-            "completion_tokens": iter_usage.get("completion_tokens", 0),
-            "total_tokens": iter_usage.get("total_tokens", 0),
-        }
+    # Extract usage (always track it internally)
+    iter_usage = result.get("usage", {}) or {}
+    usage_data = {
+        "prompt_tokens": iter_usage.get("prompt_tokens", 0),
+        "completion_tokens": iter_usage.get("completion_tokens", 0),
+        "total_tokens": iter_usage.get("total_tokens", 0),
+    }
 
     try:
         raw_plan = _safe_json_loads(content)
-        plan_result = _normalize_plan(raw_plan, fallback_goal=skill.description)
-        if return_usage:
-            return plan_result[0], plan_result[1], usage_data
-        return plan_result
+        goal, steps = _normalize_plan(raw_plan, fallback_goal=skill.description)
     except Exception as exc:
         logger.warning(f"[SkillMode] Failed to parse initial plan JSON, using fallback: {exc}")
-        plan_result = _normalize_plan({}, fallback_goal=skill.description)
-        if return_usage:
-            return plan_result[0], plan_result[1], usage_data
-        return plan_result
+        goal, steps = _normalize_plan({}, fallback_goal=skill.description)
+
+    # Always return 3-tuple for consistent type; caller can ignore usage if not needed
+    return goal, steps, usage_data
 
 
 def _parse_skill_control_marker(output: str) -> Tuple[str, str]:

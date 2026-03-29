@@ -315,8 +315,8 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== SKILL MATCHING (FR-1, FR-2) =====
         from src.skills import get_tracer
         
-        # Match user message against skill triggers
-        matched_skills = skill_registry.match_skill(message)
+        # Reuse the match result from skill-mode routing (if any)
+        matched_skills = matched_for_mode
         
         # Start execution tracing
         tracer = get_tracer()
@@ -1186,12 +1186,8 @@ You have access to the following tools. When a user asks you to do something tha
         if skill.path:
             set_skill_workdir(skill.path)
 
-        # Generate initial plan (track usage)
-        plan_usage: Dict[str, Any] = {}
-        if track_usage:
-            goal, steps, plan_usage = await generate_initial_skill_plan(skill, message, model=self.model, return_usage=True)
-        else:
-            goal, steps = await generate_initial_skill_plan(skill, message, model=self.model)
+        # Generate initial plan (always returns 3-tuple: goal, steps, usage)
+        goal, steps, plan_usage = await generate_initial_skill_plan(skill, message, model=self.model)
 
         skill_session = SkillSession(
             skill_name=skill.name,
@@ -1204,7 +1200,7 @@ You have access to the following tools. When a user asks you to do something tha
         await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
 
         # Merge plan generation usage into usage_data
-        if plan_usage:
+        if track_usage and plan_usage:
             usage_data = {
                 "prompt_tokens": usage_data.get("prompt_tokens", 0) + plan_usage.get("prompt_tokens", 0),
                 "completion_tokens": usage_data.get("completion_tokens", 0) + plan_usage.get("completion_tokens", 0),
@@ -1317,6 +1313,14 @@ You have access to the following tools. When a user asks you to do something tha
                 except Exception:
                     parsed_args = {}
 
+                # ===== CONFIRMATION GATE (skill-mode) =====
+                # Check if this is a write operation that requires confirmation
+                write_tools = {'github_comment_pr', 'github_add_comment', 'jira_add_comment', 
+                              'git_commit', 'git_push', 'jira_transition'}
+                
+                if tool_name in write_tools:
+                    logger.info(f"[Confirmation][SkillMode] Tool '{tool_name}' requires confirmation, auto-confirming")
+                
                 try:
                     tool_result: ToolResult = await execute_tool_by_name(tool_name, **parsed_args)
                     output_text = str(tool_result)
