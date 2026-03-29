@@ -354,6 +354,12 @@ class ExecutionTracer:
             # Take only the last 'limit' executions for this session
             filtered_executions = filtered_executions[-limit:]
         
+        # Also include current_execution if it matches the session_id
+        if self.current_execution:
+            if session_id is None or self.current_execution.session_id == session_id:
+                # Prepend current_execution to show latest events first
+                filtered_executions = [self.current_execution] + filtered_executions
+        
         for execution in filtered_executions:
             # Skill matched
             if 'skill_matched' in event_types and execution.matched_skill:
