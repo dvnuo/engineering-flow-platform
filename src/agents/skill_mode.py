@@ -15,8 +15,26 @@ from src.skills.registry import Skill
 logger = logging.getLogger(__name__)
 
 
-# Type alias for consistent return shape (goal, steps, usage)
-SkillPlanResult = Tuple[str, List[Dict[str, str]], Dict[str, int]]
+# Token estimation: ~1 token ≈ 4 characters for English, ~2 characters for Chinese
+# Use conservative estimate: 3 characters per token
+CHARS_PER_TOKEN = 3
+
+# Max context tokens for skill mode (leave room for response)
+MAX_CONTEXT_TOKENS = 12800
+# Reserve tokens for system prompt + response
+CONTEXT_RESERVED_TOKENS = 2048
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate token count for text."""
+    if not text:
+        return 0
+    return len(text) // CHARS_PER_TOKEN
+
+
+def get_available_context_tokens() -> int:
+    """Get available tokens for user messages in skill mode."""
+    return MAX_CONTEXT_TOKENS - CONTEXT_RESERVED_TOKENS
 
 
 @dataclass
@@ -80,8 +98,15 @@ def _build_skill_plan_user_prompt(skill: Skill, user_message: str) -> str:
 
 
 def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -> str:
+    # Calculate available tokens for completed steps
+    available_tokens = get_available_context_tokens()
+    # Estimate ~100 chars per step entry, so ~10 tokens per step
+    tokens_per_step = 100 // CHARS_PER_TOKEN
+    max_steps = min(len(skill_session.completed_steps), available_tokens // tokens_per_step)
+    max_steps = max(max_steps, 10)  # At least 10 steps
+    
     completed = "\n".join(
-        f"- {item.get('result', '')}" for item in skill_session.completed_steps[-3:] if item.get("result")
+        f"- {item.get('result', '')}" for item in skill_session.completed_steps[-max_steps:] if item.get("result")
     ) or "(none)"
     plan = "\n".join(
         f"- [{step.get('type', 'execute')}] {step.get('title', '')}" for step in skill_session.plan
@@ -232,7 +257,7 @@ def _parse_skill_control_marker(output: str) -> Tuple[str, str]:
     return "execute", text
 
 
-def _update_skill_memory_summary(skill_session: SkillSession, user_message: str, latest_result: str, max_chars: int = 1200) -> str:
+def _update_skill_memory_summary(skill_session: SkillSession, user_message: str, latest_result: str, max_chars: int = 8000) -> str:
     chunks = []
     if skill_session.memory_summary:
         chunks.append(skill_session.memory_summary)
