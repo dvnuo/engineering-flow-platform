@@ -248,7 +248,7 @@ def _update_skill_memory_summary(skill_session: SkillSession, user_message: str,
 
 
 _FILE_PATH_PATTERN = re.compile(
-    r"(?<![\w/.-])([A-Za-z0-9_./-]+\.(?:feature|java|xml|json|ya?ml|md))(?![\w.-])",
+    r"(?<![\w/.-])([A-Za-z0-9_./-]+\.(?:py|js|ts|jsx|tsx|java|cpp|c|go|rb|php|swift|kt|scala|rs|feature|xml|json|ya?ml|md|sh|bash|sql|html|css|yml|yaml|toml|ini|cfg|conf|env))(?![\w.-])",
     re.IGNORECASE,
 )
 _ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
