@@ -40,7 +40,7 @@ class SkillExecution:
     session_id: str
     user_message: str
     matched_skill: Optional[str]
-    skill_prompt: str
+    skill_prompt: str = ""  # Made optional with default empty string
     
     tool_calls: List[ToolCall] = field(default_factory=list)
     thinking_events: List[Dict] = field(default_factory=list)  # LLM thinking events
