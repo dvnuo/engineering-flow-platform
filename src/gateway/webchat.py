@@ -328,21 +328,25 @@ async def api_chat(request: web.Request) -> web.Response:
         llm_debug = result.get("_llm_debug", {}) if result else {}
         if llm_debug:
             response_data['_llm_debug'] = llm_debug
-            
-            # Save to session chatlog file
-            chatlog_dir = os.path.join(session_persistence.storage_dir, "chatlogs")
-            os.makedirs(chatlog_dir, exist_ok=True)
-            chatlog_file = os.path.join(chatlog_dir, f"{session_id}.json")
-            try:
-                with open(chatlog_file, "w") as f:
-                    json.dump({
-                        "session_id": session_id,
-                        "timestamp": datetime.utcnow().isoformat() + "Z",
-                        "llm_debug": llm_debug
-                    }, f, indent=2)
-                logger.info(f"[api_chat] Saved LLM chatlog to {chatlog_file}")
-            except Exception as e:
-                logger.warning(f"[api_chat] Failed to save chatlog: {e}")
+        
+        # Always save thinking events to chatlog (even without llm_debug)
+        chatlog_dir = os.path.join(session_persistence.storage_dir, "chatlogs")
+        os.makedirs(chatlog_dir, exist_ok=True)
+        chatlog_file = os.path.join(chatlog_dir, f"{session_id}.json")
+        try:
+            chatlog_data = {
+                "session_id": session_id,
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "metadata": session.get('metadata', {}),
+                "events": events,
+            }
+            if llm_debug:
+                chatlog_data["llm_debug"] = llm_debug
+            with open(chatlog_file, "w") as f:
+                json.dump(chatlog_data, f, indent=2)
+            logger.info(f"[api_chat] Saved chatlog with {len(events)} events to {chatlog_file}")
+        except Exception as e:
+            logger.warning(f"[api_chat] Failed to save chatlog: {e}")
         
         # Include reasoning if available
         if reasoning:
