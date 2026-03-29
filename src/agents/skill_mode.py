@@ -29,6 +29,7 @@ class SkillSession:
     plan: List[Dict[str, str]] = field(default_factory=list)
     completed_steps: List[Dict[str, Any]] = field(default_factory=list)
     memory_summary: str = ""
+    artifacts: Dict[str, Any] = field(default_factory=dict)
     pending_question: Optional[str] = None
 
     @classmethod
@@ -41,6 +42,7 @@ class SkillSession:
             plan=data.get("plan", []) or [],
             completed_steps=data.get("completed_steps", []) or [],
             memory_summary=data.get("memory_summary", ""),
+            artifacts=data.get("artifacts", {}) or {},
             pending_question=data.get("pending_question"),
         )
 
