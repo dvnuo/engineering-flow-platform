@@ -623,7 +623,9 @@ async def api_session_chatlog(request: web.Request) -> web.Response:
                 chatlog_data = json.load(f)
             return web.json_response(chatlog_data)
         else:
-            return web.json_response({'error': 'Chatlog not found'}, status=404)
+            # Return empty object for new sessions instead of 404
+            # This prevents 404 error in Thinking Process panel
+            return web.json_response({'session_id': session_id, 'messages': [], 'metadata': {}})
             
     except Exception as e:
         logger.error(f"Error loading chatlog: {e}")
