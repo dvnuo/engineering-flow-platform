@@ -1192,7 +1192,7 @@ You have access to the following tools. When a user asks you to do something tha
             set_skill_workdir(skill.path)
 
         # Log skill mode entry
-        tracer.log_skill_mode_entry(skill.name, message)
+        tracer.log_skill_mode_entry(skill.name, message, session_id)
 
         # Generate initial plan (always returns 3-tuple: goal, steps, usage)
         tracer.log_skill_mode_step("GENERATE_PLAN", "started", f"Creating plan for: {message[:50]}...")

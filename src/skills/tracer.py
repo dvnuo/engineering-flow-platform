@@ -136,18 +136,19 @@ class ExecutionTracer:
             status = "OK" if success else "ERROR"
             logger.info(f"[Tracer]  [{status}] {tool_name} ({duration_ms:.1f}ms)")
     
-    def log_skill_mode_entry(self, skill_name: str, goal: str = ""):
+    def log_skill_mode_entry(self, skill_name: str, goal: str = "", session_id: str = "skill-mode"):
         """Log skill mode entry event.
         
         Args:
             skill_name: Name of the skill that was triggered
             goal: The goal/task for this skill mode session
+            session_id: Session ID to associate with this skill mode execution
         """
         if not self.current_execution:
             # Create a new execution for skill mode tracking
             self.current_execution = SkillExecution(
                 execution_id=str(uuid.uuid4()),
-                session_id="skill-mode",
+                session_id=session_id,
                 user_message=goal,
                 matched_skill=skill_name,
             )
