@@ -1238,6 +1238,9 @@ You have access to the following tools. When a user asks you to do something tha
         skill: Any = None,
     ) -> Dict[str, Any]:
         """Continue an existing lightweight skill-mode session."""
+        from src.skills import get_tracer
+        tracer = get_tracer()
+        
         usage_data = usage_data or {}
 
         from src.skills import skill_registry
