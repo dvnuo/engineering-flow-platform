@@ -19,40 +19,40 @@ tools:
   - git_push
   - run_command
 strategy:
-  - "1. 解析 Jira ticket(s) - 支持单个或多个 (如: EFP-123 或 EFP-123,EFP-456)"
-  - "2. 调用 jira_get_issue 获取每个 ticket 的详细信息"
-  - "3. 提取: summary, description, acceptance criteria, comments"
-  - "4. 如信息不足则 [ASK_USER] 补充；信息完整则展示给用户确认"
-  - "5. 生成测试场景 (scenario outline + examples)"
-  - "6. 生成 Cucumber feature 文件"
-  - "7. 用户确认场景后生成: Step Definitions + Java Interface + 实现类"
-  - "8. 代码提交到 GitHub"
+  - "1. Parse Jira ticket(s) - supports single or multiple (e.g., EFP-123 or EFP-123,EFP-456)"
+  - "2. Call jira_get_issue to fetch each ticket's details"
+  - "3. Extract: summary, description, acceptance criteria, comments"
+  - "4. If info is insufficient, [ASK_USER] to supplement; if complete, show for confirmation"
+  - "5. Generate test scenarios (scenario outline + examples)"
+  - "6. Generate Cucumber feature file"
+  - "7. After user confirms scenarios, generate: Step Definitions + Java Interface + implementations"
+  - "8. Commit code to GitHub"
 output_format: markdown
 ---
 
 # MobileX Test Cases Generator
 
-通过 Jira ticket 生成移动端自动化测试用例。
+Generate mobile automation test cases from Jira tickets.
 
-## 功能概述
+## Overview
 
-1. **Jira 解析** - 从 Jira 获取需求详情 (summary, description, AC, comments)
-2. **场景生成** - 生成覆盖需求的测试场景 (Gherkin/Cucumber)
-3. **代码生成** - 创建完整的测试代码:
-   - Cucumber Feature 文件
+1. **Jira Parsing** - Fetch requirement details from Jira (summary, description, AC, comments)
+2. **Scenario Generation** - Generate test scenarios covering requirements (Gherkin/Cucumber)
+3. **Code Generation** - Create complete test code:
+   - Cucumber Feature files
    - Java Step Definitions
    - Java DeviceStepDriver Interface
    - Common Implementation
    - iOS Implementation
    - Android Implementation
-4. **Git 提交** - 代码提交到 GitHub
+4. **Git Commit** - Commit code to GitHub
 
-## 输出文件结构
+## Output File Structure
 
 ```
 <project-root>/
 ├── src/test/resources/features/
-│   └── {ticket}-{feature-name}.feature          # Feature 文件
+│   └── {ticket}-{feature-name}.feature          # Feature file
 ├── src/test/java/{package}/steps/
 │   └── {FeatureName}Steps.java                  # Step Definitions
 ├── src/test/java/{package}/driver/
@@ -66,10 +66,10 @@ output_format: markdown
 │       └── AndroidDeviceStepDriver.java        # Android impl
 ```
 
-## 生成文件说明
+## Generated File Details
 
-### 1. Feature 文件 (.feature)
-使用 Cucumber/Gherkin 语法描述测试场景:
+### 1. Feature File (.feature)
+Describe test scenarios using Cucumber/Gherkin syntax:
 
 ```gherkin
 @EFP-123
@@ -92,7 +92,7 @@ Feature: User Login
 ```
 
 ### 2. Step Definitions (Java)
-将 Gherkin 步骤映射到代码实现:
+Map Gherkin steps to code implementation:
 
 ```java
 @Given("the app is launched")
@@ -102,7 +102,7 @@ public void theAppIsLaunched() {
 ```
 
 ### 3. DeviceStepDriver Interface
-定义设备操作的标准接口:
+Define standard interface for device operations:
 
 ```java
 public interface DeviceStepDriver {
@@ -113,30 +113,30 @@ public interface DeviceStepDriver {
 }
 ```
 
-### 4. 实现类
-- **Common** - 所有平台的通用操作
-- **iOS** - Appium iOS 特定实现
-- **Android** - Appium Android 特定实现
+### 4. Implementation Classes
+- **Common** - Generic operations for all platforms
+- **iOS** - Appium iOS-specific implementation
+- **Android** - Appium Android-specific implementation
 
-## 示例用法
+## Usage Examples
 
 - "generate mobile tests for EFP-123"
 - "mobilex test cases: EFP-123, EFP-456"
 - "jira to mobile automation EFP-123"
 - "/mobilex-test EFP-123"
 
-## 用户交互流程
+## User Interaction Flow
 
-1. **提供 Ticket** → Skill 解析并获取 Jira 信息
-2. **确认信息** → 展示 summary + AC，用户确认/补充
-3. **生成场景** → 生成 feature 草案
-4. **审核场景** → 用户确认或修改场景
-5. **生成代码** → 一键生成完整测试代码
-6. **提交代码** → Git push + PR 链接
+1. **Provide Ticket** → Skill parses and fetches Jira info
+2. **Confirm Info** → Display summary + AC, user confirms/supplements
+3. **Generate Scenarios** → Create feature draft
+4. **Review Scenarios** → User confirms or modifies scenarios
+5. **Generate Code** → One-click generate complete test code
+6. **Submit Code** → Git push + PR link
 
-## 注意事项
+## Notes
 
-- 支持多 ticket 批量处理
-- 自动检测 Git 仓库并克隆到 workspace
-- 避免覆盖已有文件 (检查 SHA)
-- 生成的代码遵循项目现有的命名规范
+- Supports multi-ticket batch processing
+- Auto-detects Git repo and clones to workspace
+- Avoids overwriting existing files (checks SHA)
+- Generated code follows project's existing naming conventions
