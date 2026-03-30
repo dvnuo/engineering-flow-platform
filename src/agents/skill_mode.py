@@ -6,6 +6,7 @@ import json
 import logging
 import re
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.agents.llm import _normalize_provider_key, llm_client
@@ -13,6 +14,39 @@ from src.config import config
 from src.skills.registry import Skill
 
 logger = logging.getLogger(__name__)
+
+
+def _load_skill_references(skill_path: str) -> str:
+    """Load all reference files from skill's references folder.
+    
+    Args:
+        skill_path: Path to the skill directory
+        
+    Returns:
+        Combined content of all reference files, formatted for inclusion in system prompt
+    """
+    if not skill_path:
+        return "(no skill path)"
+    
+    skill_dir = Path(skill_path)
+    references_dir = skill_dir / "references"
+    
+    if not references_dir.exists():
+        return "(no references folder)"
+    
+    references_content = []
+    for ref_file in sorted(references_dir.glob("*")):
+        if ref_file.is_file() and ref_file.suffix in (".md", ".txt", ".html"):
+            try:
+                content = ref_file.read_text(encoding="utf-8")
+                references_content.append(f"=== {ref_file.name} ===\n{content}")
+            except Exception as e:
+                logger.warning(f"[SkillMode] Failed to read reference file {ref_file}: {e}")
+    
+    if not references_content:
+        return "(no reference files found)"
+    
+    return "\n\n".join(references_content)
 
 
 # Token estimation: ~1 token ≈ 4 characters for English, ~2 characters for Chinese
@@ -115,6 +149,9 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
     # Include skill strategy for ongoing sessions
     strategy_hint = "\n".join(f"- {s}" for s in skill.strategy) if skill.strategy else "(none)"
     artifacts_summary = _build_artifacts_summary(skill_session)
+    
+    # Load skill references
+    references = _load_skill_references(getattr(skill, 'path', '') or '')
 
     return (
         "You are running an active skill-mode session.\n"
@@ -125,6 +162,7 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
         f"Memory summary:\n{skill_session.memory_summary or '(empty)'}\n\n"
         f"Known artifacts:\n{artifacts_summary}\n\n"
         f"Strategy hints:\n{strategy_hint}\n\n"
+        f"References (use these as needed):\n{references}\n\n"
         "Output rules (STRICT):\n"
         "1) First line MUST be exactly one marker: [EXECUTE] or [ASK_USER] or [FINISH]\n"
         "2) No other prefix before first line\n"
