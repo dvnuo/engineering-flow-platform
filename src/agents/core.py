@@ -1525,7 +1525,9 @@ You have access to the following tools. When a user asks you to do something tha
             # No function calls and no text output after max rounds
             # Check if we accomplished something via tool calls
             completed = skill_session.completed_steps if skill_session else []
+            logger.info(f"[SkillMode] Loop ended with {len(completed)} completed steps")
             if completed:
+                logger.info(f"[SkillMode] completed_steps details: {completed}")
                 # Generate a summary from completed steps
                 summaries = []
                 for step in completed[-5:]:  # Last 5 steps
