@@ -75,7 +75,7 @@ def _list_skill_scripts(skill_path: str) -> str:
     if not scripts:
         return "(no Python scripts found)"
     
-    return "Available scripts:\n" + "\n".join(scripts) + "\n\nYou can read these scripts to understand their logic, or execute them using exec tool with: exec(command=['python3', 'path/to/script.py', ...args])"
+    return "Available scripts:\n" + "\n".join(scripts) + "\n\nYou can read these scripts using cat tool, or execute them using run_command with: run_command(cmd='python3', args=['path/to/script.py', ...])"
 
 
 # Token estimation: ~1 token ≈ 4 characters for English, ~2 characters for Chinese
