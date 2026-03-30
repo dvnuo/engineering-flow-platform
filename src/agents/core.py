@@ -1262,7 +1262,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         provider = (config.llm.get("provider") or getattr(llm_client, "default_provider", "openai")).lower()
         max_skill_tool_rounds = 6
-        max_skill_compaction_budget = 2000  # tokens for completed_steps
+        max_skill_compaction_budget = 4000  # tokens for completed_steps (6% of 64K context)
         
         # Resolve skill mode context window (similar to regular chat)
         model = self.model or config.llm.get("model", "gpt-4o")
