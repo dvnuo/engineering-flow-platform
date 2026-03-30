@@ -21,11 +21,11 @@ tools:
 strategy:
   - "1. Parse Jira ticket(s) - supports single or multiple (e.g., EFP-123 or EFP-123,EFP-456)"
   - "2. Call jira_get_issue_by_url to fetch each ticket's details"
-  - "3. Extract: summary, description, acceptance criteria, comments"
-  - "4. If info is insufficient, [ASK_USER] to supplement; if complete, show for confirmation"
-  - "5. Generate test scenarios (scenario outline + examples)"
-  - "6. Generate Cucumber feature file"
-  - "7. After user confirms scenarios, generate: Step Definitions + Java Interface + implementations"
+  - "3. After getting result, respond with [FINISH] + summary of what was fetched"
+  - "4. Include in [FINISH]: summary, description (key points), acceptance criteria"
+  - "5. Wait for user confirmation before generating test code"
+  - "6. After confirmation, generate test scenarios (scenario outline + examples)"
+  - "7. Generate Cucumber feature file + Step Definitions + Java implementations"
   - "8. Commit code to GitHub"
 output_format: markdown
 ---
