@@ -1189,6 +1189,10 @@ You have access to the following tools. When a user asks you to do something tha
         from src.skills import get_tracer
         tracer = get_tracer()
         
+        logger.debug(f"[SkillMode] ===== _start_skill_mode BEGIN =====")
+        logger.debug(f"[SkillMode] message='{message[:200]}...'")
+        logger.debug(f"[SkillMode] session_id={session_id}, skill={skill.name if skill else None}")
+        
         usage_data: Dict[str, Any] = {}
 
         def send_skill_event(event_type: str, data: dict):
@@ -1275,12 +1279,17 @@ You have access to the following tools. When a user asks you to do something tha
         from src.skills import get_tracer
         tracer = get_tracer()
         
+        logger.debug(f"[SkillMode] ===== _continue_skill_mode BEGIN =====")
+        logger.debug(f"[SkillMode] message='{message[:200]}...'")
+        logger.debug(f"[SkillMode] session_id={session_id}, skill_state keys={list(skill_state.keys()) if skill_state else None}")
+        
         usage_data = usage_data or {}
 
         def send_skill_event(event_type: str, data: dict):
             """Send skill event via stream_callback if available, and also emit to event_bus for WebSocket."""
             import json
             event = json.dumps({"type": event_type, "data": data})
+            logger.debug(f"[SkillMode] [EVENT] type={event_type}, data={json.dumps(data)[:200]}")
             
             # Send via stream_callback (for SSE)
             if stream_callback:
@@ -1310,6 +1319,10 @@ You have access to the following tools. When a user asks you to do something tha
             events = tracer.get_events_for_ui(limit=10, session_id=session_id)
             return {"response": fallback, "usage": usage_data, "events": events, "user_message_id": user_message_id}
 
+        logger.debug(f"[SkillMode] skill={skill.name}, skill_session.status={skill_session.status}")
+        logger.debug(f"[SkillMode] skill_session.completed_steps count={len(skill_session.completed_steps)}")
+        logger.debug(f"[SkillMode] skill_session.memory_summary length={len(skill_session.memory_summary) if skill_session.memory_summary else 0}")
+        
         if skill.path:
             set_skill_workdir(skill.path)
 
@@ -1329,6 +1342,8 @@ You have access to the following tools. When a user asks you to do something tha
         raw_output = ""
 
         for round_num in range(max_skill_tool_rounds):
+            logger.debug(f"[SkillMode] ===== Round {round_num + 1}/{max_skill_tool_rounds} =====")
+            
             # Estimate current token count from completed_steps and memory_summary
             current_steps_tokens = sum(
                 estimate_tokens(step.get('result', '')) 
@@ -1337,9 +1352,10 @@ You have access to the following tools. When a user asks you to do something tha
             memory_tokens = estimate_tokens(skill_session.memory_summary or '')
             current_tokens = current_steps_tokens + memory_tokens
             
-            logger.info(
+            logger.debug(
                 f"[SkillMode] Compaction check: "
-                f"current_tokens={current_tokens}, max_tokens={skill_max_tokens}"
+                f"current_tokens={current_tokens}, max_tokens={skill_max_tokens}, "
+                f"steps={len(skill_session.completed_steps)}, memory_chars={len(skill_session.memory_summary or '')}"
             )
             
             # Compact if over limit (same trigger as regular chat)
@@ -1370,6 +1386,9 @@ You have access to the following tools. When a user asks you to do something tha
             system_prompt = _build_skill_mode_system_prompt(skill, skill_session)
             user_prompt = _build_skill_mode_user_prompt(message, skill_session)
             
+            logger.debug(f"[SkillMode] system_prompt length={len(system_prompt)}")
+            logger.debug(f"[SkillMode] user_prompt length={len(user_prompt)}")
+            
             # Use consistent input format: input_text block for user content
             input_items: List[Dict[str, Any]] = [{"role": "user", "content": [{"type": "input_text", "text": user_prompt}]}]
             
@@ -1377,6 +1396,10 @@ You have access to the following tools. When a user asks you to do something tha
             available_tools = getattr(skill, 'tools', []) or []
             if not available_tools and self.tools:
                 available_tools = self.tools
+            
+            logger.debug(f"[SkillMode] available_tools count={len(available_tools)}")
+            if available_tools:
+                logger.debug(f"[SkillMode] tools: {[t.get('name') or t.get('function', {}).get('name') for t in available_tools]}")
             
             llm_kwargs = {
                 "input_items": input_items,
@@ -1389,7 +1412,10 @@ You have access to the following tools. When a user asks you to do something tha
             if self.model:
                 llm_kwargs["model"] = self.model
 
+            logger.debug(f"[SkillMode] Calling LLM with model={llm_kwargs.get('model')}, max_tokens={llm_kwargs.get('max_tokens')}")
             llm_result = await llm_client.responses(**llm_kwargs)
+            logger.debug(f"[SkillMode] LLM response keys={llm_result.keys() if llm_result else None}")
+            logger.debug(f"[SkillMode] LLM response content length={len(llm_result.get('content', '') or '')}")
 
             if llm_result.get("error"):
                 error_info = llm_result["error"]
@@ -1413,7 +1439,11 @@ You have access to the following tools. When a user asks you to do something tha
             raw_output = (llm_result.get("content") or "").strip()
             function_calls = llm_result.get("function_calls", []) or llm_result.get("tool_calls", []) or []
 
+            logger.debug(f"[SkillMode] raw_output='{raw_output[:300]}...'")
+            logger.debug(f"[SkillMode] function_calls count={len(function_calls)}")
+
             if not function_calls:
+                logger.debug(f"[SkillMode] No function calls, breaking loop")
                 break
 
             # Keep assistant text context if model returned text together with tool calls
@@ -1426,6 +1456,8 @@ You have access to the following tools. When a user asks you to do something tha
                 tool_name = function_payload.get("name") or call.get("name", "")
                 args_raw = function_payload.get("arguments", {}) or call.get("arguments", {})
                 args_str = args_raw if isinstance(args_raw, str) else json.dumps(args_raw, ensure_ascii=False)
+
+                logger.debug(f"[SkillMode] [TOOL_CALL] tool={tool_name}, args_str='{args_str[:200]}...'")
 
                 input_items.append({
                     "type": "function_call",
@@ -1447,11 +1479,14 @@ You have access to the following tools. When a user asks you to do something tha
                 if tool_name in write_tools:
                     logger.info(f"[Confirmation][SkillMode] Tool '{tool_name}' requires confirmation, auto-confirming")
                 
+                logger.debug(f"[SkillMode] [TOOL_EXEC] Executing tool={tool_name}, parsed_args={parsed_args}")
                 try:
                     tool_result: ToolResult = await execute_tool_by_name(tool_name, **parsed_args)
                     output_text = str(tool_result)
+                    logger.debug(f"[SkillMode] [TOOL_RESULT] tool={tool_name}, result length={len(output_text)}, preview='{output_text[:200]}...'")
                 except Exception as tool_exc:
                     output_text = f"Error: Tool '{tool_name}' failed with {tool_exc}"
+                    logger.error(f"[SkillMode] [TOOL_ERROR] tool={tool_name}, error={tool_exc}")
 
                 input_items.append({
                     "type": "function_call_output",
@@ -1506,6 +1541,7 @@ You have access to the following tools. When a user asks you to do something tha
             # Get events for UI
             events = tracer.get_events_for_ui(limit=10, session_id=session_id)
             send_skill_event("skill_complete", {"reason": "ask_user", "question": question[:200]})
+            logger.debug(f"[SkillMode] ===== _continue_skill_mode END (ASK_USER) =====")
             return {"response": question, "usage": usage_data, "events": events, "user_message_id": user_message_id}
 
         if action == "finish":
@@ -1520,6 +1556,7 @@ You have access to the following tools. When a user asks you to do something tha
             await session_manager.add_message(session_id, "assistant", final_text)
             # Get events for UI
             events = tracer.get_events_for_ui(limit=10, session_id=session_id)
+            logger.debug(f"[SkillMode] ===== _continue_skill_mode END (FINISH) =====")
             return {"response": final_text, "usage": usage_data, "events": events, "user_message_id": user_message_id}
 
         # default: execute
