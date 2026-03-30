@@ -1451,6 +1451,12 @@ You have access to the following tools. When a user asks you to do something tha
 
             logger.debug(f"[SkillMode] raw_output='{raw_output[:300]}...'")
             logger.debug(f"[SkillMode] function_calls count={len(function_calls)}")
+            
+            # Log full response if content is empty for debugging
+            if not raw_output and not function_calls:
+                logger.warning(f"[SkillMode] WARNING: LLM returned empty content AND no function_calls!")
+                logger.warning(f"[SkillMode] Full llm_result keys: {llm_result.keys() if llm_result else None}")
+                logger.warning(f"[SkillMode] llm_result: {str(llm_result)[:500]}")
 
             if not function_calls:
                 logger.debug(f"[SkillMode] No function calls, breaking loop")
