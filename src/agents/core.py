@@ -1261,7 +1261,7 @@ You have access to the following tools. When a user asks you to do something tha
         from src.agents.compaction import resolve_context_window_tokens
         
         provider = (config.llm.get("provider") or getattr(llm_client, "default_provider", "openai")).lower()
-        max_skill_tool_rounds = 6
+        max_skill_tool_rounds = 10  # Increased for longer skill execution
         max_skill_compaction_budget = 32000  # 12% of 264K context for completed_steps
         
         # Resolve skill mode context window (similar to regular chat)
@@ -1294,6 +1294,19 @@ You have access to the following tools. When a user asks you to do something tha
                 except Exception as compaction_err:
                     logger.warning(f"[SkillMode] Async compaction failed: {compaction_err}, using sync fallback")
                     skill_session = compact_skill_session_sync(skill_session, max_chars=4000)
+            
+            # Update token count after potential compaction
+            if current_tokens > skill_max_tokens:
+                current_steps_tokens = sum(
+                    estimate_tokens(step.get('result', '')) 
+                    for step in skill_session.completed_steps
+                )
+                memory_tokens = estimate_tokens(skill_session.memory_summary or '')
+                current_tokens = current_steps_tokens + memory_tokens
+                logger.info(
+                    f"[SkillMode] After compaction: "
+                    f"current_tokens={current_tokens}, steps_count={len(skill_session.completed_steps)}"
+                )
             
             # Build prompts with potentially compacted session
             system_prompt = _build_skill_mode_system_prompt(skill, skill_session)
