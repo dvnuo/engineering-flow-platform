@@ -27,38 +27,31 @@ def _load_skill_references(skill_path: str) -> str:
         skill_path: Path to the skill directory
         
     Returns:
-        Combined content of all reference files, formatted for inclusion in system prompt
+        List of available reference files with their names for tool use
     """
     if not skill_path:
         return "(no skill path)"
     
     skill_dir = Path(skill_path)
-    references_content = []
+    ref_files = []
     
     # Pattern 1: references/ folder (preferred)
     references_dir = skill_dir / "references"
     if references_dir.exists():
         for ref_file in sorted(references_dir.glob("*")):
             if ref_file.is_file() and ref_file.suffix in (".md", ".txt", ".html"):
-                try:
-                    content = ref_file.read_text(encoding="utf-8")
-                    references_content.append(f"=== {ref_file.name} ===\n{content}")
-                except Exception as e:
-                    logger.warning(f"[SkillMode] Failed to read reference file {ref_file}: {e}")
+                ref_files.append(str(ref_file))
     else:
         # Pattern 2: Root-level reference files (ref-*.md or any *.md except skill.md/SKILL.md)
         for ref_file in sorted(skill_dir.glob("*.md")):
             if ref_file.name.lower() not in ("skill.md",):  # Skip skill definition file
-                try:
-                    content = ref_file.read_text(encoding="utf-8")
-                    references_content.append(f"=== {ref_file.name} ===\n{content}")
-                except Exception as e:
-                    logger.warning(f"[SkillMode] Failed to read reference file {ref_file}: {e}")
+                ref_files.append(str(ref_file))
     
-    if not references_content:
+    if not ref_files:
         return "(no reference files found)"
     
-    return "\n\n".join(references_content)
+    # Return just the list of files, not content
+    return "Available references:\n" + "\n".join(f"- {Path(f).name}: {f}" for f in ref_files)
 
 
 def _list_skill_scripts(skill_path: str) -> str:
@@ -204,8 +197,8 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
         f"Memory summary:\n{skill_session.memory_summary or '(empty)'}\n\n"
         f"Known artifacts:\n{artifacts_summary}\n\n"
         f"Strategy hints:\n{strategy_hint}\n\n"
-        f"References (use these as needed):\n{references}\n\n"
-        f"Scripts:\n{skill_scripts}\n\n"
+        f"{references}\n\n"
+        f"{skill_scripts}\n\n"
         "Output rules (STRICT):\n"
         "1) First line MUST be exactly one marker: [EXECUTE] or [ASK_USER] or [FINISH]\n"
         "2) No other prefix before first line\n"
@@ -219,6 +212,8 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
         "10) Do not call tools speculatively\n"
         "11) If key user information is missing, ask user instead of over-searching with tools\n"
         "12) If you create or update a file, always show the complete code in a markdown code block\n"
+        "13) To read a reference file, use cat tool with the file path shown above\n"
+        "14) To run a skill script, use run_command tool\n"
     )
 
 
