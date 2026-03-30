@@ -793,7 +793,9 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
         # GPT-3.5
         "gpt-3.5-turbo": 16385,
         # Gemini series (64K context)
-        "gemini-2.5": 64000,
+        "gemini-2.5": 264000,
+        "minimax/MiniMax-M3": 264000,
+        "minimax": 264000,
         "gemini-2.0": 32000,
         "gemini-1.5": 32000,
         # Claude series
@@ -821,7 +823,7 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
             if key in model_lower:
                 return context_windows[key]
     
-    return 64000  # Default to 64K for unknown models (common modern context)
+    return 264000  # Default to 264K for unknown models (common modern context)
 
 
 def normalize_compaction_threshold(raw_value, default_value=0.8):

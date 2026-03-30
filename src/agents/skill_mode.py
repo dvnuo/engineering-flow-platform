@@ -89,9 +89,9 @@ CHARS_PER_TOKEN = 3
 
 # Max context tokens for skill mode (leave room for response)
 # Updated to 64K context window
-MAX_CONTEXT_TOKENS = 64000
+MAX_CONTEXT_TOKENS = 264000
 # Reserve tokens for system prompt + response (20% for response)
-CONTEXT_RESERVED_TOKENS = 12800
+CONTEXT_RESERVED_TOKENS = 64000
 
 
 def estimate_tokens(text: str) -> int:
