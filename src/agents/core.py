@@ -400,7 +400,7 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Get context window for the model
             context_window = resolve_context_window_tokens(
-                config.llm.get("model", "gpt-3.5-turbo")
+                config.llm.get("model", "gpt-5-mini")
             )
             
             # Compact messages
@@ -1265,7 +1265,7 @@ You have access to the following tools. When a user asks you to do something tha
         max_skill_compaction_budget = 32000  # 12% of 264K context for completed_steps
         
         # Resolve skill mode context window (similar to regular chat)
-        model = self.model or config.llm.get("model", "gpt-4o")
+        model = self.model or config.llm.get("model", "gpt-5-mini")
         context_window = resolve_context_window_tokens(model)
         # Trigger compaction at 80% of context window
         skill_max_tokens = int(context_window * 0.8)
