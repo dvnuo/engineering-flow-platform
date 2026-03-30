@@ -1278,7 +1278,7 @@ You have access to the following tools. When a user asks you to do something tha
                 "tools": available_tools,  # Use skill's tools or fall back to all tools
                 "reasoning_replay": False,
                 "provider": _normalize_provider_key(provider),
-                "max_tokens": 4000,  # Higher limit for skill mode code generation
+                "max_tokens": 8000,  # Higher limit for skill mode code generation
             }
             if self.model:
                 llm_kwargs["model"] = self.model
