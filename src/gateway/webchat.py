@@ -342,6 +342,9 @@ async def api_chat(request: web.Request) -> web.Response:
             }
             if llm_debug:
                 chatlog_data["llm_debug"] = llm_debug
+            # Add skill mode info if present
+            if session.get('metadata', {}).get('active_skill_session'):
+                chatlog_data["skill_session"] = session.get('metadata', {}).get('active_skill_session')
             with open(chatlog_file, "w") as f:
                 json.dump(chatlog_data, f, indent=2)
             logger.info(f"[api_chat] Saved chatlog with {len(events)} events to {chatlog_file}")
