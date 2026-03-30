@@ -300,6 +300,7 @@ You have access to the following tools. When a user asks you to do something tha
                 user_message_id=user_message_id,
                 skill_state=active_skill_state,
                 track_usage=track_usage,
+                stream_callback=stream_callback,
             )
 
         matched_for_mode = skill_registry.match_skill(message)
@@ -310,6 +311,7 @@ You have access to the following tools. When a user asks you to do something tha
                 user_message_id=user_message_id,
                 skill=matched_for_mode[0],
                 track_usage=track_usage,
+                stream_callback=stream_callback,
             )
 
         # ===== END SKILL MODE ROUTING =====
@@ -1181,6 +1183,7 @@ You have access to the following tools. When a user asks you to do something tha
         user_message_id: str,
         skill: Any,
         track_usage: bool = True,
+        stream_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         """Start a new lightweight skill-mode session."""
         from src.skills import get_tracer
@@ -1188,16 +1191,34 @@ You have access to the following tools. When a user asks you to do something tha
         
         usage_data: Dict[str, Any] = {}
 
+        def send_skill_event(event_type: str, data: dict):
+            """Send skill event via stream_callback if available."""
+            if stream_callback:
+                import json
+                event = json.dumps({"type": event_type, "data": data})
+                try:
+                    if hasattr(stream_callback, 'put'):
+                        stream_callback.put_nowait(event)
+                    else:
+                        stream_callback(event)
+                except Exception:
+                    pass  # Ignore callback errors
+
         if skill.path:
             set_skill_workdir(skill.path)
 
         # Log skill mode entry
         tracer.log_skill_mode_entry(skill.name, message, session_id)
+        send_skill_event("skill_mode_start", {"skill": skill.name, "message": message[:100]})
 
         # Generate initial plan (always returns 3-tuple: goal, steps, usage)
         tracer.log_skill_mode_step("GENERATE_PLAN", "started", f"Creating plan for: {message[:50]}...")
+        send_skill_event("skill_step", {"step": "GENERATE_PLAN", "status": "started", "detail": f"Creating plan..."})
+        
         goal, steps, plan_usage = await generate_initial_skill_plan(skill, message, model=self.model)
+        
         tracer.log_skill_mode_step("GENERATE_PLAN", "completed", f"Goal: {goal[:50]}...")
+        send_skill_event("skill_step", {"step": "GENERATE_PLAN", "status": "completed", "detail": f"Goal: {goal[:100]}..."})
 
         skill_session = SkillSession(
             skill_name=skill.name,
@@ -1217,6 +1238,8 @@ You have access to the following tools. When a user asks you to do something tha
                 "total_tokens": usage_data.get("total_tokens", 0) + plan_usage.get("total_tokens", 0),
             }
 
+        send_skill_event("skill_session_start", {"skill": skill.name, "goal": goal[:100]})
+
         return await self._continue_skill_mode(
             message=message,
             session_id=session_id,
@@ -1225,6 +1248,7 @@ You have access to the following tools. When a user asks you to do something tha
             track_usage=track_usage,
             usage_data=usage_data,
             skill=skill,
+            stream_callback=stream_callback,
         )
 
     async def _continue_skill_mode(
@@ -1236,12 +1260,26 @@ You have access to the following tools. When a user asks you to do something tha
         track_usage: bool = True,
         usage_data: Optional[Dict[str, Any]] = None,
         skill: Any = None,
+        stream_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         """Continue an existing lightweight skill-mode session."""
         from src.skills import get_tracer
         tracer = get_tracer()
         
         usage_data = usage_data or {}
+
+        def send_skill_event(event_type: str, data: dict):
+            """Send skill event via stream_callback if available."""
+            if stream_callback:
+                import json
+                event = json.dumps({"type": event_type, "data": data})
+                try:
+                    if hasattr(stream_callback, 'put'):
+                        stream_callback.put_nowait(event)
+                    else:
+                        stream_callback(event)
+                except Exception:
+                    pass  # Ignore callback errors
 
         from src.skills import skill_registry
 
@@ -1289,11 +1327,13 @@ You have access to the following tools. When a user asks you to do something tha
             # Compact if over limit (same trigger as regular chat)
             if current_tokens > skill_max_tokens:
                 logger.info(f"[SkillMode] Session exceeds token limit, compacting...")
+                send_skill_event("skill_compaction", {"status": "started", "current_tokens": current_tokens, "max_tokens": skill_max_tokens})
                 try:
                     skill_session = await compact_skill_session_async(skill_session, max_skill_compaction_budget)
                 except Exception as compaction_err:
                     logger.warning(f"[SkillMode] Async compaction failed: {compaction_err}, using sync fallback")
                     skill_session = compact_skill_session_sync(skill_session, max_chars=4000)
+                send_skill_event("skill_compaction", {"status": "completed", "remaining_steps": len(skill_session.completed_steps)})
             
             # Update token count after potential compaction
             if current_tokens > skill_max_tokens:
@@ -1403,6 +1443,14 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 # Log tool call for skill mode
                 tracer.log_tool_call(tool_name, args_str, output_text)
+                
+                # Stream tool call event for real-time UI updates
+                send_skill_event("tool_call", {
+                    "tool": tool_name,
+                    "args": args_str[:500] if args_str else "",
+                    "result": output_text[:500] if output_text else "",
+                    "status": "completed" if not output_text.startswith("Error:") else "error"
+                })
 
         if not raw_output:
             # No function calls and no text output after max rounds
@@ -1434,10 +1482,12 @@ You have access to the following tools. When a user asks you to do something tha
             skill_session.pending_question = question
             skill_session.memory_summary = _update_skill_memory_summary(skill_session, message, question)
             tracer.log_skill_mode_step("ASK_USER", "completed", f"Question: {question[:50]}...")
+            send_skill_event("skill_step", {"step": "ASK_USER", "status": "completed", "detail": question[:200]})
             await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
             await session_manager.add_message(session_id, "assistant", question)
             # Get events for UI
             events = tracer.get_events_for_ui(limit=10, session_id=session_id)
+            send_skill_event("skill_complete", {"reason": "ask_user", "question": question[:200]})
             return {"response": question, "usage": usage_data, "events": events, "user_message_id": user_message_id}
 
         if action == "finish":
@@ -1446,6 +1496,8 @@ You have access to the following tools. When a user asks you to do something tha
             skill_session.completed_steps.append({"type": "finish", "result": final_text})
             tracer.log_skill_mode_step("FINISH", "completed", f"Result: {final_text[:50]}...")
             tracer.log_skill_mode_complete(final_text)
+            send_skill_event("skill_step", {"step": "FINISH", "status": "completed", "detail": final_text[:200]})
+            send_skill_event("skill_complete", {"reason": "finish", "result": final_text[:200]})
             await session_manager.set_active_skill_session(session_id, None)
             await session_manager.add_message(session_id, "assistant", final_text)
             # Get events for UI
@@ -1456,6 +1508,7 @@ You have access to the following tools. When a user asks you to do something tha
         was_waiting_user = skill_session.status == "waiting_user"
         result_text = body.strip() if body.strip() else raw_output
         tracer.log_skill_mode_step("EXECUTE", "completed", f"Result preview: {result_text[:50]}...")
+        send_skill_event("skill_step", {"step": "EXECUTE", "status": "completed", "detail": result_text[:200]})
         if len(result_text) < 30:
             result_text = f"{result_text}\n\n(Continuing skill execution, will ask if more info is needed.)"
 
