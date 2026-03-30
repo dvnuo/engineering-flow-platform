@@ -1192,10 +1192,12 @@ You have access to the following tools. When a user asks you to do something tha
         usage_data: Dict[str, Any] = {}
 
         def send_skill_event(event_type: str, data: dict):
-            """Send skill event via stream_callback if available."""
+            """Send skill event via stream_callback if available, and also emit to event_bus for WebSocket."""
+            import json
+            event = json.dumps({"type": event_type, "data": data})
+            
+            # Send via stream_callback (for SSE)
             if stream_callback:
-                import json
-                event = json.dumps({"type": event_type, "data": data})
                 try:
                     if hasattr(stream_callback, 'put'):
                         stream_callback.put_nowait(event)
@@ -1203,6 +1205,13 @@ You have access to the following tools. When a user asks you to do something tha
                         stream_callback(event)
                 except Exception:
                     pass  # Ignore callback errors
+            
+            # Also emit to event_bus for WebSocket listeners
+            try:
+                from src.gateway.event_bus import event_bus
+                event_bus.emit_sync(event_type, data)
+            except Exception:
+                pass  # Ignore if event_bus not available
 
         if skill.path:
             set_skill_workdir(skill.path)
@@ -1269,10 +1278,12 @@ You have access to the following tools. When a user asks you to do something tha
         usage_data = usage_data or {}
 
         def send_skill_event(event_type: str, data: dict):
-            """Send skill event via stream_callback if available."""
+            """Send skill event via stream_callback if available, and also emit to event_bus for WebSocket."""
+            import json
+            event = json.dumps({"type": event_type, "data": data})
+            
+            # Send via stream_callback (for SSE)
             if stream_callback:
-                import json
-                event = json.dumps({"type": event_type, "data": data})
                 try:
                     if hasattr(stream_callback, 'put'):
                         stream_callback.put_nowait(event)
@@ -1280,6 +1291,13 @@ You have access to the following tools. When a user asks you to do something tha
                         stream_callback(event)
                 except Exception:
                     pass  # Ignore callback errors
+            
+            # Also emit to event_bus for WebSocket listeners
+            try:
+                from src.gateway.event_bus import event_bus
+                event_bus.emit_sync(event_type, data)
+            except Exception:
+                pass  # Ignore if event_bus not available
 
         from src.skills import skill_registry
 
