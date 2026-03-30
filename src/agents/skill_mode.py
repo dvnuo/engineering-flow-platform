@@ -49,6 +49,35 @@ def _load_skill_references(skill_path: str) -> str:
     return "\n\n".join(references_content)
 
 
+def _list_skill_scripts(skill_path: str) -> str:
+    """List available Python scripts in skill's scripts folder.
+    
+    Args:
+        skill_path: Path to the skill directory
+        
+    Returns:
+        List of available scripts with their paths
+    """
+    if not skill_path:
+        return "(no skill path)"
+    
+    skill_dir = Path(skill_path)
+    scripts_dir = skill_dir / "scripts"
+    
+    if not scripts_dir.exists():
+        return "(no scripts folder)"
+    
+    scripts = []
+    for script_file in sorted(scripts_dir.glob("*.py")):
+        if script_file.is_file():
+            scripts.append(f"- {script_file.name}: {script_file}")
+    
+    if not scripts:
+        return "(no Python scripts found)"
+    
+    return "Available scripts:\n" + "\n".join(scripts) + "\n\nYou can read these scripts to understand their logic, or execute them using exec tool with: exec(command=['python3', 'path/to/script.py', ...args])"
+
+
 # Token estimation: ~1 token ≈ 4 characters for English, ~2 characters for Chinese
 # Use conservative estimate: 3 characters per token
 CHARS_PER_TOKEN = 3
@@ -152,6 +181,7 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
     
     # Load skill references
     references = _load_skill_references(getattr(skill, 'path', '') or '')
+    skill_scripts = _list_skill_scripts(getattr(skill, 'path', '') or '')
 
     return (
         "You are running an active skill-mode session.\n"
@@ -163,6 +193,7 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
         f"Known artifacts:\n{artifacts_summary}\n\n"
         f"Strategy hints:\n{strategy_hint}\n\n"
         f"References (use these as needed):\n{references}\n\n"
+        f"Scripts:\n{skill_scripts}\n\n"
         "Output rules (STRICT):\n"
         "1) First line MUST be exactly one marker: [EXECUTE] or [ASK_USER] or [FINISH]\n"
         "2) No other prefix before first line\n"
