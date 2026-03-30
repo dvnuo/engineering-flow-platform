@@ -1356,11 +1356,14 @@ You have access to the following tools. When a user asks you to do something tha
                 tracer.log_tool_call(tool_name, args_str, output_text)
 
         if not raw_output:
-            raw_output = "I could not produce a final skill-mode response."
+            # No function calls and no text output - model failed to produce valid response
+            logger.warning(f"[SkillMode] Model produced no output after {max_skill_tool_rounds} rounds. Last raw_output: '{raw_output}'")
+            raw_output = "I could not produce a final skill-mode response. The model did not return any output or valid response."
 
         action, body = _parse_skill_control_marker(raw_output)
         
-        # Log skill mode action
+        # Log skill mode action with raw output for debugging
+        logger.info(f"[SkillMode] Parsed action={action}, body_preview='{body[:100] if body else ''}', raw_output_preview='{raw_output[:100] if raw_output else ''}'")
         tracer.log_skill_mode_action(action, body)
 
         if action == "ask_user":
