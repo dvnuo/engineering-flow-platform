@@ -1357,9 +1357,22 @@ You have access to the following tools. When a user asks you to do something tha
                 tracer.log_tool_call(tool_name, args_str, output_text)
 
         if not raw_output:
-            # No function calls and no text output - model failed to produce valid response
-            logger.warning(f"[SkillMode] Model produced no output after {max_skill_tool_rounds} rounds. Last raw_output: '{raw_output}'")
-            raw_output = "I could not produce a final skill-mode response. The model did not return any output or valid response."
+            # No function calls and no text output after max rounds
+            # Check if we accomplished something via tool calls
+            completed = skill_session.completed_steps if skill_session else []
+            if completed:
+                # Generate a summary from completed steps
+                summaries = []
+                for step in completed[-5:]:  # Last 5 steps
+                    if step.get("type") == "execute" and step.get("result"):
+                        summaries.append(step["result"][:200])  # Truncate each
+                if summaries:
+                    raw_output = f"[FINISH] Successfully completed {len(completed)} steps:\n" + "\n".join(f"- {s}" for s in summaries)
+                    logger.info(f"[SkillMode] Auto-generated finish from {len(completed)} completed steps")
+                else:
+                    raw_output = "I could not produce a final skill-mode response. The model did not return any output or valid response."
+            else:
+                raw_output = "I could not produce a final skill-mode response. The model did not return any output or valid response."
 
         action, body = _parse_skill_control_marker(raw_output)
         
