@@ -1393,13 +1393,23 @@ You have access to the following tools. When a user asks you to do something tha
             input_items: List[Dict[str, Any]] = [{"role": "user", "content": [{"type": "input_text", "text": user_prompt}]}]
             
             # Get tools - use skill's tools if available, otherwise fall back to all tools
-            available_tools = getattr(skill, 'tools', []) or []
-            if not available_tools and self.tools:
+            skill_tool_names = getattr(skill, 'tools', []) or []
+            
+            # If skill defines tool names (List[str]), convert to schemas
+            # If skill defines tool schemas (List[Dict]), use directly
+            if skill_tool_names and isinstance(skill_tool_names[0], str):
+                # Convert tool names to schemas
+                all_tool_schemas = get_tools_schemas()
+                available_tools = [t for t in all_tool_schemas if t.get("function", {}).get("name") in skill_tool_names]
+                logger.debug(f"[SkillMode] Converted {len(skill_tool_names)} tool names to {len(available_tools)} tool schemas")
+            elif not skill_tool_names and self.tools:
                 available_tools = self.tools
+            else:
+                available_tools = skill_tool_names if isinstance(skill_tool_names[0], dict) else []
             
             logger.debug(f"[SkillMode] available_tools count={len(available_tools)}")
-            if available_tools:
-                logger.debug(f"[SkillMode] tools: {[t.get('name') or t.get('function', {}).get('name') for t in available_tools]}")
+            if available_tools and isinstance(available_tools[0], dict):
+                logger.debug(f"[SkillMode] tools: {[t.get('function', {}).get('name') or t.get('name') for t in available_tools]}")
             
             llm_kwargs = {
                 "input_items": input_items,
