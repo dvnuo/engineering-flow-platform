@@ -1342,7 +1342,7 @@ You have access to the following tools. When a user asks you to do something tha
         raw_output = ""
 
         for round_num in range(max_skill_tool_rounds):
-            logger.debug(f"[SkillMode] ===== Round {round_num + 1}/{max_skill_tool_rounds} =====")
+            logger.info(f"[SkillMode] ===== Round {round_num + 1}/{max_skill_tool_rounds} =====")
             
             # Estimate current token count from completed_steps and memory_summary
             current_steps_tokens = sum(
@@ -1459,7 +1459,7 @@ You have access to the following tools. When a user asks you to do something tha
                 logger.warning(f"[SkillMode] llm_result: {str(llm_result)[:500]}")
 
             if not function_calls:
-                logger.debug(f"[SkillMode] No function calls, breaking loop")
+                logger.info(f"[SkillMode] No function calls at round {round_num + 1}, breaking loop")
                 break
 
             # Keep assistant text context if model returned text together with tool calls
