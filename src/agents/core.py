@@ -1267,10 +1267,15 @@ You have access to the following tools. When a user asks you to do something tha
         raw_output = ""
 
         for _ in range(max_skill_tool_rounds):
+            # Get tools - use skill's tools if available, otherwise fall back to all tools
+            available_tools = skill.get("tools", []) or []
+            if not available_tools and self.tools:
+                available_tools = self.tools
+            
             llm_kwargs = {
                 "input_items": input_items,
                 "system_prompt": system_prompt,
-                "tools": self.tools,  # Keep full tool availability during skill-mode trial
+                "tools": available_tools,  # Use skill's tools or fall back to all tools
                 "reasoning_replay": False,
                 "provider": _normalize_provider_key(provider),
             }
