@@ -199,6 +199,11 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
         f"Strategy hints:\n{strategy_hint}\n\n"
         f"{references}\n\n"
         f"{skill_scripts}\n\n"
+        "Available tools:\n"
+        "- run_command(cmd, args): Execute shell command. Examples:\n"
+        "  run_command(cmd='cat', args=['/path/to/ref-01.md'])  # Read a file\n"
+        "  run_command(cmd='python3', args=['/path/to/script.py', '--arg', 'value'])  # Run script\n"
+        "- discover_commands(prefix, contains): Find available commands\n\n"
         "Output rules (STRICT):\n"
         "1) First line MUST be exactly one marker: [EXECUTE] or [ASK_USER] or [FINISH]\n"
         "2) No other prefix before first line\n"
@@ -212,8 +217,6 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
         "10) Do not call tools speculatively\n"
         "11) If key user information is missing, ask user instead of over-searching with tools\n"
         "12) If you create or update a file, always show the complete code in a markdown code block\n"
-        "13) To read a reference file, use cat tool with the file path shown above\n"
-        "14) To run a skill script, use run_command tool\n"
     )
 
 
