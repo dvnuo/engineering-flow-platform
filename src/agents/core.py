@@ -1268,7 +1268,7 @@ You have access to the following tools. When a user asks you to do something tha
 
         for _ in range(max_skill_tool_rounds):
             # Get tools - use skill's tools if available, otherwise fall back to all tools
-            available_tools = skill.get("tools", []) or []
+            available_tools = getattr(skill, 'tools', []) or []
             if not available_tools and self.tools:
                 available_tools = self.tools
             
