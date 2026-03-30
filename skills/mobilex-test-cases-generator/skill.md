@@ -1,6 +1,6 @@
 ---
 name: mobilex-test-cases-generator
-description: Generate mobile automation test cases from Jira tickets. Creates Cucumber feature files and Java step implementations for iOS/Android. Use when: user provides Jira ticket(s) and wants automated test cases.
+description: "Generate mobile automation test cases from Jira tickets. Creates Cucumber feature files and Java step implementations for iOS/Android. Use when: user provides Jira ticket(s) and wants automated test cases."
 version: 1.0.0
 owner: qa-platform
 triggers:
