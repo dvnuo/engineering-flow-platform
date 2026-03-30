@@ -1344,6 +1344,9 @@ You have access to the following tools. When a user asks you to do something tha
         for round_num in range(max_skill_tool_rounds):
             logger.info(f"[SkillMode] ===== Round {round_num + 1}/{max_skill_tool_rounds} =====")
             
+            # Track if same tool is being called repeatedly
+            round_tool_calls = []
+            
             # Estimate current token count from completed_steps and memory_summary
             current_steps_tokens = sum(
                 estimate_tokens(step.get('result', '')) 
@@ -1462,6 +1465,9 @@ You have access to the following tools. When a user asks you to do something tha
                 logger.info(f"[SkillMode] No function calls at round {round_num + 1}, breaking loop")
                 break
 
+            # Log tools called in this round
+            logger.info(f"[SkillMode] Round {round_num + 1} tools called: {round_tool_calls}")
+            
             # Keep assistant text context if model returned text together with tool calls
             if raw_output:
                 input_items.append({"role": "assistant", "content": raw_output})
@@ -1481,6 +1487,8 @@ You have access to the following tools. When a user asks you to do something tha
                     "name": tool_name,
                     "arguments": args_str,
                 })
+                
+                round_tool_calls.append((tool_name, args_str[:100]))
 
                 try:
                     parsed_args = json.loads(args_str) if isinstance(args_str, str) and args_str.strip() else {}
@@ -1509,6 +1517,8 @@ You have access to the following tools. When a user asks you to do something tha
                     "call_id": call_id,
                     "output": output_text,
                 })
+                
+                logger.info(f"[SkillMode] [TOOL_FEEDBACK] Added to input_items, output length={len(output_text)}, first 300 chars: '{output_text[:300]}'")
                 
                 # Log tool call for skill mode
                 tracer.log_tool_call(tool_name, args_str, output_text)
