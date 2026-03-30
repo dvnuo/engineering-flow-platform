@@ -10,7 +10,7 @@ triggers:
   - "mobile test from jira"
   - "/mobilex-test"
 tools:
-  - jira_get_issue
+  - jira_get_issue_by_url
   - jira_search
   - github_create_or_update_file
   - github_get_file_content
@@ -20,7 +20,7 @@ tools:
   - run_command
 strategy:
   - "1. Parse Jira ticket(s) - supports single or multiple (e.g., EFP-123 or EFP-123,EFP-456)"
-  - "2. Call jira_get_issue to fetch each ticket's details"
+  - "2. Call jira_get_issue_by_url to fetch each ticket's details"
   - "3. Extract: summary, description, acceptance criteria, comments"
   - "4. If info is insufficient, [ASK_USER] to supplement; if complete, show for confirmation"
   - "5. Generate test scenarios (scenario outline + examples)"
