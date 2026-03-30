@@ -1257,16 +1257,30 @@ You have access to the following tools. When a user asks you to do something tha
         if skill.path:
             set_skill_workdir(skill.path)
 
-        system_prompt = _build_skill_mode_system_prompt(skill, skill_session)
-        user_prompt = _build_skill_mode_user_prompt(message, skill_session)
-
+        from src.agents.skill_mode import compact_skill_session_async, compact_skill_session_sync
+        
         provider = (config.llm.get("provider") or getattr(llm_client, "default_provider", "openai")).lower()
         max_skill_tool_rounds = 6
-        # Use consistent input format: input_text block for user content
-        input_items: List[Dict[str, Any]] = [{"role": "user", "content": [{"type": "input_text", "text": user_prompt}]}]
+        max_skill_compaction_budget = 2000  # tokens
+        
         raw_output = ""
 
-        for _ in range(max_skill_tool_rounds):
+        for round_num in range(max_skill_tool_rounds):
+            # Compact skill session before each LLM call (except first round if session is fresh)
+            if round_num > 0 or len(skill_session.completed_steps) > 10:
+                try:
+                    skill_session = await compact_skill_session_async(skill_session, max_skill_compaction_budget)
+                except Exception as compaction_err:
+                    logger.warning(f"[SkillMode] Async compaction failed: {compaction_err}, using sync fallback")
+                    skill_session = compact_skill_session_sync(skill_session)
+            
+            # Build prompts with potentially compacted session
+            system_prompt = _build_skill_mode_system_prompt(skill, skill_session)
+            user_prompt = _build_skill_mode_user_prompt(message, skill_session)
+            
+            # Use consistent input format: input_text block for user content
+            input_items: List[Dict[str, Any]] = [{"role": "user", "content": [{"type": "input_text", "text": user_prompt}]}]
+            
             # Get tools - use skill's tools if available, otherwise fall back to all tools
             available_tools = getattr(skill, 'tools', []) or []
             if not available_tools and self.tools:

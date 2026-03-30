@@ -524,3 +524,86 @@ def _build_artifacts_summary(skill_session: SkillSession, max_items: int = 3, ma
     if len(summary) > max_chars:
         summary = summary[: max_chars - 3] + "..."
     return summary
+
+
+async def compact_skill_session_async(skill_session: SkillSession, budget_tokens: int = 2000) -> SkillSession:
+    """Compact skill session history to fit within token budget.
+    
+    Uses the existing compaction module to compress completed_steps.
+    """
+    try:
+        from src.agents.compaction import compact_messages, AgentMessage
+        
+        # Convert completed_steps to AgentMessage format
+        steps_as_messages = [
+            AgentMessage(
+                role="assistant",  # treat steps as assistant messages
+                content=f"[{step.get('type', 'execute')}] {step.get('result', '')}",
+                timestamp=step.get('timestamp', 0)
+            )
+            for step in skill_session.completed_steps
+            if step.get('result')
+        ]
+        
+        if not steps_as_messages:
+            return skill_session
+        
+        # Estimate current tokens (rough estimate)
+        current_tokens = sum(len(m.content) // 3 for m in steps_as_messages)
+        
+        if current_tokens <= budget_tokens:
+            return skill_session  # No compaction needed
+        
+        # Use existing compaction module
+        compacted_messages, stats = await compact_messages(
+            messages=steps_as_messages,
+            budget_tokens=budget_tokens,
+            context_window=8000,
+        )
+        
+        if stats and stats.dropped_messages > 0:
+            # Convert back to completed_steps format
+            new_steps = []
+            for msg in compacted_messages:
+                # Parse step type from content
+                content = msg.content
+                step_type = "execute"
+                if content.startswith("[finish]"):
+                    step_type = "finish"
+                    content = content[8:].strip()
+                elif content.startswith("[ask_user]"):
+                    step_type = "ask_user"
+                    content = content[10:].strip()
+                new_steps.append({
+                    "type": step_type,
+                    "result": content,
+                    "timestamp": msg.timestamp,
+                    "_compacted": True,  # Mark as compacted
+                })
+            
+            skill_session.completed_steps = new_steps
+            logger.info(f"[SkillMode] Compacted {stats.dropped_messages} steps, kept {stats.kept_tokens} tokens")
+        
+        return skill_session
+        
+    except Exception as e:
+        logger.warning(f"[SkillMode] Compaction failed: {e}, continuing without compaction")
+        return skill_session
+
+
+def compact_skill_session_sync(skill_session: SkillSession, max_steps: int = 20, max_chars: int = 4000) -> SkillSession:
+    """Synchronous fallback compaction - simple truncation.
+    
+    Used when async compaction is not available or fails.
+    """
+    # Truncate completed_steps to max_steps
+    if len(skill_session.completed_steps) > max_steps:
+        # Keep first few (goal/plan) and last ones
+        kept = skill_session.completed_steps[:3] + skill_session.completed_steps[-max_steps+3:]
+        skill_session.completed_steps = kept
+    
+    # Truncate memory_summary
+    if len(skill_session.memory_summary) > max_chars:
+        skill_session.memory_summary = skill_session.memory_summary[-max_chars:]
+    
+    return skill_session
