@@ -88,9 +88,10 @@ def _list_skill_scripts(skill_path: str) -> str:
 CHARS_PER_TOKEN = 3
 
 # Max context tokens for skill mode (leave room for response)
-MAX_CONTEXT_TOKENS = 12800
-# Reserve tokens for system prompt + response
-CONTEXT_RESERVED_TOKENS = 2048
+# Updated to 64K context window
+MAX_CONTEXT_TOKENS = 64000
+# Reserve tokens for system prompt + response (20% for response)
+CONTEXT_RESERVED_TOKENS = 12800
 
 
 def estimate_tokens(text: str) -> int:
@@ -532,7 +533,7 @@ async def compact_skill_session_async(skill_session: SkillSession, budget_tokens
     Uses the existing compaction module to compress completed_steps.
     """
     try:
-        from src.agents.compaction import compact_messages, AgentMessage
+        from src.agents.compaction import compact_messages, AgentMessage, resolve_context_window_tokens
         
         # Convert completed_steps to AgentMessage format
         steps_as_messages = [
@@ -554,11 +555,14 @@ async def compact_skill_session_async(skill_session: SkillSession, budget_tokens
         if current_tokens <= budget_tokens:
             return skill_session  # No compaction needed
         
+        # Use 64K context window for compaction
+        context_window = resolve_context_window_tokens("default-64k")
+        
         # Use existing compaction module
         compacted_messages, stats = await compact_messages(
             messages=steps_as_messages,
             budget_tokens=budget_tokens,
-            context_window=8000,
+            context_window=context_window,
         )
         
         if stats and stats.dropped_messages > 0:
