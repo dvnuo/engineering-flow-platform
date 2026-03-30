@@ -17,7 +17,11 @@ logger = logging.getLogger(__name__)
 
 
 def _load_skill_references(skill_path: str) -> str:
-    """Load all reference files from skill's references folder.
+    """Load all reference files from skill's references folder or skill directory.
+    
+    Supports two patterns:
+    1. references/ folder: skill_path/references/*.md (preferred)
+    2. Root-level refs: skill_path/ref-*.md or skill_path/*.md (excluding skill.md)
     
     Args:
         skill_path: Path to the skill directory
@@ -29,19 +33,27 @@ def _load_skill_references(skill_path: str) -> str:
         return "(no skill path)"
     
     skill_dir = Path(skill_path)
-    references_dir = skill_dir / "references"
-    
-    if not references_dir.exists():
-        return "(no references folder)"
-    
     references_content = []
-    for ref_file in sorted(references_dir.glob("*")):
-        if ref_file.is_file() and ref_file.suffix in (".md", ".txt", ".html"):
-            try:
-                content = ref_file.read_text(encoding="utf-8")
-                references_content.append(f"=== {ref_file.name} ===\n{content}")
-            except Exception as e:
-                logger.warning(f"[SkillMode] Failed to read reference file {ref_file}: {e}")
+    
+    # Pattern 1: references/ folder (preferred)
+    references_dir = skill_dir / "references"
+    if references_dir.exists():
+        for ref_file in sorted(references_dir.glob("*")):
+            if ref_file.is_file() and ref_file.suffix in (".md", ".txt", ".html"):
+                try:
+                    content = ref_file.read_text(encoding="utf-8")
+                    references_content.append(f"=== {ref_file.name} ===\n{content}")
+                except Exception as e:
+                    logger.warning(f"[SkillMode] Failed to read reference file {ref_file}: {e}")
+    else:
+        # Pattern 2: Root-level reference files (ref-*.md or any *.md except skill.md/SKILL.md)
+        for ref_file in sorted(skill_dir.glob("*.md")):
+            if ref_file.name.lower() not in ("skill.md",):  # Skip skill definition file
+                try:
+                    content = ref_file.read_text(encoding="utf-8")
+                    references_content.append(f"=== {ref_file.name} ===\n{content}")
+                except Exception as e:
+                    logger.warning(f"[SkillMode] Failed to read reference file {ref_file}: {e}")
     
     if not references_content:
         return "(no reference files found)"
