@@ -1340,6 +1340,15 @@ You have access to the following tools. When a user asks you to do something tha
         skill_max_tokens = int(context_window * 0.8)
         
         raw_output = ""
+        repeat_call_count = 0
+        last_tool_signature: Optional[str] = None
+        has_readonly_tool_success = False
+        has_write_tool_call = False
+        should_finalize_without_tools = False
+        finalize_reason = ""
+
+        user_prompt = _build_skill_mode_user_prompt(message, skill_session)
+        input_items: List[Dict[str, Any]] = [{"role": "user", "content": [{"type": "input_text", "text": user_prompt}]}]
 
         for round_num in range(max_skill_tool_rounds):
             logger.info(f"[SkillMode] ===== Round {round_num + 1}/{max_skill_tool_rounds} =====")
@@ -1387,13 +1396,9 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Build prompts with potentially compacted session
             system_prompt = _build_skill_mode_system_prompt(skill, skill_session)
-            user_prompt = _build_skill_mode_user_prompt(message, skill_session)
             
             logger.debug(f"[SkillMode] system_prompt length={len(system_prompt)}")
-            logger.debug(f"[SkillMode] user_prompt length={len(user_prompt)}")
-            
-            # Use consistent input format: input_text block for user content
-            input_items: List[Dict[str, Any]] = [{"role": "user", "content": [{"type": "input_text", "text": user_prompt}]}]
+            logger.debug(f"[SkillMode] input_items count={len(input_items)}")
             
             # Get tools - use skill's tools if available, otherwise fall back to all tools
             skill_tool_names = getattr(skill, 'tools', []) or []
@@ -1463,11 +1468,10 @@ You have access to the following tools. When a user asks you to do something tha
 
             if not function_calls:
                 logger.info(f"[SkillMode] No function calls at round {round_num + 1}, breaking loop")
+                should_finalize_without_tools = True
+                finalize_reason = "no_function_calls"
                 break
 
-            # Log tools called in this round
-            logger.info(f"[SkillMode] Round {round_num + 1} tools called: {round_tool_calls}")
-            
             # Keep assistant text context if model returned text together with tool calls
             if raw_output:
                 input_items.append({"role": "assistant", "content": raw_output})
@@ -1494,6 +1498,18 @@ You have access to the following tools. When a user asks you to do something tha
                     parsed_args = json.loads(args_str) if isinstance(args_str, str) and args_str.strip() else {}
                 except Exception:
                     parsed_args = {}
+                normalized_args = parsed_args if isinstance(parsed_args, dict) else {"raw": str(parsed_args)}
+                tool_signature = f"{tool_name}:{json.dumps(normalized_args, sort_keys=True, ensure_ascii=False)}"
+                if tool_signature == last_tool_signature:
+                    repeat_call_count += 1
+                else:
+                    repeat_call_count = 1
+                    last_tool_signature = tool_signature
+                if repeat_call_count >= 2:
+                    logger.info(f"[SkillMode] Repeated identical tool call detected: {tool_name}, finalizing without more tools")
+                    should_finalize_without_tools = True
+                    finalize_reason = "repeated_tool_call"
+                    break
 
                 # ===== CONFIRMATION GATE (skill-mode) =====
                 # Check if this is a write operation that requires confirmation
@@ -1501,6 +1517,7 @@ You have access to the following tools. When a user asks you to do something tha
                               'git_commit', 'git_push', 'jira_transition'}
                 
                 if tool_name in write_tools:
+                    has_write_tool_call = True
                     logger.info(f"[Confirmation][SkillMode] Tool '{tool_name}' requires confirmation, auto-confirming")
                 
                 logger.debug(f"[SkillMode] [TOOL_EXEC] Executing tool={tool_name}, parsed_args={parsed_args}")
@@ -1523,6 +1540,25 @@ You have access to the following tools. When a user asks you to do something tha
                 # Log tool call for skill mode
                 tracer.log_tool_call(tool_name, args_str, output_text)
                 
+                if not output_text.startswith("Error:"):
+                    readonly_markers = ("get", "list", "query", "search", "fetch", "read", "issue", "pr", "file")
+                    write_markers = ("comment", "create", "update", "push", "transition", "commit", "delete", "write")
+                    lower_tool_name = tool_name.lower()
+                    is_write_tool = any(marker in lower_tool_name for marker in write_markers)
+                    if any(marker in lower_tool_name for marker in readonly_markers) and not is_write_tool:
+                        has_readonly_tool_success = True
+                    skill_session.completed_steps.append(
+                        {
+                            "type": "tool_result",
+                            "tool": tool_name,
+                            "result": output_text[:1200],
+                        }
+                    )
+                    skill_session.memory_summary = _update_skill_memory_summary(
+                        skill_session, message, f"{tool_name}: {output_text[:800]}"
+                    )
+                    await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
+                
                 # Stream tool call event for real-time UI updates
                 send_skill_event("tool_call", {
                     "tool": tool_name,
@@ -1530,6 +1566,48 @@ You have access to the following tools. When a user asks you to do something tha
                     "result": output_text[:500] if output_text else "",
                     "status": "completed" if not output_text.startswith("Error:") else "error"
                 })
+
+            # Log tools called in this round
+            logger.info(f"[SkillMode] Round {round_num + 1} tools called: {round_tool_calls}")
+            
+            if should_finalize_without_tools:
+                break
+            
+            if has_readonly_tool_success and not has_write_tool_call:
+                logger.info("[SkillMode] Read-only tool lookup succeeded, finalizing without additional tool rounds")
+                should_finalize_without_tools = True
+                finalize_reason = "readonly_lookup_complete"
+                break
+
+        if should_finalize_without_tools:
+            finalizer_prompt = (
+                "Do not call tools. Return exactly one control marker on the first line: "
+                "[FINISH] or [ASK_USER]."
+            )
+            finalizer_items = list(input_items)
+            finalizer_items.append({"role": "user", "content": [{"type": "input_text", "text": finalizer_prompt}]})
+            finalizer_result = await llm_client.responses(
+                input_items=finalizer_items,
+                system_prompt=system_prompt,
+                tools=[],
+                reasoning_replay=False,
+                provider=_normalize_provider_key(provider),
+                max_tokens=64000,
+                **({"model": self.model} if self.model else {}),
+            )
+            if not finalizer_result.get("error"):
+                if track_usage:
+                    iter_usage = finalizer_result.get("usage", {}) or {}
+                    usage_data = {
+                        "prompt_tokens": usage_data.get("prompt_tokens", 0) + iter_usage.get("prompt_tokens", 0),
+                        "completion_tokens": usage_data.get("completion_tokens", 0) + iter_usage.get("completion_tokens", 0),
+                        "total_tokens": usage_data.get("total_tokens", 0) + iter_usage.get("total_tokens", 0),
+                    }
+                raw_output = (finalizer_result.get("content") or "").strip() or raw_output
+                logger.info(f"[SkillMode] Finalizer completed, reason={finalize_reason}, output_len={len(raw_output)}")
+            elif has_readonly_tool_success:
+                logger.warning("[SkillMode] Finalizer failed, using fallback finish. reason=%s", finalize_reason)
+                raw_output = "[FINISH] Successfully retrieved the requested information."
 
         if not raw_output:
             # No function calls and no text output after max rounds
