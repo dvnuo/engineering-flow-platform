@@ -1472,9 +1472,6 @@ You have access to the following tools. When a user asks you to do something tha
                 finalize_reason = "no_function_calls"
                 break
 
-            # Log tools called in this round
-            logger.info(f"[SkillMode] Round {round_num + 1} tools called: {round_tool_calls}")
-            
             # Keep assistant text context if model returned text together with tool calls
             if raw_output:
                 input_items.append({"role": "assistant", "content": raw_output})
@@ -1569,6 +1566,9 @@ You have access to the following tools. When a user asks you to do something tha
                     "result": output_text[:500] if output_text else "",
                     "status": "completed" if not output_text.startswith("Error:") else "error"
                 })
+
+            # Log tools called in this round
+            logger.info(f"[SkillMode] Round {round_num + 1} tools called: {round_tool_calls}")
             
             if should_finalize_without_tools:
                 break
@@ -1605,6 +1605,9 @@ You have access to the following tools. When a user asks you to do something tha
                     }
                 raw_output = (finalizer_result.get("content") or "").strip() or raw_output
                 logger.info(f"[SkillMode] Finalizer completed, reason={finalize_reason}, output_len={len(raw_output)}")
+            elif has_readonly_tool_success:
+                logger.warning("[SkillMode] Finalizer failed, using fallback finish. reason=%s", finalize_reason)
+                raw_output = "[FINISH] Successfully retrieved the requested information."
 
         if not raw_output:
             # No function calls and no text output after max rounds
