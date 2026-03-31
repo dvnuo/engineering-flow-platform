@@ -1737,8 +1737,8 @@ service_reload_manager.register('llm', llm_client.reinit)
 
 # Models that support vision/image input
 USE_VISION_MODELS = {
-    "openai": {"gpt-4o", "gpt-4o-mini", "gpt-5-mini", "gpt-5"},
-    "github_copilot": {"gpt-4o", "gpt-5-mini", "gpt-5", "gemini-2.5-pro"},
+    "openai": {"gpt-5-mini", "gpt-5"},
+    "github_copilot": {"gpt-5-mini", "gpt-5", "gemini-2.5-pro"},
     "claude": {"claude-sonnet", "claude-haiku", "claude-opus"},
     "ollama": set(),  # Ollama vision support varies
 }
