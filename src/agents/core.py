@@ -892,6 +892,8 @@ You have access to the following tools. When a user asks you to do something tha
                     logger.debug(f"Failed to save intermediate chatlog: {e}")
             
             # Run chatlog save in background thread to avoid blocking
+            asyncio.create_task(save_chatlog())
+
             # If no function calls, we're done - return the response
             if not tool_calls:
                 # Fallback: if content is empty, try to use the latest tool result
