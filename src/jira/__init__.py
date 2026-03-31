@@ -22,6 +22,7 @@ from .api import (
 )
 from .adapter import JiraFormatAdapter
 from src.utils.attachment import download_and_process_attachment
+from .exporter import export_issues_to_markdown
 
 __all__ = [
     "JiraChannel", 
@@ -43,6 +44,7 @@ __all__ = [
     "jira_get_versions",
     "jira_get_worklog",
     "jira_add_worklog",
+    "export_issues_to_markdown",
 ]
 
 
@@ -388,7 +390,7 @@ def _get_all_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "jira_get_issue",
-                "description": "Get a Jira issue by key. Returns Markdown by default.",
+                "description": "Get a Jira issue by key. Returns Markdown by default, including description, recent comments, and extracted acceptance criteria when visible.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -411,7 +413,7 @@ def _get_all_schemas() -> list:
                         "include_fields": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Fields to include (default: summary, status, description, comments)"
+                            "description": "Fields to include (default: summary, status, description, acceptance_criteria, comments)"
                         },
                         "include_comments": {
                             "type": "boolean",
@@ -543,6 +545,49 @@ def _get_all_schemas() -> list:
                         "issue_key": {"type": "string", "description": "Jira issue key"}
                     },
                     "required": ["issue_key"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "export_issues_to_markdown",
+                "description": "Export one or more Jira issues to Markdown. Supports single issue key, comma-separated keys, or JQL input. Can write per-issue files, a combined file, or produce a zip.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "input": {
+                            "type": "string",
+                            "description": "Issue input as a string. Accepts a single issue key (e.g., 'PROJ-123'), comma-separated keys ('PROJ-1,PROJ-2'), or a JQL query string prefixed with 'jql:' (e.g., 'jql:project = PROJ AND status != Done')."
+                        },
+                        "jql": {
+                            "type": "string",
+                            "description": "Optional JQL query string (alternative to using 'input' with 'jql:' prefix)."
+                        },
+                        "page_size": {
+                            "type": "integer",
+                            "description": "Optional page size when using JQL",
+                            "default": 50
+                        },
+                        "output_mode": {"type": "string", "enum": ["single_combined", "one_file_per_issue", "zip_per_issue"], "default": "single_combined"},
+                        "output_directory": {"type": "string", "description": "Directory to write files (required for file modes)"},
+                        "download_attachments": {"type": "boolean", "description": "Whether to download attachments"},
+                        "attachments_dir": {"type": "string", "description": "Relative attachments directory under output_directory"},
+                        "attachments_concurrency": {"type": "integer", "description": "Concurrent downloads for attachments", "default": 4},
+                        "attachments_max_size": {"type": "integer", "description": "Maximum attachment download size in bytes", "default": 52428800},
+                        "attachments_inline_text_threshold": {"type": "integer", "description": "Max chars for inline text embedding", "default": 2000},
+                        "attachments_retries": {"type": "integer", "description": "Retry attempts for attachment downloads", "default": 3},
+                        "attachments_backoff": {"type": "array", "items": {"type": "integer"}, "description": "Backoff seconds for retries", "default": [1,2,4]},
+                        "attachments_preserve_binary": {"type": "boolean", "description": "Whether to preserve and copy the original binary files", "default": True},
+                        "include_raw_snapshot": {"type": "boolean", "description": "Include a raw fields snapshot in the Markdown"},
+                        "max_comments": {"type": "integer", "description": "Maximum number of comments to include", "default": 10},
+                        "comments_order": {"type": "string", "enum": ["latest_first", "oldest_first"], "default": "latest_first"},
+                        "field_match_threshold": {"type": "number", "description": "Similarity threshold for custom field matching", "default": 0.9},
+                        "field_similarity_threshold": {"type": "number", "description": "Similarity threshold for content de-duplication", "default": 0.9},
+                        "array_inline_max_items": {"type": "integer", "default": 3},
+                        "array_inline_max_element_length": {"type": "integer", "default": 40}
+                    },
+                    "required": ["input"]
                 }
             }
         },

@@ -34,7 +34,7 @@ class JiraMarkupConverter:
         md = re.sub(r'^h6\. (.+)$', r'###### \1', md, flags=re.MULTILINE)
         
         # Bold/Italic (exclude list markers: * followed by space)
-        md = re.sub(r'\*(?!\s)(.+?)(?<!\s)\*', r'**\1**', md)
+        md = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'**\1**', md)
         md = re.sub(r'_(.+?)_', r'*\1*', md)
         
         # Inline code
@@ -64,9 +64,45 @@ class JiraMarkupConverter:
         
         # Horizontal rule
         md = re.sub(r'^----+$', r'---', md, flags=re.MULTILINE)
-        
+
+        # Tables
+        md = self._convert_wiki_table_to_markdown(md)
+
         return md.strip()
-    
+
+    def _convert_wiki_table_to_markdown(self, wiki_text: str) -> str:
+        """Convert Jira wiki table to Markdown table."""
+        lines = wiki_text.splitlines()
+        md_lines = []
+        in_table = False
+        table_rows = []
+        for line in lines:
+            if line.strip().startswith('||') or line.strip().startswith('|'):
+                in_table = True
+                table_rows.append(line.strip())
+            else:
+                if in_table and table_rows:
+                    md_lines.extend(self._wiki_table_rows_to_markdown(table_rows))
+                    table_rows = []
+                    in_table = False
+                md_lines.append(line)
+        if in_table and table_rows:
+            md_lines.extend(self._wiki_table_rows_to_markdown(table_rows))
+        return '\n'.join(md_lines)
+
+    def _wiki_table_rows_to_markdown(self, rows):
+        md = []
+        for i, row in enumerate(rows):
+            if row.startswith('||'):
+                # header row
+                cells = [c.strip() for c in row.strip('|').split('||')]
+                md.append('| ' + ' | '.join(cells) + ' |')
+                md.append('| ' + ' | '.join(['---'] * len(cells)) + ' |')
+            elif row.startswith('|'):
+                cells = [c.strip() for c in row.strip('|').split('|')]
+                md.append('| ' + ' | '.join(cells) + ' |')
+        return md
+
     # ========== Markdown -> Wiki ==========
     
     def markdown_to_wiki(self, md_text: str) -> str:
@@ -166,15 +202,39 @@ class JiraMarkupConverter:
         return self._adf_node_to_markdown(adf_node)
     
     def _adf_node_to_markdown(self, node: Any) -> str:
-        """Convert a single ADF node to Markdown."""
+        """Convert a single ADF node to Markdown, including tables."""
         if not isinstance(node, dict):
             return str(node)
-        
+
         node_type = node.get('type', '')
         content = node.get('content', [])
-        
+
         if node_type == 'doc':
             return '\n\n'.join(self._adf_node_to_markdown(c) for c in content)
+
+        elif node_type == 'table':
+            # Convert ADF table to Markdown table
+            rows = []
+            for row in content:
+                if row.get('type') == 'tableRow':
+                    cells = []
+                    for cell in row.get('content', []):
+                        if cell.get('type') in ('tableCell', 'tableHeader'):
+                            cell_md = ''.join(self._adf_node_to_markdown(c) for c in cell.get('content', []))
+                            # Escape pipes and replace newlines with <br>
+                            cell_md = cell_md.replace('|', '\\|').replace('\n', '<br>')
+                            cells.append(cell_md)
+                    rows.append(cells)
+            if not rows:
+                return ''
+            # Header row: if first row is all tableHeader, treat as header; else, treat first row as header
+            header = rows[0]
+            sep = ['---'] * len(header)
+            body = rows[1:] if len(rows) > 1 else []
+            md_lines = ['| ' + ' | '.join(header) + ' |', '| ' + ' | '.join(sep) + ' |']
+            for row in body:
+                md_lines.append('| ' + ' | '.join(row) + ' |')
+            return '\n'.join(md_lines)
         
         elif node_type == 'paragraph':
             return ''.join(self._adf_node_to_markdown(c) for c in content)

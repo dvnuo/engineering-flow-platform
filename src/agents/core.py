@@ -892,16 +892,24 @@ You have access to the following tools. When a user asks you to do something tha
                     logger.debug(f"Failed to save intermediate chatlog: {e}")
             
             # Run chatlog save in background thread to avoid blocking
-            asyncio.create_task(save_chatlog())
-            
             # If no function calls, we're done - return the response
             if not tool_calls:
-                await session_manager.add_message(session_id, "assistant", content)
-                result = {"response": content, "usage": usage_data, "user_message_id": user_message_id}
+                # Fallback: if content is empty, try to use the latest tool result
+                fallback_content = content
+                if not content.strip():
+                    # Find the latest tool result in loop_messages
+                    for msg in reversed(loop_messages):
+                        if msg.get("role") == "tool" and msg.get("content"):
+                            fallback_content = str(msg.get("content"))
+                            break
+                    # If still empty, provide a default prompt
+                    if not fallback_content.strip():
+                        fallback_content = "Operation completed, but no detailed result was returned."
+                await session_manager.add_message(session_id, "assistant", fallback_content)
+                result = {"response": fallback_content, "usage": usage_data, "user_message_id": user_message_id}
                 if enable_reasoning:
                     reasoning_content = llm_result.get("reasoning", "")
                     result["reasoning"] = reasoning_content
-                    
                     # Send actual thinking content if reasoning is available
                     if reasoning_content:
                         send_event("llm_thinking", {
@@ -929,22 +937,18 @@ You have access to the following tools. When a user asks you to do something tha
                             "context": "user_message",
                             "iteration": iteration
                         })
-                
                 # Send completion event
                 send_event("complete", {
-                    "response": truncate_with_count(content, 500),
+                    "response": truncate_with_count(fallback_content, 500),
                     "total_iterations": iteration
                 })
-                
                 # Complete execution tracing
-                tracer.complete_execution(content)
-                
+                tracer.complete_execution(fallback_content)
                 # Get events for UI
                 from src.skills import get_tracer
                 tracer_instance = get_tracer()
                 events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
                 result["events"] = events
-                
                 # Add complete thinking flow to debug info
                 if llm_result and "_llm_debug" in llm_result:
                     # Get all events from tracer for complete flow
@@ -952,19 +956,18 @@ You have access to the following tools. When a user asks you to do something tha
                     result["_llm_debug"] = {
                         "llm_request": llm_result["_llm_debug"],
                         "thinking_events": all_events,
-                        "final_response": content,
+                        "final_response": fallback_content,
                     }
-                
                 # Trigger memory update (async, fire and forget)
                 # We need to get the last user message and assistant response
                 recent_messages = await session_manager.get_history(session_id)
                 user_text = ""
-                assistant_text = content
+                assistant_text = fallback_content
                 for msg in reversed(recent_messages):
                     if msg.get("role") == "user":
                         user_text = msg.get("content", "")
                         break
-                
+
                 # Disabled: Turn-based memory writing (only backfill at startup)
                 # if user_text and self.memory_update_manager:
                 #     try:
@@ -1330,7 +1333,7 @@ You have access to the following tools. When a user asks you to do something tha
         from src.agents.compaction import resolve_context_window_tokens
         
         provider = (config.llm.get("provider") or getattr(llm_client, "default_provider", "openai")).lower()
-        max_skill_tool_rounds = 10  # Increased for longer skill execution
+        max_skill_tool_rounds = 6  # Increased for longer skill execution
         max_skill_compaction_budget = 32000  # 12% of 264K context for completed_steps
         
         # Resolve skill mode context window (similar to regular chat)
@@ -1505,7 +1508,7 @@ You have access to the following tools. When a user asks you to do something tha
                 else:
                     repeat_call_count = 1
                     last_tool_signature = tool_signature
-                if repeat_call_count >= 2:
+                if repeat_call_count > 3:
                     logger.info(f"[SkillMode] Repeated identical tool call detected: {tool_name}, finalizing without more tools")
                     should_finalize_without_tools = True
                     finalize_reason = "repeated_tool_call"
