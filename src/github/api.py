@@ -433,13 +433,23 @@ class GitHubChannel:
             path: File path
             content: File content (will be base64 encoded)
             message: Commit message
-            sha: SHA of file being updated (optional, required for updates)
+            sha: SHA of file being updated (optional, will auto-fetch if not provided)
             branch: Branch name
             
         Returns:
             Commit data
         """
         import base64
+        
+        # Auto-fetch SHA if not provided (required for updating existing files)
+        if not sha:
+            try:
+                existing = await self.get_file(owner, repo, path, branch or "main")
+                if existing:
+                    sha = existing.get("sha")
+                    logger.info(f"Auto-fetched SHA for {path}: {sha[:7] if sha else 'None'}")
+            except Exception as e:
+                logger.debug(f"Could not fetch existing file SHA: {e}")
         
         logger.info(f"{'Updating' if sha else 'Creating'} file {owner}/{repo}/{path}")
         

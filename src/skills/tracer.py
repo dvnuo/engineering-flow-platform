@@ -40,7 +40,7 @@ class SkillExecution:
     session_id: str
     user_message: str
     matched_skill: Optional[str]
-    skill_prompt: str
+    skill_prompt: str = ""  # Made optional with default empty string
     
     tool_calls: List[ToolCall] = field(default_factory=list)
     thinking_events: List[Dict] = field(default_factory=list)  # LLM thinking events
@@ -135,6 +135,125 @@ class ExecutionTracer:
         if self.enabled:
             status = "OK" if success else "ERROR"
             logger.info(f"[Tracer]  [{status}] {tool_name} ({duration_ms:.1f}ms)")
+    
+    def log_skill_mode_entry(self, skill_name: str, goal: str = "", session_id: str = "skill-mode"):
+        """Log skill mode entry event.
+        
+        Args:
+            skill_name: Name of the skill that was triggered
+            goal: The goal/task for this skill mode session
+            session_id: Session ID to associate with this skill mode execution
+        """
+        if not self.current_execution:
+            # Create a new execution for skill mode tracking
+            self.current_execution = SkillExecution(
+                execution_id=str(uuid.uuid4()),
+                session_id=session_id,
+                user_message=goal,
+                matched_skill=skill_name,
+            )
+        
+        skill_mode_event = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "type": "skill_mode_entry",
+            "data": {
+                "skill": skill_name,
+                "goal": goal,
+            },
+            "display": {
+                "icon": "🎯",
+                "name": "Skill Mode Entry",
+                "message": f"Entered skill mode: {skill_name}"
+            }
+        }
+        self.current_execution.thinking_events.append(skill_mode_event)
+        
+        if self.enabled:
+            logger.info(f"[Tracer] Skill mode entry: {skill_name}")
+    
+    def log_skill_mode_step(self, step: str, status: str, details: str = ""):
+        """Log skill mode step progress.
+        
+        Args:
+            step: Step name/description (e.g., "FETCH_JIRA", "GENERATE_SCENARIOS")
+            status: Status of the step (e.g., "started", "completed", "failed")
+            details: Additional details about the step
+        """
+        if not self.current_execution:
+            return
+        
+        step_event = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "type": "skill_mode_step",
+            "data": {
+                "step": step,
+                "status": status,
+                "details": details,
+            },
+            "display": {
+                "icon": "📋",
+                "name": f"Skill Step: {step}",
+                "message": f"[{status.upper()}] {step}" + (f" - {details}" if details else "")
+            }
+        }
+        self.current_execution.thinking_events.append(step_event)
+        
+        if self.enabled:
+            logger.info(f"[Tracer] Skill mode step: {step} [{status}] {details}")
+    
+    def log_skill_mode_action(self, action: str, body_preview: str = ""):
+        """Log skill mode action (EXECUTE/ASK_USER/FINISH).
+        
+        Args:
+            action: The action label (EXECUTE, ASK_USER, FINISH)
+            body_preview: Preview of the response body
+        """
+        if not self.current_execution:
+            return
+        
+        action_event = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "type": "skill_mode_action",
+            "data": {
+                "action": action,
+                "body_preview": body_preview[:200] if body_preview else "",
+            },
+            "display": {
+                "icon": "▶️" if action == "EXECUTE" else ("❓" if action == "ASK_USER" else "🏁"),
+                "name": f"Skill Action: {action}",
+                "message": f"[{action}]" + (f" {body_preview[:100]}..." if body_preview else "")
+            }
+        }
+        self.current_execution.thinking_events.append(action_event)
+        
+        if self.enabled:
+            logger.info(f"[Tracer] Skill mode action: {action}")
+    
+    def log_skill_mode_complete(self, final_response: str):
+        """Log skill mode completion.
+        
+        Args:
+            final_response: The final response from skill mode
+        """
+        if not self.current_execution:
+            return
+        
+        complete_event = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "type": "skill_mode_complete",
+            "data": {
+                "final_response": final_response[:500] if final_response else "",
+            },
+            "display": {
+                "icon": "🎉",
+                "name": "Skill Mode Complete",
+                "message": "Skill mode execution completed"
+            }
+        }
+        self.current_execution.thinking_events.append(complete_event)
+        
+        if self.enabled:
+            logger.info(f"[Tracer] Skill mode complete")
 
     def log_thinking(self, thinking: str):
         """Log LLM thinking/reasoning during execution.
@@ -210,7 +329,8 @@ class ExecutionTracer:
         """
         # Default event types if not specified
         if event_types is None:
-            event_types = ['skill_matched', 'llm_thinking', 'tool_call', 'tool_result', 'complete']
+            event_types = ['skill_matched', 'llm_thinking', 'tool_call', 'tool_result', 'complete', 
+                          'skill_mode_entry', 'skill_mode_step', 'skill_mode_action', 'skill_mode_complete']
         
         # Configurable icons (can be customized per skill)
         icons = {
@@ -219,6 +339,10 @@ class ExecutionTracer:
             'tool_call': '🔧',
             'tool_result': '✅',
             'complete': '🎉',
+            'skill_mode_entry': '🎯',
+            'skill_mode_step': '📋',
+            'skill_mode_action': '▶️',
+            'skill_mode_complete': '🏁',
         }
         
         events = []
@@ -229,6 +353,12 @@ class ExecutionTracer:
             filtered_executions = [e for e in self.execution_history if e.session_id == session_id]
             # Take only the last 'limit' executions for this session
             filtered_executions = filtered_executions[-limit:]
+        
+        # Also include current_execution if it matches the session_id
+        if self.current_execution:
+            if session_id is None or self.current_execution.session_id == session_id:
+                # Prepend current_execution to show latest events first
+                filtered_executions = [self.current_execution] + filtered_executions
         
         for execution in filtered_executions:
             # Skill matched
@@ -247,16 +377,33 @@ class ExecutionTracer:
             # LLM thinking events
             if 'llm_thinking' in event_types:
                 for thinking in execution.thinking_events:
-                    events.append({
-                        "type": "llm_thinking",
-                        "data": {"thinking": truncate(thinking.get('thinking', ''), 500)},
-                        "timestamp": thinking.get('timestamp', ''),
-                        "display": {
-                            "icon": icons.get('llm_thinking', '🤔'),
-                            "name": "LLM Thinking",
-                            "message": truncate(thinking.get('thinking', ''), 100)
-                        }
-                    })
+                    # Check if it's a skill mode event
+                    if thinking.get('type', '').startswith('skill_mode_'):
+                        event_type = thinking.get('type', '')
+                        if event_type in event_types:
+                            data = thinking.get('data', {})
+                            events.append({
+                                "type": event_type,
+                                "data": data,
+                                "timestamp": thinking.get('timestamp', ''),
+                                "display": {
+                                    "icon": icons.get(event_type, '📋'),
+                                    "name": thinking.get('display', {}).get('name', event_type),
+                                    "message": thinking.get('display', {}).get('message', str(data))
+                                }
+                            })
+                    else:
+                        # Regular thinking event
+                        events.append({
+                            "type": "llm_thinking",
+                            "data": {"thinking": truncate(thinking.get('thinking', ''), 500)},
+                            "timestamp": thinking.get('timestamp', ''),
+                            "display": {
+                                "icon": icons.get('llm_thinking', '🤔'),
+                                "name": "LLM Thinking",
+                                "message": truncate(thinking.get('thinking', ''), 100)
+                            }
+                        })
             
             # Tool calls
             for tool_call in execution.tool_calls:

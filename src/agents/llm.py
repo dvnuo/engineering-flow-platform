@@ -423,7 +423,7 @@ class OpenAIProvider(BaseProvider):
         }
         if include_temperature:
             payload["temperature"] = temperature
-        payload[max_tokens_key] = max_tokens or config.llm.get('max_tokens', 1000)
+        payload[max_tokens_key] = max_tokens or config.llm.get('max_tokens', 64000)
         
         # Add reasoning_replay if enabled (for o1/o3 style reasoning)
         # Only supported by specific models: o1, o3, o1-mini, o1-pro, etc.
@@ -564,7 +564,7 @@ class OpenAIProvider(BaseProvider):
             "model": model_name,
             "instructions": system_prompt or "",
             "input": input_items,
-            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),
             "text": {"format": {"type": "text"}},
         }
         
@@ -675,7 +675,7 @@ class OpenAIProvider(BaseProvider):
             "instructions": system_prompt,
             "input": input_items,
             "tools": converted_tools,
-            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),
         })
         
         # Calculate cost and record usage
@@ -910,7 +910,7 @@ class GitHubCopilotProvider(BaseProvider):
             "model": model_name,
             "instructions": system_prompt or "",
             "input": input_items,
-            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),
             "text": {"format": {"type": "text"}},
         }
         
@@ -1028,7 +1028,7 @@ class GitHubCopilotProvider(BaseProvider):
             "instructions": system_prompt,
             "input": input_items,
             "tools": converted_tools,  # Use converted tools (same as actual request)
-            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),  # Match actual default
+            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),  # Match actual default
         })
         
         return result
@@ -1251,7 +1251,7 @@ class OllamaProvider(BaseProvider):
             "stream": False,
             "options": {
                 "temperature": temperature,
-                "num_predict": max_tokens or config.llm.get('max_tokens', 1000),
+                "num_predict": max_tokens or config.llm.get('max_tokens', 64000),
             }
         }
         
@@ -1331,7 +1331,7 @@ class OllamaProvider(BaseProvider):
             "instructions": system_prompt,
             "input": messages,  # Ollama uses Messages API, not input_items
             "tools": tools,  # Original tools format (for display purposes)
-            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),
         })
         
         return result

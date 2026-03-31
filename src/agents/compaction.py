@@ -787,11 +787,17 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
         "gpt-4o": 128000,
         "gpt-4o-mini": 128000,
         # GPT-5 series
-        "gpt-5": 200000,
-        "gpt-5-mini": 200000,
-        "gpt-5-pro": 200000,
+        "gpt-5": 264000,
+        "gpt-5-mini": 264000,
+        "gpt-5-pro": 264000,
         # GPT-3.5
         "gpt-3.5-turbo": 16385,
+        # Gemini series (64K context)
+        "gemini-2.5": 264000,
+        "minimax/MiniMax-M3": 264000,
+        "minimax": 264000,
+        "gemini-2.0": 32000,
+        "gemini-1.5": 32000,
         # Claude series
         # 4.x models (including versioned like claude-haiku-4-20250514)
         "claude-opus-4": 200000,
@@ -805,6 +811,9 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
         # 3.x models
         "claude-3-opus": 200000,
         "claude-3-haiku": 200000,
+        # MiniMax series (64K context)
+        "minimax": 64000,
+        "minimaxi": 64000,
     }
     
     if model:
@@ -814,7 +823,7 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
             if key in model_lower:
                 return context_windows[key]
     
-    return 4096  # Default
+    return 264000  # Default to 264K for gpt-5-mini and unknown models
 
 
 def normalize_compaction_threshold(raw_value, default_value=0.8):

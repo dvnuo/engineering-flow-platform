@@ -48,3 +48,14 @@ output_format: markdown
 ```
 
 Followed by human-readable documentation.
+
+## Skill Mode Demo Skills
+
+This repository also includes multiple **demo skills** for validating skill mode behavior in realistic QA/dev workflows.
+
+These demos are intentionally designed to exercise:
+- `[ASK_USER]` when key input is missing
+- `[EXECUTE]` for meaningful incremental progress
+- `[FINISH]` for task wrap-up
+- planning behavior differences (single-step vs multi-step)
+- collaboration with full tool availability (used only when clearly helpful)
