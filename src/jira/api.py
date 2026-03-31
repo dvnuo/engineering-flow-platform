@@ -22,40 +22,35 @@ import httpx
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from src.utils.truncate import truncate, truncate_json
-
 from src.config import config
-from src.utils.attachment import download_and_process_attachment
+import logging
 
 logger = logging.getLogger(__name__)
+from src.utils.truncate import truncate, truncate_json as _truncate_json
 
-# Debug mode flag
-_DEBUG_MODE = os.environ.get("DEBUG_JIRA", "").lower() in ("1", "true", "yes")
+# Conservative list of patterns that indicate potentially dangerous JQL input.
+# Used by JiraChannel._validate_jql to block obvious injection-like payloads.
+# Keep patterns conservative to avoid false positives on valid JQL.
+JQL_DANGEROUS_PATTERNS = [
+    r";",                           # statement separator
+    r"--",                          # SQL comment
+    r"/\*",                        # C-style comment start
+    r"\bor\s+1=1\b",             # tautology injection attempts
+    r"\b(?:drop|delete|insert|update|union|select|create|truncate)\b",
+    r"script:",                     # script or URL-based payloads
+    r"\bshutdown\b",
+]
 
 
 def _is_debug_enabled() -> bool:
-    """Check if debug mode is enabled."""
-    return _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG)
-
-
-def _truncate_json(data: Any, max_length: int = 500) -> str:
-    """Truncate JSON for logging (wrapper for truncate_json)."""
-    return truncate_json(data, max_length)
-
-
-# Security: JQL injection patterns to block
-JQL_DANGEROUS_PATTERNS = [
-    r";",           # Statement separator
-    r"--",          # SQL comment
-    r"/\*",         # Block comment start
-    r"\*/",         # Block comment end
-    r"xp_",         # Extended stored procedures
-    r"exec\s",      # EXEC command
-    r"execute\s",   # EXECUTE command
-    r"delete\s",    # DELETE statement
-    r"drop\s",      # DROP statement
-    r"truncate\s",  # TRUNCATE statement
-]
+    """Return True when debug logging is enabled via config or logger level."""
+    try:
+        debug_cfg = config.debug if hasattr(config, 'debug') else {}
+        if isinstance(debug_cfg, dict) and debug_cfg.get('enabled'):
+            return True
+    except Exception:
+        pass
+    return logger.isEnabledFor(logging.DEBUG)
 
 
 class JiraChannel:
@@ -274,25 +269,38 @@ class JiraChannel:
         return result
     
     # ========== Issue Operations ==========
-    
-    async def get_issue(self, issue_key: str) -> Dict[str, Any]:
+
+    async def get_issue(
+        self,
+        issue_key: str,
+        fields: Optional[List[str]] = None,
+        expand: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """Get issue details by key.
-        
+
         Args:
             issue_key: Issue key (e.g., "PROJ-123")
-            
+            fields: Optional list of fields to request
+            expand: Optional list of Jira expansions (e.g., ["names", "renderedFields"])
+
         Returns:
             Issue details including fields, status, assignee
         """
         logger.info(f"Fetching issue: {issue_key}")
-        result = await self._request("GET", f"/issue/{issue_key}")
-        
+        params = {}
+        if fields:
+            params["fields"] = ",".join(fields)
+        if expand:
+            params["expand"] = ",".join(expand)
+
+        result = await self._request("GET", f"/issue/{issue_key}", params=params or None)
+
         # Debug: Log issue summary
-        if _DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+        if _is_debug_enabled():
             summary = result.get("fields", {}).get("summary", "No summary")
             status = result.get("fields", {}).get("status", {}).get("name", "Unknown")
             logger.debug(f"Issue {issue_key}: {status} - {summary}")
-        
+
         return result
     
     async def search_issues(
@@ -1306,6 +1314,42 @@ def get_tools_schemas() -> list:
                         "file_path": {"type": "string", "description": "Local file path to upload"}
                     },
                     "required": ["issue_key", "file_path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "export_issues_to_markdown",
+                "description": "Export one or more Jira issues to Markdown. Supports single issue key, comma-separated keys, a list of keys, or a JQL input (pass a dict with 'jql'). Can write per-issue files, a combined file, or produce a zip.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "input": {
+                            "type": "string",
+                            "description": "Issue input: single key (e.g., PROJ-123), comma-separated keys (e.g., PROJ-1,PROJ-2), a JSON list like [\"PROJ-1\",\"PROJ-2\"], or a JSON object like {\"jql\": \"project = PROJ\"}. For complex inputs, pass a JSON-encoded string."
+                        },
+                        "jql": {"type": "string", "description": "Optional JQL query string (alternative to using 'input' with a dict)"},
+                        "page_size": {"type": "integer", "description": "Optional page size when using JQL", "default": 50},
+                        "output_mode": {"type": "string", "enum": ["single_combined", "one_file_per_issue", "zip_per_issue"], "default": "single_combined"},
+                        "output_directory": {"type": "string", "description": "Directory to write files (required for file modes)"},
+                        "download_attachments": {"type": "boolean", "description": "Whether to download attachments"},
+                        "attachments_dir": {"type": "string", "description": "Relative attachments directory under output_directory"},
+                        "attachments_concurrency": {"type": "integer", "description": "Concurrent downloads for attachments", "default": 4},
+                        "attachments_max_size": {"type": "integer", "description": "Maximum attachment download size in bytes", "default": 52428800},
+                        "attachments_inline_text_threshold": {"type": "integer", "description": "Max chars for inline text embedding", "default": 2000},
+                        "attachments_retries": {"type": "integer", "description": "Retry attempts for attachment downloads", "default": 3},
+                        "attachments_backoff": {"type": "array", "items": {"type": "integer"}, "description": "Backoff seconds for retries", "default": [1, 2, 4]},
+                        "attachments_preserve_binary": {"type": "boolean", "description": "Whether to preserve and copy the original binary files", "default": True},
+                        "include_raw_snapshot": {"type": "boolean", "description": "Include a raw fields snapshot in the Markdown"},
+                        "max_comments": {"type": "integer", "description": "Maximum number of comments to include", "default": 10},
+                        "comments_order": {"type": "string", "enum": ["latest_first", "oldest_first"], "default": "latest_first"},
+                        "field_match_threshold": {"type": "number", "description": "Similarity threshold for custom field matching", "default": 0.9},
+                        "field_similarity_threshold": {"type": "number", "description": "Similarity threshold for content de-duplication", "default": 0.9},
+                        "array_inline_max_items": {"type": "integer", "default": 3},
+                        "array_inline_max_element_length": {"type": "integer", "default": 40}
+                    },
+                    "required": ["input"]
                 }
             }
         },

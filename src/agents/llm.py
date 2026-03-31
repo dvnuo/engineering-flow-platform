@@ -580,7 +580,12 @@ class OpenAIProvider(BaseProvider):
             logger.debug(f"Model: {model_name}")
             logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
             logger.debug(f"Input items count: {len(input_items)}")
-        
+
+        # Defensive check: If input_items is empty, immediately return an error to avoid Copilot API 400.
+        if not input_items or not any(i.get("content") for i in input_items if isinstance(i, dict)):
+            logger.error(f"[LLM] responses() called with empty input_items, aborting Copilot API call. Payload: {{'messages': {messages}, 'input_items': {input_items}}}")
+            return {"error": {"message": "Input field missing for Copilot API.", "type": "bad_request", "code": "input_missing"}}
+
         # Use _call_api for centralized retry/backoff behavior
         data = await self._call_api("/responses", payload)
         
@@ -621,7 +626,58 @@ class OpenAIProvider(BaseProvider):
                     "name": item.get("name", ""),
                     "arguments": item.get("arguments", {}),
                 })
-        
+
+        # Prioritize function_call: if there are function_calls/tool_calls_compat, return directly to the upper layer
+        if not content.strip():
+            # Assign all return fields in advance to ensure robustness
+            usage_data = data.get("usage", {})
+            prompt_tokens = usage_data.get("input_tokens", 0)
+            completion_tokens = usage_data.get("output_tokens", 0)
+            if prompt_tokens == 0:
+                prompt_tokens = sum(len(str(m).split()) * 4 for m in input_items)
+            if completion_tokens == 0:
+                completion_tokens = 0  # If content is empty, tokens can only be 0
+            model_name = model or self.default_model
+            # Build function_calls (Responses API format)
+            function_calls_result = []
+            for fc in function_calls:
+                args = fc.get("arguments", {})
+                arguments = json.dumps(args) if isinstance(args, dict) else args
+                function_calls_result.append({
+                    "call_id": fc.get("call_id", ""),
+                    "name": fc.get("name", ""),
+                    "arguments": arguments,
+                })
+            # Also include tool_calls for backward compatibility
+            tool_calls_compat = []
+            for fc in function_calls:
+                args = fc.get("arguments", {})
+                arguments = json.dumps(args) if isinstance(args, dict) else args
+                tool_calls_compat.append({
+                    "id": fc.get("call_id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": fc.get("name", ""),
+                        "arguments": arguments
+                    }
+                })
+            if function_calls:
+                #remove payload/response details when function_calls exist but content is empty, to avoid confusion in logs
+                logger.info(f"[LLM] Copilot API returned function_call(s) with empty content. Returning function_call for toolchain. ")
+                return {
+                    "function_calls": function_calls_result,
+                    "tool_calls": tool_calls_compat,
+                    "raw_output": data,
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": prompt_tokens + completion_tokens,
+                        "cost_usd": estimate_cost(model_name, prompt_tokens, completion_tokens)
+                    }
+                }
+            logger.error(f"[LLM] Copilot API returned empty content. Payload: {json.dumps(payload, ensure_ascii=False)} Response: {json.dumps(data, ensure_ascii=False)}")
+            return {"error": {"message": "Copilot API returned empty message. Please try rephrasing your prompt or check your input.", "type": "empty_response", "code": "empty_message"}}
+
         # Calculate usage
         usage_data = data.get("usage", {})
         prompt_tokens = usage_data.get("input_tokens", 0)
@@ -925,9 +981,18 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"Model: {model_name}")
             logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
             logger.debug(f"Input messages count: {len(input_items)}")
-        
+            logger.debug(f"Input items detail: {json.dumps(input_items, ensure_ascii=False)}")
+
+        # Defensive check: if input_items is empty, return error immediately to avoid Copilot API 400
+        if not input_items or not any(i.get("content") for i in input_items if isinstance(i, dict)):
+            logger.error(f"[LLM] responses() called with empty input_items, aborting Copilot API call. Payload: {{'messages': {messages}, 'input_items': {input_items}}}")
+            return {"error": {"message": "Input field missing for Copilot API.", "type": "bad_request", "code": "input_missing"}}
+
         # Use _call_api for centralized retry/backoff behavior
         data = await self._call_api("/responses", payload)
+        if _is_debug_enabled():
+            logger.debug(f"=== [GITHUB COPILOT] RESPONSES API RAW RESPONSE ===")
+            logger.debug(json.dumps(data, ensure_ascii=False))
         
         # Debug: Log response (response handled inside _call_api)
         
@@ -960,7 +1025,58 @@ class GitHubCopilotProvider(BaseProvider):
                     "name": item.get("name", ""),
                     "arguments": item.get("arguments", {}),
                 })
-        
+
+        # Priority: handle function_call first. If there are function_calls/tool_calls_compat, return directly to the upper layer.
+        if not content.strip():
+            # Pre-assign all return fields in advance to ensure robustness
+            usage_data = data.get("usage", {})
+            prompt_tokens = usage_data.get("input_tokens", 0)
+            completion_tokens = usage_data.get("output_tokens", 0)
+            if prompt_tokens == 0:
+                prompt_tokens = sum(len(str(m).split()) * 4 for m in input_items)
+            if completion_tokens == 0:
+                completion_tokens = 0  # content is empty, so tokens can only be 0
+            model_name = model or self.default_model
+            # Build function_calls (Responses API format)
+            function_calls_result = []
+            for fc in function_calls:
+                args = fc.get("arguments", {})
+                arguments = json.dumps(args) if isinstance(args, dict) else args
+                function_calls_result.append({
+                    "call_id": fc.get("call_id", ""),
+                    "name": fc.get("name", ""),
+                    "arguments": arguments,
+                })
+            # Also include tool_calls for backward compatibility
+            tool_calls_compat = []
+            for fc in function_calls:
+                args = fc.get("arguments", {})
+                arguments = json.dumps(args) if isinstance(args, dict) else args
+                tool_calls_compat.append({
+                    "id": fc.get("call_id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": fc.get("name", ""),
+                        "arguments": arguments
+                    }
+                })
+            if function_calls:
+                #remove payload/response details when function_calls exist but content is empty, to avoid confusion in logs
+                logger.info(f"[LLM] Copilot API returned function_call(s) with empty content. Returning function_call for toolchain. ")
+                return {
+                    "function_calls": function_calls_result,
+                    "tool_calls": tool_calls_compat,
+                    "raw_output": data,
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": prompt_tokens + completion_tokens,
+                        "cost_usd": estimate_cost(model_name, prompt_tokens, completion_tokens)
+                    }
+                }
+            logger.error(f"[LLM] Copilot API returned empty content. Payload: {json.dumps(payload, ensure_ascii=False)} Response: {json.dumps(data, ensure_ascii=False)}")
+            return {"error": {"message": "Copilot API returned empty message. Please try rephrasing your prompt or check your input.", "type": "empty_response", "code": "empty_message"}}
+
         # Calculate usage
         usage_data = data.get("usage", {})
         prompt_tokens = usage_data.get("input_tokens", 0)
@@ -1007,7 +1123,16 @@ class GitHubCopilotProvider(BaseProvider):
                 "total_tokens": prompt_tokens + completion_tokens,
             }
         }
-        
+
+        # Add _llm_debug for sidebar display (using base method)
+        self._add_llm_debug(result, {
+            "model": model_name,
+            "instructions": system_prompt,
+            "input": input_items,
+            "tools": converted_tools,
+            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+        })
+
         # Calculate cost and record usage
         cost = estimate_cost(model_name, prompt_tokens, completion_tokens)
         result["usage"]["cost_usd"] = cost
@@ -1737,8 +1862,8 @@ service_reload_manager.register('llm', llm_client.reinit)
 
 # Models that support vision/image input
 USE_VISION_MODELS = {
-    "openai": {"gpt-4o", "gpt-4o-mini", "gpt-5-mini", "gpt-5"},
-    "github_copilot": {"gpt-4o", "gpt-5-mini", "gpt-5", "gemini-2.5-pro"},
+    "openai": {"gpt-5-mini", "gpt-5"},
+    "github_copilot": {"gpt-5-mini", "gpt-5", "gemini-2.5-pro"},
     "claude": {"claude-sonnet", "claude-haiku", "claude-opus"},
     "ollama": set(),  # Ollama vision support varies
 }

@@ -284,7 +284,39 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         assignee = kwargs.get("assignee", "")
         result = await jira_module.jira_assign_issue(issue_key, assignee)
         return ToolResult(success="Error" not in result, content=result)
-    
+
+    elif name == "export_issues_to_markdown":
+        # Support both direct input and jql parameter. If jql is provided and input is empty, convert to dict.
+        inp = kwargs.get("input")
+        jql = kwargs.get("jql")
+        page_size = kwargs.get("page_size", 50)
+        if (inp is None or (isinstance(inp, str) and inp.strip() == "")) and jql:
+            inp = {"jql": jql, "page_size": page_size}
+
+        result = await jira_module.export_issues_to_markdown(
+            input=inp,
+            output_mode=kwargs.get("output_mode", "single_combined"),
+            output_directory=kwargs.get("output_directory"),
+            download_attachments=kwargs.get("download_attachments"),
+            attachments_dir=kwargs.get("attachments_dir", "attachments"),
+            include_raw_snapshot=kwargs.get("include_raw_snapshot", False),
+            max_comments=kwargs.get("max_comments", 10),
+            comments_order=kwargs.get("comments_order", "latest_first"),
+            field_match_threshold=kwargs.get("field_match_threshold", 0.9),
+            field_similarity_threshold=kwargs.get("field_similarity_threshold", 0.9),
+            array_inline_max_items=kwargs.get("array_inline_max_items", 3),
+            array_inline_max_element_length=kwargs.get("array_inline_max_element_length", 40),
+            attachments_concurrency=kwargs.get("attachments_concurrency", 4),
+            attachments_max_size=kwargs.get("attachments_max_size", 52428800),
+            attachments_inline_text_threshold=kwargs.get("attachments_inline_text_threshold", 2000),
+            attachments_retries=kwargs.get("attachments_retries", 3),
+            attachments_backoff=kwargs.get("attachments_backoff", [1, 2, 4]),
+            attachments_preserve_binary=kwargs.get("attachments_preserve_binary", True),
+        )
+        # exporter returns a dict: consider success True if no errors present
+        ok = isinstance(result, dict) and not result.get("errors")
+        return ToolResult(success=bool(ok), content=str(result))
+
     # GitHub tools
     elif name == "github_get_issue":
         owner = kwargs.get("owner", "")
@@ -514,10 +546,8 @@ __all__ = [
     "get_confluence_tools",
     "get_git_tools",
     "get_bash_tools",
-    "github_api",
     "jira",
     "confluence",
-    "git_api",
     "bash_tools",
     "ToolResult",
     "Tool",

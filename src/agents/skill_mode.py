@@ -172,7 +172,7 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
     # Estimate ~100 chars per step entry, so ~10 tokens per step
     tokens_per_step = 100 // CHARS_PER_TOKEN
     max_steps = min(len(skill_session.completed_steps), available_tokens // tokens_per_step)
-    max_steps = max(max_steps, 10)  # At least 10 steps
+    max_steps = max(max_steps, 100)  # At least 100 steps
     
     completed = "\n".join(
         f"- {item.get('result', '')}" for item in skill_session.completed_steps[-max_steps:] if item.get("result")
