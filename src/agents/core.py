@@ -1584,12 +1584,19 @@ You have access to the following tools. When a user asks you to do something tha
                 "Do not call tools. Return exactly one control marker on the first line: "
                 "[FINISH] or [ASK_USER]."
             )
-            finalizer_items = list(input_items)
+            # Filter input_items to only keep valid message types for finalizer
+            finalizer_items = [
+                item for item in input_items 
+                if item.get("type") in (None, "message") or item.get("role") in ("user", "assistant")
+            ]
             finalizer_items.append({"role": "user", "content": [{"type": "input_text", "text": finalizer_prompt}]})
+            
+            logger.info(f"[SkillMode] Finalizer: input_items count={len(finalizer_items)}, system_prompt length={len(system_prompt) if system_prompt else 0}")
+            
             finalizer_result = await llm_client.responses(
                 input_items=finalizer_items,
                 system_prompt=system_prompt,
-                tools=[],
+                tools=None,  # Use None instead of [] to avoid potential API issues
                 reasoning_replay=False,
                 provider=_normalize_provider_key(provider),
                 max_tokens=64000,
