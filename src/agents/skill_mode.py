@@ -1,4 +1,8 @@
-"""Lightweight skill-mode session helpers."""
+"""Legacy skill-mode session helpers.
+
+This module is kept for backward compatibility and tests only.
+Active runtime skill handling now lives in unified agent loop + src/skills/runtime.py.
+"""
 
 from __future__ import annotations
 
@@ -16,8 +20,8 @@ from src.skills.registry import Skill
 logger = logging.getLogger(__name__)
 
 
-def _load_skill_references(skill_path: str) -> str:
-    """Load all reference files from skill's references folder or skill directory.
+def list_skill_reference_files(skill_path: str) -> str:
+    """Build a formatted reference summary string for a skill directory.
     
     Supports two patterns:
     1. references/ folder: skill_path/references/*.md (preferred)
@@ -27,7 +31,8 @@ def _load_skill_references(skill_path: str) -> str:
         skill_path: Path to the skill directory
         
     Returns:
-        List of available reference files with their names for tool use
+        Human-readable summary text listing available reference files for tool use.
+        (Legacy behavior: this function returns a string, not a List[str].)
     """
     if not skill_path:
         return "(no skill path)"
@@ -211,7 +216,7 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
     artifacts_summary = _build_artifacts_summary(skill_session)
     
     # Load skill references
-    references = _load_skill_references(getattr(skill, 'path', '') or '')
+    references = list_skill_reference_files(getattr(skill, 'path', '') or '')
     skill_scripts = _list_skill_scripts(getattr(skill, 'path', '') or '')
 
     return (
@@ -636,3 +641,7 @@ def compact_skill_session_sync(skill_session: SkillSession, max_steps: int = 20,
         skill_session.memory_summary = skill_session.memory_summary[-max_chars:]
     
     return skill_session
+
+
+# Backward compatibility alias
+_load_skill_references = list_skill_reference_files

@@ -45,6 +45,16 @@ from src.agents.executor import (
     ToolResult,
 )
 from src.agents.tool_result_policy import should_passthrough_tool_result
+from src.agents.skill_runtime import (
+    apply_skill_hooks,
+    build_skill_runtime_event_payload,
+    build_skill_tool_denied_result,
+    get_effective_skill_runtime_prompt,
+    get_skill_reference_attachment,
+    resolve_prompt_execution_boundary,
+    run_skill_tool_with_task_boundary,
+)
+from src.skills.runtime import SkillRuntimeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -454,43 +464,16 @@ You have access to the following tools. When a user asks you to do something tha
             return {"response": fastlane_response, "usage": usage_data, "user_message_id": user_message_id}
         # ===== END FAST LANE =====
 
-        # ===== SKILL MODE ROUTING =====
+        # ===== SKILL MATCHING =====
         from src.skills import skill_registry
 
-        # Initialize skill registry once (shared with skill matching below)
+        # Initialize skill registry once
         if not skill_registry._initialized:
             skill_registry.load_skills()
 
-        active_skill_state = await session_manager.get_active_skill_session(session_id)
-        if active_skill_state:
-            return await self._continue_skill_mode(
-                message=message,
-                session_id=session_id,
-                user_message_id=user_message_id,
-                skill_state=active_skill_state,
-                track_usage=track_usage,
-                stream_callback=stream_callback,
-            )
-
-        matched_for_mode = skill_registry.match_skill(message)
-        if matched_for_mode:
-            return await self._start_skill_mode(
-                message=message,
-                session_id=session_id,
-                user_message_id=user_message_id,
-                skill=matched_for_mode[0],
-                track_usage=track_usage,
-                stream_callback=stream_callback,
-            )
-
-        # ===== END SKILL MODE ROUTING =====
-
-        # ===== SKILL MATCHING (FR-1, FR-2) =====
+        matched_skills = skill_registry.match_skill(message)
         from src.skills import get_tracer
-        
-        # Reuse the match result from skill-mode routing (if any)
-        matched_skills = matched_for_mode
-        
+
         # Start execution tracing
         tracer = get_tracer()
         execution_id = tracer.start_execution(
@@ -499,26 +482,27 @@ You have access to the following tools. When a user asks you to do something tha
             matched_skill=matched_skills[0].name if matched_skills else None,
         )
         
-        # Build skill prompt if matched (FR-3: Dynamic Skill Injection)
-        skill_prompt = ""
-        
+        active_skill_runtime: Optional[SkillRuntimeConfig] = None
+
         if matched_skills:
             # Use the best match
             best_skill = matched_skills[0]
             logger.info(f"[Skill] Matched skill: {best_skill.name}")
             
             # Set skill workdir for exec tool (async-safe via contextvars)
+            set_skill_workdir(best_skill.path or None)
             if best_skill.path:
-                set_skill_workdir(best_skill.path)
                 logger.info(f"[Skill] Workdir: {best_skill.path}")
-            
-            skill_prompt = skill_registry.get_skill_prompt(best_skill)
+
+            active_skill_runtime = skill_registry.get_skill_runtime_config(best_skill)
             # Log matched skill
             tracer.log_tool_call(
                 tool_name="skill_matched",
                 arguments={"skill": best_skill.name},
                 result=f"Matched skill: {best_skill.name}",
             )
+        else:
+            set_skill_workdir(None)
         # ===== END SKILL MATCHING =====
 
         # ===== MESSAGE COMPACTION =====
@@ -628,13 +612,16 @@ You have access to the following tools. When a user asks you to do something tha
         enable_reasoning = reasoning_replay if reasoning_replay is not None else config.llm.get('reasoning_replay', False)
         logger.info(f"[{session_id}] reasoning_replay={enable_reasoning}")
         
-        # ===== BUILD EFFECTIVE SYSTEM PROMPT (with Skill Guidance + Semantic Context) =====
-        effective_system_prompt = self.system_prompt
-        
-        # FR-3: Dynamic Skill Injection - Include skill prompt from FIRST call
-        if skill_prompt:
-            effective_system_prompt = f"{self.system_prompt}\n\n## Skill Guidance\n\n{skill_prompt}"
-            logger.info(f"[Skill] Injected skill guidance for: {matched_skills[0].name}")
+        # ===== BUILD EFFECTIVE PROMPT ASSEMBLY (layered skill runtime + semantic context) =====
+        prompt_assembly = get_effective_skill_runtime_prompt(
+            base_system_prompt=self.system_prompt,
+            runtime_config=active_skill_runtime,
+        )
+        effective_system_prompt, prompt_boundary_mode = resolve_prompt_execution_boundary(prompt_assembly)
+        reference_attachment = get_skill_reference_attachment(active_skill_runtime)
+
+        if active_skill_runtime:
+            logger.info(f"[Skill] Applied layered prompt assembly for: {active_skill_runtime.skill_name}")
         
         # Semantic Context Search - Find relevant memory context
         semantic_context = ""
@@ -715,6 +702,18 @@ You have access to the following tools. When a user asks you to do something tha
         # Send skill matched event
         if matched_skills:
             send_event("skill_matched", {"skill": matched_skills[0].name})
+        if active_skill_runtime:
+            verbose_runtime_event = _is_debug_enabled() or bool(config.session.get("verbose_skill_runtime_events", False))
+            send_event(
+                "skill_runtime_applied",
+                build_skill_runtime_event_payload(
+                    runtime_config=active_skill_runtime,
+                    reference_attachment=reference_attachment,
+                    prompt_assembly=prompt_assembly,
+                    prompt_boundary_mode=prompt_boundary_mode,
+                    verbose=verbose_runtime_event,
+                ),
+            )
         
         # ===== INJECT ATTACHED IMAGES =====
         if attached_images and len(messages) > 0:
@@ -932,7 +931,11 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Check if any message contains images - if so, use vision model
             # Use model explicitly set in agent, otherwise let provider decide
-            current_model = self.model or config.llm.get("model")
+            current_model = (
+                (active_skill_runtime.model_override if active_skill_runtime else None)
+                or self.model
+                or config.llm.get("model")
+            )
             
             # Resolve provider: use config if set, otherwise use llm_client's default
             config_provider = config.llm.get("provider")
@@ -976,10 +979,19 @@ You have access to the following tools. When a user asks you to do something tha
                         effective_model = fallback
             
             # Only pass model if explicitly set
+            loop_tools = self.tools
+            if active_skill_runtime and active_skill_runtime.allowed_tools:
+                allowed = active_skill_runtime.allowed_tools_set
+                loop_tools = [
+                    tool_schema
+                    for tool_schema in self.tools
+                    if tool_schema.get("function", {}).get("name") in allowed
+                ]
+
             llm_kwargs = dict(
                 input_items=input_items,
                 system_prompt=effective_system_prompt,
-                tools=self.tools,
+                tools=loop_tools,
                 reasoning_replay=enable_reasoning,
             )
             if effective_model:
@@ -1259,6 +1271,100 @@ You have access to the following tools. When a user asks you to do something tha
                     "args": args,
                     "status": "executing"
                 })
+
+                # Runtime skill policy enforcement (hard guard, not prompt-only)
+                if active_skill_runtime and active_skill_runtime.allowed_tools:
+                    if tool_name not in active_skill_runtime.allowed_tools_set:
+                        deny_result = build_skill_tool_denied_result(active_skill_runtime, tool_name)
+                        logger.warning(
+                            "[Skill] Runtime tool policy denied tool '%s' for skill '%s'",
+                            tool_name,
+                            active_skill_runtime.skill_name,
+                        )
+                        send_event(
+                            "skill_tool_denied",
+                            {
+                                "skill": active_skill_runtime.skill_name,
+                                "tool": tool_name,
+                                "call_id": call_id,
+                                "allowed_tools": active_skill_runtime.allowed_tools,
+                            },
+                        )
+                        send_event(
+                            "tool_result",
+                            {
+                                "tool": tool_name,
+                                "call_id": call_id,
+                                "result": str(deny_result),
+                                "success": False,
+                            },
+                        )
+                        tracer.log_tool_call(
+                            tool_name=tool_name,
+                            arguments=args,
+                            result=str(deny_result),
+                            success=False,
+                        )
+                        loop_messages.append(
+                            {
+                                "role": "tool",
+                                "content": str(deny_result),
+                                "tool_call_id": call_id,
+                            }
+                        )
+                        executed_tool_results.append((tool_name, deny_result))
+                        apply_skill_hooks(
+                            runtime_config=active_skill_runtime,
+                            stage="post_tool",
+                            session_id=session_id,
+                            tool_name=tool_name,
+                            payload={"denied": True, "result": str(deny_result)},
+                            event_callback=send_event,
+                        )
+                        continue
+
+                pre_hook_effects = apply_skill_hooks(
+                    runtime_config=active_skill_runtime,
+                    stage="pre_tool",
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    payload={"args": args},
+                    event_callback=send_event,
+                )
+                if pre_hook_effects.modified_args:
+                    args = {**args, **pre_hook_effects.modified_args}
+                if pre_hook_effects.short_circuit_result is not None:
+                    short_result = pre_hook_effects.short_circuit_result
+                    short_result_preview = truncate_with_count(str(short_result), 200)
+                    tracer.log_tool_call(
+                        tool_name=tool_name,
+                        arguments=args,
+                        result=str(short_result),
+                        success=short_result.success,
+                    )
+                    loop_messages.append(
+                        {
+                            "role": "tool",
+                            "content": str(short_result),
+                            "tool_call_id": call_id,
+                        }
+                    )
+                    send_event("tool_result", {
+                        "tool": tool_name,
+                        "call_id": call_id,
+                        "result": short_result_preview,
+                        "success": short_result.success
+                    })
+                    executed_tool_results.append((tool_name, short_result))
+                    apply_skill_hooks(
+                        runtime_config=active_skill_runtime,
+                        stage="post_tool",
+                        session_id=session_id,
+                        tool_name=tool_name,
+                        payload={"short_circuit": True, "result": str(short_result)},
+                        event_callback=send_event,
+                    )
+                    continue
                 
                 # ===== CONFIRMATION GATE (FR-4) =====
                 # Check if this is a write operation that requires confirmation
@@ -1276,18 +1382,34 @@ You have access to the following tools. When a user asks you to do something tha
                     # TODO: Implement actual user confirmation flow
                     logger.info(f"[Confirmation] Auto-confirming write operation: {tool_name}")
                 
-                # Execute the tool
+                # Execute the tool (task-capable tools go through task manager boundary)
                 logger.info(f"Executing tool: {tool_name} with args: {args}")
-                tool_result = await execute_tool_by_name(tool_name, **args)
+                tool_result = await run_skill_tool_with_task_boundary(
+                    runtime_config=active_skill_runtime,
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    execute_direct=lambda tn=tool_name, tool_args=args: execute_tool_by_name(tn, **tool_args),
+                    event_callback=send_event,
+                )
+                result_preview = truncate_with_count(str(tool_result), 200)
+                post_hook_effects = apply_skill_hooks(
+                    runtime_config=active_skill_runtime,
+                    stage="post_tool",
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    payload={"success": tool_result.success, "result_preview": result_preview},
+                    event_callback=send_event,
+                )
+                if post_hook_effects.result_override is not None:
+                    tool_result = post_hook_effects.result_override
+                    result_preview = truncate_with_count(str(tool_result), 200)
                 tracer.log_tool_call(
                     tool_name=tool_name,
                     arguments=args,
                     result=str(tool_result),
                     success=tool_result.success,
                 )
-                
                 # Send tool result event
-                result_preview = truncate_with_count(str(tool_result), 200)
                 send_event("tool_result", {
                     "tool": tool_name,
                     "result": result_preview,

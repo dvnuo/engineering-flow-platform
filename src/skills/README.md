@@ -9,8 +9,31 @@ The Skills module provides skill discovery, matching, and execution capabilities
 ```
 skills/
 ├── registry.py    # Skill loading, matching, and discovery
+├── runtime.py     # Skill runtime config + prompt block composition
 └── tracer.py      # Skill execution tracing for UI
 ```
+
+## Runtime Architecture (Skill-as-Command)
+
+- Skill matching still happens in `SkillRegistry.match_skill(...)`.
+- A match now becomes a `SkillRuntimeConfig` (not a separate skill workflow).
+- Prompt injection is layered with compact blocks:
+  1. **System rules**: hard runtime constraints summary.
+  2. **Developer instructions**: description + strategy + compact body.
+  3. **References summary**: filenames/paths only.
+- The prompt assembly is built as explicit layers first, then serialized once at the final LLM request boundary.
+- `allowed_tools` is enforced in the unified tool loop at runtime.
+- `task_tools` marks tool names that should run through the task boundary (`src/agents/tasks.py`) rather than direct execution.
+- `hooks` can register lightweight runtime hook points (`pre_tool`, `post_tool`) and optional callable adapters (`pre_tool:module.path.fn`), with safe failure handling.
+- Callable hook adapters are resolved with a safe allowlist policy: default `src.hooks.` only. Test hooks (`tests.`) require `SKILL_RUNTIME_ENABLE_TEST_HOOKS=1`.
+- Async hook callables/results are rejected by default (`unsupported_async_hook`) to keep runtime hook execution sync-safe.
+- Hook adapters may optionally return:
+  - `{"modified_args": {...}}` (pre-tool)
+  - `{"short_circuit_result": ...}` (pre-tool)
+  - `{"result_override": ...}` (post-tool)
+- References stay compact by default (metadata + short availability context), without inlining full reference file contents.
+- Explicit `references` entries are normalized to absolute paths (relative paths resolve from the skill directory/source file).
+- For implicit references, fallback scanning is narrow (`references/` folder first, then `ref-*.md`-style local patterns) to avoid cross-skill contamination.
 
 ## Components
 
@@ -71,6 +94,16 @@ strategy:
   - Process the request
   - Return results
 output_format: markdown
+when_to_use:
+  - For triage workflows
+references:
+  - references/playbook.md
+model: gpt-5-mini
+hooks:
+  - precheck
+task_tools:
+  - run_command
+risk_level: medium
 ---
 ```
 
