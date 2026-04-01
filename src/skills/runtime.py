@@ -34,6 +34,12 @@ class EffectivePromptAssembly:
 
 
 @dataclass
+class ReferenceAttachment:
+    references: List[str] = field(default_factory=list)
+    context_text: str = ""
+
+
+@dataclass
 class SkillRuntimeConfig:
     skill_name: str
     allowed_tools: List[str] = field(default_factory=list)
@@ -118,6 +124,8 @@ def serialize_prompt_layers(base_system_prompt: str, layers: SkillPromptLayers) 
     system_sections = [base_system_prompt.strip()]
     if layers.system_rules_text:
         system_sections.append(f"## Skill Runtime Rules\n{layers.system_rules_text}")
+    if layers.developer_instructions_text:
+        system_sections.append(f"## Skill Developer Instructions\n{layers.developer_instructions_text}")
     if layers.reference_context_text:
         system_sections.append(f"## Skill References\n{layers.reference_context_text}")
 
@@ -137,6 +145,11 @@ def serialize_prompt_layers(base_system_prompt: str, layers: SkillPromptLayers) 
 def assemble_effective_prompt(base_system_prompt: str, runtime_config: Optional[SkillRuntimeConfig]) -> EffectivePromptAssembly:
     layers = assemble_skill_prompt_layers(runtime_config)
     return serialize_prompt_layers(base_system_prompt, layers)
+
+
+def attach_skill_references(runtime_config: Optional[SkillRuntimeConfig]) -> ReferenceAttachment:
+    refs = list((runtime_config.references if runtime_config else []) or [])
+    return ReferenceAttachment(references=refs, context_text=build_reference_context(refs))
 
 
 def build_skill_runtime_config(skill: Skill) -> SkillRuntimeConfig:

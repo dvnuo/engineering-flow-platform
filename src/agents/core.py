@@ -49,6 +49,7 @@ from src.agents.skill_runtime import (
     apply_skill_hooks,
     build_skill_tool_denied_result,
     get_effective_skill_runtime_prompt,
+    get_skill_reference_attachment,
     run_skill_tool_with_task_boundary,
 )
 from src.skills.runtime import SkillRuntimeConfig
@@ -615,7 +616,7 @@ You have access to the following tools. When a user asks you to do something tha
             runtime_config=active_skill_runtime,
         )
         effective_system_prompt = prompt_assembly.serialized_system_prompt
-        skill_developer_prompt = prompt_assembly.serialized_developer_prompt
+        reference_attachment = get_skill_reference_attachment(active_skill_runtime)
 
         if active_skill_runtime:
             logger.info(f"[Skill] Applied layered prompt assembly for: {active_skill_runtime.skill_name}")
@@ -634,11 +635,6 @@ You have access to the following tools. When a user asks you to do something tha
                 logger.info(f"[Memory] Added semantic context from search")
         except Exception as e:
             logger.debug(f"[Memory] Semantic search failed: {e}")
-
-        if skill_developer_prompt:
-            effective_system_prompt = (
-                f"{effective_system_prompt}\n\n## Skill Developer Instructions\n{skill_developer_prompt}"
-            )
         
         # ===== TOOL LOOP (REACT Pattern) =====
         # Continue calling LLM until it stops requesting tools
@@ -712,7 +708,13 @@ You have access to the following tools. When a user asks you to do something tha
                     "allowed_tools": active_skill_runtime.allowed_tools,
                     "task_tools": active_skill_runtime.task_tools,
                     "hooks": active_skill_runtime.hooks,
-                    "references": active_skill_runtime.references,
+                    "references": reference_attachment.references,
+                    "reference_context": reference_attachment.context_text,
+                    "prompt_layers": {
+                        "system_rules_text": prompt_assembly.system_rules_text,
+                        "developer_instructions_text": prompt_assembly.developer_instructions_text,
+                        "reference_context_text": prompt_assembly.reference_context_text,
+                    },
                 },
             )
         
@@ -1275,6 +1277,7 @@ You have access to the following tools. When a user asks you to do something tha
                 apply_skill_hooks(
                     runtime_config=active_skill_runtime,
                     stage="pre_tool",
+                    session_id=session_id,
                     tool_name=tool_name,
                     payload={"args": args},
                     event_callback=send_event,
@@ -1314,6 +1317,7 @@ You have access to the following tools. When a user asks you to do something tha
                         apply_skill_hooks(
                             runtime_config=active_skill_runtime,
                             stage="post_tool",
+                            session_id=session_id,
                             tool_name=tool_name,
                             payload={"denied": True, "result": str(deny_result)},
                             event_callback=send_event,
@@ -1362,6 +1366,7 @@ You have access to the following tools. When a user asks you to do something tha
                 apply_skill_hooks(
                     runtime_config=active_skill_runtime,
                     stage="post_tool",
+                    session_id=session_id,
                     tool_name=tool_name,
                     payload={"success": tool_result.success, "result_preview": result_preview},
                     event_callback=send_event,

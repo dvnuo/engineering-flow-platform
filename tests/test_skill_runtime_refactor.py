@@ -6,8 +6,8 @@ from src.agents.core import Agent
 from src.agents.skill_runtime import build_skill_tool_denied_result
 from src.skills.registry import SkillRegistry
 from src.skills.runtime import (
+    attach_skill_references,
     assemble_effective_prompt,
-    build_skill_prompt_blocks,
     build_skill_runtime_config,
 )
 
@@ -113,6 +113,11 @@ def test_prompt_layer_assembly_and_reference_context():
     assert "Available references:" in assembly.reference_context_text
     assert "ref-a.md" in assembly.reference_context_text
     assert "line1" not in assembly.reference_context_text
+    assert assembly.serialized_system_prompt.count("Skill Developer Instructions") == 1
+
+    attachment = attach_skill_references(runtime_config)
+    assert attachment.references == ["/tmp/ref-a.md", "/tmp/ref-b.md"]
+    assert "Available references:" in attachment.context_text
 
 
 def test_build_skill_tool_denied_result_contains_policy():
@@ -267,6 +272,44 @@ async def test_hooks_and_task_path_emit_events(monkeypatch, base_agent):
 
 
 @pytest.mark.asyncio
+async def test_hook_failure_does_not_break_request(monkeypatch, base_agent):
+    agent, _ = base_agent
+    matched_skill = SimpleNamespace(
+        name="runtime-skill",
+        description="d",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="instructions",
+        references=[],
+        model="",
+        hooks=["pre_tool:tests.test_skill_runtime_refactor._failing_hook"],
+    )
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+    )
+
+    async def _exec(*args, **kwargs):
+        return ToolResult(True, "task ok")
+
+    monkeypatch.setattr("src.agents.core.execute_tool_by_name", _exec)
+
+    responses = [
+        {"content": "", "function_calls": [{"call_id": "1", "name": "allowed_tool", "arguments": "{}"}], "usage": {}},
+        {"content": "done", "function_calls": [], "usage": {}},
+    ]
+
+    async def fake_responses(**kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+    result = await agent.process("runtime test", session_id="s-hook-fail")
+    assert result["response"] == "done"
+
+
+@pytest.mark.asyncio
 async def test_non_skill_request_unaffected(monkeypatch, base_agent):
     agent, _ = base_agent
     monkeypatch.setattr(
@@ -280,3 +323,7 @@ async def test_non_skill_request_unaffected(monkeypatch, base_agent):
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
     result = await agent.process("hello", session_id="s4")
     assert result["response"] == "plain response"
+
+
+def _failing_hook(context):
+    raise RuntimeError("hook failure for testing")
