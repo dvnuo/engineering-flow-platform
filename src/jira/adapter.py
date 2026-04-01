@@ -69,6 +69,9 @@ class JiraFormatAdapter:
             max_comments: Maximum number of comments to include
             include_fields: Fields to include (default: summary, status, description, comments)
             include_comments: Whether to include comments
+            include_attachment_urls: Markdown-only flag (default: False). When False,
+                attachments render as filenames only. When True, markdown attachment
+                entries may include URLs.
 
         Returns:
             markdown/wiki: str

@@ -122,7 +122,9 @@ async def jira_get_issue(
         max_comments: Maximum number of comments to include
         include_fields: Fields to include (default: summary, status, description, comments)
         include_comments: Whether to include comments
-        include_attachment_urls: Whether to include full attachment URLs in markdown output
+        include_attachment_urls: Markdown-only flag (default: False). Controls
+            whether attachment rendering includes full URLs. By default,
+            attachment filenames are shown without URLs.
         
     Returns:
         Issue details in requested format (markdown/wiki: str, raw: dict)
@@ -185,7 +187,9 @@ async def jira_get_issue_by_url(
         max_comments: Maximum number of comments to include
         include_fields: Fields to include
         include_comments: Whether to include comments
-        include_attachment_urls: Whether to include full attachment URLs in markdown output
+        include_attachment_urls: Markdown-only flag (default: False). Controls
+            whether attachment rendering includes full URLs. By default,
+            attachment filenames are shown without URLs.
         
     Returns:
         Issue details in requested format
