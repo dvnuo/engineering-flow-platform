@@ -112,7 +112,7 @@ async def jira_get_issue(
     include_fields: List[str] = None,
     include_comments: bool = True,
     include_attachment_urls: bool = False
- ) -> Union[str, dict]:
+) -> Union[str, dict]:
     """Get a Jira issue by key.
     
     Args:

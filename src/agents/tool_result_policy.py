@@ -46,7 +46,7 @@ def _message_has_jira_transform_intent(text: str) -> bool:
 def _message_has_jira_retrieval_intent(text: str, latest_user_message: str) -> bool:
     if _message_has_any_keyword(text, _JIRA_RETRIEVAL_HINTS):
         return True
-    has_retrieval_verb = any(word in text for word in ("get", "show", "read", "open", "fetch", "retrieve"))
+    has_retrieval_verb = bool(re.search(r"\b(get|show|read|open|fetch|retrieve)\b", text))
     has_issue_hint = ("jira" in text) or ("issue" in text) or bool(
         re.search(r"\b[A-Z][A-Z0-9_]*-\d+\b", latest_user_message or "")
     )
