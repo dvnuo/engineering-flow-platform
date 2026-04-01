@@ -32,6 +32,7 @@ skills/
   - `{"short_circuit_result": ...}` (pre-tool)
   - `{"result_override": ...}` (post-tool)
 - References stay compact by default (metadata + short availability context), without inlining full reference file contents.
+- Explicit `references` entries are normalized to absolute paths (relative paths resolve from the skill directory/source file).
 - For implicit references, fallback scanning is narrow (`references/` folder first, then `ref-*.md`-style local patterns) to avoid cross-skill contamination.
 
 ## Components

@@ -54,8 +54,23 @@ class SkillRuntimeConfig:
 
 
 def summarize_skill_references(skill: Skill) -> List[str]:
+    base_dir = Path(getattr(skill, "path", "") or "").resolve() if getattr(skill, "path", "") else None
+    if base_dir is None:
+        source_file = Path(getattr(skill, "source_file", "") or "")
+        base_dir = source_file.parent.resolve() if str(source_file).strip() else None
+
     if skill.references:
-        return [str(ref) for ref in skill.references if str(ref).strip()]
+        refs: List[str] = []
+        for ref in skill.references:
+            ref_text = str(ref or "").strip()
+            if not ref_text:
+                continue
+            ref_path = Path(ref_text)
+            if ref_path.is_absolute() or base_dir is None:
+                refs.append(str(ref_path))
+            else:
+                refs.append(str((base_dir / ref_path).resolve()))
+        return refs
     if not skill.path:
         return []
 

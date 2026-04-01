@@ -114,20 +114,20 @@ def _hook_applies_to_stage(hook_name: str, stage: str) -> bool:
     return normalized == stage or normalized.startswith(f"{stage}:")
 
 
-def _resolve_hook_callable(hook_name: str):
+def _resolve_hook_callable(hook_name: str) -> Dict[str, Any]:
     normalized = (hook_name or "").strip()
     if ":" not in normalized:
-        return None
+        return {"mode": "event_only", "callable": None}
     _, target = normalized.split(":", 1)
     if "." not in target:
-        return None
+        return {"mode": "event_only", "callable": None}
     approved_prefixes = _approved_hook_prefixes()
     if not any(target.startswith(prefix) for prefix in approved_prefixes):
         logger.warning("[SkillHook] Rejected unapproved hook target: %s (allowed=%s)", target, approved_prefixes)
-        return None
+        return {"mode": "rejected_unapproved_hook", "callable": None}
     module_name, func_name = target.rsplit(".", 1)
     module = import_module(module_name)
-    return getattr(module, func_name)
+    return {"mode": "callable", "callable": getattr(module, func_name)}
 
 
 def _coerce_tool_result(value: Any) -> Optional[ToolResult]:
@@ -148,7 +148,11 @@ def _coerce_tool_result(value: Any) -> Optional[ToolResult]:
 def dispatch_skill_hook(*, hook_name: str, context: HookContext) -> Dict[str, Any]:
     """Execute a hook target when available and return runtime metadata."""
     try:
-        hook_fn = _resolve_hook_callable(hook_name)
+        resolved = _resolve_hook_callable(hook_name)
+        resolution_mode = resolved.get("mode", "event_only")
+        hook_fn = resolved.get("callable")
+        if resolution_mode == "rejected_unapproved_hook":
+            return {"applied": False, "mode": "rejected_unapproved_hook", "error": "hook_target_not_allowed", "hook_effects": {}}
         if not hook_fn:
             return {"applied": True, "mode": "event_only", "hook_effects": {}}
         if inspect.iscoroutinefunction(hook_fn):

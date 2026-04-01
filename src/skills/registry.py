@@ -256,7 +256,12 @@ class SkillRegistry:
             return {}, content
 
         frontmatter_text = "".join(lines[1:closing_index])
-        parsed = _yaml.load(frontmatter_text)
+        try:
+            parsed = _yaml.load(frontmatter_text)
+        except Exception as exc:
+            logger.warning("Failed to parse skill markdown frontmatter: %s", exc)
+            body = "".join(lines[closing_index + 1 :]).lstrip("\n")
+            return {}, body
         if parsed is None:
             frontmatter: Dict[str, Any] = {}
         elif isinstance(parsed, Mapping):
@@ -347,9 +352,10 @@ class SkillRegistry:
     
     def get_skill_prompt(self, skill: Skill) -> str:
         """Backward-compatible prompt summary."""
-        from src.skills.runtime import build_skill_prompt_blocks
+        from src.skills.runtime import build_skill_prompt_blocks, summarize_skill_references
 
-        blocks = build_skill_prompt_blocks(skill)
+        references = summarize_skill_references(skill)
+        blocks = build_skill_prompt_blocks(skill, references=references)
         return "\n\n".join(
             part for part in [blocks.system_rules, blocks.developer_instructions, blocks.references_summary] if part
         )

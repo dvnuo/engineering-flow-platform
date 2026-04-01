@@ -159,6 +159,21 @@ Body
     assert "Invalid skill frontmatter type" in caplog.text
 
 
+def test_parse_markdown_frontmatter_yaml_error_is_safe(tmp_path, caplog):
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir=str(tmp_path / "none"))
+    with caplog.at_level("WARNING"):
+        frontmatter, body = registry._parse_markdown_frontmatter(
+            """---
+name: [unterminated
+---
+Body
+"""
+        )
+    assert frontmatter == {}
+    assert body.strip() == "Body"
+    assert "Failed to parse skill markdown frontmatter" in caplog.text
+
+
 def test_prompt_layer_assembly_and_reference_context():
     skill = SimpleNamespace(
         name="compact",
@@ -428,6 +443,7 @@ async def test_hooks_and_task_path_emit_events(monkeypatch, base_agent):
 @pytest.mark.asyncio
 async def test_hook_failure_does_not_break_request(monkeypatch, base_agent):
     agent, _ = base_agent
+    monkeypatch.setenv("SKILL_RUNTIME_ENABLE_TEST_HOOKS", "1")
     matched_skill = SimpleNamespace(
         name="runtime-skill",
         description="d",
@@ -466,6 +482,7 @@ async def test_hook_failure_does_not_break_request(monkeypatch, base_agent):
 @pytest.mark.asyncio
 async def test_pre_hook_can_modify_args(monkeypatch, base_agent):
     agent, _ = base_agent
+    monkeypatch.setenv("SKILL_RUNTIME_ENABLE_TEST_HOOKS", "1")
     matched_skill = SimpleNamespace(
         name="runtime-skill",
         description="d",
@@ -505,6 +522,7 @@ async def test_pre_hook_can_modify_args(monkeypatch, base_agent):
 @pytest.mark.asyncio
 async def test_pre_hook_can_short_circuit(monkeypatch, base_agent):
     agent, _ = base_agent
+    monkeypatch.setenv("SKILL_RUNTIME_ENABLE_TEST_HOOKS", "1")
     matched_skill = SimpleNamespace(
         name="runtime-skill",
         description="d",
@@ -544,6 +562,7 @@ async def test_pre_hook_can_short_circuit(monkeypatch, base_agent):
 @pytest.mark.asyncio
 async def test_post_hook_can_override_result(monkeypatch, base_agent):
     agent, _ = base_agent
+    monkeypatch.setenv("SKILL_RUNTIME_ENABLE_TEST_HOOKS", "1")
     matched_skill = SimpleNamespace(
         name="runtime-skill",
         description="d",
@@ -632,6 +651,36 @@ def test_explicit_references_take_precedence(tmp_path):
     assert refs == [explicit]
 
 
+def test_explicit_relative_references_resolve_against_skill_path(tmp_path):
+    skill_dir = tmp_path / "skill"
+    skill_dir.mkdir()
+    skill = Skill(
+        name="alpha",
+        description="a",
+        path=str(skill_dir),
+        references=["references/playbook.md", "  ", "notes.md"],
+    )
+    refs = summarize_skill_references(skill)
+    assert refs == [
+        str((skill_dir / "references/playbook.md").resolve()),
+        str((skill_dir / "notes.md").resolve()),
+    ]
+
+
+def test_explicit_references_fallback_to_source_file_parent(tmp_path):
+    skill_file = tmp_path / "nested" / "skill.md"
+    skill_file.parent.mkdir(parents=True)
+    skill_file.write_text("---\nname: alpha\ndescription: a\n---\n", encoding="utf-8")
+    skill = Skill(
+        name="alpha",
+        description="a",
+        source_file=str(skill_file),
+        references=["references/readme.md"],
+    )
+    refs = summarize_skill_references(skill)
+    assert refs == [str((skill_file.parent / "references/readme.md").resolve())]
+
+
 def test_hook_resolution_rejects_unapproved_import(monkeypatch):
     import_called = {"value": False}
 
@@ -644,22 +693,48 @@ def test_hook_resolution_rejects_unapproved_import(monkeypatch):
         hook_name="pre_tool:os.system",
         context={"session_id": "s", "skill_name": "k", "tool_name": "t", "stage": "pre_tool", "payload": {}},
     )
-    assert result["mode"] == "event_only"
+    assert result["mode"] == "rejected_unapproved_hook"
+    assert result["applied"] is False
     assert import_called["value"] is False
 
 
-def test_dispatch_skill_hook_ignores_unknown_effect_keys():
+def test_dispatch_skill_hook_event_only_mode():
     result = dispatch_skill_hook(
-        hook_name="pre_tool:tests.test_skill_runtime_refactor._unknown_effect_hook",
+        hook_name="pre_tool",
+        context={"session_id": "s", "skill_name": "k", "tool_name": "t", "stage": "pre_tool", "payload": {}},
+    )
+    assert result["mode"] == "event_only"
+    assert result["applied"] is True
+
+
+def test_dispatch_skill_hook_approved_callable_mode(monkeypatch):
+    hook_module = SimpleNamespace(test_hook=lambda context: {"modified_args": {"x": "1"}})
+    monkeypatch.setattr("src.agents.skill_runtime.import_module", lambda _name: hook_module)
+    result = dispatch_skill_hook(
+        hook_name="pre_tool:src.hooks.fake.test_hook",
+        context={"session_id": "s", "skill_name": "k", "tool_name": "t", "stage": "pre_tool", "payload": {}},
+    )
+    assert result["mode"] == "callable"
+    assert result["applied"] is True
+    assert result["hook_effects"]["modified_args"] == {"x": "1"}
+
+
+def test_dispatch_skill_hook_ignores_unknown_effect_keys(monkeypatch):
+    hook_module = SimpleNamespace(_unknown_effect_hook=_unknown_effect_hook)
+    monkeypatch.setattr("src.agents.skill_runtime.import_module", lambda _name: hook_module)
+    result = dispatch_skill_hook(
+        hook_name="pre_tool:src.hooks.fake._unknown_effect_hook",
         context={"session_id": "s", "skill_name": "k", "tool_name": "t", "stage": "pre_tool", "payload": {}},
     )
     assert result["mode"] == "callable"
     assert "unknown_key" not in result.get("hook_effects", {})
 
 
-def test_dispatch_skill_hook_rejects_async_hook():
+def test_dispatch_skill_hook_rejects_async_hook(monkeypatch):
+    hook_module = SimpleNamespace(_async_hook=_async_hook)
+    monkeypatch.setattr("src.agents.skill_runtime.import_module", lambda _name: hook_module)
     result = dispatch_skill_hook(
-        hook_name="pre_tool:tests.test_skill_runtime_refactor._async_hook",
+        hook_name="pre_tool:src.hooks.fake._async_hook",
         context={"session_id": "s", "skill_name": "k", "tool_name": "t", "stage": "pre_tool", "payload": {}},
     )
     assert result["mode"] == "unsupported_async_hook"
@@ -768,3 +843,19 @@ def _unknown_effect_hook(context):
 
 async def _async_hook(context):
     return {"modified_args": {"x": "async"}}
+
+
+def test_get_skill_prompt_includes_resolved_reference_summary(tmp_path):
+    skill_dir = tmp_path / "skill"
+    skill_dir.mkdir()
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir=str(tmp_path / "none"))
+    skill = Skill(
+        name="alpha",
+        description="a",
+        path=str(skill_dir),
+        references=["references/playbook.md"],
+        tools=["allowed_tool"],
+    )
+    prompt = registry.get_skill_prompt(skill)
+    assert "Active skill: alpha" in prompt
+    assert "Available references: playbook.md" in prompt
