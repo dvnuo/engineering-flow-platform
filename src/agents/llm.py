@@ -206,6 +206,19 @@ def _convert_messages_to_input_items(messages: List[Dict]) -> List[Dict]:
 def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
     """Convert Chat-style tools to Responses API format."""
     import copy
+
+    def _make_nullable_if_optional(prop_schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Allow null for an optional top-level property while preserving metadata."""
+        schema = copy.deepcopy(prop_schema) if isinstance(prop_schema, dict) else {"type": ["null"]}
+        prop_type = schema.get("type")
+        if isinstance(prop_type, list):
+            if "null" not in prop_type:
+                schema["type"] = [*prop_type, "null"]
+        elif isinstance(prop_type, str):
+            if prop_type != "null":
+                schema["type"] = [prop_type, "null"]
+        return schema
+
     converted = []
     for tool in tools:
         if not isinstance(tool, dict):
@@ -220,10 +233,22 @@ def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
             if "additionalProperties" not in params:
                 params["additionalProperties"] = False
             
-            # Preserve the source schema's required list.
-            # Optional arguments must remain optional after conversion.
-            required = params.get("required")
-            if required is not None and not isinstance(required, list):
+            properties = params.get("properties", {})
+            if isinstance(properties, dict):
+                original_required = params.get("required", [])
+                if not isinstance(original_required, list):
+                    original_required = []
+                original_required_set = set(original_required)
+
+                normalized_properties = {}
+                for prop_name, prop_schema in properties.items():
+                    if prop_name in original_required_set:
+                        normalized_properties[prop_name] = prop_schema
+                    else:
+                        normalized_properties[prop_name] = _make_nullable_if_optional(prop_schema)
+                params["properties"] = normalized_properties
+                params["required"] = list(properties.keys())
+            elif "required" not in params or not isinstance(params.get("required"), list):
                 params["required"] = []
             
             converted.append({
