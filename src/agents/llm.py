@@ -217,6 +217,11 @@ def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
         elif isinstance(prop_type, str):
             if prop_type != "null":
                 schema["type"] = [prop_type, "null"]
+        if isinstance(schema.get("enum"), list) and None not in schema["enum"]:
+            schema["enum"] = [*schema["enum"], None]
+        if "const" in schema:
+            schema["enum"] = [schema["const"], None]
+            schema.pop("const", None)
         return schema
 
     converted = []

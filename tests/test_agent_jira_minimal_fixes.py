@@ -120,11 +120,60 @@ def test_convert_tools_schema_jira_get_issue_optional_fields_nullable():
     assert params["properties"]["issue_key"]["type"] == "string"
     assert params["properties"]["issue_key"]["type"] != ["string", "null"]
     assert params["properties"]["format"]["type"] == ["string", "null"]
+    assert params["properties"]["format"]["enum"] == ["markdown", "wiki", "raw", None]
     assert params["properties"]["max_chars"]["type"] == ["integer", "null"]
     assert params["properties"]["max_comments"]["type"] == ["integer", "null"]
     assert params["properties"]["include_fields"]["type"] == ["array", "null"]
     assert params["properties"]["include_comments"]["type"] == ["boolean", "null"]
     assert params["properties"]["include_attachment_urls"]["type"] == ["boolean", "null"]
+
+
+def test_convert_tools_schema_required_enum_field_is_not_widened():
+    from src.agents.llm import _convert_tools_schema
+
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "required_enum",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "format": {"type": "string", "enum": ["markdown", "raw"]},
+                    "value": {"type": "string"},
+                },
+                "required": ["format"],
+            },
+        },
+    }]
+
+    params = _convert_tools_schema(tools)[0]["parameters"]
+    assert params["required"] == ["format", "value"]
+    assert params["properties"]["format"]["type"] == "string"
+    assert params["properties"]["format"]["enum"] == ["markdown", "raw"]
+    assert params["properties"]["value"]["type"] == ["string", "null"]
+
+
+def test_convert_tools_schema_optional_const_field_becomes_nullable_enum():
+    from src.agents.llm import _convert_tools_schema
+
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "optional_const",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mode": {"type": "string", "const": "raw"},
+                },
+            },
+        },
+    }]
+
+    params = _convert_tools_schema(tools)[0]["parameters"]
+    assert params["required"] == ["mode"]
+    assert params["properties"]["mode"]["type"] == ["string", "null"]
+    assert params["properties"]["mode"]["enum"] == ["raw", None]
+    assert "const" not in params["properties"]["mode"]
 
 
 def test_convert_tools_schema_no_optional_properties_no_type_widening():
