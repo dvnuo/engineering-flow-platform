@@ -1887,7 +1887,7 @@ You have access to the following tools. When a user asks you to do something tha
                 skill_session.termination_reason = finalize_reason
             else:
                 skill_session.termination_reason = "finish"
-            skill_session.transition = "finish"
+            skill_session.transition = skill_session.transition or "finish"
             skill_session.completed_steps.append(
                 {
                     "type": "terminal_snapshot",

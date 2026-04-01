@@ -126,6 +126,7 @@ async def test_repeated_same_tool_output_no_progress(monkeypatch):
     ]
     _, snapshots, _ = await run_replay_case(monkeypatch, responses=responses, tool_output="same output")
     assert "no_progress" in terminal_reasons(snapshots)
+    assert latest_state(snapshots).get("transition") == "no_progress"
 
 
 @pytest.mark.asyncio
