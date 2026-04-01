@@ -229,9 +229,11 @@ def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
             # Deep copy parameters to avoid mutating the original
             params = copy.deepcopy(func.get("parameters", {}))
 
+            # Capture the original required fields before any strict-mode mutation.
             original_required = set(params.get("required", []))
             properties = params.get("properties", {})
             if isinstance(properties, dict):
+                property_keys = list(properties.keys())
                 normalized_properties = {}
                 for prop_name, prop_schema in properties.items():
                     if prop_name in original_required:
@@ -239,7 +241,8 @@ def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
                     else:
                         normalized_properties[prop_name] = _make_nullable_if_optional(prop_schema)
                 params["properties"] = normalized_properties
-                params["required"] = list(properties.keys())
+                # Strict mode requires all top-level properties to be required.
+                params["required"] = property_keys
             elif "required" not in params or not isinstance(params.get("required"), list):
                 params["required"] = []
 
