@@ -229,9 +229,8 @@ def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
             # Deep copy parameters to avoid mutating the original
             params = copy.deepcopy(func.get("parameters", {}))
             
-            # Ensure additionalProperties: false
-            if "additionalProperties" not in params:
-                params["additionalProperties"] = False
+            # Responses API strict mode requires closed top-level argument objects.
+            params["additionalProperties"] = False
             
             properties = params.get("properties", {})
             if isinstance(properties, dict):

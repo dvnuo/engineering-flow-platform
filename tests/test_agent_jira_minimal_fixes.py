@@ -99,6 +99,7 @@ def test_convert_tools_schema_jira_get_issue_optional_fields_nullable():
                     "max_comments": {"type": "integer"},
                     "include_fields": {"type": "array", "items": {"type": "string"}},
                     "include_comments": {"type": "boolean"},
+                    "include_attachment_urls": {"type": "boolean"},
                 },
                 "required": ["issue_key"],
             },
@@ -106,13 +107,22 @@ def test_convert_tools_schema_jira_get_issue_optional_fields_nullable():
     }]
 
     params = _convert_tools_schema(tools)[0]["parameters"]
-    assert params["required"] == ["issue_key", "format", "max_chars", "max_comments", "include_fields", "include_comments"]
+    assert params["required"] == [
+        "issue_key",
+        "format",
+        "max_chars",
+        "max_comments",
+        "include_fields",
+        "include_comments",
+        "include_attachment_urls",
+    ]
     assert params["properties"]["issue_key"]["type"] == "string"
     assert params["properties"]["format"]["type"] == ["string", "null"]
     assert params["properties"]["max_chars"]["type"] == ["integer", "null"]
     assert params["properties"]["max_comments"]["type"] == ["integer", "null"]
     assert params["properties"]["include_fields"]["type"] == ["array", "null"]
     assert params["properties"]["include_comments"]["type"] == ["boolean", "null"]
+    assert params["properties"]["include_attachment_urls"]["type"] == ["boolean", "null"]
 
 
 def test_convert_tools_schema_no_optional_properties_no_type_widening():
@@ -137,6 +147,26 @@ def test_convert_tools_schema_no_optional_properties_no_type_widening():
     assert params["required"] == ["id", "name"]
     assert params["properties"]["id"]["type"] == "string"
     assert params["properties"]["name"]["type"] == "string"
+
+
+def test_convert_tools_schema_forces_additional_properties_false():
+    from src.agents.llm import _convert_tools_schema
+
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "already_open_object",
+            "parameters": {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+                "additionalProperties": True,
+            },
+        },
+    }]
+
+    params = _convert_tools_schema(tools)[0]["parameters"]
+    assert params["additionalProperties"] is False
 
 
 @pytest.mark.parametrize(
