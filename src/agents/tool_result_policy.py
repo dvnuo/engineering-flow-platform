@@ -25,11 +25,13 @@ _JIRA_SEQUENCE_WORDS = {"then", "after", "next"}
 def _message_has_any_keyword(text: str, keywords: set[str]) -> bool:
     normalized_text = text.lower()
     for keyword in keywords:
-        escaped_keyword = re.escape(keyword.lower())
-        if " " in keyword:
-            if re.search(escaped_keyword, normalized_text):
+        keyword_tokens = keyword.lower().split()
+        if len(keyword_tokens) > 1:
+            phrase_pattern = r"\b" + r"\s+".join(re.escape(token) for token in keyword_tokens) + r"\b"
+            if re.search(phrase_pattern, normalized_text):
                 return True
             continue
+        escaped_keyword = re.escape(keyword_tokens[0])
         if re.search(rf"\b{escaped_keyword}\b", normalized_text):
             return True
     return False

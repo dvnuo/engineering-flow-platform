@@ -256,3 +256,22 @@ def test_should_passthrough_tool_result_heuristic(user_message, expected):
         tool_calls_count=1,
     )
     assert actual is expected
+
+
+def test_message_has_any_keyword_multiword_avoids_embedded_substring_false_positive():
+    from src.agents.tool_result_policy import _message_has_any_keyword
+
+    assert _message_has_any_keyword("show me the budget issue details", {"get issue"}) is False
+
+
+@pytest.mark.parametrize(
+    "text,keywords",
+    [
+        ("get issue EFP-123", {"get issue"}),
+        ("move to in progress", {"in progress"}),
+    ],
+)
+def test_message_has_any_keyword_multiword_preserves_true_positives(text, keywords):
+    from src.agents.tool_result_policy import _message_has_any_keyword
+
+    assert _message_has_any_keyword(text, keywords) is True
