@@ -57,7 +57,8 @@ class JiraFormatAdapter:
             max_chars: int = None,
             max_comments: int = 5,
             include_fields: List[str] = None,
-            include_comments: bool = True
+            include_comments: bool = True,
+            include_attachment_urls: bool = False,
     ) -> Union[str, dict]:
         """Get Jira issue.
 
@@ -68,6 +69,9 @@ class JiraFormatAdapter:
             max_comments: Maximum number of comments to include
             include_fields: Fields to include (default: summary, status, description, comments)
             include_comments: Whether to include comments
+            include_attachment_urls: Markdown-only flag (default: False). When False,
+                attachments render as filenames only. When True, markdown attachment
+                entries may include URLs.
 
         Returns:
             markdown/wiki: str
@@ -91,7 +95,14 @@ class JiraFormatAdapter:
             return self._to_wiki(issue, max_chars, max_comments, include_fields, include_comments)
 
         # format == "markdown" (default)
-        return self._to_markdown(issue, max_chars, max_comments, include_fields, include_comments)
+        return self._to_markdown(
+            issue,
+            max_chars,
+            max_comments,
+            include_fields,
+            include_comments,
+            include_attachment_urls=include_attachment_urls,
+        )
 
     def _to_markdown(
             self,
@@ -99,7 +110,8 @@ class JiraFormatAdapter:
             max_chars: int = None,
             max_comments: int = 5,
             include_fields: List[str] = None,
-            include_comments: bool = True
+            include_comments: bool = True,
+            include_attachment_urls: bool = False,
     ) -> str:
         # ...existing code...
         fields = include_fields or ["summary", "status", "description", "acceptance_criteria", "comments", "attachment"]
@@ -156,12 +168,6 @@ class JiraFormatAdapter:
         comments = []
         if include_comments and "comments" in fields:
             comments = self._get_comments_list(issue, max_comments)
-        # Get attachment mapping (filename->url)
-        issue_fields = issue.get("fields", {})
-        attachment_list = issue_fields.get("attachment", [])
-        # Prefer content field, fallback to self/url field
-        attachment_map = {att.get("filename", ""): att.get("content") or att.get("self") or att.get("url") or "" for att
-                          in attachment_list}
         if comments:
             for i, comment in enumerate(comments, 1):
                 author = comment.get('author', {})
@@ -182,8 +188,11 @@ class JiraFormatAdapter:
         if attachment_list:
             for att in attachment_list:
                 filename = att.get("filename", "unknown")
-                url = att.get("content") or att.get("self") or att.get("url") or ""
-                lines.append(f"- {filename} ({url})")
+                if include_attachment_urls:
+                    url = att.get("content") or att.get("self") or att.get("url") or ""
+                    lines.append(f"- {filename} ({url})")
+                else:
+                    lines.append(f"- {filename}")
         else:
             lines.append("N/A")
 

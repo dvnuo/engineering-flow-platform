@@ -110,7 +110,8 @@ async def jira_get_issue(
     max_chars: int = None,
     max_comments: int = 5,
     include_fields: List[str] = None,
-    include_comments: bool = True
+    include_comments: bool = True,
+    include_attachment_urls: bool = False
 ) -> Union[str, dict]:
     """Get a Jira issue by key.
     
@@ -121,6 +122,9 @@ async def jira_get_issue(
         max_comments: Maximum number of comments to include
         include_fields: Fields to include (default: summary, status, description, comments)
         include_comments: Whether to include comments
+        include_attachment_urls: Markdown-only flag (default: False). Controls
+            whether attachment rendering includes full URLs. By default,
+            attachment filenames are shown without URLs.
         
     Returns:
         Issue details in requested format (markdown/wiki: str, raw: dict)
@@ -136,7 +140,8 @@ async def jira_get_issue(
             max_chars=max_chars,
             max_comments=max_comments,
             include_fields=include_fields,
-            include_comments=include_comments
+            include_comments=include_comments,
+            include_attachment_urls=include_attachment_urls
         )
         
         # Process attachments - need to fetch raw issue to get attachment field
@@ -170,8 +175,9 @@ async def jira_get_issue_by_url(
     max_chars: int = None,
     max_comments: int = 5,
     include_fields: List[str] = None,
-    include_comments: bool = True
-) -> str:
+    include_comments: bool = True,
+    include_attachment_urls: bool = False
+) -> Union[str, dict]:
     """Get a Jira issue by its URL.
     
     Args:
@@ -181,9 +187,12 @@ async def jira_get_issue_by_url(
         max_comments: Maximum number of comments to include
         include_fields: Fields to include
         include_comments: Whether to include comments
+        include_attachment_urls: Markdown-only flag (default: False). Controls
+            whether attachment rendering includes full URLs. By default,
+            attachment filenames are shown without URLs.
         
     Returns:
-        Issue details in requested format
+        Issue details in requested format (markdown/wiki: str, raw: dict)
     """
     import re
     
@@ -212,7 +221,8 @@ async def jira_get_issue_by_url(
             max_chars=max_chars,
             max_comments=max_comments,
             include_fields=include_fields,
-            include_comments=include_comments
+            include_comments=include_comments,
+            include_attachment_urls=include_attachment_urls
         )
         
         # Process attachments
@@ -419,6 +429,11 @@ def _get_all_schemas() -> list:
                             "type": "boolean",
                             "description": "Whether to include comments",
                             "default": True
+                        },
+                        "include_attachment_urls": {
+                            "type": "boolean",
+                            "description": "Whether to include attachment URLs in markdown output",
+                            "default": False
                         }
                     },
                     "required": ["issue_key"]
@@ -443,6 +458,11 @@ def _get_all_schemas() -> list:
                         "max_chars": {"type": "integer", "description": "Maximum characters to return"},
                         "max_comments": {"type": "integer", "description": "Maximum comments to include", "default": 5},
                         "include_comments": {"type": "boolean", "description": "Include comments", "default": True},
+                        "include_attachment_urls": {
+                            "type": "boolean",
+                            "description": "Whether to include attachment URLs in markdown output",
+                            "default": False
+                        },
                         "include_fields": {"type": "array", "items": {"type": "string"}, "description": "Fields to include"}
                     },
                     "required": ["url"]

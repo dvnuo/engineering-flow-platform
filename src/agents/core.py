@@ -44,6 +44,7 @@ from src.agents.executor import (
     execute_tool_by_name,
     ToolResult,
 )
+from src.agents.tool_result_policy import should_passthrough_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -1238,6 +1239,7 @@ You have access to the following tools. When a user asks you to do something tha
             # here - the final LLM response will be saved after tool execution.
             
             # Execute each function call
+            executed_tool_results: List[tuple[str, ToolResult]] = []
             for fc in function_calls:
                 call_id = fc.get("call_id", "")
                 tool_name = fc.get("name", "")
@@ -1322,6 +1324,33 @@ You have access to the following tools. When a user asks you to do something tha
                 # execution context and are passed directly to subsequent LLM calls.
                 
                 logger.info(f"Tool result: {truncate_with_count(str(tool_result), 200)}")
+                executed_tool_results.append((tool_name, tool_result))
+
+            # Narrow passthrough shortcut for direct Jira detail retrieval requests.
+            if len(executed_tool_results) == 1:
+                single_tool_name, single_tool_result = executed_tool_results[0]
+                if should_passthrough_tool_result(
+                    latest_user_message=message,
+                    tool_name=single_tool_name,
+                    tool_result=single_tool_result,
+                    tool_calls_count=len(function_calls),
+                ):
+                    passthrough_content = str(single_tool_result.content)
+                    await session_manager.add_message(session_id, "assistant", passthrough_content)
+                    send_event("complete", {
+                        "response": truncate_with_count(passthrough_content, 500),
+                        "total_iterations": iteration
+                    })
+                    tracer.complete_execution(passthrough_content)
+                    from src.skills import get_tracer
+                    tracer_instance = get_tracer()
+                    events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
+                    return {
+                        "response": passthrough_content,
+                        "usage": usage_data,
+                        "events": events,
+                        "user_message_id": user_message_id,
+                    }
             
             # Send iteration complete event
             send_event("iteration_end", {"iteration": iteration})

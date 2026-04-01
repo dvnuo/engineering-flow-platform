@@ -94,6 +94,11 @@ def get_tools_schema() -> List[Dict]:
     return get_all_tools()
 
 
+def _strip_none_values(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove keys explicitly set to None so Python defaults can apply."""
+    return {k: v for k, v in kwargs.items() if v is not None}
+
+
 async def execute_tool(name: str, **kwargs) -> ToolResult:
     """Execute a tool by name."""
     from . import bash_tools as bash_tools_module
@@ -101,6 +106,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     from . import jira as jira_module
     from . import github as github_module
     from . import confluence as confluence_module
+    kwargs = _strip_none_values(kwargs)
     
     # Bash/Shell tools
     if name == "read":
@@ -196,14 +202,20 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     # Jira tools
     elif name == "jira_get_issue":
         issue_key = kwargs.get("issue_key", "")
-        format = kwargs.get("format", "markdown")
+        format = kwargs.get("format")
+        format = "markdown" if format is None else format
         max_chars = kwargs.get("max_chars")
-        max_comments = kwargs.get("max_comments", 5)
-        include_comments = kwargs.get("include_comments", True)
+        max_comments = kwargs.get("max_comments")
+        max_comments = 5 if max_comments is None else max_comments
+        include_comments = kwargs.get("include_comments")
+        include_comments = True if include_comments is None else include_comments
         include_fields = kwargs.get("include_fields")
+        include_attachment_urls = kwargs.get("include_attachment_urls")
+        include_attachment_urls = False if include_attachment_urls is None else include_attachment_urls
         result = await jira_module.jira_get_issue(
             issue_key, format=format, max_chars=max_chars, max_comments=max_comments,
-            include_comments=include_comments, include_fields=include_fields
+            include_comments=include_comments, include_fields=include_fields,
+            include_attachment_urls=include_attachment_urls
         )
         # Ensure content is always a string (format="raw" returns dict)
         if isinstance(result, dict):
@@ -244,14 +256,20 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     
     elif name == "jira_get_issue_by_url":
         url = kwargs.get("url", "")
-        format = kwargs.get("format", "markdown")
+        format = kwargs.get("format")
+        format = "markdown" if format is None else format
         max_chars = kwargs.get("max_chars")
-        max_comments = kwargs.get("max_comments", 5)
-        include_comments = kwargs.get("include_comments", True)
+        max_comments = kwargs.get("max_comments")
+        max_comments = 5 if max_comments is None else max_comments
+        include_comments = kwargs.get("include_comments")
+        include_comments = True if include_comments is None else include_comments
         include_fields = kwargs.get("include_fields")
+        include_attachment_urls = kwargs.get("include_attachment_urls")
+        include_attachment_urls = False if include_attachment_urls is None else include_attachment_urls
         result = await jira_module.jira_get_issue_by_url(
             url, format=format, max_chars=max_chars, max_comments=max_comments,
-            include_comments=include_comments, include_fields=include_fields
+            include_comments=include_comments, include_fields=include_fields,
+            include_attachment_urls=include_attachment_urls
         )
         # Ensure content is always a string (format="raw" returns dict)
         if isinstance(result, dict):
