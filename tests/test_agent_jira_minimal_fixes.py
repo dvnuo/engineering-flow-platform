@@ -32,8 +32,15 @@ def test_convert_tools_schema_preserves_optional_properties():
     "user_message,expected",
     [
         ("Get Jira EFP-123 detail", True),
+        ("Show issue EFP-123", True),
         ("Open this Jira URL and show me the issue", True),
         ("Summarize Jira EFP-123", False),
+        ("Get issue EFP-123 and assign it to me", False),
+        ("Show Jira EFP-123 and add a comment", False),
+        ("Open issue EFP-123 and move it to In Progress", False),
+        ("Read issue EFP-123 and update the assignee", False),
+        ("Fetch issue EFP-123 then transition it", False),
+        ("Retrieve Jira EFP-123 and close it", False),
     ],
 )
 def test_should_passthrough_tool_result_heuristic(user_message, expected):

@@ -150,6 +150,15 @@ _JIRA_RETRIEVAL_HINTS = {
     "get issue", "show issue", "read issue", "open issue",
     "issue detail", "jira detail", "fetch issue", "retrieve issue",
 }
+_JIRA_MUTATION_INTENT_KEYWORDS = {
+    "assign", "assignee", "update", "edit", "modify", "change", "set",
+    "add", "comment", "transition", "move", "status", "resolve", "close",
+    "reopen", "link", "attach", "remove", "delete", "create", "generate",
+}
+
+
+def _message_has_jira_mutation_intent(text: str) -> bool:
+    return any(keyword in text for keyword in _JIRA_MUTATION_INTENT_KEYWORDS)
 
 
 def _should_passthrough_tool_result(
@@ -169,6 +178,8 @@ def _should_passthrough_tool_result(
         return False
 
     text = (latest_user_message or "").lower()
+    if _message_has_jira_mutation_intent(text):
+        return False
     if any(keyword in text for keyword in _JIRA_TRANSFORM_INTENT_KEYWORDS):
         return False
     if any(hint in text for hint in _JIRA_RETRIEVAL_HINTS):
