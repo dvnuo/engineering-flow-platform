@@ -94,6 +94,11 @@ def get_tools_schema() -> List[Dict]:
     return get_all_tools()
 
 
+def _strip_none_values(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove keys explicitly set to None so Python defaults can apply."""
+    return {k: v for k, v in kwargs.items() if v is not None}
+
+
 async def execute_tool(name: str, **kwargs) -> ToolResult:
     """Execute a tool by name."""
     from . import bash_tools as bash_tools_module
@@ -101,6 +106,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     from . import jira as jira_module
     from . import github as github_module
     from . import confluence as confluence_module
+    kwargs = _strip_none_values(kwargs)
     
     # Bash/Shell tools
     if name == "read":
