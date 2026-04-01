@@ -126,6 +126,7 @@ class SkillSession:
     no_progress_count: int = 0
     last_progress_signature: str = ""
     termination_reason: str = ""
+    transition: str = ""
     finalizer_state: str = "idle"  # idle/running/succeeded/retryable_failed/terminal_failed
     execution_mode: str = ""  # "", "readonly_lookup", "producing_output", "waiting_user"
     last_tool_name: str = ""
@@ -150,6 +151,7 @@ class SkillSession:
             no_progress_count=int(data.get("no_progress_count", 0) or 0),
             last_progress_signature=data.get("last_progress_signature", "") or "",
             termination_reason=data.get("termination_reason", "") or "",
+            transition=data.get("transition", "") or "",
             finalizer_state=data.get("finalizer_state", "idle") or "idle",
             execution_mode=data.get("execution_mode", "") or "",
             last_tool_name=data.get("last_tool_name", "") or "",

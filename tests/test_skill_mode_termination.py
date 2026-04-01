@@ -1,11 +1,11 @@
 import pytest
 from types import SimpleNamespace
 
-from src.agents.core import Agent, _build_progress_signature, _decide_skill_loop_transition, _is_lookup_only_skill
+from src.agents.core import Agent
 from src.agents.skill_mode import SkillSession
 
 
-class _FakeTracer:
+class FakeTracer:
     def log_tool_call(self, *args, **kwargs):
         return None
 
@@ -22,11 +22,157 @@ class _FakeTracer:
         return []
 
 
-def _make_agent():
+def make_agent():
     agent = Agent.__new__(Agent)
     agent.model = None
     agent.tools = [{"function": {"name": "search"}}]
     return agent
+
+
+async def run_replay_case(monkeypatch, *, responses, tool_output="lookup output", message="search issue", initial_session=None):
+    from src.agents import core as core_mod
+
+    call_counter = {"n": 0}
+    snapshots = []
+
+    async def fake_responses(**kwargs):
+        idx = call_counter["n"]
+        call_counter["n"] += 1
+        return responses[min(idx, len(responses) - 1)]
+
+    async def fake_execute_tool_by_name(name, **kwargs):
+        if callable(tool_output):
+            return tool_output(call_counter["n"])
+        return tool_output
+
+    async def fake_set_active(session_id, state):
+        snapshots.append(state)
+
+    async def fake_add_message(*args, **kwargs):
+        return "m1"
+
+    class FakeSessionManager:
+        set_active_skill_session = staticmethod(fake_set_active)
+        add_message = staticmethod(fake_add_message)
+
+    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
+    monkeypatch.setattr(core_mod, "execute_tool_by_name", fake_execute_tool_by_name)
+    monkeypatch.setattr(core_mod, "session_manager", FakeSessionManager)
+    monkeypatch.setattr("src.skills.get_tracer", lambda: FakeTracer())
+
+    skill = SimpleNamespace(name="lookup", description="search issue", path="", tools=[], strategy=[])
+    agent = make_agent()
+
+    skill_session = initial_session or SkillSession(skill_name="lookup", original_user_request=message)
+    result = await agent._continue_skill_mode(
+        message=message,
+        session_id="s-replay",
+        user_message_id="u-replay",
+        skill_state=skill_session.to_dict(),
+        skill=skill,
+    )
+    return result, snapshots, call_counter["n"]
+
+
+def terminal_reasons(snapshots):
+    return [s.get("termination_reason") for s in snapshots if isinstance(s, dict) and s.get("termination_reason")]
+
+
+@pytest.mark.asyncio
+async def test_readonly_two_step_lookup_then_finish(monkeypatch):
+    responses = [
+        {"content": "", "function_calls": [{"id": "c1", "function": {"name": "search", "arguments": '{"q":"a"}'}}], "usage": {}},
+        {"content": "", "function_calls": [{"id": "c2", "function": {"name": "search", "arguments": '{"q":"b"}'}}], "usage": {}},
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[FINISH]\ncomplete lookup", "function_calls": [], "usage": {}},
+    ]
+    _, snapshots, _ = await run_replay_case(monkeypatch, responses=responses, message="search issue details")
+    assert terminal_reasons(snapshots)[-1] == "lookup_complete"
+
+
+@pytest.mark.asyncio
+async def test_readonly_generate_intent_not_early_finalize(monkeypatch):
+    responses = [
+        {"content": "", "function_calls": [{"id": "c1", "function": {"name": "search", "arguments": '{"q":"a"}'}}], "usage": {}},
+        {"content": "", "function_calls": [{"id": "c2", "function": {"name": "search", "arguments": '{"q":"b"}'}}], "usage": {}},
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[FINISH]\nproduced doc", "function_calls": [], "usage": {}},
+    ]
+    _, snapshots, calls = await run_replay_case(monkeypatch, responses=responses, message="search issue and produce a doc")
+    assert calls >= 4
+    assert terminal_reasons(snapshots)[-1] == "no_function_calls"
+
+
+@pytest.mark.asyncio
+async def test_repeated_same_tool_output_no_progress(monkeypatch):
+    responses = [
+        {"content": "", "function_calls": [{"id": "c1", "function": {"name": "search", "arguments": '{"q":"same"}'}}], "usage": {}},
+        {"content": "", "function_calls": [{"id": "c2", "function": {"name": "search", "arguments": '{"q":"same"}'}}], "usage": {}},
+        {"content": "", "function_calls": [{"id": "c3", "function": {"name": "search", "arguments": '{"q":"same"}'}}], "usage": {}},
+        {"content": "[FINISH]\ndone", "function_calls": [], "usage": {}},
+    ]
+    _, snapshots, _ = await run_replay_case(monkeypatch, responses=responses, tool_output="same output")
+    assert "no_progress" in terminal_reasons(snapshots)
+
+
+@pytest.mark.asyncio
+async def test_different_tools_same_state_delta_no_progress(monkeypatch):
+    responses = [
+        {"content": "", "function_calls": [{"id": "c1", "function": {"name": "search", "arguments": '{"q":"same"}'}}], "usage": {}},
+        {"content": "", "function_calls": [{"id": "c2", "function": {"name": "query", "arguments": '{"q":"same"}'}}], "usage": {}},
+        {"content": "", "function_calls": [{"id": "c3", "function": {"name": "fetch", "arguments": '{"q":"same"}'}}], "usage": {}},
+        {"content": "[FINISH]\ndone", "function_calls": [], "usage": {}},
+    ]
+    _, snapshots, _ = await run_replay_case(monkeypatch, responses=responses, tool_output="same output")
+    assert "no_progress" in terminal_reasons(snapshots)
+
+
+@pytest.mark.asyncio
+async def test_invalid_finalizer_marker_retry_then_fallback(monkeypatch):
+    responses = [
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[EXECUTE] invalid for finalizer", "function_calls": [], "usage": {}},
+        {"content": "", "function_calls": [], "usage": {}},
+    ]
+    _, snapshots, _ = await run_replay_case(monkeypatch, responses=responses)
+    assert terminal_reasons(snapshots)[-1] == "no_function_calls"
+    assert any(isinstance(s, dict) and s.get("finalizer_state") == "terminal_failed" for s in snapshots)
+
+
+@pytest.mark.asyncio
+async def test_max_llm_calls_guard(monkeypatch):
+    responses = [{"content": "", "function_calls": [{"id": "c", "function": {"name": "search", "arguments": '{"q":"x"}'}}], "usage": {}}]
+    seeded = SkillSession(skill_name="lookup", original_user_request="search issue", llm_call_count=9)
+    _, snapshots, calls = await run_replay_case(
+        monkeypatch,
+        responses=responses,
+        tool_output=lambda n: f"output-{n}",
+        initial_session=seeded,
+    )
+    assert calls >= 2
+    assert "max_llm_calls" in terminal_reasons(snapshots)
+
+
+@pytest.mark.asyncio
+async def test_max_tool_rounds_guard(monkeypatch):
+    responses = [{"content": "", "function_calls": [{"id": "c", "function": {"name": "search", "arguments": '{"q":"x"}'}}], "usage": {}}]
+    _, snapshots, _ = await run_replay_case(
+        monkeypatch,
+        responses=responses,
+        tool_output=lambda n: f"diff-output-{n}",
+    )
+    assert "max_tool_rounds" in terminal_reasons(snapshots)
+
+
+@pytest.mark.asyncio
+async def test_ask_user_path(monkeypatch):
+    responses = [
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[ASK_USER]\nPlease provide repository name.", "function_calls": [], "usage": {}},
+    ]
+    result, snapshots, _ = await run_replay_case(monkeypatch, responses=responses)
+    assert "Please provide repository name" in result["response"]
+    assert terminal_reasons(snapshots)[-1] == "ask_user"
 
 
 def test_skill_session_from_dict_backward_compatible():
@@ -45,183 +191,3 @@ def test_skill_session_from_dict_backward_compatible():
     assert sess.tool_round_count == 0
     assert sess.finalizer_state == "idle"
     assert sess.termination_reason == ""
-
-
-def test_progress_signature_unchanged_for_same_round_data():
-    sess = SkillSession(skill_name="x", original_user_request="y")
-    sess.completed_steps.append({"type": "tool_result", "result": "same"})
-    sig1 = _build_progress_signature(sess, "search", {"q": "abc"}, "output")
-    sig2 = _build_progress_signature(sess, "search", {"q": "abc"}, "output")
-    assert sig1["progress_signature"] == sig2["progress_signature"]
-
-
-def test_lookup_only_heuristic_respects_generate_intent():
-    skill = SimpleNamespace(name="issue-helper", description="get issue info")
-    sess = SkillSession(skill_name="issue-helper", original_user_request="")
-    assert _is_lookup_only_skill(skill, sess, "get issue details") is True
-    assert _is_lookup_only_skill(skill, sess, "get issue details and produce a doc") is False
-
-
-def test_decider_no_progress_triggers_finalizer():
-    decision = _decide_skill_loop_transition(
-        round_num=1,
-        max_rounds=6,
-        has_function_calls=True,
-        no_progress_count=2,
-        has_readonly_tool_success=False,
-        has_write_tool_call=False,
-        lookup_only_skill=False,
-    )
-    assert decision["run_finalizer"] is True
-    assert decision["reason"] == "no_progress"
-
-
-@pytest.mark.asyncio
-async def test_finalizer_retry_then_fallback_sets_terminal_reason(monkeypatch):
-    from src.agents import core as core_mod
-
-    calls = {"n": 0}
-
-    async def fake_responses(**kwargs):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"content": "", "function_calls": [], "usage": {}}
-        return {"error": {"message": "boom", "type": "llm_error"}, "usage": {}}
-
-    saved_states = []
-
-    async def fake_set_active(session_id, state):
-        saved_states.append(state)
-
-    async def fake_add_message(*args, **kwargs):
-        return "m1"
-
-    class _FakeSessionManager:
-        set_active_skill_session = staticmethod(fake_set_active)
-        add_message = staticmethod(fake_add_message)
-
-    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
-    monkeypatch.setattr(core_mod, "session_manager", _FakeSessionManager)
-    monkeypatch.setattr("src.skills.get_tracer", lambda: _FakeTracer())
-
-    skill = SimpleNamespace(name="lookup", description="get info", path="", tools=[], strategy=[])
-    agent = _make_agent()
-
-    result = await agent._continue_skill_mode(
-        message="get issue info",
-        session_id="s1",
-        user_message_id="u1",
-        skill_state=SkillSession(skill_name="lookup", original_user_request="get issue info").to_dict(),
-        skill=skill,
-    )
-
-    assert "response" in result
-    assert calls["n"] == 3  # 1 normal + 2 finalizer attempts
-    # final set call before return should include terminal reason
-    assert any(state and state.get("termination_reason") for state in saved_states)
-    assert any(state and state.get("finalizer_attempts", 0) >= 2 for state in saved_states)
-
-
-@pytest.mark.asyncio
-async def test_no_progress_repeated_same_tool_output_terminates(monkeypatch):
-    from src.agents import core as core_mod
-
-    calls = {"n": 0}
-
-    async def fake_responses(**kwargs):
-        calls["n"] += 1
-        if calls["n"] <= 2:
-            return {
-                "content": "",
-                "function_calls": [{"id": f"c{calls['n']}", "function": {"name": "search", "arguments": '{"q":"abc"}'}}],
-                "usage": {},
-            }
-        return {"content": "[FINISH] done", "function_calls": [], "usage": {}}
-
-    async def fake_execute_tool_by_name(name, **kwargs):
-        return "same output"
-
-    saved_states = []
-
-    async def fake_set_active(session_id, state):
-        saved_states.append(state)
-
-    async def fake_add_message(*args, **kwargs):
-        return "m1"
-
-    class _FakeSessionManager:
-        set_active_skill_session = staticmethod(fake_set_active)
-        add_message = staticmethod(fake_add_message)
-
-    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
-    monkeypatch.setattr(core_mod, "execute_tool_by_name", fake_execute_tool_by_name)
-    monkeypatch.setattr(core_mod, "session_manager", _FakeSessionManager)
-    monkeypatch.setattr("src.skills.get_tracer", lambda: _FakeTracer())
-
-    skill = SimpleNamespace(name="lookup", description="search issue", path="", tools=[], strategy=[])
-    agent = _make_agent()
-
-    await agent._continue_skill_mode(
-        message="search issue",
-        session_id="s2",
-        user_message_id="u2",
-        skill_state=SkillSession(skill_name="lookup", original_user_request="search issue").to_dict(),
-        skill=skill,
-    )
-
-    assert any(state and state.get("termination_reason") for state in saved_states)
-
-
-@pytest.mark.asyncio
-async def test_readonly_lookup_not_auto_finish_when_generate_requested(monkeypatch):
-    from src.agents import core as core_mod
-
-    calls = {"n": 0}
-
-    async def fake_responses(**kwargs):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {
-                "content": "",
-                "function_calls": [{"id": "c1", "function": {"name": "search", "arguments": '{"q":"abc"}'}}],
-                "usage": {},
-            }
-        if calls["n"] == 2:
-            # proves tool loop continued instead of readonly immediate finalize
-            return {
-                "content": "",
-                "function_calls": [{"id": "c2", "function": {"name": "search", "arguments": '{"q":"def"}'}}],
-                "usage": {},
-            }
-        return {"content": "[FINISH] produced doc", "function_calls": [], "usage": {}}
-
-    async def fake_execute_tool_by_name(name, **kwargs):
-        return "lookup output"
-
-    async def fake_set_active(*args, **kwargs):
-        return None
-
-    async def fake_add_message(*args, **kwargs):
-        return "m1"
-
-    class _FakeSessionManager:
-        set_active_skill_session = staticmethod(fake_set_active)
-        add_message = staticmethod(fake_add_message)
-
-    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
-    monkeypatch.setattr(core_mod, "execute_tool_by_name", fake_execute_tool_by_name)
-    monkeypatch.setattr(core_mod, "session_manager", _FakeSessionManager)
-    monkeypatch.setattr("src.skills.get_tracer", lambda: _FakeTracer())
-
-    skill = SimpleNamespace(name="lookup", description="search issue", path="", tools=[], strategy=[])
-    agent = _make_agent()
-
-    await agent._continue_skill_mode(
-        message="search and produce a doc",
-        session_id="s3",
-        user_message_id="u3",
-        skill_state=SkillSession(skill_name="lookup", original_user_request="search and produce a doc").to_dict(),
-        skill=skill,
-    )
-
-    assert calls["n"] >= 3
