@@ -126,6 +126,7 @@ class ExecutionQueue:
     ) -> Any:
         """Task-focused alias used by skill runtime task manager."""
         return await self.enqueue(session_id, coro, *args, **kwargs)
+
     async def get_queue_status(self, session_id: str) -> Dict[str, Any]:
         """Get the current status of a session queue."""
         queue = self._session_queues.get(session_id)

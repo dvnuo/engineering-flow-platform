@@ -87,7 +87,7 @@ class TaskManager:
             return await coro_factory()
 
         try:
-            result = await execution_queue.enqueue(session_id, _runner)
+            result = await execution_queue.enqueue_task(session_id, _runner)
             task.status = "completed"
             task.finished_at = datetime.utcnow().isoformat() + "Z"
             task.result = result

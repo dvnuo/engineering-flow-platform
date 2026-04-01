@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from src.skills.registry import Skill
 
@@ -44,6 +44,7 @@ class ReferenceAttachment:
 class SkillRuntimeConfig:
     skill_name: str
     allowed_tools: List[str] = field(default_factory=list)
+    allowed_tools_set: Set[str] = field(default_factory=set)
     task_tools: List[str] = field(default_factory=list)
     model_override: Optional[str] = None
     hooks: List[str] = field(default_factory=list)
@@ -83,7 +84,7 @@ def build_reference_context(reference_paths: List[str], max_items: int = 8) -> s
     return f"Available references: {', '.join(names)}{suffix}"
 
 
-def build_skill_prompt_blocks(skill: Skill) -> SkillPromptBlocks:
+def build_skill_prompt_blocks(skill: Skill, references: Optional[List[str]] = None) -> SkillPromptBlocks:
     allowed_tools = ", ".join(skill.tools) if skill.tools else "all tools"
     task_tools = ", ".join(skill.task_tools) if skill.task_tools else "none"
     system_rules = (
@@ -104,7 +105,7 @@ def build_skill_prompt_blocks(skill: Skill) -> SkillPromptBlocks:
     if body_compact:
         developer_parts.extend(["Instructions:", body_compact])
 
-    refs = summarize_skill_references(skill)
+    refs = list(references or [])
     references_summary = build_reference_context(refs)
 
     return SkillPromptBlocks(
@@ -157,11 +158,13 @@ def attach_skill_references(runtime_config: Optional[SkillRuntimeConfig]) -> Ref
 
 
 def build_skill_runtime_config(skill: Skill) -> SkillRuntimeConfig:
-    prompt_blocks = build_skill_prompt_blocks(skill)
     references = summarize_skill_references(skill)
+    allowed_tools = list(skill.tools or [])
+    prompt_blocks = build_skill_prompt_blocks(skill, references=references)
     return SkillRuntimeConfig(
         skill_name=skill.name,
-        allowed_tools=list(skill.tools or []),
+        allowed_tools=allowed_tools,
+        allowed_tools_set=set(allowed_tools),
         task_tools=list(skill.task_tools or []),
         model_override=skill.model or None,
         hooks=list(skill.hooks or []),

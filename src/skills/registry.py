@@ -242,12 +242,21 @@ class SkillRegistry:
         return loaded
     
     def _parse_markdown_frontmatter(self, content: str) -> Tuple[Dict[str, Any], str]:
-        if not content.startswith("---"):
+        lines = content.splitlines(keepends=True)
+        if not lines or lines[0].strip() != "---":
             return {}, content
-        parts = content.split("---", 2)
-        if len(parts) < 3:
+
+        closing_index = None
+        for idx in range(1, len(lines)):
+            if lines[idx].strip() == "---":
+                closing_index = idx
+                break
+
+        if closing_index is None:
             return {}, content
-        parsed = _yaml.load(parts[1])
+
+        frontmatter_text = "".join(lines[1:closing_index])
+        parsed = _yaml.load(frontmatter_text)
         if parsed is None:
             frontmatter: Dict[str, Any] = {}
         elif isinstance(parsed, Mapping):
@@ -255,7 +264,7 @@ class SkillRegistry:
         else:
             logger.warning("Invalid skill frontmatter type: %s. Expected mapping.", type(parsed).__name__)
             frontmatter = {}
-        body = parts[2].lstrip("\n")
+        body = "".join(lines[closing_index + 1 :]).lstrip("\n")
         return frontmatter, body
 
     def _load_skill_file(self, file_path: Path) -> Optional[Skill]:

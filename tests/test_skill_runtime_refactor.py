@@ -100,6 +100,65 @@ Use compact instructions.
     assert skill.task_tools == []
 
 
+def test_parse_markdown_frontmatter_with_body_horizontal_rules(tmp_path):
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir=str(tmp_path / "none"))
+    frontmatter, body = registry._parse_markdown_frontmatter(
+        """---
+name: runtime-test
+description: runtime test skill
+---
+Section A
+---
+Section B
+"""
+    )
+    assert frontmatter["name"] == "runtime-test"
+    assert "Section A" in body
+    assert "\n---\n" in body
+
+
+def test_parse_markdown_frontmatter_with_yaml_value_containing_dashes(tmp_path):
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir=str(tmp_path / "none"))
+    frontmatter, body = registry._parse_markdown_frontmatter(
+        """---
+name: runtime-test
+description: "contains --- separators"
+---
+Body content
+"""
+    )
+    assert frontmatter["description"] == "contains --- separators"
+    assert body.strip() == "Body content"
+
+
+def test_parse_markdown_frontmatter_unclosed_is_treated_as_no_frontmatter(tmp_path):
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir=str(tmp_path / "none"))
+    content = """---
+name: runtime-test
+description: runtime test skill
+Body content without closing delimiter
+"""
+    frontmatter, body = registry._parse_markdown_frontmatter(content)
+    assert frontmatter == {}
+    assert body == content
+
+
+def test_parse_markdown_frontmatter_non_mapping_yaml_is_safe(tmp_path, caplog):
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir=str(tmp_path / "none"))
+    with caplog.at_level("WARNING"):
+        frontmatter, body = registry._parse_markdown_frontmatter(
+            """---
+- item1
+- item2
+---
+Body
+"""
+        )
+    assert frontmatter == {}
+    assert body.strip() == "Body"
+    assert "Invalid skill frontmatter type" in caplog.text
+
+
 def test_prompt_layer_assembly_and_reference_context():
     skill = SimpleNamespace(
         name="compact",
@@ -129,6 +188,33 @@ def test_prompt_layer_assembly_and_reference_context():
     attachment = attach_skill_references(runtime_config)
     assert attachment.references == ["/tmp/ref-a.md", "/tmp/ref-b.md"]
     assert "Available references:" in attachment.context_text
+    assert runtime_config.allowed_tools_set == {"a"}
+
+
+def test_build_skill_runtime_config_scans_references_once(monkeypatch):
+    skill = SimpleNamespace(
+        name="compact",
+        description="desc",
+        tools=["a"],
+        task_tools=[],
+        strategy=[],
+        body="line1",
+        references=[],
+        model="",
+        hooks=[],
+        path="",
+    )
+    calls = {"count": 0}
+
+    def _fake_summarize(_skill):
+        calls["count"] += 1
+        return ["/tmp/ref-a.md"]
+
+    monkeypatch.setattr("src.skills.runtime.summarize_skill_references", _fake_summarize)
+    runtime_config = build_skill_runtime_config(skill)
+    assert calls["count"] == 1
+    assert runtime_config.references == ["/tmp/ref-a.md"]
+    assert "ref-a.md" in runtime_config.prompt_blocks.references_summary
 
 
 def test_build_skill_tool_denied_result_contains_policy():
@@ -605,6 +691,26 @@ async def test_task_lifecycle_events_and_retention():
     assert "task_finished" in names
     assert "task_failed" in names
     assert manager.get_task(first_task.task_id) is None
+
+
+@pytest.mark.asyncio
+async def test_task_manager_uses_enqueue_task_alias(monkeypatch):
+    manager = TaskManager()
+    called = {"enqueue_task": 0}
+
+    async def _fake_enqueue_task(session_id, coro, *args, **kwargs):
+        called["enqueue_task"] += 1
+        return await coro(*args, **kwargs)
+
+    monkeypatch.setattr("src.agents.tasks.execution_queue.enqueue_task", _fake_enqueue_task)
+
+    async def _ok():
+        return "ok"
+
+    task = await manager.submit_tool_task(session_id="s", tool_name="t", coro_factory=_ok)
+    assert task.status == "completed"
+    assert task.result == "ok"
+    assert called["enqueue_task"] == 1
 
 
 def test_task_retention_preserves_active_records():

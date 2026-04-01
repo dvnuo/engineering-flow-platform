@@ -981,7 +981,7 @@ You have access to the following tools. When a user asks you to do something tha
             # Only pass model if explicitly set
             loop_tools = self.tools
             if active_skill_runtime and active_skill_runtime.allowed_tools:
-                allowed = set(active_skill_runtime.allowed_tools)
+                allowed = active_skill_runtime.allowed_tools_set
                 loop_tools = [
                     tool_schema
                     for tool_schema in self.tools
@@ -1274,7 +1274,7 @@ You have access to the following tools. When a user asks you to do something tha
 
                 # Runtime skill policy enforcement (hard guard, not prompt-only)
                 if active_skill_runtime and active_skill_runtime.allowed_tools:
-                    if tool_name not in active_skill_runtime.allowed_tools:
+                    if tool_name not in active_skill_runtime.allowed_tools_set:
                         deny_result = build_skill_tool_denied_result(active_skill_runtime, tool_name)
                         logger.warning(
                             "[Skill] Runtime tool policy denied tool '%s' for skill '%s'",

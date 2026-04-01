@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 HookEventCallback = Optional[Callable[[str, Dict[str, Any]], None]]
 HookContext = Dict[str, Any]
+
 def _approved_hook_prefixes() -> Tuple[str, ...]:
     prefixes = ["src.hooks."]
     if os.getenv("SKILL_RUNTIME_ENABLE_TEST_HOOKS") == "1":
