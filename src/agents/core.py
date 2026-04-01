@@ -155,10 +155,17 @@ _JIRA_MUTATION_INTENT_KEYWORDS = {
     "add", "comment", "transition", "move", "status", "resolve", "close",
     "reopen", "link", "attach", "remove", "delete", "create", "generate",
 }
+_JIRA_SEQUENCE_CONNECTORS = {"and", "then", "after", "also"}
+_JIRA_SEQUENCE_WORDS = {"then", "after", "next"}
 
 
 def _message_has_jira_mutation_intent(text: str) -> bool:
     return any(keyword in text for keyword in _JIRA_MUTATION_INTENT_KEYWORDS)
+
+
+def _has_mixed_intent(text: str) -> bool:
+    has_connector = any(connector in text for connector in _JIRA_SEQUENCE_CONNECTORS)
+    return has_connector and _message_has_jira_mutation_intent(text)
 
 
 def _should_passthrough_tool_result(
@@ -178,6 +185,10 @@ def _should_passthrough_tool_result(
         return False
 
     text = (latest_user_message or "").lower()
+    if any(word in text for word in _JIRA_SEQUENCE_WORDS):
+        return False
+    if _has_mixed_intent(text):
+        return False
     if _message_has_jira_mutation_intent(text):
         return False
     if any(keyword in text for keyword in _JIRA_TRANSFORM_INTENT_KEYWORDS):
