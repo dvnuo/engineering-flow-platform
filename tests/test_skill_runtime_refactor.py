@@ -574,6 +574,53 @@ async def test_pre_hook_can_short_circuit(monkeypatch, base_agent):
 
 
 @pytest.mark.asyncio
+async def test_pre_hook_short_circuit_failure_emits_failed_tool_result(monkeypatch, base_agent):
+    agent, _ = base_agent
+    events = []
+
+    def stream_callback(event_json: str):
+        events.append(event_json)
+
+    monkeypatch.setenv("SKILL_RUNTIME_ENABLE_TEST_HOOKS", "1")
+    matched_skill = SimpleNamespace(
+        name="runtime-skill",
+        description="d",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="instructions",
+        references=[],
+        model="",
+        hooks=["pre_tool:tests.test_skill_runtime_refactor._short_circuit_fail_hook"],
+    )
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+    )
+    called = {"tool": 0}
+
+    async def _exec(*args, **kwargs):
+        called["tool"] += 1
+        return ToolResult(True, "should not execute")
+
+    monkeypatch.setattr("src.agents.core.execute_tool_by_name", _exec)
+    responses = [
+        {"content": "", "function_calls": [{"call_id": "1", "name": "allowed_tool", "arguments": "{}"}], "usage": {}},
+        {"content": "done", "function_calls": [], "usage": {}},
+    ]
+
+    async def _fake_responses(**kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=_fake_responses, default_provider="openai"))
+    result = await agent.process("runtime test", session_id="s-short-fail", stream_callback=stream_callback)
+    assert result["response"] == "done"
+    assert called["tool"] == 0
+    assert any('"type": "tool_result"' in e and '"success": false' in e for e in events)
+
+
+@pytest.mark.asyncio
 async def test_post_hook_can_override_result(monkeypatch, base_agent):
     agent, _ = base_agent
     monkeypatch.setenv("SKILL_RUNTIME_ENABLE_TEST_HOOKS", "1")
@@ -636,6 +683,10 @@ def _modify_args_hook(context):
 
 def _short_circuit_hook(context):
     return {"short_circuit_result": {"success": True, "content": "short-circuit"}}
+
+
+def _short_circuit_fail_hook(context):
+    return {"short_circuit_result": {"success": False, "content": "short-circuit-fail"}}
 
 
 def _post_override_hook(context):

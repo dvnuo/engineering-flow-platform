@@ -1335,6 +1335,7 @@ You have access to the following tools. When a user asks you to do something tha
                     args = {**args, **pre_hook_effects.modified_args}
                 if pre_hook_effects.short_circuit_result is not None:
                     short_result = pre_hook_effects.short_circuit_result
+                    short_result_preview = truncate_with_count(str(short_result), 200)
                     tracer.log_tool_call(
                         tool_name=tool_name,
                         arguments=args,
@@ -1351,8 +1352,8 @@ You have access to the following tools. When a user asks you to do something tha
                     send_event("tool_result", {
                         "tool": tool_name,
                         "call_id": call_id,
-                        "result": str(short_result),
-                        "success": True
+                        "result": short_result_preview,
+                        "success": short_result.success
                     })
                     executed_tool_results.append((tool_name, short_result))
                     apply_skill_hooks(
