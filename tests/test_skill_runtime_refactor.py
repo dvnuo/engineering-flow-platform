@@ -3,8 +3,13 @@ from types import SimpleNamespace
 
 from src import ToolResult
 from src.agents.core import Agent
+from src.agents.skill_runtime import build_skill_tool_denied_result
 from src.skills.registry import SkillRegistry
-from src.skills.runtime import build_skill_prompt_blocks, build_skill_runtime_config
+from src.skills.runtime import (
+    assemble_effective_prompt,
+    build_skill_prompt_blocks,
+    build_skill_runtime_config,
+)
 
 
 class _Tracer:
@@ -52,13 +57,12 @@ def base_agent(monkeypatch):
     sess = _SessionManager()
     monkeypatch.setattr("src.agents.core.session_manager", sess)
     monkeypatch.setattr("src.skills.get_tracer", lambda: _Tracer())
+
     async def _no_fastlane(*args, **kwargs):
         return None
 
     monkeypatch.setattr("src.agents.fastlane.process_fastlane_command", _no_fastlane)
-    monkeypatch.setattr("src.agents.core.process_fastlane_command", _no_fastlane, raising=False)
     monkeypatch.setattr("src.agents.core.memory_system", SimpleNamespace(build_context_with_search=lambda **kwargs: ""))
-    monkeypatch.setattr("src.agents.core.send_event", lambda *a, **k: None, raising=False)
     return agent, sess
 
 
@@ -88,7 +92,7 @@ Use compact instructions.
     assert skill.task_tools == []
 
 
-def test_structured_prompt_blocks_are_compact():
+def test_prompt_layer_assembly_and_reference_context():
     skill = SimpleNamespace(
         name="compact",
         description="desc",
@@ -96,15 +100,40 @@ def test_structured_prompt_blocks_are_compact():
         task_tools=["b"],
         strategy=["step1"],
         body="line1\nline2",
-        references=["/tmp/ref-a.md"],
+        references=["/tmp/ref-a.md", "/tmp/ref-b.md"],
         model="",
         hooks=[],
         path="",
     )
-    blocks = build_skill_prompt_blocks(skill)
-    assert "Runtime policy" in blocks.system_rules
-    assert "Skill: compact" in blocks.developer_instructions
-    assert "ref-a.md" in blocks.references_summary
+    runtime_config = build_skill_runtime_config(skill)
+    assembly = assemble_effective_prompt("BASE", runtime_config)
+
+    assert "Runtime policy" in assembly.system_rules_text
+    assert "Skill: compact" in assembly.developer_instructions_text
+    assert "Available references:" in assembly.reference_context_text
+    assert "ref-a.md" in assembly.reference_context_text
+    assert "line1" not in assembly.reference_context_text
+
+
+def test_build_skill_tool_denied_result_contains_policy():
+    runtime_config = build_skill_runtime_config(
+        SimpleNamespace(
+            name="demo",
+            description="demo",
+            tools=["allowed_tool"],
+            task_tools=[],
+            strategy=[],
+            body="",
+            references=[],
+            model="",
+            hooks=[],
+            path="",
+        )
+    )
+    denied = build_skill_tool_denied_result(runtime_config, "blocked_tool")
+    assert denied.success is False
+    assert "blocked_tool" in str(denied)
+    assert "allowed_tool" in str(denied)
 
 
 @pytest.mark.asyncio
@@ -122,7 +151,10 @@ async def test_matched_skill_does_not_route_to_legacy_skill_mode(monkeypatch, ba
         model="",
         hooks=[],
     )
-    monkeypatch.setattr("src.skills.skill_registry", SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)))
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+    )
 
     async def fake_responses(**kwargs):
         return {"content": "done", "function_calls": [], "usage": {}}
@@ -143,7 +175,7 @@ async def test_matched_skill_does_not_route_to_legacy_skill_mode(monkeypatch, ba
 
 
 @pytest.mark.asyncio
-async def test_disallowed_tool_is_denied_and_not_executed(monkeypatch, base_agent):
+async def test_disallowed_tool_is_denied_and_allowed_tool_executes(monkeypatch, base_agent):
     agent, _ = base_agent
     matched_skill = SimpleNamespace(
         name="runtime-skill",
@@ -153,22 +185,27 @@ async def test_disallowed_tool_is_denied_and_not_executed(monkeypatch, base_agen
         task_tools=[],
         strategy=[],
         body="instructions",
-        references=[],
+        references=["/tmp/ref-a.md"],
         model="",
         hooks=[],
     )
-    monkeypatch.setattr("src.skills.skill_registry", SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)))
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+    )
 
-    calls = {"execute": 0}
+    calls = {"execute": 0, "names": []}
 
     async def fake_execute(name, **kwargs):
         calls["execute"] += 1
+        calls["names"].append(name)
         return ToolResult(True, "tool ok")
 
     monkeypatch.setattr("src.agents.core.execute_tool_by_name", fake_execute)
 
     responses = [
         {"content": "", "function_calls": [{"call_id": "1", "name": "blocked_tool", "arguments": "{}"}], "usage": {}},
+        {"content": "", "function_calls": [{"call_id": "2", "name": "allowed_tool", "arguments": "{}"}], "usage": {}},
         {"content": "done", "function_calls": [], "usage": {}},
     ]
 
@@ -178,12 +215,18 @@ async def test_disallowed_tool_is_denied_and_not_executed(monkeypatch, base_agen
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
     result = await agent.process("runtime test", session_id="s2")
     assert result["response"] == "done"
-    assert calls["execute"] == 0
+    assert calls["execute"] == 1
+    assert calls["names"] == ["allowed_tool"]
 
 
 @pytest.mark.asyncio
-async def test_task_capable_tool_uses_task_manager(monkeypatch, base_agent):
+async def test_hooks_and_task_path_emit_events(monkeypatch, base_agent):
     agent, _ = base_agent
+    events = []
+
+    def stream_callback(event_json: str):
+        events.append(event_json)
+
     matched_skill = SimpleNamespace(
         name="runtime-skill",
         description="d",
@@ -194,22 +237,13 @@ async def test_task_capable_tool_uses_task_manager(monkeypatch, base_agent):
         body="instructions",
         references=[],
         model="",
-        hooks=[],
+        hooks=["pre_tool", "post_tool"],
     )
-    monkeypatch.setattr("src.skills.skill_registry", SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)))
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+    )
 
-    task_calls = {"n": 0}
-
-    class _TaskRecord:
-        def __init__(self, result):
-            self.result = result
-
-    async def fake_submit_tool_task(**kwargs):
-        task_calls["n"] += 1
-        result = await kwargs["coro_factory"]()
-        return _TaskRecord(result)
-
-    monkeypatch.setattr("src.agents.core.task_manager", SimpleNamespace(submit_tool_task=fake_submit_tool_task))
     async def _exec(*args, **kwargs):
         return ToolResult(True, "task ok")
 
@@ -224,6 +258,25 @@ async def test_task_capable_tool_uses_task_manager(monkeypatch, base_agent):
         return responses.pop(0)
 
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
-    result = await agent.process("runtime test", session_id="s3")
+
+    result = await agent.process("runtime test", session_id="s3", stream_callback=stream_callback)
     assert result["response"] == "done"
-    assert task_calls["n"] == 1
+    assert any('"type": "skill_hook"' in e for e in events)
+    assert any('"type": "task_started"' in e for e in events)
+    assert any('"type": "task_finished"' in e for e in events)
+
+
+@pytest.mark.asyncio
+async def test_non_skill_request_unaffected(monkeypatch, base_agent):
+    agent, _ = base_agent
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [], get_skill_runtime_config=lambda s: None),
+    )
+
+    async def fake_responses(**kwargs):
+        return {"content": "plain response", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+    result = await agent.process("hello", session_id="s4")
+    assert result["response"] == "plain response"

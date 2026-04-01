@@ -339,6 +339,11 @@ class SkillRegistry:
         from src.skills.runtime import build_skill_runtime_config
 
         return build_skill_runtime_config(skill)
+
+    def get_reference_file_list(self, skill: Skill) -> List[str]:
+        from src.skills.runtime import summarize_skill_references
+
+        return summarize_skill_references(skill)
     
     def get_all_skill_summaries(self) -> List[Dict]:
         """Get summary of all skills for frontend/UI."""

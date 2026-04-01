@@ -95,3 +95,8 @@ def emit_gateway_event(event_type: str, data: dict) -> None:
         emit_agent_event_sync(event_type, data)
     except Exception as exc:
         logger.debug(f"emit_gateway_event failed for {event_type}: {exc}")
+
+
+def emit_skill_runtime_event(event_type: str, data: dict) -> None:
+    """Thin adapter for skill runtime/task events."""
+    emit_gateway_event(event_type, data)

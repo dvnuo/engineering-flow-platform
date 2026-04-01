@@ -21,8 +21,11 @@ skills/
   1. **System rules**: hard runtime constraints summary.
   2. **Developer instructions**: description + strategy + compact body.
   3. **References summary**: filenames/paths only.
+- The prompt assembly is built as explicit layers first, then serialized for the current LLM API call shape.
 - `allowed_tools` is enforced in the unified tool loop at runtime.
 - `task_tools` marks tool names that should run through the task boundary (`src/agents/tasks.py`) rather than direct execution.
+- `hooks` can register lightweight runtime hook points (`pre_tool`, `post_tool`) and are applied safely (failures are logged, non-skill flow is unaffected).
+- References stay compact by default (metadata + short availability context), without inlining full reference file contents.
 
 ## Components
 

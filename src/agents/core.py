@@ -45,7 +45,12 @@ from src.agents.executor import (
     ToolResult,
 )
 from src.agents.tool_result_policy import should_passthrough_tool_result
-from src.agents.tasks import task_manager
+from src.agents.skill_runtime import (
+    apply_skill_hooks,
+    build_skill_tool_denied_result,
+    get_effective_skill_runtime_prompt,
+    run_skill_tool_with_task_boundary,
+)
 from src.skills.runtime import SkillRuntimeConfig
 
 logger = logging.getLogger(__name__)
@@ -604,16 +609,16 @@ You have access to the following tools. When a user asks you to do something tha
         enable_reasoning = reasoning_replay if reasoning_replay is not None else config.llm.get('reasoning_replay', False)
         logger.info(f"[{session_id}] reasoning_replay={enable_reasoning}")
         
-        # ===== BUILD EFFECTIVE SYSTEM PROMPT (with skill runtime blocks + Semantic Context) =====
-        effective_system_prompt = self.system_prompt
+        # ===== BUILD EFFECTIVE PROMPT ASSEMBLY (layered skill runtime + semantic context) =====
+        prompt_assembly = get_effective_skill_runtime_prompt(
+            base_system_prompt=self.system_prompt,
+            runtime_config=active_skill_runtime,
+        )
+        effective_system_prompt = prompt_assembly.serialized_system_prompt
+        skill_developer_prompt = prompt_assembly.serialized_developer_prompt
 
         if active_skill_runtime:
-            block = active_skill_runtime.prompt_blocks
-            runtime_sections = [block.system_rules, block.developer_instructions, block.references_summary]
-            runtime_text = "\n\n".join(section for section in runtime_sections if section)
-            if runtime_text:
-                effective_system_prompt = f"{effective_system_prompt}\n\n## Skill Runtime\n\n{runtime_text}"
-            logger.info(f"[Skill] Injected structured runtime blocks for: {active_skill_runtime.skill_name}")
+            logger.info(f"[Skill] Applied layered prompt assembly for: {active_skill_runtime.skill_name}")
         
         # Semantic Context Search - Find relevant memory context
         semantic_context = ""
@@ -629,6 +634,11 @@ You have access to the following tools. When a user asks you to do something tha
                 logger.info(f"[Memory] Added semantic context from search")
         except Exception as e:
             logger.debug(f"[Memory] Semantic search failed: {e}")
+
+        if skill_developer_prompt:
+            effective_system_prompt = (
+                f"{effective_system_prompt}\n\n## Skill Developer Instructions\n{skill_developer_prompt}"
+            )
         
         # ===== TOOL LOOP (REACT Pattern) =====
         # Continue calling LLM until it stops requesting tools
@@ -701,6 +711,8 @@ You have access to the following tools. When a user asks you to do something tha
                     "skill": active_skill_runtime.skill_name,
                     "allowed_tools": active_skill_runtime.allowed_tools,
                     "task_tools": active_skill_runtime.task_tools,
+                    "hooks": active_skill_runtime.hooks,
+                    "references": active_skill_runtime.references,
                 },
             )
         
@@ -1260,18 +1272,18 @@ You have access to the following tools. When a user asks you to do something tha
                     "args": args,
                     "status": "executing"
                 })
+                apply_skill_hooks(
+                    runtime_config=active_skill_runtime,
+                    stage="pre_tool",
+                    tool_name=tool_name,
+                    payload={"args": args},
+                    event_callback=send_event,
+                )
 
                 # Runtime skill policy enforcement (hard guard, not prompt-only)
                 if active_skill_runtime and active_skill_runtime.allowed_tools:
                     if tool_name not in active_skill_runtime.allowed_tools:
-                        deny_result = ToolResult(
-                            success=False,
-                            content=(
-                                f"Tool '{tool_name}' is denied by active skill policy "
-                                f"for skill '{active_skill_runtime.skill_name}'. "
-                                f"Allowed tools: {active_skill_runtime.allowed_tools}"
-                            )
-                        )
+                        deny_result = build_skill_tool_denied_result(active_skill_runtime, tool_name)
                         logger.warning(
                             "[Skill] Runtime tool policy denied tool '%s' for skill '%s'",
                             tool_name,
@@ -1299,6 +1311,13 @@ You have access to the following tools. When a user asks you to do something tha
                             }
                         )
                         executed_tool_results.append((tool_name, deny_result))
+                        apply_skill_hooks(
+                            runtime_config=active_skill_runtime,
+                            stage="post_tool",
+                            tool_name=tool_name,
+                            payload={"denied": True, "result": str(deny_result)},
+                            event_callback=send_event,
+                        )
                         continue
                 
                 # ===== CONFIRMATION GATE (FR-4) =====
@@ -1319,16 +1338,13 @@ You have access to the following tools. When a user asks you to do something tha
                 
                 # Execute the tool (task-capable tools go through task manager boundary)
                 logger.info(f"Executing tool: {tool_name} with args: {args}")
-                if active_skill_runtime and tool_name in set(active_skill_runtime.task_tools):
-                    task_record = await task_manager.submit_tool_task(
-                        session_id=session_id,
-                        tool_name=tool_name,
-                        coro_factory=lambda tn=tool_name, tool_args=args: execute_tool_by_name(tn, **tool_args),
-                        event_callback=send_event,
-                    )
-                    tool_result = task_record.result
-                else:
-                    tool_result = await execute_tool_by_name(tool_name, **args)
+                tool_result = await run_skill_tool_with_task_boundary(
+                    runtime_config=active_skill_runtime,
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    execute_direct=lambda tn=tool_name, tool_args=args: execute_tool_by_name(tn, **tool_args),
+                    event_callback=send_event,
+                )
                 tracer.log_tool_call(
                     tool_name=tool_name,
                     arguments=args,
@@ -1343,6 +1359,13 @@ You have access to the following tools. When a user asks you to do something tha
                     "result": result_preview,
                     "success": tool_result.success
                 })
+                apply_skill_hooks(
+                    runtime_config=active_skill_runtime,
+                    stage="post_tool",
+                    tool_name=tool_name,
+                    payload={"success": tool_result.success, "result_preview": result_preview},
+                    event_callback=send_event,
+                )
                 
                 # Add tool result to loop_messages for the NEXT LLM call in the current request
                 # IMPORTANT: Append to the END of loop_messages, not a specific position.

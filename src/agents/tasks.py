@@ -65,5 +65,22 @@ class TaskManager:
                 event_callback("task_failed", {"task_id": task.task_id, "tool": tool_name, "session_id": session_id, "error": str(exc)})
             raise
 
+    async def run_tool_task(
+        self,
+        *,
+        session_id: str,
+        tool_name: str,
+        coro_factory: Callable[[], Awaitable[Any]],
+        event_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    ) -> Any:
+        """Submit and resolve a tool task in the current request lifecycle."""
+        task_record = await self.submit_tool_task(
+            session_id=session_id,
+            tool_name=tool_name,
+            coro_factory=coro_factory,
+            event_callback=event_callback,
+        )
+        return task_record.result
+
 
 task_manager = TaskManager()

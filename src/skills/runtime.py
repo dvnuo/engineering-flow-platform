@@ -1,4 +1,4 @@
-"""Runtime skill configuration and prompt block builders."""
+"""Runtime skill configuration and layered prompt assembly."""
 
 from __future__ import annotations
 
@@ -14,6 +14,23 @@ class SkillPromptBlocks:
     system_rules: str = ""
     developer_instructions: str = ""
     references_summary: str = ""
+
+
+@dataclass
+class SkillPromptLayers:
+    system_rules_text: str = ""
+    developer_instructions_text: str = ""
+    reference_context_text: str = ""
+
+
+@dataclass
+class EffectivePromptAssembly:
+    base_system_prompt: str
+    system_rules_text: str = ""
+    developer_instructions_text: str = ""
+    reference_context_text: str = ""
+    serialized_system_prompt: str = ""
+    serialized_developer_prompt: str = ""
 
 
 @dataclass
@@ -48,6 +65,14 @@ def summarize_skill_references(skill: Skill) -> List[str]:
     return refs
 
 
+def build_reference_context(reference_paths: List[str], max_items: int = 8) -> str:
+    if not reference_paths:
+        return "References: none"
+    names = [Path(item).name for item in reference_paths[:max_items]]
+    suffix = "" if len(reference_paths) <= max_items else f" (+{len(reference_paths) - max_items} more)"
+    return f"Available references: {', '.join(names)}{suffix}"
+
+
 def build_skill_prompt_blocks(skill: Skill) -> SkillPromptBlocks:
     allowed_tools = ", ".join(skill.tools) if skill.tools else "all tools"
     task_tools = ", ".join(skill.task_tools) if skill.task_tools else "none"
@@ -70,13 +95,48 @@ def build_skill_prompt_blocks(skill: Skill) -> SkillPromptBlocks:
         developer_parts.extend(["Instructions:", body_compact])
 
     refs = summarize_skill_references(skill)
-    references_summary = "References: " + (", ".join(Path(r).name for r in refs) if refs else "none")
+    references_summary = build_reference_context(refs)
 
     return SkillPromptBlocks(
         system_rules=system_rules,
         developer_instructions="\n".join(developer_parts),
         references_summary=references_summary,
     )
+
+
+def assemble_skill_prompt_layers(runtime_config: Optional[SkillRuntimeConfig]) -> SkillPromptLayers:
+    if not runtime_config:
+        return SkillPromptLayers()
+    return SkillPromptLayers(
+        system_rules_text=(runtime_config.prompt_blocks.system_rules or "").strip(),
+        developer_instructions_text=(runtime_config.prompt_blocks.developer_instructions or "").strip(),
+        reference_context_text=(runtime_config.prompt_blocks.references_summary or "").strip(),
+    )
+
+
+def serialize_prompt_layers(base_system_prompt: str, layers: SkillPromptLayers) -> EffectivePromptAssembly:
+    system_sections = [base_system_prompt.strip()]
+    if layers.system_rules_text:
+        system_sections.append(f"## Skill Runtime Rules\n{layers.system_rules_text}")
+    if layers.reference_context_text:
+        system_sections.append(f"## Skill References\n{layers.reference_context_text}")
+
+    serialized_system = "\n\n".join(section for section in system_sections if section).strip()
+    serialized_developer = layers.developer_instructions_text
+
+    return EffectivePromptAssembly(
+        base_system_prompt=base_system_prompt,
+        system_rules_text=layers.system_rules_text,
+        developer_instructions_text=layers.developer_instructions_text,
+        reference_context_text=layers.reference_context_text,
+        serialized_system_prompt=serialized_system,
+        serialized_developer_prompt=serialized_developer,
+    )
+
+
+def assemble_effective_prompt(base_system_prompt: str, runtime_config: Optional[SkillRuntimeConfig]) -> EffectivePromptAssembly:
+    layers = assemble_skill_prompt_layers(runtime_config)
+    return serialize_prompt_layers(base_system_prompt, layers)
 
 
 def build_skill_runtime_config(skill: Skill) -> SkillRuntimeConfig:
