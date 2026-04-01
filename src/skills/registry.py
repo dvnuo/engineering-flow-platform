@@ -35,6 +35,7 @@ class Skill:
     output_format: str = "markdown"
     deprecated: bool = False
     path: str = ""  # Directory containing skill.md
+    source_file: str = ""
     body: str = ""
     when_to_use: List[str] = field(default_factory=list)
     references: List[str] = field(default_factory=list)
@@ -265,6 +266,7 @@ class SkillRegistry:
 
         skill = Skill.from_dict(data)
         skill.path = str(file_path.parent.resolve())
+        skill.source_file = str(file_path.resolve())
         skill.body = body
 
         return skill

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 from importlib import import_module
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from src import ToolResult
 from src.agents.tasks import TaskManager, task_manager
@@ -22,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 HookEventCallback = Optional[Callable[[str, Dict[str, Any]], None]]
 HookContext = Dict[str, Any]
+APPROVED_HOOK_PREFIXES = ("src.hooks.", "tests.")
+SUPPORTED_HOOK_EFFECT_KEYS = {"modified_args", "short_circuit_result", "result_override"}
 
 
 @dataclass
@@ -56,6 +59,34 @@ def get_skill_reference_attachment(runtime_config: Optional[SkillRuntimeConfig])
     return attach_skill_references(runtime_config)
 
 
+def build_skill_runtime_event_payload(
+    *,
+    runtime_config: SkillRuntimeConfig,
+    reference_attachment: ReferenceAttachment,
+    prompt_assembly: EffectivePromptAssembly,
+    prompt_boundary_mode: str,
+    verbose: bool = False,
+) -> Dict[str, Any]:
+    payload = {
+        "skill": runtime_config.skill_name,
+        "allowed_tools": runtime_config.allowed_tools,
+        "task_tools": runtime_config.task_tools,
+        "hooks": runtime_config.hooks,
+        "references": [os.path.basename(ref) for ref in reference_attachment.references],
+        "reference_context": reference_attachment.context_text,
+        "reference_count": len(reference_attachment.references),
+        "attachment_mode": reference_attachment.attachment_mode,
+        "prompt_boundary_mode": prompt_boundary_mode,
+    }
+    if verbose:
+        payload["prompt_layers"] = {
+            "system_rules_text": prompt_assembly.system_rules_text,
+            "developer_instructions_text": prompt_assembly.developer_instructions_text,
+            "reference_context_text": prompt_assembly.reference_context_text,
+        }
+    return payload
+
+
 def build_skill_tool_denied_result(runtime_config: SkillRuntimeConfig, tool_name: str, reason: str = "not_allowed") -> ToolResult:
     return ToolResult(
         success=False,
@@ -80,6 +111,9 @@ def _resolve_hook_callable(hook_name: str):
     _, target = normalized.split(":", 1)
     if "." not in target:
         return None
+    if not any(target.startswith(prefix) for prefix in APPROVED_HOOK_PREFIXES):
+        logger.warning("[SkillHook] Rejected unapproved hook target: %s", target)
+        return None
     module_name, func_name = target.rsplit(".", 1)
     module = import_module(module_name)
     return getattr(module, func_name)
@@ -102,12 +136,19 @@ def _coerce_tool_result(value: Any) -> Optional[ToolResult]:
 
 def dispatch_skill_hook(*, hook_name: str, context: HookContext) -> Dict[str, Any]:
     """Execute a hook target when available and return runtime metadata."""
-    hook_fn = _resolve_hook_callable(hook_name)
-    if not hook_fn:
-        return {"applied": True, "mode": "event_only"}
+    try:
+        hook_fn = _resolve_hook_callable(hook_name)
+        if not hook_fn:
+            return {"applied": True, "mode": "event_only", "hook_effects": {}}
 
-    hook_result = hook_fn(context)
-    hook_effects = hook_result if isinstance(hook_result, dict) else {}
+        hook_result = hook_fn(context)
+    except Exception as exc:
+        logger.warning("[SkillHook] Dispatch failed for %s: %s", hook_name, exc)
+        return {"applied": False, "mode": "error", "error": str(exc), "hook_effects": {}}
+
+    hook_effects = {}
+    if isinstance(hook_result, dict):
+        hook_effects = {k: v for k, v in hook_result.items() if k in SUPPORTED_HOOK_EFFECT_KEYS}
     return {
         "applied": True,
         "mode": "callable",
@@ -160,7 +201,7 @@ def apply_skill_hooks(
                 event_callback(
                     "skill_hook",
                     {
-                        "status": "applied",
+                        "status": "applied" if dispatch_result.get("applied", False) else "failed",
                         "hook": hook,
                         "stage": stage,
                         "tool": tool_name,
@@ -169,7 +210,8 @@ def apply_skill_hooks(
                         "dispatch": dispatch_result,
                     },
                 )
-            effects.invoked_hooks.append(hook)
+            if dispatch_result.get("applied", False):
+                effects.invoked_hooks.append(hook)
         except Exception as exc:  # defensive: hooks must not break requests
             logger.warning("[SkillHook] Failed hook=%s stage=%s tool=%s err=%s", hook, stage, tool_name, exc)
             if event_callback:
@@ -192,7 +234,7 @@ async def run_skill_tool_with_task_boundary(
     runtime_config: Optional[SkillRuntimeConfig],
     session_id: str,
     tool_name: str,
-    execute_direct: Callable[[], Any],
+    execute_direct: Callable[[], Awaitable[Any]],
     event_callback: HookEventCallback = None,
     tasks: TaskManager = task_manager,
 ):

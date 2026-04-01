@@ -25,9 +25,26 @@ class TaskRecord:
 
 
 class TaskManager:
-    def __init__(self):
+    def __init__(self, max_completed_tasks: int = 200):
         self._tasks: Dict[str, TaskRecord] = {}
         self._lock = asyncio.Lock()
+        self._max_completed_tasks = max_completed_tasks
+
+    def get_task(self, task_id: str) -> Optional[TaskRecord]:
+        return self._tasks.get(task_id)
+
+    def _prune_completed_tasks(self) -> None:
+        completed_ids = [
+            task_id
+            for task_id, task in self._tasks.items()
+            if task.status in {"completed", "failed"}
+        ]
+        overflow = len(completed_ids) - self._max_completed_tasks
+        if overflow <= 0:
+            return
+        completed_ids.sort(key=lambda task_id: self._tasks[task_id].finished_at or self._tasks[task_id].created_at)
+        for task_id in completed_ids[:overflow]:
+            self._tasks.pop(task_id, None)
 
     async def submit_tool_task(
         self,
@@ -42,11 +59,31 @@ class TaskManager:
             self._tasks[task.task_id] = task
 
         if event_callback:
-            event_callback("task_started", {"task_id": task.task_id, "tool": tool_name, "session_id": session_id})
+            event_callback(
+                "task_queued",
+                {
+                    "task_id": task.task_id,
+                    "tool": tool_name,
+                    "session_id": session_id,
+                    "status": task.status,
+                    "created_at": task.created_at,
+                },
+            )
 
         async def _runner() -> Any:
             task.status = "running"
             task.started_at = datetime.utcnow().isoformat() + "Z"
+            if event_callback:
+                event_callback(
+                    "task_started",
+                    {
+                        "task_id": task.task_id,
+                        "tool": tool_name,
+                        "session_id": session_id,
+                        "status": task.status,
+                        "started_at": task.started_at,
+                    },
+                )
             return await coro_factory()
 
         try:
@@ -54,15 +91,36 @@ class TaskManager:
             task.status = "completed"
             task.finished_at = datetime.utcnow().isoformat() + "Z"
             task.result = result
+            self._prune_completed_tasks()
             if event_callback:
-                event_callback("task_finished", {"task_id": task.task_id, "tool": tool_name, "session_id": session_id})
+                event_callback(
+                    "task_finished",
+                    {
+                        "task_id": task.task_id,
+                        "tool": tool_name,
+                        "session_id": session_id,
+                        "status": task.status,
+                        "finished_at": task.finished_at,
+                    },
+                )
             return task
         except Exception as exc:
             task.status = "failed"
             task.finished_at = datetime.utcnow().isoformat() + "Z"
             task.error = str(exc)
+            self._prune_completed_tasks()
             if event_callback:
-                event_callback("task_failed", {"task_id": task.task_id, "tool": tool_name, "session_id": session_id, "error": str(exc)})
+                event_callback(
+                    "task_failed",
+                    {
+                        "task_id": task.task_id,
+                        "tool": tool_name,
+                        "session_id": session_id,
+                        "status": task.status,
+                        "finished_at": task.finished_at,
+                        "error": str(exc),
+                    },
+                )
             raise
 
     async def run_tool_task(

@@ -4,12 +4,19 @@ from types import SimpleNamespace
 from src import ToolResult
 from src.agents.core import Agent
 from src.agents.skill_runtime import build_skill_tool_denied_result
-from src.agents.skill_runtime import resolve_prompt_execution_boundary
+from src.agents.skill_runtime import (
+    build_skill_runtime_event_payload,
+    dispatch_skill_hook,
+    resolve_prompt_execution_boundary,
+)
+from src.agents.tasks import TaskManager, TaskRecord
 from src.skills.registry import SkillRegistry
+from src.skills.registry import Skill
 from src.skills.runtime import (
     attach_skill_references,
     assemble_effective_prompt,
     build_skill_runtime_config,
+    summarize_skill_references,
 )
 
 
@@ -457,3 +464,130 @@ def _short_circuit_hook(context):
 
 def _post_override_hook(context):
     return {"result_override": {"success": True, "content": "overridden-result"}}
+
+
+def test_reference_fallback_scoping_for_single_file_skill(tmp_path):
+    shared = tmp_path / "skills"
+    shared.mkdir()
+    skill_file = shared / "alpha.md"
+    skill_file.write_text("---\nname: alpha\ndescription: a\n---\n", encoding="utf-8")
+    (shared / "README.md").write_text("no", encoding="utf-8")
+    (shared / "beta.md").write_text("---\nname: beta\ndescription: b\n---\n", encoding="utf-8")
+    (shared / "ref-alpha-guide.md").write_text("guide", encoding="utf-8")
+
+    skill = Skill(name="alpha", description="a", path=str(shared), source_file=str(skill_file))
+    refs = summarize_skill_references(skill)
+    assert any("ref-alpha-guide.md" in r for r in refs)
+    assert all("beta.md" not in r for r in refs)
+    assert all("README.md" not in r for r in refs)
+
+
+def test_explicit_references_take_precedence(tmp_path):
+    explicit = str(tmp_path / "x.md")
+    skill = Skill(name="alpha", description="a", references=[explicit], path=str(tmp_path))
+    refs = summarize_skill_references(skill)
+    assert refs == [explicit]
+
+
+def test_hook_resolution_rejects_unapproved_import(monkeypatch):
+    import_called = {"value": False}
+
+    def _fail_import(name):
+        import_called["value"] = True
+        raise AssertionError("import should not occur for unapproved target")
+
+    monkeypatch.setattr("src.agents.skill_runtime.import_module", _fail_import)
+    result = dispatch_skill_hook(
+        hook_name="pre_tool:os.system",
+        context={"session_id": "s", "skill_name": "k", "tool_name": "t", "stage": "pre_tool", "payload": {}},
+    )
+    assert result["mode"] == "event_only"
+    assert import_called["value"] is False
+
+
+def test_dispatch_skill_hook_ignores_unknown_effect_keys():
+    result = dispatch_skill_hook(
+        hook_name="pre_tool:tests.test_skill_runtime_refactor._unknown_effect_hook",
+        context={"session_id": "s", "skill_name": "k", "tool_name": "t", "stage": "pre_tool", "payload": {}},
+    )
+    assert result["mode"] == "callable"
+    assert "unknown_key" not in result.get("hook_effects", {})
+
+
+@pytest.mark.asyncio
+async def test_task_lifecycle_events_and_retention():
+    events = []
+    manager = TaskManager(max_completed_tasks=2)
+
+    def _event(name, data):
+        events.append((name, data))
+
+    async def _ok():
+        return "ok"
+
+    async def _boom():
+        raise RuntimeError("boom")
+
+    first_task = await manager.submit_tool_task(session_id="s", tool_name="t1", coro_factory=_ok, event_callback=_event)
+    with pytest.raises(RuntimeError):
+        await manager.submit_tool_task(session_id="s", tool_name="t2", coro_factory=_boom, event_callback=_event)
+    await manager.submit_tool_task(session_id="s", tool_name="t3", coro_factory=_ok, event_callback=_event)
+
+    names = [name for name, _ in events]
+    assert "task_queued" in names
+    assert "task_started" in names
+    assert "task_finished" in names
+    assert "task_failed" in names
+    assert manager.get_task(first_task.task_id) is None
+
+
+def test_task_retention_preserves_active_records():
+    manager = TaskManager(max_completed_tasks=1)
+    manager._tasks["running"] = TaskRecord(task_id="running", session_id="s", tool_name="x", status="running")
+    manager._tasks["c1"] = TaskRecord(task_id="c1", session_id="s", tool_name="x", status="completed", finished_at="2020-01-01T00:00:00Z")
+    manager._tasks["c2"] = TaskRecord(task_id="c2", session_id="s", tool_name="x", status="completed", finished_at="2020-01-02T00:00:00Z")
+    manager._prune_completed_tasks()
+    assert "running" in manager._tasks
+    assert len([t for t in manager._tasks.values() if t.status == "completed"]) == 1
+
+
+def test_skill_runtime_event_payload_sanitized_and_verbose():
+    runtime_config = build_skill_runtime_config(
+        SimpleNamespace(
+            name="demo",
+            description="d",
+            tools=["allowed_tool"],
+            task_tools=[],
+            strategy=[],
+            body="secret-body",
+            references=["/tmp/private/path/ref-1.md"],
+            model="",
+            hooks=[],
+            path="",
+        )
+    )
+    assembly = assemble_effective_prompt("BASE", runtime_config)
+    attachment = attach_skill_references(runtime_config)
+
+    payload = build_skill_runtime_event_payload(
+        runtime_config=runtime_config,
+        reference_attachment=attachment,
+        prompt_assembly=assembly,
+        prompt_boundary_mode="merged_once_into_system",
+        verbose=False,
+    )
+    assert payload["references"] == ["ref-1.md"]
+    assert "prompt_layers" not in payload
+
+    verbose_payload = build_skill_runtime_event_payload(
+        runtime_config=runtime_config,
+        reference_attachment=attachment,
+        prompt_assembly=assembly,
+        prompt_boundary_mode="merged_once_into_system",
+        verbose=True,
+    )
+    assert "prompt_layers" in verbose_payload
+
+
+def _unknown_effect_hook(context):
+    return {"unknown_key": "ignored", "modified_args": {"x": "1"}}

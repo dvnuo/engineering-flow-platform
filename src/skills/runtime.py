@@ -37,6 +37,7 @@ class EffectivePromptAssembly:
 class ReferenceAttachment:
     references: List[str] = field(default_factory=list)
     context_text: str = ""
+    attachment_mode: str = "compact"
 
 
 @dataclass
@@ -63,11 +64,14 @@ def summarize_skill_references(skill: Skill) -> List[str]:
     if references_dir.exists():
         refs.extend(str(p) for p in sorted(references_dir.glob("*")) if p.is_file())
     else:
-        refs.extend(
-            str(p)
-            for p in sorted(skill_dir.glob("*.md"))
-            if p.is_file() and p.name.lower() != "skill.md"
-        )
+        source_file = Path(getattr(skill, "source_file", "") or "")
+        source_name = source_file.name.lower()
+        source_stem = source_file.stem.lower()
+        if source_name == "skill.md":
+            refs.extend(str(p) for p in sorted(skill_dir.glob("ref-*.md")) if p.is_file())
+        elif source_stem:
+            for pattern in (f"ref-{source_stem}*.md", f"{source_stem}.ref*.md"):
+                refs.extend(str(p) for p in sorted(skill_dir.glob(pattern)) if p.is_file())
     return refs
 
 
@@ -149,7 +153,7 @@ def assemble_effective_prompt(base_system_prompt: str, runtime_config: Optional[
 
 def attach_skill_references(runtime_config: Optional[SkillRuntimeConfig]) -> ReferenceAttachment:
     refs = list((runtime_config.references if runtime_config else []) or [])
-    return ReferenceAttachment(references=refs, context_text=build_reference_context(refs))
+    return ReferenceAttachment(references=refs, context_text=build_reference_context(refs), attachment_mode="compact")
 
 
 def build_skill_runtime_config(skill: Skill) -> SkillRuntimeConfig:

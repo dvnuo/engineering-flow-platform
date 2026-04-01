@@ -47,6 +47,7 @@ from src.agents.executor import (
 from src.agents.tool_result_policy import should_passthrough_tool_result
 from src.agents.skill_runtime import (
     apply_skill_hooks,
+    build_skill_runtime_event_payload,
     build_skill_tool_denied_result,
     get_effective_skill_runtime_prompt,
     get_skill_reference_attachment,
@@ -702,22 +703,16 @@ You have access to the following tools. When a user asks you to do something tha
         if matched_skills:
             send_event("skill_matched", {"skill": matched_skills[0].name})
         if active_skill_runtime:
+            verbose_runtime_event = _is_debug_enabled() or bool(config.session.get("verbose_skill_runtime_events", False))
             send_event(
                 "skill_runtime_applied",
-                {
-                    "skill": active_skill_runtime.skill_name,
-                    "allowed_tools": active_skill_runtime.allowed_tools,
-                    "task_tools": active_skill_runtime.task_tools,
-                    "hooks": active_skill_runtime.hooks,
-                    "references": reference_attachment.references,
-                    "reference_context": reference_attachment.context_text,
-                    "prompt_layers": {
-                        "system_rules_text": prompt_assembly.system_rules_text,
-                        "developer_instructions_text": prompt_assembly.developer_instructions_text,
-                        "reference_context_text": prompt_assembly.reference_context_text,
-                    },
-                    "prompt_boundary_mode": prompt_boundary_mode,
-                },
+                build_skill_runtime_event_payload(
+                    runtime_config=active_skill_runtime,
+                    reference_attachment=reference_attachment,
+                    prompt_assembly=prompt_assembly,
+                    prompt_boundary_mode=prompt_boundary_mode,
+                    verbose=verbose_runtime_event,
+                ),
             )
         
         # ===== INJECT ATTACHED IMAGES =====
