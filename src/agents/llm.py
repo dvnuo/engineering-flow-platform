@@ -228,14 +228,13 @@ def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
             func = tool.get("function", {})
             # Deep copy parameters to avoid mutating the original
             params = copy.deepcopy(func.get("parameters", {}))
+
+            # Capture required fields before strict-mode normalization expands `required`.
             original_required = params.get("required", [])
             if not isinstance(original_required, list):
                 original_required = []
             original_required_set = set(original_required)
-            
-            # Responses API strict mode requires closed top-level argument objects.
-            params["additionalProperties"] = False
-            
+
             properties = params.get("properties", {})
             if isinstance(properties, dict):
                 normalized_properties = {}
@@ -248,7 +247,10 @@ def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
                 params["required"] = list(properties.keys())
             elif "required" not in params or not isinstance(params.get("required"), list):
                 params["required"] = []
-            
+
+            # Responses API strict mode requires closed top-level argument objects.
+            params["additionalProperties"] = False
+
             converted.append({
                 "type": "function",
                 "name": func.get("name", ""),
