@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import inspect
 from importlib import import_module
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
@@ -73,7 +74,11 @@ def build_skill_runtime_event_payload(
         "task_tools": runtime_config.task_tools,
         "hooks": runtime_config.hooks,
         "references": [os.path.basename(ref) for ref in reference_attachment.references],
-        "reference_context": reference_attachment.context_text,
+        "reference_context": (
+            f"{len(reference_attachment.references)} reference(s) available"
+            if reference_attachment.references
+            else "References: none"
+        ),
         "reference_count": len(reference_attachment.references),
         "attachment_mode": reference_attachment.attachment_mode,
         "prompt_boundary_mode": prompt_boundary_mode,
@@ -140,8 +145,24 @@ def dispatch_skill_hook(*, hook_name: str, context: HookContext) -> Dict[str, An
         hook_fn = _resolve_hook_callable(hook_name)
         if not hook_fn:
             return {"applied": True, "mode": "event_only", "hook_effects": {}}
+        if inspect.iscoroutinefunction(hook_fn):
+            logger.warning("[SkillHook] Rejected unsupported async hook callable: %s", hook_name)
+            return {
+                "applied": False,
+                "mode": "unsupported_async_hook",
+                "error": "async_hook_not_supported",
+                "hook_effects": {},
+            }
 
         hook_result = hook_fn(context)
+        if inspect.isawaitable(hook_result):
+            logger.warning("[SkillHook] Rejected unsupported async hook result: %s", hook_name)
+            return {
+                "applied": False,
+                "mode": "unsupported_async_hook",
+                "error": "async_hook_result_not_supported",
+                "hook_effects": {},
+            }
     except Exception as exc:
         logger.warning("[SkillHook] Dispatch failed for %s: %s", hook_name, exc)
         return {"applied": False, "mode": "error", "error": str(exc), "hook_effects": {}}

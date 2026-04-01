@@ -514,6 +514,15 @@ def test_dispatch_skill_hook_ignores_unknown_effect_keys():
     assert "unknown_key" not in result.get("hook_effects", {})
 
 
+def test_dispatch_skill_hook_rejects_async_hook():
+    result = dispatch_skill_hook(
+        hook_name="pre_tool:tests.test_skill_runtime_refactor._async_hook",
+        context={"session_id": "s", "skill_name": "k", "tool_name": "t", "stage": "pre_tool", "payload": {}},
+    )
+    assert result["mode"] == "unsupported_async_hook"
+    assert result["applied"] is False
+
+
 @pytest.mark.asyncio
 async def test_task_lifecycle_events_and_retention():
     events = []
@@ -578,6 +587,7 @@ def test_skill_runtime_event_payload_sanitized_and_verbose():
     )
     assert payload["references"] == ["ref-1.md"]
     assert "prompt_layers" not in payload
+    assert "ref-1.md" not in payload["reference_context"]
 
     verbose_payload = build_skill_runtime_event_payload(
         runtime_config=runtime_config,
@@ -591,3 +601,7 @@ def test_skill_runtime_event_payload_sanitized_and_verbose():
 
 def _unknown_effect_hook(context):
     return {"unknown_key": "ignored", "modified_args": {"x": "1"}}
+
+
+async def _async_hook(context):
+    return {"modified_args": {"x": "async"}}

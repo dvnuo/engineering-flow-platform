@@ -26,6 +26,7 @@ skills/
 - `task_tools` marks tool names that should run through the task boundary (`src/agents/tasks.py`) rather than direct execution.
 - `hooks` can register lightweight runtime hook points (`pre_tool`, `post_tool`) and optional callable adapters (`pre_tool:module.path.fn`), with safe failure handling.
 - Callable hook adapters are resolved with a safe allowlist policy (approved prefixes only, currently `src.hooks.` and test-only `tests.`).
+- Async hook callables/results are rejected by default (`unsupported_async_hook`) to keep runtime hook execution sync-safe.
 - Hook adapters may optionally return:
   - `{"modified_args": {...}}` (pre-tool)
   - `{"short_circuit_result": ...}` (pre-tool)
