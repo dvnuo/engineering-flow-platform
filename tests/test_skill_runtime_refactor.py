@@ -1,5 +1,6 @@
 import pytest
 from types import SimpleNamespace
+from pathlib import Path
 
 from src import ToolResult
 from src.agents.core import Agent, get_skill_workdir, set_skill_workdir
@@ -351,6 +352,11 @@ async def test_matched_skill_workdir_updates_and_clears_when_path_falsy(monkeypa
 @pytest.mark.asyncio
 async def test_disallowed_tool_is_denied_and_allowed_tool_executes(monkeypatch, base_agent):
     agent, _ = base_agent
+    events = []
+
+    def stream_callback(event_json: str):
+        events.append(event_json)
+
     matched_skill = SimpleNamespace(
         name="runtime-skill",
         description="d",
@@ -387,10 +393,12 @@ async def test_disallowed_tool_is_denied_and_allowed_tool_executes(monkeypatch, 
         return responses.pop(0)
 
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
-    result = await agent.process("runtime test", session_id="s2")
+    result = await agent.process("runtime test", session_id="s2", stream_callback=stream_callback)
     assert result["response"] == "done"
     assert calls["execute"] == 1
     assert calls["names"] == ["allowed_tool"]
+    assert any('"type": "skill_tool_denied"' in e for e in events)
+    assert any('"type": "tool_result"' in e and "blocked_tool" in e for e in events)
 
 
 @pytest.mark.asyncio
@@ -522,6 +530,11 @@ async def test_pre_hook_can_modify_args(monkeypatch, base_agent):
 @pytest.mark.asyncio
 async def test_pre_hook_can_short_circuit(monkeypatch, base_agent):
     agent, _ = base_agent
+    events = []
+
+    def stream_callback(event_json: str):
+        events.append(event_json)
+
     monkeypatch.setenv("SKILL_RUNTIME_ENABLE_TEST_HOOKS", "1")
     matched_skill = SimpleNamespace(
         name="runtime-skill",
@@ -554,9 +567,10 @@ async def test_pre_hook_can_short_circuit(monkeypatch, base_agent):
         return responses.pop(0)
 
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=_fake_responses, default_provider="openai"))
-    result = await agent.process("runtime test", session_id="s-short")
+    result = await agent.process("runtime test", session_id="s-short", stream_callback=stream_callback)
     assert result["response"] == "done"
     assert called["tool"] == 0
+    assert any('"type": "tool_result"' in e and "allowed_tool" in e for e in events)
 
 
 @pytest.mark.asyncio
@@ -679,6 +693,19 @@ def test_explicit_references_fallback_to_source_file_parent(tmp_path):
     )
     refs = summarize_skill_references(skill)
     assert refs == [str((skill_file.parent / "references/readme.md").resolve())]
+
+
+def test_reference_normalization_fallback(monkeypatch):
+    monkeypatch.chdir("/tmp")
+    skill = Skill(
+        name="alpha",
+        description="a",
+        path="",
+        source_file="",
+        references=["references/playbook.md"],
+    )
+    refs = summarize_skill_references(skill)
+    assert refs == [str((Path("/tmp") / "references/playbook.md").resolve())]
 
 
 def test_hook_resolution_rejects_unapproved_import(monkeypatch):

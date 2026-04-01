@@ -1286,7 +1286,17 @@ You have access to the following tools. When a user asks you to do something tha
                             {
                                 "skill": active_skill_runtime.skill_name,
                                 "tool": tool_name,
+                                "call_id": call_id,
                                 "allowed_tools": active_skill_runtime.allowed_tools,
+                            },
+                        )
+                        send_event(
+                            "tool_result",
+                            {
+                                "tool": tool_name,
+                                "call_id": call_id,
+                                "result": str(deny_result),
+                                "success": False,
                             },
                         )
                         tracer.log_tool_call(
@@ -1338,6 +1348,12 @@ You have access to the following tools. When a user asks you to do something tha
                             "tool_call_id": call_id,
                         }
                     )
+                    send_event("tool_result", {
+                        "tool": tool_name,
+                        "call_id": call_id,
+                        "result": str(short_result),
+                        "success": True
+                    })
                     executed_tool_results.append((tool_name, short_result))
                     apply_skill_hooks(
                         runtime_config=active_skill_runtime,

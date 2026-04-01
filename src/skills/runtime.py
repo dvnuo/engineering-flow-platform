@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Set
 
 from src.skills.registry import Skill
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -54,10 +57,14 @@ class SkillRuntimeConfig:
 
 
 def summarize_skill_references(skill: Skill) -> List[str]:
+    fallback_to_cwd = False
     base_dir = Path(getattr(skill, "path", "") or "").resolve() if getattr(skill, "path", "") else None
     if base_dir is None:
         source_file = Path(getattr(skill, "source_file", "") or "")
         base_dir = source_file.parent.resolve() if str(source_file).strip() else None
+    if base_dir is None:
+        base_dir = Path.cwd()
+        fallback_to_cwd = True
 
     if skill.references:
         refs: List[str] = []
@@ -70,6 +77,8 @@ def summarize_skill_references(skill: Skill) -> List[str]:
                 refs.append(str(ref_path))
             else:
                 refs.append(str((base_dir / ref_path).resolve()))
+        if fallback_to_cwd:
+            logger.debug("[SkillRuntime] Resolved explicit references relative to cwd because skill path/source_file were empty.")
         return refs
     if not skill.path:
         return []
