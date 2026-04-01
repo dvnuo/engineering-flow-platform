@@ -230,16 +230,15 @@ def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
             params = copy.deepcopy(func.get("parameters", {}))
 
             # Capture required fields before strict-mode normalization expands `required`.
-            original_required = params.get("required", [])
-            if not isinstance(original_required, list):
-                original_required = []
-            original_required_set = set(original_required)
+            original_required = set(params.get("required", []))
+            if not isinstance(params.get("required"), list):
+                original_required = set()
 
             properties = params.get("properties", {})
             if isinstance(properties, dict):
                 normalized_properties = {}
                 for prop_name, prop_schema in properties.items():
-                    if prop_name in original_required_set:
+                    if prop_name in original_required:
                         normalized_properties[prop_name] = prop_schema
                     else:
                         normalized_properties[prop_name] = _make_nullable_if_optional(prop_schema)
