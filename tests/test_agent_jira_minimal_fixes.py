@@ -78,6 +78,7 @@ def test_convert_tools_schema_run_command_keeps_cmd_non_nullable():
     params = _convert_tools_schema(tools)[0]["parameters"]
     assert params["required"] == ["cmd", "args", "cwd", "timeout_ms"]
     assert params["properties"]["cmd"]["type"] == "string"
+    assert params["properties"]["cmd"]["type"] != ["string", "null"]
     assert params["properties"]["args"]["type"] == ["array", "null"]
     assert params["properties"]["cwd"]["type"] == ["string", "null"]
     assert params["properties"]["timeout_ms"]["type"] == ["integer", "null"]
@@ -117,6 +118,7 @@ def test_convert_tools_schema_jira_get_issue_optional_fields_nullable():
         "include_attachment_urls",
     ]
     assert params["properties"]["issue_key"]["type"] == "string"
+    assert params["properties"]["issue_key"]["type"] != ["string", "null"]
     assert params["properties"]["format"]["type"] == ["string", "null"]
     assert params["properties"]["max_chars"]["type"] == ["integer", "null"]
     assert params["properties"]["max_comments"]["type"] == ["integer", "null"]
