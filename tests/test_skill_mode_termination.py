@@ -139,9 +139,11 @@ async def test_invalid_finalizer_marker_retry_then_fallback(monkeypatch):
         {"content": "[EXECUTE] invalid for finalizer", "function_calls": [], "usage": {}},
         {"content": "", "function_calls": [], "usage": {}},
     ]
-    _, snapshots, _ = await run_replay_case(monkeypatch, responses=responses)
+    result, snapshots, _ = await run_replay_case(monkeypatch, responses=responses)
     assert terminal_reasons(snapshots)[-1] == "no_function_calls"
     assert any(isinstance(s, dict) and s.get("finalizer_state") == "terminal_failed" for s in snapshots)
+    assert latest_state(snapshots).get("status") == "finished"
+    assert "Skill execution completed with fallback summary." in result["response"]
 
 
 @pytest.mark.asyncio

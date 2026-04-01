@@ -107,7 +107,6 @@ def _normalize_tool_args(args_str: str) -> Dict[str, Any]:
 
 def _build_progress_signature(
     skill_session: SkillSession,
-    tool_name: str,
     normalized_args: Dict[str, Any],
     output_text: str,
 ) -> Dict[str, str]:
@@ -170,7 +169,6 @@ def _evaluate_skill_progress(
 ) -> Dict[str, Any]:
     progress_data = _build_progress_signature(
         skill_session=skill_session,
-        tool_name=tool_name,
         normalized_args=normalized_args,
         output_text=output_text,
     )
@@ -247,11 +245,11 @@ async def _run_skill_finalizer(
     fallback_used = True
     if skill_session.completed_steps:
         summary = "; ".join(str(step.get("result", ""))[:120] for step in skill_session.completed_steps[-3:] if step.get("result")) or "Skill execution reached a stable stopping point."
-        raw_output = f"[FINISH] {summary}"
+        raw_output = f"[FINISH]\n{summary}"
     elif skill_session.pending_question:
-        raw_output = f"[ASK_USER] {skill_session.pending_question}"
+        raw_output = f"[ASK_USER]\n{skill_session.pending_question}"
     else:
-        raw_output = "[FINISH] Skill execution completed with fallback summary."
+        raw_output = "[FINISH]\nSkill execution completed with fallback summary."
     parsed_action, _ = _parse_skill_control_marker(raw_output)
     return FinalizerResult("terminal_failed", skill_session.finalizer_attempts, parsed_action, raw_output, termination_reason, fallback_used), usage_data
 
