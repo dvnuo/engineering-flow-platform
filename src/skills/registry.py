@@ -10,7 +10,7 @@ Responsibilities:
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import os
 from dataclasses import dataclass, field
 
@@ -35,7 +35,14 @@ class Skill:
     output_format: str = "markdown"
     deprecated: bool = False
     path: str = ""  # Directory containing skill.md
-    
+    body: str = ""
+    when_to_use: List[str] = field(default_factory=list)
+    references: List[str] = field(default_factory=list)
+    model: str = ""
+    hooks: List[str] = field(default_factory=list)
+    task_tools: List[str] = field(default_factory=list)
+    risk_level: str = ""
+
     # Compiled patterns for fast matching
     trigger_patterns: List[re.Pattern] = field(default_factory=list)
     
@@ -56,6 +63,12 @@ class Skill:
             strategy=data.get("strategy", []),
             output_format=data.get("output_format", "markdown"),
             deprecated=data.get("deprecated", False),
+            when_to_use=data.get("when_to_use", []) or [],
+            references=data.get("references", []) or [],
+            model=data.get("model", "") or "",
+            hooks=data.get("hooks", []) or [],
+            task_tools=data.get("task_tools", []) or [],
+            risk_level=data.get("risk_level", "") or "",
             trigger_patterns=patterns,
         )
 
@@ -226,31 +239,34 @@ class SkillRegistry:
         
         return loaded
     
+    def _parse_markdown_frontmatter(self, content: str) -> Tuple[Dict[str, Any], str]:
+        if not content.startswith("---"):
+            return {}, content
+        parts = content.split("---", 2)
+        if len(parts) < 3:
+            return {}, content
+        frontmatter = _yaml.load(parts[1]) or {}
+        body = parts[2].lstrip("\n")
+        return frontmatter, body
+
     def _load_skill_file(self, file_path: Path) -> Optional[Skill]:
         """Load a single skill from YAML or MD file."""
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
-        
-        # Check if it's a markdown file with frontmatter
-        if file_path.suffix == '.md' and content.startswith('---'):
-            # Extract frontmatter between first two ---
-            parts = content.split('---', 2)
-            if len(parts) >= 3:
-                frontmatter = parts[1]
-                data = _yaml.load(frontmatter)
-            else:
-                data = {}
+
+        body = ""
+        if file_path.suffix == ".md":
+            data, body = self._parse_markdown_frontmatter(content)
         else:
-            # Plain YAML file
             data = _yaml.load(content)
-        
+
         if not data:
             return None
-        
+
         skill = Skill.from_dict(data)
-        skill.path = str(file_path.parent.resolve())  # Store the directory path
-        skill_file = file_path.name
-        
+        skill.path = str(file_path.parent.resolve())
+        skill.body = body
+
         return skill
     
     def get_skill(self, name: str) -> Optional[Skill]:
@@ -311,26 +327,18 @@ class SkillRegistry:
         return skill.tools if skill else []
     
     def get_skill_prompt(self, skill: Skill) -> str:
-        """Generate skill prompt for LLM injection.
-        
-        Reference: FR-3 Dynamic Skill Injection
-        """
-        prompt_parts = [
-            f"Skill: {skill.name}",
-            f"Description: {skill.description}",
-            "",
-            "When activated, you MUST follow this strategy:",
-        ]
-        
-        for step in skill.strategy:
-            prompt_parts.append(f"  {step}")
-        
-        prompt_parts.extend([
-            "",
-            f"Output format: {skill.output_format}",
-        ])
-        
-        return "\n".join(prompt_parts)
+        """Backward-compatible prompt summary."""
+        from src.skills.runtime import build_skill_prompt_blocks
+
+        blocks = build_skill_prompt_blocks(skill)
+        return "\n\n".join(
+            part for part in [blocks.system_rules, blocks.developer_instructions, blocks.references_summary] if part
+        )
+
+    def get_skill_runtime_config(self, skill: Skill):
+        from src.skills.runtime import build_skill_runtime_config
+
+        return build_skill_runtime_config(skill)
     
     def get_all_skill_summaries(self) -> List[Dict]:
         """Get summary of all skills for frontend/UI."""

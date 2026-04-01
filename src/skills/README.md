@@ -9,8 +9,20 @@ The Skills module provides skill discovery, matching, and execution capabilities
 ```
 skills/
 ├── registry.py    # Skill loading, matching, and discovery
+├── runtime.py     # Skill runtime config + prompt block composition
 └── tracer.py      # Skill execution tracing for UI
 ```
+
+## Runtime Architecture (Skill-as-Command)
+
+- Skill matching still happens in `SkillRegistry.match_skill(...)`.
+- A match now becomes a `SkillRuntimeConfig` (not a separate skill workflow).
+- Prompt injection is layered with compact blocks:
+  1. **System rules**: hard runtime constraints summary.
+  2. **Developer instructions**: description + strategy + compact body.
+  3. **References summary**: filenames/paths only.
+- `allowed_tools` is enforced in the unified tool loop at runtime.
+- `task_tools` marks tool names that should run through the task boundary (`src/agents/tasks.py`) rather than direct execution.
 
 ## Components
 
@@ -71,6 +83,16 @@ strategy:
   - Process the request
   - Return results
 output_format: markdown
+when_to_use:
+  - For triage workflows
+references:
+  - references/playbook.md
+model: gpt-5-mini
+hooks:
+  - precheck
+task_tools:
+  - run_command
+risk_level: medium
 ---
 ```
 

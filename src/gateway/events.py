@@ -84,3 +84,14 @@ def setup_event_routes(app: web.Application):
     """Set up event routes."""
     app.router.add_get('/api/events', handle_websocket)
     logger.info("WebSocket event route registered: GET /api/events")
+
+
+
+def emit_gateway_event(event_type: str, data: dict) -> None:
+    """Emit gateway-compatible events from non-websocket code paths."""
+    try:
+        from .event_bus import emit_agent_event_sync
+
+        emit_agent_event_sync(event_type, data)
+    except Exception as exc:
+        logger.debug(f"emit_gateway_event failed for {event_type}: {exc}")

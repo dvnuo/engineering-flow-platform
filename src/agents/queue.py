@@ -116,6 +116,16 @@ class ExecutionQueue:
             if queue.empty():
                 del self._session_queues[session_id]
     
+
+    async def enqueue_task(
+        self,
+        session_id: str,
+        coro: Callable[..., Coroutine],
+        *args,
+        **kwargs
+    ) -> Any:
+        """Task-focused alias used by skill runtime task manager."""
+        return await self.enqueue(session_id, coro, *args, **kwargs)
     async def get_queue_status(self, session_id: str) -> Dict[str, Any]:
         """Get the current status of a session queue."""
         queue = self._session_queues.get(session_id)
