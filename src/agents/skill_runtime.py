@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 from importlib import import_module
-from typing import Any, Callable, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src import ToolResult
 from src.agents.tasks import TaskManager, task_manager
@@ -21,6 +22,25 @@ logger = logging.getLogger(__name__)
 
 HookEventCallback = Optional[Callable[[str, Dict[str, Any]], None]]
 HookContext = Dict[str, Any]
+
+
+@dataclass
+class HookEffects:
+    modified_args: Dict[str, Any] = field(default_factory=dict)
+    short_circuit_result: Optional[ToolResult] = None
+    result_override: Optional[ToolResult] = None
+    invoked_hooks: List[str] = field(default_factory=list)
+
+
+def resolve_prompt_execution_boundary(assembly: EffectivePromptAssembly) -> Tuple[str, str]:
+    """Single prompt serialization boundary for LLM requests.
+
+    Returns:
+        (final_system_prompt, boundary_mode)
+    """
+    # Current LLM wrapper does not expose a separate developer channel,
+    # so developer instructions are serialized into system prompt exactly once.
+    return assembly.serialized_system_prompt, "merged_once_into_system"
 
 
 def get_effective_skill_runtime_prompt(
@@ -65,6 +85,21 @@ def _resolve_hook_callable(hook_name: str):
     return getattr(module, func_name)
 
 
+def _coerce_tool_result(value: Any) -> Optional[ToolResult]:
+    if isinstance(value, ToolResult):
+        return value
+    if isinstance(value, dict):
+        if "success" in value or "content" in value or "error" in value:
+            return ToolResult(
+                success=bool(value.get("success", True)),
+                content=str(value.get("content", "")),
+                error=value.get("error"),
+            )
+    if isinstance(value, str):
+        return ToolResult(success=True, content=value)
+    return None
+
+
 def dispatch_skill_hook(*, hook_name: str, context: HookContext) -> Dict[str, Any]:
     """Execute a hook target when available and return runtime metadata."""
     hook_fn = _resolve_hook_callable(hook_name)
@@ -72,10 +107,12 @@ def dispatch_skill_hook(*, hook_name: str, context: HookContext) -> Dict[str, An
         return {"applied": True, "mode": "event_only"}
 
     hook_result = hook_fn(context)
+    hook_effects = hook_result if isinstance(hook_result, dict) else {}
     return {
         "applied": True,
         "mode": "callable",
         "hook_result": hook_result if hook_result is not None else "",
+        "hook_effects": hook_effects,
     }
 
 
@@ -87,15 +124,15 @@ def apply_skill_hooks(
     tool_name: str,
     payload: Optional[Dict[str, Any]] = None,
     event_callback: HookEventCallback = None,
-) -> List[str]:
+) -> HookEffects:
     """Apply configured runtime hooks in a safe/no-op manner.
 
     Hook strings can be `pre_tool`, `post_tool`, or namespaced (`pre_tool:trace`).
     """
     if not runtime_config or not runtime_config.hooks:
-        return []
+        return HookEffects()
 
-    invoked: List[str] = []
+    effects = HookEffects()
     for hook in runtime_config.hooks:
         if not _hook_applies_to_stage(hook, stage):
             continue
@@ -108,6 +145,16 @@ def apply_skill_hooks(
                 "payload": payload or {},
             }
             dispatch_result = dispatch_skill_hook(hook_name=hook, context=hook_context)
+
+            hook_effects = dispatch_result.get("hook_effects", {}) if isinstance(dispatch_result, dict) else {}
+            if stage == "pre_tool" and isinstance(hook_effects, dict):
+                if isinstance(hook_effects.get("modified_args"), dict):
+                    effects.modified_args.update(hook_effects["modified_args"])
+                if hook_effects.get("short_circuit_result") is not None:
+                    effects.short_circuit_result = _coerce_tool_result(hook_effects.get("short_circuit_result"))
+            if stage == "post_tool" and isinstance(hook_effects, dict):
+                if hook_effects.get("result_override") is not None:
+                    effects.result_override = _coerce_tool_result(hook_effects.get("result_override"))
 
             if event_callback:
                 event_callback(
@@ -122,7 +169,7 @@ def apply_skill_hooks(
                         "dispatch": dispatch_result,
                     },
                 )
-            invoked.append(hook)
+            effects.invoked_hooks.append(hook)
         except Exception as exc:  # defensive: hooks must not break requests
             logger.warning("[SkillHook] Failed hook=%s stage=%s tool=%s err=%s", hook, stage, tool_name, exc)
             if event_callback:
@@ -137,7 +184,7 @@ def apply_skill_hooks(
                         "error": str(exc),
                     },
                 )
-    return invoked
+    return effects
 
 
 async def run_skill_tool_with_task_boundary(

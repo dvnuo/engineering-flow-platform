@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from src import ToolResult
 from src.agents.core import Agent
 from src.agents.skill_runtime import build_skill_tool_denied_result
+from src.agents.skill_runtime import resolve_prompt_execution_boundary
 from src.skills.registry import SkillRegistry
 from src.skills.runtime import (
     attach_skill_references,
@@ -107,6 +108,7 @@ def test_prompt_layer_assembly_and_reference_context():
     )
     runtime_config = build_skill_runtime_config(skill)
     assembly = assemble_effective_prompt("BASE", runtime_config)
+    final_system_prompt, boundary_mode = resolve_prompt_execution_boundary(assembly)
 
     assert "Runtime policy" in assembly.system_rules_text
     assert "Skill: compact" in assembly.developer_instructions_text
@@ -114,6 +116,8 @@ def test_prompt_layer_assembly_and_reference_context():
     assert "ref-a.md" in assembly.reference_context_text
     assert "line1" not in assembly.reference_context_text
     assert assembly.serialized_system_prompt.count("Skill Developer Instructions") == 1
+    assert final_system_prompt == assembly.serialized_system_prompt
+    assert boundary_mode == "merged_once_into_system"
 
     attachment = attach_skill_references(runtime_config)
     assert attachment.references == ["/tmp/ref-a.md", "/tmp/ref-b.md"]
@@ -310,6 +314,120 @@ async def test_hook_failure_does_not_break_request(monkeypatch, base_agent):
 
 
 @pytest.mark.asyncio
+async def test_pre_hook_can_modify_args(monkeypatch, base_agent):
+    agent, _ = base_agent
+    matched_skill = SimpleNamespace(
+        name="runtime-skill",
+        description="d",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="instructions",
+        references=[],
+        model="",
+        hooks=["pre_tool:tests.test_skill_runtime_refactor._modify_args_hook"],
+    )
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+    )
+    captured = {}
+
+    async def _exec(name=None, **kwargs):
+        captured.update(kwargs)
+        return ToolResult(True, "ok")
+
+    monkeypatch.setattr("src.agents.core.execute_tool_by_name", _exec)
+    responses = [
+        {"content": "", "function_calls": [{"call_id": "1", "name": "allowed_tool", "arguments": '{"a":"1"}'}], "usage": {}},
+        {"content": "done", "function_calls": [], "usage": {}},
+    ]
+    async def _fake_responses(**kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=_fake_responses, default_provider="openai"))
+    result = await agent.process("runtime test", session_id="s-mod-args")
+    assert result["response"] == "done"
+    assert captured.get("a") == "2"
+
+
+@pytest.mark.asyncio
+async def test_pre_hook_can_short_circuit(monkeypatch, base_agent):
+    agent, _ = base_agent
+    matched_skill = SimpleNamespace(
+        name="runtime-skill",
+        description="d",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="instructions",
+        references=[],
+        model="",
+        hooks=["pre_tool:tests.test_skill_runtime_refactor._short_circuit_hook"],
+    )
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+    )
+    called = {"tool": 0}
+
+    async def _exec(*args, **kwargs):
+        called["tool"] += 1
+        return ToolResult(True, "should not execute")
+
+    monkeypatch.setattr("src.agents.core.execute_tool_by_name", _exec)
+    responses = [
+        {"content": "", "function_calls": [{"call_id": "1", "name": "allowed_tool", "arguments": "{}"}], "usage": {}},
+        {"content": "done", "function_calls": [], "usage": {}},
+    ]
+    async def _fake_responses(**kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=_fake_responses, default_provider="openai"))
+    result = await agent.process("runtime test", session_id="s-short")
+    assert result["response"] == "done"
+    assert called["tool"] == 0
+
+
+@pytest.mark.asyncio
+async def test_post_hook_can_override_result(monkeypatch, base_agent):
+    agent, _ = base_agent
+    matched_skill = SimpleNamespace(
+        name="runtime-skill",
+        description="d",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="instructions",
+        references=[],
+        model="",
+        hooks=["post_tool:tests.test_skill_runtime_refactor._post_override_hook"],
+    )
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+    )
+
+    async def _exec(*args, **kwargs):
+        return ToolResult(True, "orig-result")
+
+    monkeypatch.setattr("src.agents.core.execute_tool_by_name", _exec)
+    responses = [
+        {"content": "", "function_calls": [{"call_id": "1", "name": "allowed_tool", "arguments": "{}"}], "usage": {}},
+        {"content": "done", "function_calls": [], "usage": {}},
+    ]
+    async def _fake_responses(**kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=_fake_responses, default_provider="openai"))
+    result = await agent.process("runtime test", session_id="s-post")
+    assert result["response"] == "done"
+
+
+@pytest.mark.asyncio
 async def test_non_skill_request_unaffected(monkeypatch, base_agent):
     agent, _ = base_agent
     monkeypatch.setattr(
@@ -327,3 +445,15 @@ async def test_non_skill_request_unaffected(monkeypatch, base_agent):
 
 def _failing_hook(context):
     raise RuntimeError("hook failure for testing")
+
+
+def _modify_args_hook(context):
+    return {"modified_args": {"a": "2"}}
+
+
+def _short_circuit_hook(context):
+    return {"short_circuit_result": {"success": True, "content": "short-circuit"}}
+
+
+def _post_override_hook(context):
+    return {"result_override": {"success": True, "content": "overridden-result"}}

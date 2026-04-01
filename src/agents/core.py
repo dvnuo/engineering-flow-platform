@@ -50,6 +50,7 @@ from src.agents.skill_runtime import (
     build_skill_tool_denied_result,
     get_effective_skill_runtime_prompt,
     get_skill_reference_attachment,
+    resolve_prompt_execution_boundary,
     run_skill_tool_with_task_boundary,
 )
 from src.skills.runtime import SkillRuntimeConfig
@@ -615,7 +616,7 @@ You have access to the following tools. When a user asks you to do something tha
             base_system_prompt=self.system_prompt,
             runtime_config=active_skill_runtime,
         )
-        effective_system_prompt = prompt_assembly.serialized_system_prompt
+        effective_system_prompt, prompt_boundary_mode = resolve_prompt_execution_boundary(prompt_assembly)
         reference_attachment = get_skill_reference_attachment(active_skill_runtime)
 
         if active_skill_runtime:
@@ -715,6 +716,7 @@ You have access to the following tools. When a user asks you to do something tha
                         "developer_instructions_text": prompt_assembly.developer_instructions_text,
                         "reference_context_text": prompt_assembly.reference_context_text,
                     },
+                    "prompt_boundary_mode": prompt_boundary_mode,
                 },
             )
         
@@ -1274,7 +1276,7 @@ You have access to the following tools. When a user asks you to do something tha
                     "args": args,
                     "status": "executing"
                 })
-                apply_skill_hooks(
+                pre_hook_effects = apply_skill_hooks(
                     runtime_config=active_skill_runtime,
                     stage="pre_tool",
                     session_id=session_id,
@@ -1282,6 +1284,33 @@ You have access to the following tools. When a user asks you to do something tha
                     payload={"args": args},
                     event_callback=send_event,
                 )
+                if pre_hook_effects.modified_args:
+                    args = {**args, **pre_hook_effects.modified_args}
+                if pre_hook_effects.short_circuit_result is not None:
+                    short_result = pre_hook_effects.short_circuit_result
+                    tracer.log_tool_call(
+                        tool_name=tool_name,
+                        arguments=args,
+                        result=str(short_result),
+                        success=short_result.success,
+                    )
+                    loop_messages.append(
+                        {
+                            "role": "tool",
+                            "content": str(short_result),
+                            "tool_call_id": call_id,
+                        }
+                    )
+                    executed_tool_results.append((tool_name, short_result))
+                    apply_skill_hooks(
+                        runtime_config=active_skill_runtime,
+                        stage="post_tool",
+                        session_id=session_id,
+                        tool_name=tool_name,
+                        payload={"short_circuit": True, "result": str(short_result)},
+                        event_callback=send_event,
+                    )
+                    continue
 
                 # Runtime skill policy enforcement (hard guard, not prompt-only)
                 if active_skill_runtime and active_skill_runtime.allowed_tools:
@@ -1349,21 +1378,8 @@ You have access to the following tools. When a user asks you to do something tha
                     execute_direct=lambda tn=tool_name, tool_args=args: execute_tool_by_name(tn, **tool_args),
                     event_callback=send_event,
                 )
-                tracer.log_tool_call(
-                    tool_name=tool_name,
-                    arguments=args,
-                    result=str(tool_result),
-                    success=tool_result.success,
-                )
-                
-                # Send tool result event
                 result_preview = truncate_with_count(str(tool_result), 200)
-                send_event("tool_result", {
-                    "tool": tool_name,
-                    "result": result_preview,
-                    "success": tool_result.success
-                })
-                apply_skill_hooks(
+                post_hook_effects = apply_skill_hooks(
                     runtime_config=active_skill_runtime,
                     stage="post_tool",
                     session_id=session_id,
@@ -1371,6 +1387,21 @@ You have access to the following tools. When a user asks you to do something tha
                     payload={"success": tool_result.success, "result_preview": result_preview},
                     event_callback=send_event,
                 )
+                if post_hook_effects.result_override is not None:
+                    tool_result = post_hook_effects.result_override
+                    result_preview = truncate_with_count(str(tool_result), 200)
+                tracer.log_tool_call(
+                    tool_name=tool_name,
+                    arguments=args,
+                    result=str(tool_result),
+                    success=tool_result.success,
+                )
+                # Send tool result event
+                send_event("tool_result", {
+                    "tool": tool_name,
+                    "result": result_preview,
+                    "success": tool_result.success
+                })
                 
                 # Add tool result to loop_messages for the NEXT LLM call in the current request
                 # IMPORTANT: Append to the END of loop_messages, not a specific position.

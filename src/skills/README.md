@@ -25,6 +25,10 @@ skills/
 - `allowed_tools` is enforced in the unified tool loop at runtime.
 - `task_tools` marks tool names that should run through the task boundary (`src/agents/tasks.py`) rather than direct execution.
 - `hooks` can register lightweight runtime hook points (`pre_tool`, `post_tool`) and optional callable adapters (`pre_tool:module.path.fn`), with safe failure handling.
+- Hook adapters may optionally return:
+  - `{"modified_args": {...}}` (pre-tool)
+  - `{"short_circuit_result": ...}` (pre-tool)
+  - `{"result_override": ...}` (post-tool)
 - References stay compact by default (metadata + short availability context), without inlining full reference file contents.
 
 ## Components
