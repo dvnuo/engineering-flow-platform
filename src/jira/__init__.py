@@ -112,7 +112,7 @@ async def jira_get_issue(
     include_fields: List[str] = None,
     include_comments: bool = True,
     include_attachment_urls: bool = False
-) -> Union[str, dict]:
+ ) -> Union[str, dict]:
     """Get a Jira issue by key.
     
     Args:
@@ -177,7 +177,7 @@ async def jira_get_issue_by_url(
     include_fields: List[str] = None,
     include_comments: bool = True,
     include_attachment_urls: bool = False
-) -> str:
+) -> Union[str, dict]:
     """Get a Jira issue by its URL.
     
     Args:
@@ -192,7 +192,7 @@ async def jira_get_issue_by_url(
             attachment filenames are shown without URLs.
         
     Returns:
-        Issue details in requested format
+        Issue details in requested format (markdown/wiki: str, raw: dict)
     """
     import re
     
