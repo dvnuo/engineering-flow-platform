@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import platform
+import re
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
@@ -125,7 +126,7 @@ def _build_progress_signature(
 
 
 def _is_lookup_only_skill(skill: Any, skill_session: SkillSession, message: str) -> bool:
-    lookup_words = ("get", "list", "query", "search", "read", "fetch", "show", "find", "issue", "pr", "file", "info")
+    lookup_words = ("get", "list", "query", "search", "read", "fetch", "show", "find", "issue", "file", "info")
     generate_words = ("generate", "create", "write", "modify", "output", "testcase", "code", "doc", "scaffold", "produce")
     haystack = " ".join([
         str(getattr(skill, "name", "") or ""),
@@ -133,9 +134,10 @@ def _is_lookup_only_skill(skill: Any, skill_session: SkillSession, message: str)
         str(skill_session.goal or ""),
         str(message or ""),
     ]).lower()
-    if any(word in haystack for word in generate_words):
+    tokens = re.findall(r"[a-z0-9_]+", haystack)
+    if any(word in tokens for word in generate_words):
         return False
-    return any(word in haystack for word in lookup_words)
+    return any(word in tokens for word in lookup_words)
 
 
 @dataclass
@@ -1549,7 +1551,7 @@ You have access to the following tools. When a user asks you to do something tha
                 turn_state.transition = "max_llm_calls"
                 break
             
-            # Track if same tool is being called repeatedly
+            # Track tool activity within this round for counting semantics.
             round_tool_calls = []
             executed_any_tool_this_round = False
             
@@ -1899,13 +1901,28 @@ You have access to the following tools. When a user asks you to do something tha
                 }
             )
             skill_session.completed_steps.append({"type": "finish", "result": final_text})
+            terminal_snapshot = {
+                "status": skill_session.status,
+                "transition": skill_session.transition,
+                "termination_reason": skill_session.termination_reason,
+                "finalizer_state": skill_session.finalizer_state,
+                "finalizer_attempts": skill_session.finalizer_attempts,
+                "tool_round_count": skill_session.tool_round_count,
+                "llm_call_count": skill_session.llm_call_count,
+                "execution_mode": skill_session.execution_mode,
+            }
             tracer.log_skill_mode_step("FINISH", "completed", f"Result: {final_text[:50]}...")
             tracer.log_skill_mode_complete(final_text)
             send_skill_event("skill_step", {"step": "FINISH", "status": "completed", "detail": final_text[:200]})
             send_skill_event("skill_complete", {"reason": "finish", "result": final_text[:200]})
             await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
             await session_manager.set_active_skill_session(session_id, None)
-            await session_manager.add_message(session_id, "assistant", final_text)
+            await session_manager.add_message(
+                session_id,
+                "assistant",
+                final_text,
+                extra={"terminal_skill_session": terminal_snapshot},
+            )
             # Get events for UI
             events = tracer.get_events_for_ui(limit=10, session_id=session_id)
             logger.info("[SkillMode][Terminate] reason=%s", skill_session.termination_reason)

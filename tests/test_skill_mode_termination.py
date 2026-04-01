@@ -1,7 +1,7 @@
 import pytest
 from types import SimpleNamespace
 
-from src.agents.core import Agent
+from src.agents.core import Agent, _is_lookup_only_skill
 from src.agents.skill_mode import SkillSession
 
 
@@ -49,6 +49,7 @@ async def run_replay_case(monkeypatch, *, responses, tool_output="lookup output"
         snapshots.append(state)
 
     async def fake_add_message(*args, **kwargs):
+        snapshots.append({"_message_extra": kwargs.get("extra")})
         return "m1"
 
     class FakeSessionManager:
@@ -79,8 +80,15 @@ def terminal_reasons(snapshots):
 
 
 def latest_state(snapshots):
-    states = [s for s in snapshots if isinstance(s, dict)]
+    states = [s for s in snapshots if isinstance(s, dict) and "status" in s]
     return states[-1] if states else {}
+
+
+def terminal_snapshot_from_message(snapshots):
+    for item in reversed(snapshots):
+        if isinstance(item, dict) and item.get("_message_extra", {}).get("terminal_skill_session"):
+            return item["_message_extra"]["terminal_skill_session"]
+    return {}
 
 
 @pytest.mark.asyncio
@@ -246,6 +254,26 @@ async def test_stale_no_progress_state_resets_on_new_turn(monkeypatch):
         message="fresh user turn",
     )
     assert terminal_reasons(snapshots)[-1] in {"no_function_calls", "lookup_complete"}
+
+
+@pytest.mark.asyncio
+async def test_terminal_snapshot_recoverable_after_finish_clear(monkeypatch):
+    responses = [
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[FINISH]\ncompleted", "function_calls": [], "usage": {}},
+    ]
+    result, snapshots, _ = await run_replay_case(monkeypatch, responses=responses)
+    assert result["response"] == "completed"
+    snapshot = terminal_snapshot_from_message(snapshots)
+    assert snapshot.get("status") == "finished"
+    assert snapshot.get("termination_reason") in {"no_function_calls", "finalizer_succeeded"}
+
+
+def test_lookup_only_heuristic_ignores_ambiguous_pr_substrings():
+    skill = SimpleNamespace(name="general", description="help text")
+    session = SkillSession(skill_name="general", original_user_request="improve docs")
+    assert _is_lookup_only_skill(skill, session, "improve this flow") is False
+    assert _is_lookup_only_skill(skill, session, "prepare release checklist") is False
 
 
 def test_skill_session_from_dict_backward_compatible():
