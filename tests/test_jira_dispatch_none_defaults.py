@@ -2,6 +2,31 @@ import pytest
 
 
 @pytest.mark.asyncio
+async def test_none_kwargs_are_stripped_before_dispatch(monkeypatch):
+    from src import execute_tool
+
+    captured = {}
+
+    async def fake_github_search_issues(query, max_results):
+        captured["query"] = query
+        captured["max_results"] = max_results
+        return "ok"
+
+    monkeypatch.setattr("src.github.github_search_issues", fake_github_search_issues)
+
+    result = await execute_tool(
+        "github_search_issues",
+        query="is:issue is:open label:bug",
+        max_results=None,
+    )
+
+    assert result.success is True
+    assert captured["query"] == "is:issue is:open label:bug"
+    # If None is not stripped first, dispatch passes None instead of the default.
+    assert captured["max_results"] == 10
+
+
+@pytest.mark.asyncio
 async def test_jira_get_issue_none_values_use_defaults(monkeypatch):
     from src import execute_tool
 
