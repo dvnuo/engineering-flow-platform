@@ -78,6 +78,11 @@ def terminal_reasons(snapshots):
     return [s.get("termination_reason") for s in snapshots if isinstance(s, dict) and s.get("termination_reason")]
 
 
+def latest_state(snapshots):
+    states = [s for s in snapshots if isinstance(s, dict)]
+    return states[-1] if states else {}
+
+
 @pytest.mark.asyncio
 async def test_readonly_two_step_lookup_then_finish(monkeypatch):
     responses = [
@@ -149,8 +154,9 @@ async def test_max_llm_calls_guard(monkeypatch):
         tool_output=lambda n: f"output-{n}",
         initial_session=seeded,
     )
-    assert calls >= 2
+    assert calls >= 1
     assert "max_llm_calls" in terminal_reasons(snapshots)
+    assert latest_state(snapshots).get("llm_call_count", 0) <= 10
 
 
 @pytest.mark.asyncio
@@ -165,6 +171,16 @@ async def test_max_tool_rounds_guard(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_no_function_round_does_not_increment_tool_round_count(monkeypatch):
+    responses = [
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[FINISH]\nno tools needed", "function_calls": [], "usage": {}},
+    ]
+    _, snapshots, _ = await run_replay_case(monkeypatch, responses=responses)
+    assert latest_state(snapshots).get("tool_round_count") == 0
+
+
+@pytest.mark.asyncio
 async def test_ask_user_path(monkeypatch):
     responses = [
         {"content": "", "function_calls": [], "usage": {}},
@@ -173,6 +189,58 @@ async def test_ask_user_path(monkeypatch):
     result, snapshots, _ = await run_replay_case(monkeypatch, responses=responses)
     assert "Please provide repository name" in result["response"]
     assert terminal_reasons(snapshots)[-1] == "ask_user"
+
+
+@pytest.mark.asyncio
+async def test_finalizer_attempts_reset_on_later_finalize_cycle(monkeypatch):
+    # First cycle: consume full finalizer retry budget.
+    first_responses = [
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[EXECUTE] invalid", "function_calls": [], "usage": {}},
+        {"content": "", "function_calls": [], "usage": {}},
+    ]
+    _, first_snapshots, _ = await run_replay_case(monkeypatch, responses=first_responses)
+    carried_session = SkillSession.from_dict(latest_state(first_snapshots))
+    assert carried_session.finalizer_attempts == 2
+
+    # Second cycle (same session): should again get fresh 2-attempt budget.
+    second_responses = [
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[EXECUTE] invalid again", "function_calls": [], "usage": {}},
+        {"content": "", "function_calls": [], "usage": {}},
+    ]
+    _, second_snapshots, _ = await run_replay_case(
+        monkeypatch,
+        responses=second_responses,
+        initial_session=carried_session,
+    )
+    assert latest_state(second_snapshots).get("finalizer_attempts") == 2
+
+
+@pytest.mark.asyncio
+async def test_stale_no_progress_state_resets_on_new_turn(monkeypatch):
+    stale = SkillSession(
+        skill_name="lookup",
+        original_user_request="old",
+        no_progress_count=3,
+        last_progress_signature="stale-sig",
+        last_tool_name="search",
+        last_tool_args_signature="old-args",
+        last_tool_output_signature="old-out",
+    )
+    responses = [
+        {"content": "", "function_calls": [{"id": "c1", "function": {"name": "search", "arguments": '{"q":"fresh"}'}}], "usage": {}},
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[FINISH]\nfresh turn done", "function_calls": [], "usage": {}},
+    ]
+    _, snapshots, _ = await run_replay_case(
+        monkeypatch,
+        responses=responses,
+        initial_session=stale,
+        tool_output="fresh output",
+        message="fresh user turn",
+    )
+    assert terminal_reasons(snapshots)[-1] in {"no_function_calls", "lookup_complete"}
 
 
 def test_skill_session_from_dict_backward_compatible():

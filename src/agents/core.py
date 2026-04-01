@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import platform
-import re
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
@@ -118,10 +117,8 @@ def _build_progress_signature(
     output_sig = _hash_text(output_text, max_len=1000)
     artifacts_sig = _hash_text(json.dumps(skill_session.artifacts or {}, sort_keys=True, ensure_ascii=False), max_len=1000)
     step_sig = _hash_text(last_step_summary, max_len=400)
-    progress_signature = "|".join([tool_name, args_sig, output_sig, artifacts_sig, step_sig])
     state_signature = "|".join([output_sig, artifacts_sig, step_sig])
     return {
-        "progress_signature": progress_signature,
         "state_signature": state_signature,
         "args_signature": args_sig,
         "output_signature": output_sig,
@@ -142,36 +139,12 @@ def _is_lookup_only_skill(skill: Any, skill_session: SkillSession, message: str)
     return any(word in haystack for word in lookup_words)
 
 
-def _decide_skill_loop_transition(
-    *,
-    round_num: int,
-    max_rounds: int,
-    has_function_calls: bool,
-    no_progress_count: int,
-    has_readonly_tool_success: bool,
-    has_write_tool_call: bool,
-    lookup_only_skill: bool,
-) -> Dict[str, Any]:
-    if no_progress_count >= 2:
-        return {"continue_tool_loop": False, "run_finalizer": True, "reason": "no_progress"}
-    if not has_function_calls:
-        reason = "lookup_complete" if has_readonly_tool_success and not has_write_tool_call and lookup_only_skill else "no_function_calls"
-        return {"continue_tool_loop": False, "run_finalizer": True, "reason": reason}
-    if has_readonly_tool_success and not has_write_tool_call and lookup_only_skill:
-        return {"continue_tool_loop": False, "run_finalizer": True, "reason": "lookup_complete"}
-    if round_num >= max_rounds - 1:
-        return {"continue_tool_loop": False, "run_finalizer": True, "reason": "max_tool_rounds"}
-    return {"continue_tool_loop": True, "run_finalizer": False, "reason": "continue"}
-
-
 @dataclass
 class SkillTurnState:
     round_index: int = 0
     llm_call_count: int = 0
     tool_round_count: int = 0
     transition: str = "tool_followup"
-    continue_reason: str = ""
-    termination_reason: str = ""
     has_function_calls: bool = False
     has_readonly_success: bool = False
     has_write_call: bool = False
@@ -211,7 +184,7 @@ def _evaluate_skill_progress(
     return {
         "progressed": progressed,
         "reason": reason,
-        "progress_signature": progress_data["state_signature"],
+        "state_signature": progress_data["state_signature"],
         "args_signature": progress_data["args_signature"],
         "output_signature": progress_data["output_signature"],
     }
@@ -226,12 +199,14 @@ async def _run_skill_finalizer(
     skill_session: SkillSession,
     track_usage: bool,
     usage_data: Dict[str, Any],
+    remaining_llm_budget: int,
 ) -> tuple[FinalizerResult, Dict[str, Any]]:
     raw_output = ""
     fallback_used = False
     parsed_action = "execute"
     termination_reason = "finalizer_terminal_failed"
-    for attempt in range(2):
+    max_attempts = min(2, max(0, remaining_llm_budget))
+    for attempt in range(max_attempts):
         skill_session.finalizer_state = "running"
         skill_session.finalizer_attempts += 1
         logger.info("[SkillMode][Finalizer] state=running attempt=%s", skill_session.finalizer_attempts)
@@ -1520,6 +1495,13 @@ You have access to the following tools. When a user asks you to do something tha
         logger.debug(f"[SkillMode] skill={skill.name}, skill_session.status={skill_session.status}")
         logger.debug(f"[SkillMode] skill_session.completed_steps count={len(skill_session.completed_steps)}")
         logger.debug(f"[SkillMode] skill_session.memory_summary length={len(skill_session.memory_summary) if skill_session.memory_summary else 0}")
+
+        # Fresh user turn: reset progress-window fields while preserving accumulated session content
+        skill_session.no_progress_count = 0
+        skill_session.last_progress_signature = ""
+        skill_session.last_tool_name = ""
+        skill_session.last_tool_args_signature = ""
+        skill_session.last_tool_output_signature = ""
         
         if skill.path:
             set_skill_workdir(skill.path)
@@ -1553,7 +1535,6 @@ You have access to the following tools. When a user asks you to do something tha
 
         for round_num in range(max_skill_tool_rounds):
             logger.info(f"[SkillMode] ===== Round {round_num + 1}/{max_skill_tool_rounds} =====")
-            skill_session.tool_round_count += 1
             turn_state.round_index = round_num
             turn_state.tool_round_count = skill_session.tool_round_count
             logger.info(
@@ -1565,6 +1546,7 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Track if same tool is being called repeatedly
             round_tool_calls = []
+            executed_any_tool_this_round = False
             
             # Estimate current token count from completed_steps and memory_summary
             current_steps_tokens = sum(
@@ -1727,6 +1709,7 @@ You have access to the following tools. When a user asks you to do something tha
                     logger.info(f"[Confirmation][SkillMode] Tool '{tool_name}' requires confirmation, auto-confirming")
                 
                 logger.debug(f"[SkillMode] [TOOL_EXEC] Executing tool={tool_name}, parsed_args={normalized_args}")
+                executed_any_tool_this_round = True
                 try:
                     tool_result: ToolResult = await execute_tool_by_name(tool_name, **normalized_args)
                     output_text = str(tool_result)
@@ -1782,7 +1765,7 @@ You have access to the following tools. When a user asks you to do something tha
                         )
                     else:
                         skill_session.no_progress_count = 0
-                        skill_session.last_progress_signature = progress_eval["progress_signature"]
+                        skill_session.last_progress_signature = progress_eval["state_signature"]
                         logger.info("[SkillMode][Progress] changed tool=%s", tool_name)
                     skill_session.last_tool_name = tool_name
                     skill_session.last_tool_args_signature = progress_eval["args_signature"]
@@ -1799,6 +1782,9 @@ You have access to the following tools. When a user asks you to do something tha
 
             # Log tools called in this round
             logger.info(f"[SkillMode] Round {round_num + 1} tools called: {round_tool_calls}")
+            if executed_any_tool_this_round:
+                skill_session.tool_round_count += 1
+                turn_state.tool_round_count = skill_session.tool_round_count
             
             if should_finalize_without_tools:
                 break
@@ -1817,6 +1803,9 @@ You have access to the following tools. When a user asks you to do something tha
 
         if should_finalize_without_tools:
             turn_state.transition = "finalizing" if turn_state.transition == "tool_followup" else turn_state.transition
+            skill_session.finalizer_attempts = 0
+            skill_session.finalizer_state = "idle"
+            remaining_llm_budget = max(0, max_skill_llm_calls - skill_session.llm_call_count)
             finalizer_result, usage_data = await _run_skill_finalizer(
                 input_items=input_items,
                 system_prompt=system_prompt,
@@ -1825,11 +1814,11 @@ You have access to the following tools. When a user asks you to do something tha
                 skill_session=skill_session,
                 track_usage=track_usage,
                 usage_data=usage_data,
+                remaining_llm_budget=remaining_llm_budget,
             )
             raw_output = finalizer_result.raw_output
             if finalizer_result.state == "terminal_failed":
                 turn_state.transition = "terminal_failed"
-            turn_state.termination_reason = finalizer_result.termination_reason if finalizer_result.termination_reason != "finalizer_succeeded" else finalize_reason or "finalizer_succeeded"
 
         if not raw_output:
             # No function calls and no text output after max rounds
