@@ -44,6 +44,7 @@ from src.agents.executor import (
     execute_tool_by_name,
     ToolResult,
 )
+from src.agents.tool_result_policy import should_passthrough_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -138,67 +139,6 @@ def _is_lookup_only_skill(skill: Any, skill_session: SkillSession, message: str)
     if any(word in tokens for word in generate_words):
         return False
     return any(word in tokens for word in lookup_words)
-
-
-_JIRA_DETAIL_TOOLS = {"jira_get_issue", "jira_get_issue_by_url"}
-_JIRA_TRANSFORM_INTENT_KEYWORDS = {
-    "summarize", "summary", "analyze", "analysis", "explanation", "explain",
-    "compare", "rewrite", "extract", "generate", "create", "update",
-    "comment", "transition", "refine",
-}
-_JIRA_RETRIEVAL_HINTS = {
-    "get issue", "show issue", "read issue", "open issue",
-    "issue detail", "jira detail", "fetch issue", "retrieve issue",
-}
-_JIRA_MUTATION_INTENT_KEYWORDS = {
-    "assign", "assignee", "update", "edit", "modify", "change", "set",
-    "add", "comment", "transition", "move", "status", "resolve", "close",
-    "reopen", "link", "attach", "remove", "delete", "create", "generate",
-}
-_JIRA_SEQUENCE_CONNECTORS = {"and", "then", "after", "also"}
-_JIRA_SEQUENCE_WORDS = {"then", "after", "next"}
-
-
-def _message_has_jira_mutation_intent(text: str) -> bool:
-    return any(keyword in text for keyword in _JIRA_MUTATION_INTENT_KEYWORDS)
-
-
-def _has_mixed_intent(text: str) -> bool:
-    has_connector = any(connector in text for connector in _JIRA_SEQUENCE_CONNECTORS)
-    return has_connector and _message_has_jira_mutation_intent(text)
-
-
-def _should_passthrough_tool_result(
-    *,
-    latest_user_message: str,
-    tool_calls: List[Dict[str, Any]],
-    tool_name: str,
-    tool_result: ToolResult,
-) -> bool:
-    """Conservative shortcut for direct Jira detail passthrough."""
-    if len(tool_calls) != 1 or tool_name not in _JIRA_DETAIL_TOOLS:
-        return False
-    if not tool_result.success:
-        return False
-    content = (tool_result.content or "").strip()
-    if not content:
-        return False
-
-    text = (latest_user_message or "").lower()
-    if any(word in text for word in _JIRA_SEQUENCE_WORDS):
-        return False
-    if _has_mixed_intent(text):
-        return False
-    if _message_has_jira_mutation_intent(text):
-        return False
-    if any(keyword in text for keyword in _JIRA_TRANSFORM_INTENT_KEYWORDS):
-        return False
-    if any(hint in text for hint in _JIRA_RETRIEVAL_HINTS):
-        return True
-    has_retrieval_verb = any(word in text for word in ("get", "show", "read", "open", "fetch", "retrieve"))
-    has_issue_hint = ("jira" in text) or ("issue" in text) or bool(re.search(r"\b[A-Z][A-Z0-9_]*-\d+\b", latest_user_message or ""))
-    has_detail_hint = "detail" in text
-    return has_retrieval_verb and (has_issue_hint or has_detail_hint)
 
 
 @dataclass
@@ -1389,11 +1329,11 @@ You have access to the following tools. When a user asks you to do something tha
             # Narrow passthrough shortcut for direct Jira detail retrieval requests.
             if len(executed_tool_results) == 1:
                 single_tool_name, single_tool_result = executed_tool_results[0]
-                if _should_passthrough_tool_result(
+                if should_passthrough_tool_result(
                     latest_user_message=message,
-                    tool_calls=function_calls,
                     tool_name=single_tool_name,
                     tool_result=single_tool_result,
+                    tool_calls_count=len(function_calls),
                 ):
                     passthrough_content = str(single_tool_result.content)
                     await session_manager.add_message(session_id, "assistant", passthrough_content)

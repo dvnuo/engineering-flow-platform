@@ -48,16 +48,15 @@ def test_convert_tools_schema_preserves_optional_properties():
     ],
 )
 def test_should_passthrough_tool_result_heuristic(user_message, expected):
-    from src.agents.core import _should_passthrough_tool_result
+    from src.agents.tool_result_policy import should_passthrough_tool_result
     from src import ToolResult
 
-    tool_calls = [{"name": "jira_get_issue", "call_id": "call_1", "arguments": {"issue_key": "EFP-123"}}]
     tool_result = ToolResult(success=True, content="# EFP-123: Details")
 
-    actual = _should_passthrough_tool_result(
+    actual = should_passthrough_tool_result(
         latest_user_message=user_message,
-        tool_calls=tool_calls,
         tool_name="jira_get_issue",
         tool_result=tool_result,
+        tool_calls_count=1,
     )
     assert actual is expected
