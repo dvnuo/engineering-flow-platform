@@ -156,9 +156,12 @@ async def test_max_llm_calls_guard(monkeypatch):
         tool_output=lambda n: f"output-{n}",
         initial_session=seeded,
     )
-    assert calls >= 1
+    # Last allowed LLM response (10th call) is processed, then no extra LLM call is made.
+    assert calls == 1
     assert "max_llm_calls" in terminal_reasons(snapshots)
-    assert latest_state(snapshots).get("llm_call_count", 0) <= 10
+    state = latest_state(snapshots)
+    assert state.get("llm_call_count", 0) == 10
+    assert state.get("tool_round_count", 0) == 1
 
 
 @pytest.mark.asyncio

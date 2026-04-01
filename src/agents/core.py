@@ -1541,6 +1541,13 @@ You have access to the following tools. When a user asks you to do something tha
                 skill_session.execution_mode or "(unset)",
                 skill_session.no_progress_count,
             )
+
+            # Enforce max LLM call cap before making the next LLM request.
+            if skill_session.llm_call_count >= max_skill_llm_calls:
+                should_finalize_without_tools = True
+                finalize_reason = "max_llm_calls"
+                turn_state.transition = "max_llm_calls"
+                break
             
             # Track if same tool is being called repeatedly
             round_tool_calls = []
@@ -1658,12 +1665,6 @@ You have access to the following tools. When a user asks you to do something tha
                 logger.warning(f"[SkillMode] WARNING: LLM returned empty content AND no function_calls!")
                 logger.warning(f"[SkillMode] Full llm_result keys: {llm_result.keys() if llm_result else None}")
                 logger.warning(f"[SkillMode] llm_result: {str(llm_result)[:500]}")
-
-            if skill_session.llm_call_count >= max_skill_llm_calls:
-                should_finalize_without_tools = True
-                finalize_reason = "max_llm_calls"
-                turn_state.transition = "max_llm_calls"
-                break
 
             if not function_calls:
                 should_finalize_without_tools = True
