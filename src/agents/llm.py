@@ -220,15 +220,11 @@ def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
             if "additionalProperties" not in params:
                 params["additionalProperties"] = False
             
-            # With strict: true, required must include ALL properties
-            if "properties" in params and isinstance(params["properties"], dict):
-                required = params.get("required", [])
-                if isinstance(required, list):
-                    # Add any missing properties to required
-                    for prop in params["properties"]:
-                        if prop not in required:
-                            required.append(prop)
-                    params["required"] = required
+            # Preserve the source schema's required list.
+            # Optional arguments must remain optional after conversion.
+            required = params.get("required")
+            if required is not None and not isinstance(required, list):
+                params["required"] = []
             
             converted.append({
                 "type": "function",

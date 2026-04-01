@@ -201,9 +201,11 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         max_comments = kwargs.get("max_comments", 5)
         include_comments = kwargs.get("include_comments", True)
         include_fields = kwargs.get("include_fields")
+        include_attachment_urls = kwargs.get("include_attachment_urls", False)
         result = await jira_module.jira_get_issue(
             issue_key, format=format, max_chars=max_chars, max_comments=max_comments,
-            include_comments=include_comments, include_fields=include_fields
+            include_comments=include_comments, include_fields=include_fields,
+            include_attachment_urls=include_attachment_urls
         )
         # Ensure content is always a string (format="raw" returns dict)
         if isinstance(result, dict):
@@ -249,9 +251,11 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         max_comments = kwargs.get("max_comments", 5)
         include_comments = kwargs.get("include_comments", True)
         include_fields = kwargs.get("include_fields")
+        include_attachment_urls = kwargs.get("include_attachment_urls", False)
         result = await jira_module.jira_get_issue_by_url(
             url, format=format, max_chars=max_chars, max_comments=max_comments,
-            include_comments=include_comments, include_fields=include_fields
+            include_comments=include_comments, include_fields=include_fields,
+            include_attachment_urls=include_attachment_urls
         )
         # Ensure content is always a string (format="raw" returns dict)
         if isinstance(result, dict):

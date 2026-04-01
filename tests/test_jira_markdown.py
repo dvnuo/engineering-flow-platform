@@ -192,6 +192,53 @@ class TestAdapter:
         result = await adapter.get_issue("PROJ-123")
         
         assert "ADF Content" in result
+
+    @pytest.mark.asyncio
+    async def test_get_issue_markdown_attachments_hide_urls_by_default(self, mock_channel):
+        """Attachment section should list filenames only by default."""
+        from src.jira.adapter import JiraFormatAdapter
+
+        mock_channel.get_issue = AsyncMock(return_value={
+            "key": "PROJ-123",
+            "fields": {
+                "summary": "Test Issue",
+                "status": {"name": "Open"},
+                "description": "Description text",
+                "attachment": [
+                    {"filename": "design.png", "content": "https://jira.example.com/very/long/url/design.png"}
+                ],
+                "comment": {"comments": []},
+            },
+        })
+
+        adapter = JiraFormatAdapter(mock_channel)
+        result = await adapter.get_issue("PROJ-123", format="markdown")
+
+        assert "- design.png" in result
+        assert "https://jira.example.com/very/long/url/design.png" not in result
+
+    @pytest.mark.asyncio
+    async def test_get_issue_markdown_attachments_can_include_urls(self, mock_channel):
+        """Optional flag keeps previous URL-inclusive attachment format."""
+        from src.jira.adapter import JiraFormatAdapter
+
+        mock_channel.get_issue = AsyncMock(return_value={
+            "key": "PROJ-123",
+            "fields": {
+                "summary": "Test Issue",
+                "status": {"name": "Open"},
+                "description": "Description text",
+                "attachment": [
+                    {"filename": "design.png", "content": "https://jira.example.com/very/long/url/design.png"}
+                ],
+                "comment": {"comments": []},
+            },
+        })
+
+        adapter = JiraFormatAdapter(mock_channel)
+        result = await adapter.get_issue("PROJ-123", format="markdown", include_attachment_urls=True)
+
+        assert "- design.png (https://jira.example.com/very/long/url/design.png)" in result
     
     @pytest.mark.asyncio
     async def test_create_issue_markdown(self, mock_channel):

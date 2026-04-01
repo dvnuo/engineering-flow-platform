@@ -140,6 +140,45 @@ def _is_lookup_only_skill(skill: Any, skill_session: SkillSession, message: str)
     return any(word in tokens for word in lookup_words)
 
 
+_JIRA_DETAIL_TOOLS = {"jira_get_issue", "jira_get_issue_by_url"}
+_JIRA_TRANSFORM_INTENT_KEYWORDS = {
+    "summarize", "summary", "analyze", "analysis", "explanation", "explain",
+    "compare", "rewrite", "extract", "generate", "create", "update",
+    "comment", "transition", "refine",
+}
+_JIRA_RETRIEVAL_HINTS = {
+    "get issue", "show issue", "read issue", "open issue",
+    "issue detail", "jira detail", "fetch issue", "retrieve issue",
+}
+
+
+def _should_passthrough_tool_result(
+    *,
+    latest_user_message: str,
+    tool_calls: List[Dict[str, Any]],
+    tool_name: str,
+    tool_result: ToolResult,
+) -> bool:
+    """Conservative shortcut for direct Jira detail passthrough."""
+    if len(tool_calls) != 1 or tool_name not in _JIRA_DETAIL_TOOLS:
+        return False
+    if not tool_result.success:
+        return False
+    content = (tool_result.content or "").strip()
+    if not content:
+        return False
+
+    text = (latest_user_message or "").lower()
+    if any(keyword in text for keyword in _JIRA_TRANSFORM_INTENT_KEYWORDS):
+        return False
+    if any(hint in text for hint in _JIRA_RETRIEVAL_HINTS):
+        return True
+    has_retrieval_verb = any(word in text for word in ("get", "show", "read", "open", "fetch", "retrieve"))
+    has_issue_hint = ("jira" in text) or ("issue" in text) or bool(re.search(r"\b[A-Z][A-Z0-9_]*-\d+\b", latest_user_message or ""))
+    has_detail_hint = "detail" in text
+    return has_retrieval_verb and (has_issue_hint or has_detail_hint)
+
+
 @dataclass
 class SkillTurnState:
     round_index: int = 0
@@ -1238,6 +1277,7 @@ You have access to the following tools. When a user asks you to do something tha
             # here - the final LLM response will be saved after tool execution.
             
             # Execute each function call
+            executed_tool_results: List[tuple[str, ToolResult]] = []
             for fc in function_calls:
                 call_id = fc.get("call_id", "")
                 tool_name = fc.get("name", "")
@@ -1322,6 +1362,33 @@ You have access to the following tools. When a user asks you to do something tha
                 # execution context and are passed directly to subsequent LLM calls.
                 
                 logger.info(f"Tool result: {truncate_with_count(str(tool_result), 200)}")
+                executed_tool_results.append((tool_name, tool_result))
+
+            # Narrow passthrough shortcut for direct Jira detail retrieval requests.
+            if len(executed_tool_results) == 1:
+                single_tool_name, single_tool_result = executed_tool_results[0]
+                if _should_passthrough_tool_result(
+                    latest_user_message=message,
+                    tool_calls=function_calls,
+                    tool_name=single_tool_name,
+                    tool_result=single_tool_result,
+                ):
+                    passthrough_content = str(single_tool_result.content)
+                    await session_manager.add_message(session_id, "assistant", passthrough_content)
+                    send_event("complete", {
+                        "response": truncate_with_count(passthrough_content, 500),
+                        "total_iterations": iteration
+                    })
+                    tracer.complete_execution(passthrough_content)
+                    from src.skills import get_tracer
+                    tracer_instance = get_tracer()
+                    events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
+                    return {
+                        "response": passthrough_content,
+                        "usage": usage_data,
+                        "events": events,
+                        "user_message_id": user_message_id,
+                    }
             
             # Send iteration complete event
             send_event("iteration_end", {"iteration": iteration})

@@ -110,7 +110,8 @@ async def jira_get_issue(
     max_chars: int = None,
     max_comments: int = 5,
     include_fields: List[str] = None,
-    include_comments: bool = True
+    include_comments: bool = True,
+    include_attachment_urls: bool = False
 ) -> Union[str, dict]:
     """Get a Jira issue by key.
     
@@ -136,7 +137,8 @@ async def jira_get_issue(
             max_chars=max_chars,
             max_comments=max_comments,
             include_fields=include_fields,
-            include_comments=include_comments
+            include_comments=include_comments,
+            include_attachment_urls=include_attachment_urls
         )
         
         # Process attachments - need to fetch raw issue to get attachment field
@@ -170,7 +172,8 @@ async def jira_get_issue_by_url(
     max_chars: int = None,
     max_comments: int = 5,
     include_fields: List[str] = None,
-    include_comments: bool = True
+    include_comments: bool = True,
+    include_attachment_urls: bool = False
 ) -> str:
     """Get a Jira issue by its URL.
     
@@ -212,7 +215,8 @@ async def jira_get_issue_by_url(
             max_chars=max_chars,
             max_comments=max_comments,
             include_fields=include_fields,
-            include_comments=include_comments
+            include_comments=include_comments,
+            include_attachment_urls=include_attachment_urls
         )
         
         # Process attachments
@@ -419,6 +423,11 @@ def _get_all_schemas() -> list:
                             "type": "boolean",
                             "description": "Whether to include comments",
                             "default": True
+                        },
+                        "include_attachment_urls": {
+                            "type": "boolean",
+                            "description": "Whether to include attachment URLs in markdown output",
+                            "default": False
                         }
                     },
                     "required": ["issue_key"]
@@ -443,6 +452,11 @@ def _get_all_schemas() -> list:
                         "max_chars": {"type": "integer", "description": "Maximum characters to return"},
                         "max_comments": {"type": "integer", "description": "Maximum comments to include", "default": 5},
                         "include_comments": {"type": "boolean", "description": "Include comments", "default": True},
+                        "include_attachment_urls": {
+                            "type": "boolean",
+                            "description": "Whether to include attachment URLs in markdown output",
+                            "default": False
+                        },
                         "include_fields": {"type": "array", "items": {"type": "string"}, "description": "Fields to include"}
                     },
                     "required": ["url"]
