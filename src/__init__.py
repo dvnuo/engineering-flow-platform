@@ -196,12 +196,16 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     # Jira tools
     elif name == "jira_get_issue":
         issue_key = kwargs.get("issue_key", "")
-        format = kwargs.get("format", "markdown")
+        format = kwargs.get("format")
+        format = "markdown" if format is None else format
         max_chars = kwargs.get("max_chars")
-        max_comments = kwargs.get("max_comments", 5)
-        include_comments = kwargs.get("include_comments", True)
+        max_comments = kwargs.get("max_comments")
+        max_comments = 5 if max_comments is None else max_comments
+        include_comments = kwargs.get("include_comments")
+        include_comments = True if include_comments is None else include_comments
         include_fields = kwargs.get("include_fields")
-        include_attachment_urls = kwargs.get("include_attachment_urls", False)
+        include_attachment_urls = kwargs.get("include_attachment_urls")
+        include_attachment_urls = False if include_attachment_urls is None else include_attachment_urls
         result = await jira_module.jira_get_issue(
             issue_key, format=format, max_chars=max_chars, max_comments=max_comments,
             include_comments=include_comments, include_fields=include_fields,
@@ -246,12 +250,16 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     
     elif name == "jira_get_issue_by_url":
         url = kwargs.get("url", "")
-        format = kwargs.get("format", "markdown")
+        format = kwargs.get("format")
+        format = "markdown" if format is None else format
         max_chars = kwargs.get("max_chars")
-        max_comments = kwargs.get("max_comments", 5)
-        include_comments = kwargs.get("include_comments", True)
+        max_comments = kwargs.get("max_comments")
+        max_comments = 5 if max_comments is None else max_comments
+        include_comments = kwargs.get("include_comments")
+        include_comments = True if include_comments is None else include_comments
         include_fields = kwargs.get("include_fields")
-        include_attachment_urls = kwargs.get("include_attachment_urls", False)
+        include_attachment_urls = kwargs.get("include_attachment_urls")
+        include_attachment_urls = False if include_attachment_urls is None else include_attachment_urls
         result = await jira_module.jira_get_issue_by_url(
             url, format=format, max_chars=max_chars, max_comments=max_comments,
             include_comments=include_comments, include_fields=include_fields,
