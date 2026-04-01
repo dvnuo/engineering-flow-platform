@@ -228,17 +228,16 @@ def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
             func = tool.get("function", {})
             # Deep copy parameters to avoid mutating the original
             params = copy.deepcopy(func.get("parameters", {}))
+            original_required = params.get("required", [])
+            if not isinstance(original_required, list):
+                original_required = []
+            original_required_set = set(original_required)
             
             # Responses API strict mode requires closed top-level argument objects.
             params["additionalProperties"] = False
             
             properties = params.get("properties", {})
             if isinstance(properties, dict):
-                original_required = params.get("required", [])
-                if not isinstance(original_required, list):
-                    original_required = []
-                original_required_set = set(original_required)
-
                 normalized_properties = {}
                 for prop_name, prop_schema in properties.items():
                     if prop_name in original_required_set:
