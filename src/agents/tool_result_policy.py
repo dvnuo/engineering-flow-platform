@@ -23,7 +23,16 @@ _JIRA_SEQUENCE_WORDS = {"then", "after", "next"}
 
 
 def _message_has_any_keyword(text: str, keywords: set[str]) -> bool:
-    return any(keyword in text for keyword in keywords)
+    normalized_text = text.lower()
+    for keyword in keywords:
+        escaped_keyword = re.escape(keyword.lower())
+        if " " in keyword:
+            if re.search(escaped_keyword, normalized_text):
+                return True
+            continue
+        if re.search(rf"\b{escaped_keyword}\b", normalized_text):
+            return True
+    return False
 
 
 def _message_has_jira_mutation_intent(text: str) -> bool:
@@ -76,4 +85,3 @@ def should_passthrough_tool_result(
     if _message_has_jira_transform_intent(text):
         return False
     return _message_has_jira_retrieval_intent(text, latest_user_message)
-
