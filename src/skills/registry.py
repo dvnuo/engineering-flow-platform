@@ -11,6 +11,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
+from collections.abc import Mapping
 import os
 from dataclasses import dataclass, field
 
@@ -246,7 +247,14 @@ class SkillRegistry:
         parts = content.split("---", 2)
         if len(parts) < 3:
             return {}, content
-        frontmatter = _yaml.load(parts[1]) or {}
+        parsed = _yaml.load(parts[1])
+        if parsed is None:
+            frontmatter: Dict[str, Any] = {}
+        elif isinstance(parsed, Mapping):
+            frontmatter = dict(parsed)
+        else:
+            logger.warning("Invalid skill frontmatter type: %s. Expected mapping.", type(parsed).__name__)
+            frontmatter = {}
         body = parts[2].lstrip("\n")
         return frontmatter, body
 

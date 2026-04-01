@@ -24,7 +24,11 @@ logger = logging.getLogger(__name__)
 
 HookEventCallback = Optional[Callable[[str, Dict[str, Any]], None]]
 HookContext = Dict[str, Any]
-APPROVED_HOOK_PREFIXES = ("src.hooks.", "tests.")
+def _approved_hook_prefixes() -> Tuple[str, ...]:
+    prefixes = ["src.hooks."]
+    if os.getenv("SKILL_RUNTIME_ENABLE_TEST_HOOKS") == "1":
+        prefixes.append("tests.")
+    return tuple(prefixes)
 SUPPORTED_HOOK_EFFECT_KEYS = {"modified_args", "short_circuit_result", "result_override"}
 
 
@@ -116,8 +120,9 @@ def _resolve_hook_callable(hook_name: str):
     _, target = normalized.split(":", 1)
     if "." not in target:
         return None
-    if not any(target.startswith(prefix) for prefix in APPROVED_HOOK_PREFIXES):
-        logger.warning("[SkillHook] Rejected unapproved hook target: %s", target)
+    approved_prefixes = _approved_hook_prefixes()
+    if not any(target.startswith(prefix) for prefix in approved_prefixes):
+        logger.warning("[SkillHook] Rejected unapproved hook target: %s (allowed=%s)", target, approved_prefixes)
         return None
     module_name, func_name = target.rsplit(".", 1)
     module = import_module(module_name)

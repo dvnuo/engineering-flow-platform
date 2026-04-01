@@ -25,7 +25,7 @@ skills/
 - `allowed_tools` is enforced in the unified tool loop at runtime.
 - `task_tools` marks tool names that should run through the task boundary (`src/agents/tasks.py`) rather than direct execution.
 - `hooks` can register lightweight runtime hook points (`pre_tool`, `post_tool`) and optional callable adapters (`pre_tool:module.path.fn`), with safe failure handling.
-- Callable hook adapters are resolved with a safe allowlist policy (approved prefixes only, currently `src.hooks.` and test-only `tests.`).
+- Callable hook adapters are resolved with a safe allowlist policy: default `src.hooks.` only. Test hooks (`tests.`) require `SKILL_RUNTIME_ENABLE_TEST_HOOKS=1`.
 - Async hook callables/results are rejected by default (`unsupported_async_hook`) to keep runtime hook execution sync-safe.
 - Hook adapters may optionally return:
   - `{"modified_args": {...}}` (pre-tool)

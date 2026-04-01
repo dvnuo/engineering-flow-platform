@@ -1271,41 +1271,6 @@ You have access to the following tools. When a user asks you to do something tha
                     "args": args,
                     "status": "executing"
                 })
-                pre_hook_effects = apply_skill_hooks(
-                    runtime_config=active_skill_runtime,
-                    stage="pre_tool",
-                    session_id=session_id,
-                    tool_name=tool_name,
-                    payload={"args": args},
-                    event_callback=send_event,
-                )
-                if pre_hook_effects.modified_args:
-                    args = {**args, **pre_hook_effects.modified_args}
-                if pre_hook_effects.short_circuit_result is not None:
-                    short_result = pre_hook_effects.short_circuit_result
-                    tracer.log_tool_call(
-                        tool_name=tool_name,
-                        arguments=args,
-                        result=str(short_result),
-                        success=short_result.success,
-                    )
-                    loop_messages.append(
-                        {
-                            "role": "tool",
-                            "content": str(short_result),
-                            "tool_call_id": call_id,
-                        }
-                    )
-                    executed_tool_results.append((tool_name, short_result))
-                    apply_skill_hooks(
-                        runtime_config=active_skill_runtime,
-                        stage="post_tool",
-                        session_id=session_id,
-                        tool_name=tool_name,
-                        payload={"short_circuit": True, "result": str(short_result)},
-                        event_callback=send_event,
-                    )
-                    continue
 
                 # Runtime skill policy enforcement (hard guard, not prompt-only)
                 if active_skill_runtime and active_skill_runtime.allowed_tools:
@@ -1347,6 +1312,42 @@ You have access to the following tools. When a user asks you to do something tha
                             event_callback=send_event,
                         )
                         continue
+
+                pre_hook_effects = apply_skill_hooks(
+                    runtime_config=active_skill_runtime,
+                    stage="pre_tool",
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    payload={"args": args},
+                    event_callback=send_event,
+                )
+                if pre_hook_effects.modified_args:
+                    args = {**args, **pre_hook_effects.modified_args}
+                if pre_hook_effects.short_circuit_result is not None:
+                    short_result = pre_hook_effects.short_circuit_result
+                    tracer.log_tool_call(
+                        tool_name=tool_name,
+                        arguments=args,
+                        result=str(short_result),
+                        success=short_result.success,
+                    )
+                    loop_messages.append(
+                        {
+                            "role": "tool",
+                            "content": str(short_result),
+                            "tool_call_id": call_id,
+                        }
+                    )
+                    executed_tool_results.append((tool_name, short_result))
+                    apply_skill_hooks(
+                        runtime_config=active_skill_runtime,
+                        stage="post_tool",
+                        session_id=session_id,
+                        tool_name=tool_name,
+                        payload={"short_circuit": True, "result": str(short_result)},
+                        event_callback=send_event,
+                    )
+                    continue
                 
                 # ===== CONFIRMATION GATE (FR-4) =====
                 # Check if this is a write operation that requires confirmation
