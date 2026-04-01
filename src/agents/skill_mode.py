@@ -119,6 +119,19 @@ class SkillSession:
     memory_summary: str = ""
     artifacts: Dict[str, Any] = field(default_factory=dict)
     pending_question: Optional[str] = None
+    # Runtime control fields (backward-compatible via from_dict defaults)
+    tool_round_count: int = 0
+    llm_call_count: int = 0
+    finalizer_attempts: int = 0
+    no_progress_count: int = 0
+    last_progress_signature: str = ""
+    termination_reason: str = ""
+    transition: str = ""
+    finalizer_state: str = "idle"  # idle/running/succeeded/retryable_failed/terminal_failed
+    execution_mode: str = ""  # "", "readonly_lookup", "producing_output", "waiting_user"
+    last_tool_name: str = ""
+    last_tool_args_signature: str = ""
+    last_tool_output_signature: str = ""
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SkillSession":
@@ -132,6 +145,18 @@ class SkillSession:
             memory_summary=data.get("memory_summary", ""),
             artifacts=data.get("artifacts", {}) or {},
             pending_question=data.get("pending_question"),
+            tool_round_count=int(data.get("tool_round_count", 0) or 0),
+            llm_call_count=int(data.get("llm_call_count", 0) or 0),
+            finalizer_attempts=int(data.get("finalizer_attempts", 0) or 0),
+            no_progress_count=int(data.get("no_progress_count", 0) or 0),
+            last_progress_signature=data.get("last_progress_signature", "") or "",
+            termination_reason=data.get("termination_reason", "") or "",
+            transition=data.get("transition", "") or "",
+            finalizer_state=data.get("finalizer_state", "idle") or "idle",
+            execution_mode=data.get("execution_mode", "") or "",
+            last_tool_name=data.get("last_tool_name", "") or "",
+            last_tool_args_signature=data.get("last_tool_args_signature", "") or "",
+            last_tool_output_signature=data.get("last_tool_output_signature", "") or "",
         )
 
     def to_dict(self) -> Dict[str, Any]:
