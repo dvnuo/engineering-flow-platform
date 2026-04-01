@@ -490,8 +490,8 @@ You have access to the following tools. When a user asks you to do something tha
             logger.info(f"[Skill] Matched skill: {best_skill.name}")
             
             # Set skill workdir for exec tool (async-safe via contextvars)
+            set_skill_workdir(best_skill.path or None)
             if best_skill.path:
-                set_skill_workdir(best_skill.path)
                 logger.info(f"[Skill] Workdir: {best_skill.path}")
 
             active_skill_runtime = skill_registry.get_skill_runtime_config(best_skill)

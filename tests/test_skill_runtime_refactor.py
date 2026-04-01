@@ -2,7 +2,7 @@ import pytest
 from types import SimpleNamespace
 
 from src import ToolResult
-from src.agents.core import Agent
+from src.agents.core import Agent, get_skill_workdir, set_skill_workdir
 from src.agents.skill_runtime import build_skill_tool_denied_result
 from src.agents.skill_runtime import (
     build_skill_runtime_event_payload,
@@ -188,6 +188,63 @@ async def test_matched_skill_does_not_route_to_legacy_skill_mode(monkeypatch, ba
 
     result = await agent.process("runtime test", session_id="s1")
     assert result["response"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_matched_skill_workdir_updates_and_clears_when_path_falsy(monkeypatch, base_agent, tmp_path):
+    agent, _ = base_agent
+    skill_with_path = SimpleNamespace(
+        name="runtime-path",
+        description="d",
+        path=str(tmp_path),
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="instructions",
+        references=[],
+        model="",
+        hooks=[],
+    )
+    skill_without_path = SimpleNamespace(
+        name="runtime-empty-path",
+        description="d",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="instructions",
+        references=[],
+        model="",
+        hooks=[],
+    )
+
+    def _match_skill(message):
+        if "with path" in message:
+            return [skill_with_path]
+        return [skill_without_path]
+
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(
+            _initialized=True,
+            match_skill=_match_skill,
+            get_skill_runtime_config=lambda s: build_skill_runtime_config(s),
+        ),
+    )
+
+    async def fake_responses(**kwargs):
+        return {"content": "done", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+
+    set_skill_workdir(None)
+    first = await agent.process("run with path", session_id="s-workdir-1")
+    assert first["response"] == "done"
+    assert get_skill_workdir() == str(tmp_path)
+
+    second = await agent.process("run without path", session_id="s-workdir-2")
+    assert second["response"] == "done"
+    assert get_skill_workdir() is None
 
 
 @pytest.mark.asyncio

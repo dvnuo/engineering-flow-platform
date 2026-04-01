@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def list_skill_reference_files(skill_path: str) -> str:
-    """Load all reference files from skill's references folder or skill directory.
+    """Build a formatted reference summary string for a skill directory.
     
     Supports two patterns:
     1. references/ folder: skill_path/references/*.md (preferred)
@@ -31,7 +31,8 @@ def list_skill_reference_files(skill_path: str) -> str:
         skill_path: Path to the skill directory
         
     Returns:
-        List of available reference files with their names for tool use
+        Human-readable summary text listing available reference files for tool use.
+        (Legacy behavior: this function returns a string, not a List[str].)
     """
     if not skill_path:
         return "(no skill path)"
