@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import socket
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -46,6 +47,56 @@ logger = logging.getLogger(__name__)
 # Get template and static paths
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str], Optional[str]]:
+    """Resolve runtime agent identity from server-side state/config, never from client body."""
+    runtime_agent_id: Optional[str] = None
+    runtime_agent_name: Optional[str] = None
+
+    app = request.app
+
+    raw_agent_id = app.get("agent_id") if hasattr(app, "get") else None
+    raw_agent_name = app.get("agent_name") if hasattr(app, "get") else None
+    if raw_agent_id:
+        runtime_agent_id = str(raw_agent_id).strip() or None
+    if raw_agent_name:
+        runtime_agent_name = str(raw_agent_name).strip() or None
+
+    raw_agent = app.get("agent") if hasattr(app, "get") else None
+    if raw_agent:
+        if isinstance(raw_agent, dict):
+            if not runtime_agent_id:
+                runtime_agent_id = str(raw_agent.get("id") or raw_agent.get("agent_id") or "").strip() or None
+            if not runtime_agent_name:
+                runtime_agent_name = str(raw_agent.get("name") or raw_agent.get("agent_name") or raw_agent.get("display_name") or "").strip() or None
+        else:
+            if not runtime_agent_id:
+                runtime_agent_id = str(getattr(raw_agent, "id", None) or getattr(raw_agent, "agent_id", None) or "").strip() or None
+            if not runtime_agent_name:
+                runtime_agent_name = str(getattr(raw_agent, "name", None) or getattr(raw_agent, "agent_name", None) or getattr(raw_agent, "display_name", None) or "").strip() or None
+
+    if not runtime_agent_name:
+        runtime_agent_name = (
+            str(global_config.get("agent.name", "") or "").strip()
+            or str(global_config.get("agent.display_name", "") or "").strip()
+            or str(global_config.get("server.name", "") or "").strip()
+            or None
+        )
+
+    if not runtime_agent_id:
+        runtime_agent_id = (
+            str(global_config.get("agent.id", "") or "").strip()
+            or str(global_config.get("server.id", "") or "").strip()
+            or str(global_config.get("server.host", "") or "").strip()
+            or str(socket.gethostname() or "").strip()
+            or None
+        )
+
+    if not runtime_agent_name:
+        runtime_agent_name = str(global_config.llm.get("model") or "").strip() or "Assistant"
+
+    return runtime_agent_id, runtime_agent_name
 
 
 def load_template(filename: str) -> str:
@@ -146,8 +197,6 @@ async def api_chat(request: web.Request) -> web.Response:
         portal_user_id = str(data.get("portal_user_id") or "").strip()
         portal_user_name = str(data.get("portal_user_name") or "").strip()
         effective_user_name = portal_user_name or "webchat-user"
-        agent_id = str(data.get("agent_id") or "").strip()
-        agent_name = str(data.get("agent_name") or "").strip()
         logger.info(f"[api_chat] DEBUG: full request data: {data}")
         
         if not message and not attachments:
@@ -265,11 +314,12 @@ async def api_chat(request: web.Request) -> web.Response:
         model = global_config.llm.get('model', 'gpt-5-mini')
         
         # Run agent (history is managed internally by session_manager)
+        runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
         agent = AgentCore(
             model=model,
             session_id=session_id,
-            agent_id=agent_id or None,
-            agent_name=agent_name or None,
+            agent_id=runtime_agent_id,
+            agent_name=runtime_agent_name,
         )
         result = await agent.process(
             message=message,
@@ -423,8 +473,6 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         portal_user_id = str(data.get("portal_user_id") or "").strip()
         portal_user_name = str(data.get("portal_user_name") or "").strip()
         effective_user_name = portal_user_name or "webchat-user"
-        agent_id = str(data.get("agent_id") or "").strip()
-        agent_name = str(data.get("agent_name") or "").strip()
         
         if not message:
             response = web.json_response({'error': 'Empty message'}, status=400)
@@ -454,11 +502,12 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         model = global_config.llm.get('model', 'gpt-5-mini')
         
         # Run agent and stream response
+        runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
         agent = AgentCore(
             model=model,
             session_id=session_id,
-            agent_id=agent_id or None,
-            agent_name=agent_name or None,
+            agent_id=runtime_agent_id,
+            agent_name=runtime_agent_name,
         )
         
         # Pass the queue to the agent for real-time events
