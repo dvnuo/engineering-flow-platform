@@ -55,6 +55,22 @@ def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str]
 
     app = request.app
 
+    try:
+        global_config.reload()
+    except Exception:
+        pass
+    config_data = getattr(global_config, "_config", {}) or {}
+
+    def _cfg(path: str) -> str:
+        value = config_data
+        for part in path.split("."):
+            if not isinstance(value, dict):
+                return ""
+            value = value.get(part)
+            if value is None:
+                return ""
+        return str(value).strip()
+
     raw_agent_id = app.get("agent_id") if hasattr(app, "get") else None
     raw_agent_name = app.get("agent_name") if hasattr(app, "get") else None
     if raw_agent_id:
@@ -77,16 +93,16 @@ def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str]
 
     if not runtime_agent_name:
         runtime_agent_name = (
-            str(global_config.get("agent.name", "") or "").strip()
-            or str(global_config.get("agent.display_name", "") or "").strip()
-            or str(global_config.get("server.name", "") or "").strip()
+            _cfg("agent.name")
+            or _cfg("agent.display_name")
+            or _cfg("server.name")
             or None
         )
 
     if not runtime_agent_id:
         runtime_agent_id = (
-            str(global_config.get("agent.id", "") or "").strip()
-            or str(global_config.get("server.id", "") or "").strip()
+            _cfg("agent.id")
+            or _cfg("server.id")
             or None
         )
 

@@ -410,12 +410,15 @@ You have access to the following tools. When a user asks you to do something tha
         }
 
     def _build_agent_author_extra(self) -> Dict[str, Any]:
-        return {
+        extra: Dict[str, Any] = {
             "author_type": "agent",
-            "author_id": getattr(self, "agent_id", None) or "",
             "author_name": getattr(self, "agent_name", None) or "Assistant",
             "author_source": "runtime",
         }
+        agent_id = getattr(self, "agent_id", None)
+        if agent_id:
+            extra["author_id"] = agent_id
+        return extra
 
     async def process(
         self,

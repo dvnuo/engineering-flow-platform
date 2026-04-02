@@ -31,6 +31,18 @@ def _isolated_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     efp_dir = tmp_path / ".efp"
     efp_dir.mkdir(exist_ok=True)
+
+    config_file = efp_dir / "config.yaml"
+    if not config_file.exists():
+        config_file.write_text("{}", encoding="utf-8")
+
+    import src.config as config_mod
+
+    config_mod.config.config_path = config_file
+    config_mod.config._config = {}
+    config_mod.config._last_modified = 0
+    config_mod.config.load()
+
     return efp_dir
 
 
