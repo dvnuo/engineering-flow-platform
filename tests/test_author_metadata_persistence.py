@@ -38,9 +38,9 @@ def _isolated_home(tmp_path, monkeypatch):
 
     import src.config as config_mod
 
-    config_mod.config.config_path = config_file
-    config_mod.config._config = {}
-    config_mod.config._last_modified = 0
+    monkeypatch.setattr(config_mod.config, "config_path", config_file, raising=False)
+    monkeypatch.setattr(config_mod.config, "_config", {}, raising=False)
+    monkeypatch.setattr(config_mod.config, "_last_modified", 0, raising=False)
     config_mod.config.load()
 
     return efp_dir
