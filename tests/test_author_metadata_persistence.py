@@ -49,14 +49,14 @@ def _isolated_home(tmp_path, monkeypatch):
 def _mk_session_manager(calls):
     class FakeSessionManager:
         async def add_message(self, session_id, role, content, extra=None):
-            calls.append(
-                {
-                    "session_id": session_id,
-                    "role": role,
-                    "content": content,
-                    "extra": extra,
-                }
-            )
+            message = {
+                "session_id": session_id,
+                "role": role,
+                "content": content,
+            }
+            if extra:
+                message.update(extra)
+            calls.append(message)
             return f"m{len(calls)}"
 
         async def get_history(self, session_id):
@@ -98,16 +98,16 @@ async def test_process_normal_path_persists_user_and_assistant_author_metadata(m
     )
 
     user_call = next(c for c in calls if c["role"] == "user")
-    assert user_call["extra"]["author_type"] == "human"
-    assert user_call["extra"]["author_id"] == "Runtime User"
-    assert user_call["extra"]["author_name"] == "Runtime User"
-    assert user_call["extra"]["author_source"] == "runtime"
+    assert user_call["author_type"] == "human"
+    assert user_call["author_id"] == "Runtime User"
+    assert user_call["author_name"] == "Runtime User"
+    assert user_call["author_source"] == "runtime"
 
     assistant_call = next(c for c in calls if c["role"] == "assistant")
-    assert assistant_call["extra"]["author_type"] == "agent"
-    assert assistant_call["extra"]["author_id"] == "agent-123"
-    assert assistant_call["extra"]["author_name"] == "Helper Bot"
-    assert assistant_call["extra"]["author_source"] == "runtime"
+    assert assistant_call["author_type"] == "agent"
+    assert assistant_call["author_id"] == "agent-123"
+    assert assistant_call["author_name"] == "Helper Bot"
+    assert assistant_call["author_source"] == "runtime"
 
 
 @pytest.mark.asyncio
@@ -134,10 +134,10 @@ async def test_process_fastlane_path_persists_assistant_author_metadata(monkeypa
 
     assistant_call = next(c for c in calls if c["role"] == "assistant")
     assert assistant_call["content"] == "fastlane response"
-    assert assistant_call["extra"]["author_type"] == "agent"
-    assert assistant_call["extra"]["author_id"] == "agent-fast"
-    assert assistant_call["extra"]["author_name"] == "Fast Bot"
-    assert assistant_call["extra"]["author_source"] == "runtime"
+    assert assistant_call["author_type"] == "agent"
+    assert assistant_call["author_id"] == "agent-fast"
+    assert assistant_call["author_name"] == "Fast Bot"
+    assert assistant_call["author_source"] == "runtime"
 
 
 @pytest.mark.asyncio
@@ -180,11 +180,9 @@ async def test_skill_finish_merges_terminal_snapshot_with_author_metadata(monkey
     assistant_calls = [c for c in calls if c["role"] == "assistant"]
     assert assistant_calls, "expected assistant save call"
     finish_call = assistant_calls[-1]
-    extra = finish_call["extra"]
-
-    assert extra["author_type"] == "agent"
-    assert extra["author_id"] == "agent-skill"
-    assert extra["author_name"] == "Skill Bot"
-    assert extra["author_source"] == "runtime"
-    assert "terminal_skill_session" in extra
-    assert isinstance(extra["terminal_skill_session"], dict)
+    assert finish_call["author_type"] == "agent"
+    assert finish_call["author_id"] == "agent-skill"
+    assert finish_call["author_name"] == "Skill Bot"
+    assert finish_call["author_source"] == "runtime"
+    assert "terminal_skill_session" in finish_call
+    assert isinstance(finish_call["terminal_skill_session"], dict)
