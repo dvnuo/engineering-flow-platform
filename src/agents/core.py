@@ -404,7 +404,7 @@ You have access to the following tools. When a user asks you to do something tha
     ) -> Dict[str, Any]:
         return {
             "author_type": "human",
-            "author_id": portal_user_id or user_name or "unknown",
+            "author_id": portal_user_id or portal_user_name or user_name or "unknown",
             "author_name": portal_user_name or user_name or "User",
             "author_source": "portal" if (portal_user_id or portal_user_name) else "runtime",
         }
