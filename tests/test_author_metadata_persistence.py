@@ -1,10 +1,6 @@
-import os
 import pytest
 from types import SimpleNamespace
 
-os.makedirs(os.path.expanduser("~/.efp"), exist_ok=True)
-
-from src.agents.core import Agent
 
 
 class FakeTracer:
@@ -28,6 +24,14 @@ class FakeTracer:
 
     def get_events_for_ui(self, **kwargs):
         return []
+
+
+@pytest.fixture(autouse=True)
+def _isolated_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    efp_dir = tmp_path / ".efp"
+    efp_dir.mkdir(exist_ok=True)
+    return efp_dir
 
 
 def _mk_session_manager(calls):
@@ -54,6 +58,7 @@ def _mk_session_manager(calls):
 
 @pytest.mark.asyncio
 async def test_process_normal_path_persists_user_and_assistant_author_metadata(monkeypatch):
+    from src.agents.core import Agent
     from src.agents import core as core_mod
 
     calls = []
@@ -95,6 +100,7 @@ async def test_process_normal_path_persists_user_and_assistant_author_metadata(m
 
 @pytest.mark.asyncio
 async def test_process_fastlane_path_persists_assistant_author_metadata(monkeypatch):
+    from src.agents.core import Agent
     from src.agents import core as core_mod
 
     calls = []
@@ -124,6 +130,7 @@ async def test_process_fastlane_path_persists_assistant_author_metadata(monkeypa
 
 @pytest.mark.asyncio
 async def test_skill_finish_merges_terminal_snapshot_with_author_metadata(monkeypatch):
+    from src.agents.core import Agent
     from src.agents import core as core_mod
     from src.agents.skill_mode import SkillSession
 

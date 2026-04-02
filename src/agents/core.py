@@ -404,7 +404,7 @@ You have access to the following tools. When a user asks you to do something tha
     ) -> Dict[str, Any]:
         return {
             "author_type": "human",
-            "author_id": portal_user_id or user_name or "",
+            "author_id": portal_user_id or user_name or "unknown",
             "author_name": portal_user_name or user_name or "User",
             "author_source": "portal" if (portal_user_id or portal_user_name) else "runtime",
         }
@@ -439,6 +439,10 @@ You have access to the following tools. When a user asks you to do something tha
                 When enabled, includes model's thinking process in response.
                 Default: Uses config.llm.reasoning_replay setting.
             stream_callback: Optional callback for streaming events (tool calls, progress, etc.)
+            portal_user_id: Optional portal-originated user ID used for persisted user-message
+                author metadata. Falls back to runtime/user_name identity when absent.
+            portal_user_name: Optional portal-originated display name used for persisted
+                user-message author metadata. Falls back to runtime/user_name when absent.
         
         Returns:
             Dict with:
