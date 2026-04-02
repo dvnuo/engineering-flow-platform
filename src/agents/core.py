@@ -401,7 +401,7 @@ You have access to the following tools. When a user asks you to do something tha
         portal_user_id: Optional[str],
         portal_user_name: Optional[str],
         user_name: Optional[str],
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         return {
             "author_type": "human",
             "author_id": portal_user_id or user_name or "",
@@ -409,7 +409,7 @@ You have access to the following tools. When a user asks you to do something tha
             "author_source": "portal" if (portal_user_id or portal_user_name) else "runtime",
         }
 
-    def _build_agent_author_extra(self) -> Dict[str, str]:
+    def _build_agent_author_extra(self) -> Dict[str, Any]:
         return {
             "author_type": "agent",
             "author_id": self.agent_id or "",

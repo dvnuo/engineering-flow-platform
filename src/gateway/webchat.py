@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import re
-import socket
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -88,8 +87,6 @@ def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str]
         runtime_agent_id = (
             str(global_config.get("agent.id", "") or "").strip()
             or str(global_config.get("server.id", "") or "").strip()
-            or str(global_config.get("server.host", "") or "").strip()
-            or str(socket.gethostname() or "").strip()
             or None
         )
 
@@ -325,8 +322,8 @@ async def api_chat(request: web.Request) -> web.Response:
             message=message,
             session_id=session_id,
             user_name=effective_user_name,
-            portal_user_id=portal_user_id,
-            portal_user_name=portal_user_name or effective_user_name,
+            portal_user_id=portal_user_id or None,
+            portal_user_name=portal_user_name or None,
             track_usage=True,
             reasoning_replay=reasoning_replay,
             attached_images=attached_images if attached_images else None,
@@ -515,8 +512,8 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             message=message,
             session_id=session_id,
             user_name=effective_user_name,
-            portal_user_id=portal_user_id,
-            portal_user_name=portal_user_name or effective_user_name,
+            portal_user_id=portal_user_id or None,
+            portal_user_name=portal_user_name or None,
             track_usage=True,
             stream_callback=event_queue,
         )
