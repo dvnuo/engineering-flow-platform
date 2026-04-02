@@ -412,8 +412,8 @@ You have access to the following tools. When a user asks you to do something tha
     def _build_agent_author_extra(self) -> Dict[str, Any]:
         return {
             "author_type": "agent",
-            "author_id": self.agent_id or "",
-            "author_name": self.agent_name or "Assistant",
+            "author_id": getattr(self, "agent_id", None) or "",
+            "author_name": getattr(self, "agent_name", None) or "Assistant",
             "author_source": "runtime",
         }
 

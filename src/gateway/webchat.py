@@ -194,7 +194,13 @@ async def api_chat(request: web.Request) -> web.Response:
         portal_user_id = str(data.get("portal_user_id") or "").strip()
         portal_user_name = str(data.get("portal_user_name") or "").strip()
         effective_user_name = portal_user_name or "webchat-user"
-        logger.info(f"[api_chat] DEBUG: full request data: {data}")
+        logger.debug(
+            "[api_chat] Request summary: session_id=%s, has_message=%s, attachment_count=%d, portal_user_id_present=%s",
+            session_id,
+            bool(message),
+            len(attachments) if isinstance(attachments, list) else 0,
+            bool(portal_user_id),
+        )
         
         if not message and not attachments:
             return web.json_response({'error': 'Empty message'}, status=400)
