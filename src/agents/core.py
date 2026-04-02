@@ -277,12 +277,16 @@ class Agent:
         think_level: Optional[str] = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        agent_name: Optional[str] = None,
     ):
         # Resolve thinking level
         self.think_level = normalize_think_level(think_level) or ThinkLevel.OFF
         
         # Store model for later use
         self.model = model
+        self.agent_id = agent_id
+        self.agent_name = agent_name
         
         # Initialize heartbeat if enabled
         self._heartbeat_enabled = config.heartbeat.get("enabled", False)
@@ -392,6 +396,27 @@ You have access to the following tools. When a user asks you to do something tha
                     f"length={len(self.system_prompt)}, tools={len(self.tools)}, "
                     f"think_level={self.think_level.value}")
 
+    def _build_user_author_extra(
+        self,
+        portal_user_id: Optional[str],
+        portal_user_name: Optional[str],
+        user_name: Optional[str],
+    ) -> Dict[str, str]:
+        return {
+            "author_type": "human",
+            "author_id": portal_user_id or user_name or "",
+            "author_name": portal_user_name or user_name or "User",
+            "author_source": "portal" if (portal_user_id or portal_user_name) else "runtime",
+        }
+
+    def _build_agent_author_extra(self) -> Dict[str, str]:
+        return {
+            "author_type": "agent",
+            "author_id": self.agent_id or "",
+            "author_name": self.agent_name or "Assistant",
+            "author_source": "runtime",
+        }
+
     async def process(
         self,
         message: str,
@@ -402,6 +427,8 @@ You have access to the following tools. When a user asks you to do something tha
         stream_callback: Optional[Callable[[str], None]] = None,
         attached_images: Optional[List[str]] = None,
         attachments: Optional[List[str]] = None,
+        portal_user_id: Optional[str] = None,
+        portal_user_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Process a user message with ReAct pattern.
         
@@ -422,12 +449,12 @@ You have access to the following tools. When a user asks you to do something tha
         usage_data = {}
         
         # Add user message to history (with attachments if any)
-        extra = {}
+        extra = self._build_user_author_extra(portal_user_id, portal_user_name, user_name)
         if attachments:
             extra["attachments"] = attachments  # Save file IDs, not base64
         user_message_id = await session_manager.add_message(
             session_id, "user", message,
-            extra=extra if extra else None
+            extra=extra
         )
 
         # Get conversation history
@@ -460,7 +487,7 @@ You have access to the following tools. When a user asks you to do something tha
         fastlane_response = await process_fastlane_command(message, self)
         if fastlane_response:
             # Fast lane command processed, return the response
-            await session_manager.add_message(session_id, "assistant", fastlane_response)
+            await session_manager.add_message(session_id, "assistant", fastlane_response, extra=self._build_agent_author_extra())
             return {"response": fastlane_response, "usage": usage_data, "user_message_id": user_message_id}
         # ===== END FAST LANE =====
 
@@ -1088,7 +1115,7 @@ You have access to the following tools. When a user asks you to do something tha
                     # If still empty, provide a default prompt
                     if not fallback_content.strip():
                         fallback_content = "Operation completed, but no detailed result was returned."
-                await session_manager.add_message(session_id, "assistant", fallback_content)
+                await session_manager.add_message(session_id, "assistant", fallback_content, extra=self._build_agent_author_extra())
                 result = {"response": fallback_content, "usage": usage_data, "user_message_id": user_message_id}
                 if enable_reasoning:
                     reasoning_content = llm_result.get("reasoning", "")
@@ -1458,7 +1485,7 @@ You have access to the following tools. When a user asks you to do something tha
                     tool_calls_count=len(function_calls),
                 ):
                     passthrough_content = str(single_tool_result.content)
-                    await session_manager.add_message(session_id, "assistant", passthrough_content)
+                    await session_manager.add_message(session_id, "assistant", passthrough_content, extra=self._build_agent_author_extra())
                     send_event("complete", {
                         "response": truncate_with_count(passthrough_content, 500),
                         "total_iterations": iteration
@@ -1482,7 +1509,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Safety: max iterations reached
         logger.warning(f"[Tool Loop] Max iterations ({max_tool_iterations}) reached")
-        await session_manager.add_message(session_id, "assistant", "Task completed after maximum iterations.")
+        await session_manager.add_message(session_id, "assistant", "Task completed after maximum iterations.", extra=self._build_agent_author_extra())
         
         # Send completion event
         send_event("complete", {
@@ -1639,7 +1666,7 @@ You have access to the following tools. When a user asks you to do something tha
         if not skill:
             await session_manager.set_active_skill_session(session_id, None)
             fallback = "Skill session was cleared because the skill definition is unavailable."
-            await session_manager.add_message(session_id, "assistant", fallback)
+            await session_manager.add_message(session_id, "assistant", fallback, extra=self._build_agent_author_extra())
             events = tracer.get_events_for_ui(limit=10, session_id=session_id)
             return {"response": fallback, "usage": usage_data, "events": events, "user_message_id": user_message_id}
 
@@ -2018,7 +2045,7 @@ You have access to the following tools. When a user asks you to do something tha
             tracer.log_skill_mode_step("ASK_USER", "completed", f"Question: {question[:50]}...")
             send_skill_event("skill_step", {"step": "ASK_USER", "status": "completed", "detail": question[:200]})
             await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
-            await session_manager.add_message(session_id, "assistant", question)
+            await session_manager.add_message(session_id, "assistant", question, extra=self._build_agent_author_extra())
             # Get events for UI
             events = tracer.get_events_for_ui(limit=10, session_id=session_id)
             send_skill_event("skill_complete", {"reason": "ask_user", "question": question[:200]})
@@ -2068,11 +2095,13 @@ You have access to the following tools. When a user asks you to do something tha
             send_skill_event("skill_complete", {"reason": "finish", "result": final_text[:200]})
             await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
             await session_manager.set_active_skill_session(session_id, None)
+            finish_extra = self._build_agent_author_extra()
+            finish_extra["terminal_skill_session"] = terminal_snapshot
             await session_manager.add_message(
                 session_id,
                 "assistant",
                 final_text,
-                extra={"terminal_skill_session": terminal_snapshot},
+                extra=finish_extra,
             )
             # Get events for UI
             events = tracer.get_events_for_ui(limit=10, session_id=session_id)
@@ -2112,7 +2141,7 @@ You have access to the following tools. When a user asks you to do something tha
         skill_session.memory_summary = _update_skill_memory_summary(skill_session, message, result_text)
 
         await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
-        await session_manager.add_message(session_id, "assistant", result_text)
+        await session_manager.add_message(session_id, "assistant", result_text, extra=self._build_agent_author_extra())
         # Get events for UI
         events = tracer.get_events_for_ui(limit=10, session_id=session_id)
         return {"response": result_text, "usage": usage_data, "events": events, "user_message_id": user_message_id}

@@ -143,6 +143,11 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Get attachments from new field
         attachments = data.get('attachments', [])
+        portal_user_id = str(data.get("portal_user_id") or "").strip()
+        portal_user_name = str(data.get("portal_user_name") or "").strip()
+        effective_user_name = portal_user_name or "webchat-user"
+        agent_id = str(data.get("agent_id") or "").strip()
+        agent_name = str(data.get("agent_name") or "").strip()
         logger.info(f"[api_chat] DEBUG: full request data: {data}")
         
         if not message and not attachments:
@@ -260,11 +265,18 @@ async def api_chat(request: web.Request) -> web.Response:
         model = global_config.llm.get('model', 'gpt-5-mini')
         
         # Run agent (history is managed internally by session_manager)
-        agent = AgentCore(model=model, session_id=session_id)
+        agent = AgentCore(
+            model=model,
+            session_id=session_id,
+            agent_id=agent_id or None,
+            agent_name=agent_name or None,
+        )
         result = await agent.process(
             message=message,
             session_id=session_id,
-            user_name="webchat-user",
+            user_name=effective_user_name,
+            portal_user_id=portal_user_id,
+            portal_user_name=portal_user_name or effective_user_name,
             track_usage=True,
             reasoning_replay=reasoning_replay,
             attached_images=attached_images if attached_images else None,
@@ -408,6 +420,11 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         data = await request.json()
         message = (data.get('message') or '').strip()
         session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
+        portal_user_id = str(data.get("portal_user_id") or "").strip()
+        portal_user_name = str(data.get("portal_user_name") or "").strip()
+        effective_user_name = portal_user_name or "webchat-user"
+        agent_id = str(data.get("agent_id") or "").strip()
+        agent_name = str(data.get("agent_name") or "").strip()
         
         if not message:
             response = web.json_response({'error': 'Empty message'}, status=400)
@@ -437,13 +454,20 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         model = global_config.llm.get('model', 'gpt-5-mini')
         
         # Run agent and stream response
-        agent = AgentCore(model=model, session_id=session_id)
+        agent = AgentCore(
+            model=model,
+            session_id=session_id,
+            agent_id=agent_id or None,
+            agent_name=agent_name or None,
+        )
         
         # Pass the queue to the agent for real-time events
         result = await agent.process(
             message=message,
             session_id=session_id,
-            user_name="webchat-user",
+            user_name=effective_user_name,
+            portal_user_id=portal_user_id,
+            portal_user_name=portal_user_name or effective_user_name,
             track_usage=True,
             stream_callback=event_queue,
         )
