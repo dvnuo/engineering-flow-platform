@@ -91,7 +91,7 @@ def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str]
         )
 
     if not runtime_agent_name:
-        runtime_agent_name = str(global_config.llm.get("model") or "").strip() or "Assistant"
+        runtime_agent_name = "Assistant"
 
     return runtime_agent_id, runtime_agent_name
 
