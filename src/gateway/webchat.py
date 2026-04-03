@@ -297,13 +297,19 @@ async def api_chat(request: web.Request) -> web.Response:
         if attached_images and not message.strip():
             message = "[image]"
         
+        # Always ensure input field is present for Copilot API downstream
+        if not message:
+            logger.error(f"[api_chat] ERROR: Final message is empty before Copilot API call. Payload: {json.dumps(data, ensure_ascii=False)}")
+            return web.json_response({'error': 'Input field missing for Copilot API.'}, status=400)
+
         # Revalidate: if no message and no attached images, return error
         if not message.strip() and not attached_images:
             return web.json_response({'error': 'Empty message'}, status=400)
-        
+
         # Inject file context if user has uploaded files
         original_msg_for_history = message if message.strip() else ("[image]" if attached_images else "")
         logger.info(f"[api_chat] DEBUG: original_msg_for_history='{original_msg_for_history}', attached_images={len(attached_images) if attached_images else 0}")
+        logger.info(f"[api_chat] DEBUG: message to Copilot API: '{message}'")
         original_message = message
         try:
             enhanced_message, budget_status, citations = inject_context(
@@ -320,6 +326,10 @@ async def api_chat(request: web.Request) -> web.Response:
         except Exception as e:
             logger.warning(f"[api_chat] File context injection failed: {e}")
             # Continue without file context if injection fails
+        # Revalidate message is not empty to prevent downstream LLM input from being empty
+        if not message or not message.strip():
+            logger.error(f"[api_chat] ERROR: Final message is empty before Copilot API call. Payload: {json.dumps(data, ensure_ascii=False)}")
+            return web.json_response({'error': 'Input field missing for Copilot API.'}, status=400)
         
         # Initialize session manager if needed
         if not session_manager._initialized:
