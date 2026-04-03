@@ -156,10 +156,16 @@ class TestConfigProxy:
 
     PROXY_ENV_KEYS = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
 
+    def _prepare_proxy_env(self, monkeypatch, clear: bool = True):
+        """Ensure proxy env vars are tracked and optionally cleared for test isolation."""
+        for key in self.PROXY_ENV_KEYS:
+            monkeypatch.setenv(key, "")
+            if clear:
+                monkeypatch.delenv(key, raising=False)
+
     def test_apply_proxy_with_plain_credentials(self, tmp_path, monkeypatch):
         """Test apply_proxy() with plain username/password credentials."""
-        for key in self.PROXY_ENV_KEYS:
-            monkeypatch.delenv(key, raising=False)
+        self._prepare_proxy_env(monkeypatch)
 
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
@@ -180,8 +186,7 @@ class TestConfigProxy:
 
     def test_apply_proxy_with_special_characters_in_credentials(self, tmp_path, monkeypatch):
         """Test apply_proxy() URL-encodes special characters in credentials."""
-        for key in self.PROXY_ENV_KEYS:
-            monkeypatch.delenv(key, raising=False)
+        self._prepare_proxy_env(monkeypatch)
 
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
@@ -202,8 +207,8 @@ class TestConfigProxy:
 
     def test_apply_proxy_disabled_clears_proxy_env_when_proxy_section_exists(self, tmp_path, monkeypatch):
         """Test disabled proxy clears proxy-related env vars when section exists."""
+        self._prepare_proxy_env(monkeypatch)
         for key in self.PROXY_ENV_KEYS:
-            monkeypatch.delenv(key, raising=False)
             monkeypatch.setenv(key, "http://should-be-cleared")
 
         config_path = tmp_path / "config.yaml"
@@ -220,8 +225,7 @@ class TestConfigProxy:
 
     def test_apply_proxy_ipv6_host_preserves_brackets(self, tmp_path, monkeypatch):
         """Test apply_proxy() preserves brackets for IPv6 proxy hosts."""
-        for key in self.PROXY_ENV_KEYS:
-            monkeypatch.delenv(key, raising=False)
+        self._prepare_proxy_env(monkeypatch)
 
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
@@ -239,8 +243,7 @@ class TestConfigProxy:
 
     def test_apply_proxy_replaces_existing_userinfo(self, tmp_path, monkeypatch):
         """Test apply_proxy() replaces existing URL userinfo with configured credentials."""
-        for key in self.PROXY_ENV_KEYS:
-            monkeypatch.delenv(key, raising=False)
+        self._prepare_proxy_env(monkeypatch)
 
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
@@ -258,8 +261,7 @@ class TestConfigProxy:
 
     def test_apply_proxy_malformed_or_schemeless_url_not_rewritten_to_none(self, tmp_path, monkeypatch):
         """Test malformed/scheme-less proxy URLs are not rewritten to include @None."""
-        for key in self.PROXY_ENV_KEYS:
-            monkeypatch.delenv(key, raising=False)
+        self._prepare_proxy_env(monkeypatch)
 
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
