@@ -34,19 +34,36 @@ class RedactingFilter(logging.Filter):
     """Log filter that redacts sensitive values in messages and args."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str):
-            record.msg = redact_text(record.msg)
-        else:
-            record.msg = redact_value(record.msg)
-
+        sanitized_args = ()
         if record.args:
             if isinstance(record.args, dict):
-                record.args = redact_value(record.args)
+                sanitized_args = redact_value(record.args)
             elif isinstance(record.args, tuple):
-                record.args = tuple(redact_value(arg) for arg in record.args)
+                sanitized_args = tuple(redact_value(arg) for arg in record.args)
             else:
-                record.args = redact_value(record.args)
+                sanitized_args = redact_value(record.args)
+            record.args = sanitized_args
+        if not isinstance(record.msg, str):
+            record.msg = redact_value(record.msg)
+        try:
+            final_message = record.getMessage()
+            record.msg = redact_text(final_message)
+            record.args = ()
+        except Exception:
+            fallback = redact_text(str(record.msg))
+            if sanitized_args:
+                fallback = f"{fallback} | args={redact_text(str(sanitized_args))}"
+            record.msg = fallback
+            record.args = ()
         return True
+
+
+class RedactingFormatter(logging.Formatter):
+    """Formatter that sanitizes exception tracebacks."""
+
+    def formatException(self, exc_info):
+        return redact_text(super().formatException(exc_info))
+
 
 class StructuredLogger:
     """Structured logger that outputs JSON logs."""
@@ -191,7 +208,7 @@ def setup_logging(
     
     # Format
     log_format = STRUCTURED_FORMAT if structured else DEFAULT_FORMAT
-    formatter = logging.Formatter(log_format)
+    formatter = RedactingFormatter(log_format)
     
     # Console handler
     if console:

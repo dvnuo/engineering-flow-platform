@@ -21,6 +21,7 @@ _SENSITIVE_KEYS = {
     "openai_api_key", "llm_api_key",
     "proxy_password",
 }
+_COMPACT_SENSITIVE_KEYS = {key.replace("_", "") for key in _SENSITIVE_KEYS}
 
 _PRIVATE_KEY_BLOCK_RE = re.compile(
     r"-----BEGIN (?:PRIVATE KEY|RSA PRIVATE KEY|OPENSSH PRIVATE KEY)-----[\s\S]*?-----END (?:PRIVATE KEY|RSA PRIVATE KEY|OPENSSH PRIVATE KEY)-----",
@@ -35,6 +36,9 @@ _TEXT_PATTERNS = [
     (re.compile(r"(?i)(\bpassword\s*[=:]\s*)([^\s&\"',;]+)"), r"\1" + REDACTED),
     (re.compile(r"(?i)(\bapi_key\s*[=:]\s*)([^\s&\"',;]+)"), r"\1" + REDACTED),
     (re.compile(r"(?i)(\bsecret\s*[=:]\s*)([^\s&\"',;]+)"), r"\1" + REDACTED),
+    (re.compile(r"(?i)(\baccess_token\s*[=:]\s*)([^\s&\"',;]+)"), r"\1" + REDACTED),
+    (re.compile(r"(?i)(\brefresh_token\s*[=:]\s*)([^\s&\"',;]+)"), r"\1" + REDACTED),
+    (re.compile(r"(?i)(\bsecret_key\s*[=:]\s*)([^\s&\"',;]+)"), r"\1" + REDACTED),
     (re.compile(r"\bghp_[A-Za-z0-9_]+\b"), REDACTED),
     (re.compile(r"\bgithub_pat_[A-Za-z0-9_]+\b"), REDACTED),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"), REDACTED),
@@ -63,7 +67,10 @@ def _sanitize_url_credentials(text: str) -> str:
 
 def _is_sensitive_key(key: Any) -> bool:
     normalized = str(key or "").strip().lower()
-    return normalized in _SENSITIVE_KEYS
+    if normalized in _SENSITIVE_KEYS:
+        return True
+    compact = normalized.replace("_", "")
+    return compact in _COMPACT_SENSITIVE_KEYS
 
 
 def redact_text(text: str) -> str:
@@ -102,10 +109,11 @@ def redact_value(value: Any) -> Any:
 def safe_preview(value: Any, limit: int = 200) -> str:
     """Sanitize a value then produce a truncated preview string."""
     sanitized = redact_value(value)
-    return truncate_with_count(str(sanitized), limit)
+    text = str(sanitized)
+    text = redact_text(text)
+    return truncate_with_count(text, limit)
 
 
 def sanitize_exception_message(value: Any) -> str:
     """Sanitize arbitrary exception values for safe logging."""
     return safe_preview(value, limit=500)
-

@@ -52,3 +52,36 @@ def test_safe_preview_redacts_before_truncating():
     assert "abcdef" not in out
     assert "***REDACTED***" in out
     assert "chars hidden" in out
+
+
+def test_camelcase_sensitive_keys_are_redacted():
+    data = {
+        "githubApiToken": "ghp_abc123",
+        "openaiApiKey": "sk-test-value",
+        "accessToken": "access-secret",
+    }
+    out = redact_value(data)
+    assert out["githubApiToken"] == "***REDACTED***"
+    assert out["openaiApiKey"] == "***REDACTED***"
+    assert out["accessToken"] == "***REDACTED***"
+
+
+def test_assignment_style_patterns_are_redacted():
+    text = "access_token=abc refresh_token=xyz secret_key=qwe"
+    out = redact_text(text)
+    assert "abc" not in out
+    assert "xyz" not in out
+    assert "qwe" not in out
+    assert out.count("***REDACTED***") >= 3
+
+
+class StringifiesToSecret:
+    def __str__(self):
+        return "access_token=abc123 password=secret"
+
+
+def test_safe_preview_redacts_custom_object_stringification():
+    preview = safe_preview(StringifiesToSecret(), limit=200)
+    assert "abc123" not in preview
+    assert "secret" not in preview
+    assert "***REDACTED***" in preview
