@@ -175,6 +175,35 @@ Body
     assert "Failed to parse skill markdown frontmatter" in caplog.text
 
 
+def test_create_cr_skill_frontmatter_shape():
+    registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
+    skill = registry._load_skill_file(Path("skills/create-cr.md"))
+    assert skill is not None
+    assert skill.name == "create-cr"
+    assert set(skill.tools) == {
+        "run_command",
+        "github_get_default_branch",
+        "github_create_pull_request",
+    }
+    assert "run_command" in skill.task_tools
+    assert "ref-create-cr-template.md" in skill.references
+
+
+def test_create_cr_runtime_config_contains_expected_blocks():
+    registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
+    skill = registry._load_skill_file(Path("skills/create-cr.md"))
+    runtime_config = build_skill_runtime_config(skill)
+
+    assert runtime_config.allowed_tools_set == {
+        "run_command",
+        "github_get_default_branch",
+        "github_create_pull_request",
+    }
+    assert "ref-create-cr-template.md" in runtime_config.prompt_blocks.references_summary
+    instructions = runtime_config.prompt_blocks.developer_instructions
+    assert ("STEP 1" in instructions) or ("Phase 1" in instructions)
+
+
 def test_prompt_layer_assembly_and_reference_context():
     skill = SimpleNamespace(
         name="compact",
