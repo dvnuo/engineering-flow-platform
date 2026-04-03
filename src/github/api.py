@@ -117,7 +117,7 @@ class GitHubChannel:
         method: str,
         endpoint: str,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> Any:
         """Make an API request with rate limit handling and exponential backoff."""
         url = f"{self.base_url}{endpoint}"
         
