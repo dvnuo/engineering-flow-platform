@@ -1,12 +1,25 @@
 import asyncio
+from pathlib import Path
+import importlib
 import pytest
 
-import src.github as github_module
-from src.github import api as github_api
+
+@pytest.fixture(autouse=True)
+def _isolated_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (Path(tmp_path) / ".efp").mkdir(parents=True, exist_ok=True)
+
+
+@pytest.fixture
+def github_modules():
+    github_module = importlib.import_module("src.github")
+    github_api = importlib.import_module("src.github.api")
+    return github_module, github_api
 
 
 @pytest.mark.asyncio
-async def test_github_get_pr_formats_metadata(monkeypatch):
+async def test_github_get_pr_formats_metadata(monkeypatch, github_modules):
+    _, github_api = github_modules
     async def _fake_get_pull_request(owner, repo, pull_number):
         return {
             "title": "Improve review output",
@@ -36,7 +49,8 @@ async def test_github_get_pr_formats_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_github_get_pr_quotes_and_truncates_body(monkeypatch):
+async def test_github_get_pr_quotes_and_truncates_body(monkeypatch, github_modules):
+    _, github_api = github_modules
     long_body = "A" * 4105
 
     async def _fake_get_pull_request(owner, repo, pull_number):
@@ -58,7 +72,8 @@ async def test_github_get_pr_quotes_and_truncates_body(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_github_get_pr_file_patch_formats_patch(monkeypatch):
+async def test_github_get_pr_file_patch_formats_patch(monkeypatch, github_modules):
+    _, github_api = github_modules
     async def _fake_get_pr_files(owner, repo, pull_number, page=1, per_page=100):
         return [
             {
@@ -81,7 +96,8 @@ async def test_github_get_pr_file_patch_formats_patch(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_github_get_pr_file_patch_returns_error_when_not_found(monkeypatch):
+async def test_github_get_pr_file_patch_returns_error_when_not_found(monkeypatch, github_modules):
+    _, github_api = github_modules
     async def _fake_get_pr_files(owner, repo, pull_number, page=1, per_page=100):
         return [{"filename": "src/other.py", "status": "modified", "additions": 1, "deletions": 0}]
 
@@ -92,7 +108,8 @@ async def test_github_get_pr_file_patch_returns_error_when_not_found(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_github_get_pr_file_patch_searches_paginated_files(monkeypatch):
+async def test_github_get_pr_file_patch_searches_paginated_files(monkeypatch, github_modules):
+    _, github_api = github_modules
     calls = []
 
     async def _fake_get_pr_files(owner, repo, pull_number, page=1, per_page=100):
@@ -110,7 +127,8 @@ async def test_github_get_pr_file_patch_searches_paginated_files(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_github_get_pr_file_patch_uses_robust_markdown_fence(monkeypatch):
+async def test_github_get_pr_file_patch_uses_robust_markdown_fence(monkeypatch, github_modules):
+    _, github_api = github_modules
     async def _fake_get_pr_files(owner, repo, pull_number, page=1, per_page=100):
         return [
             {
@@ -130,7 +148,8 @@ async def test_github_get_pr_file_patch_uses_robust_markdown_fence(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_channel_get_pr_files_passes_pagination_params(monkeypatch):
+async def test_channel_get_pr_files_passes_pagination_params(monkeypatch, github_modules):
+    _, github_api = github_modules
     captured = {}
 
     async def _fake_request(method, endpoint, **kwargs):
@@ -148,7 +167,8 @@ async def test_channel_get_pr_files_passes_pagination_params(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_github_get_pr_reraises_cancelled_error(monkeypatch):
+async def test_github_get_pr_reraises_cancelled_error(monkeypatch, github_modules):
+    _, github_api = github_modules
     async def _fake_get_pull_request(owner, repo, pull_number):
         raise asyncio.CancelledError()
 
@@ -159,7 +179,8 @@ async def test_github_get_pr_reraises_cancelled_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_github_get_pr_file_patch_reraises_cancelled_error(monkeypatch):
+async def test_github_get_pr_file_patch_reraises_cancelled_error(monkeypatch, github_modules):
+    _, github_api = github_modules
     async def _fake_get_pr_files(owner, repo, pull_number, page=1, per_page=100):
         raise asyncio.CancelledError()
 
@@ -170,7 +191,8 @@ async def test_github_get_pr_file_patch_reraises_cancelled_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_github_wrapper_get_pr_file_patch_reraises_cancelled_error(monkeypatch):
+async def test_github_wrapper_get_pr_file_patch_reraises_cancelled_error(monkeypatch, github_modules):
+    github_module, _ = github_modules
     async def _fake_api_patch(owner, repo, pull_number, path):
         raise asyncio.CancelledError()
 
@@ -181,7 +203,8 @@ async def test_github_wrapper_get_pr_file_patch_reraises_cancelled_error(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_github_wrapper_get_pr_reraises_cancelled_error(monkeypatch):
+async def test_github_wrapper_get_pr_reraises_cancelled_error(monkeypatch, github_modules):
+    github_module, _ = github_modules
     async def _fake_api_get_pr(owner, repo, pull_number):
         raise asyncio.CancelledError()
 
