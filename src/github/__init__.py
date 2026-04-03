@@ -5,12 +5,12 @@ from typing import Optional
 from .api import (
     GitHubChannel as GitHubClient,
     github_channel,
+    github_get_pr as _api_github_get_pr,
+    github_get_pr_file_patch as _api_github_get_pr_file_patch,
     github_get_issue,
-    github_get_pr,
     github_search_issues,
     github_add_comment,
     github_get_pr_files,
-    github_get_pr_file_patch,
     github_get_pr_diff,
     github_get_pr_comments,
     github_add_pr_review_comment,
@@ -61,9 +61,7 @@ async def github_get_issue(owner: str, repo: str, issue_number: int) -> str:
 async def github_get_pr(owner: str, repo: str, pull_number: int) -> str:
     """Get GitHub PR details."""
     try:
-        from .api import github_get_pr as _github_get_pr
-
-        return await _github_get_pr(owner, repo, pull_number)
+        return await _api_github_get_pr(owner, repo, pull_number)
     except Exception as e:
         return f"Error getting PR metadata: {e}"
 
@@ -122,9 +120,7 @@ async def github_get_pr_files(owner: str, repo: str, pull_number: int) -> str:
 async def github_get_pr_file_patch(owner: str, repo: str, pull_number: int, path: str) -> str:
     """Get patch/details for a single changed file in a PR."""
     try:
-        from .api import github_get_pr_file_patch as _github_get_pr_file_patch
-
-        return await _github_get_pr_file_patch(owner, repo, pull_number, path)
+        return await _api_github_get_pr_file_patch(owner, repo, pull_number, path)
     except Exception as e:
         return f"Error getting PR file patch: {e}"
 

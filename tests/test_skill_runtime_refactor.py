@@ -976,7 +976,7 @@ def test_review_pull_request_skill_loads_from_directory_structure():
     registry.load_skills()
     skill = registry.get_skill("review-pull-request")
     assert skill is not None
-    assert skill.source_file.endswith("skills/review-pull-request/skill.md")
+    assert Path(skill.source_file).as_posix().endswith("skills/review-pull-request/skill.md")
     assert "github_get_pr" in skill.tools
     assert "github_get_pr_file_patch" in skill.tools
 
