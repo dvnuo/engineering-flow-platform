@@ -1,4 +1,4 @@
-# PR Review Guidelines
+# Pull Request Review Guidelines
 
 Focus on reviewer value, not volume.
 
@@ -9,5 +9,5 @@ Focus on reviewer value, not volume.
 - Check changed tests and identify meaningful gaps (missing edge cases, error paths, migration paths).
 - Watch for backward compatibility breaks in API contracts, schema/data formats, config behavior, and automation interfaces.
 - Validate security-sensitive paths (authz/authn, secrets handling, injection risks, unsafe deserialization, privilege escalation).
-- Avoid duplicate feedback when the same issue is already present in PR comments/reviews.
+- Avoid duplicate feedback when the same issue is already present in pull request comments/reviews.
 - If no material issues exist, summarize reviewed risk areas and residual validation gaps.

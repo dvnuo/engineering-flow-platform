@@ -1,15 +1,18 @@
 ---
-name: review-pr
+name: review-pull-request
 description: Review a GitHub pull request with high-signal, actionable feedback
-version: 2.0.0
+version: 2.1.0
 owner: devops-team
 triggers:
+  - review pull request
   - review pr
   - code review
   - analyze pull request
+  - /skill review-pull-request
   - /skill review-pr
+  - /review-pull-request
   - /review-pr
-  - review pull request
+  - check pull request
   - check pr
 tools:
   - github_get_pr
@@ -23,19 +26,19 @@ tools:
 output_format: markdown
 ---
 
-# Skill: review-pr
+# Skill: review-pull-request
 
 Provide a GitHub Copilot-style pull request review while staying concise and high signal.
 
-## Review strategy
+## Pull request review strategy
 
 - Operate in review/comment mode only. Do **not** decide approval state (no "Approve" / "Request changes").
-- Start by fetching PR metadata with `github_get_pr`.
+- Start by fetching pull request metadata with `github_get_pr`.
 - Inspect changed files before commenting: use `github_get_pr_files`, then `github_get_pr_file_patch` for file-level analysis, and `github_get_pr_diff` when broader context is required.
 - Check prior discussion first (`github_get_pr_comments`, `github_list_pr_reviews`) and avoid repeating concerns that are already raised.
 - Prefer fewer, high-impact findings over many low-value comments.
 - Add inline comments only for concrete, line-anchorable issues.
-- Post final summary only after completing review analysis.
+- Post final summary only after completing pull request review analysis.
 
 ## Priorities
 
@@ -52,7 +55,7 @@ Prioritize findings in this order:
 
 Use natural markdown with this structure:
 
-## PR Summary
+## Pull Request Summary
 - Scope
 - Main modules changed
 - Risk level

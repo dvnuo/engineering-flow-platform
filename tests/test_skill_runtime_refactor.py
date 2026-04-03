@@ -971,29 +971,37 @@ def test_get_skill_prompt_includes_resolved_reference_summary(tmp_path):
     assert "Available references: playbook.md" in prompt
 
 
-def test_review_pr_skill_loads_from_directory_structure():
+def test_review_pull_request_skill_loads_from_directory_structure():
     registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
     registry.load_skills()
-    skill = registry.get_skill("review-pr")
+    skill = registry.get_skill("review-pull-request")
     assert skill is not None
-    assert skill.source_file.endswith("skills/review-pr/skill.md")
+    assert skill.source_file.endswith("skills/review-pull-request/skill.md")
     assert "github_get_pr" in skill.tools
     assert "github_get_pr_file_patch" in skill.tools
 
 
-def test_review_pr_skill_references_are_discovered():
+def test_review_pull_request_skill_references_are_discovered():
     registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
     registry.load_skills()
-    skill = registry.get_skill("review-pr")
+    skill = registry.get_skill("review-pull-request")
     refs = summarize_skill_references(skill)
-    assert any(path.endswith("review-pr-guidelines.md") for path in refs)
+    assert any(path.endswith("review-pull-request-guidelines.md") for path in refs)
     assert any(path.endswith("lang-typescript-javascript.md") for path in refs)
     assert any(path.endswith("lang-python.md") for path in refs)
 
 
-def test_review_pr_backward_compatible_trigger_invocation():
+def test_review_pull_request_backward_compatible_trigger_invocation():
     registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
     registry.load_skills()
     matches = registry.match_skill("/review-pr 123")
     assert matches
-    assert matches[0].name == "review-pr"
+    assert matches[0].name == "review-pull-request"
+
+
+def test_review_pull_request_backward_compatible_skill_command_invocation():
+    registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
+    registry.load_skills()
+    matches = registry.match_skill("/skill review-pr")
+    assert matches
+    assert matches[0].name == "review-pull-request"

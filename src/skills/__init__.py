@@ -11,7 +11,7 @@ Core Components:
 - Skill Prompt Builder: Dynamic skill injection into prompts
 
 Example Skill:
-- review-pr.skill.yaml: Reviews GitHub PRs using github tools
+- review-pull-request/skill.md: Reviews GitHub pull requests using github tools
 """
 
 from .registry import Skill, SkillRegistry, skill_registry, load_all_skills
