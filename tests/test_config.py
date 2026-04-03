@@ -154,126 +154,126 @@ class TestConfigEdgeCases:
 class TestConfigProxy:
     """Tests for proxy configuration handling."""
 
-    def test_apply_proxy_with_plain_credentials(self):
+    PROXY_ENV_KEYS = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]
+
+    def test_apply_proxy_with_plain_credentials(self, tmp_path, monkeypatch):
         """Test apply_proxy() with plain username/password credentials."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write(
-                "proxy:\n"
-                "  enabled: true\n"
-                "  url: http://proxy.example.com:8080\n"
-                "  username: user\n"
-                "  password: pass\n"
-            )
-            f.flush()
-            config = Config(f.name)
-            config.apply_proxy()
+        for key in self.PROXY_ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
 
-            expected_url = "http://user:pass@proxy.example.com:8080"
-            assert os.environ["http_proxy"] == expected_url
-            assert os.environ["https_proxy"] == expected_url
-            assert os.environ["HTTP_PROXY"] == expected_url
-            assert os.environ["HTTPS_PROXY"] == expected_url
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "proxy:\n"
+            "  enabled: true\n"
+            "  url: http://proxy.example.com:8080\n"
+            "  username: user\n"
+            "  password: pass\n"
+        )
+        config = Config(str(config_path))
+        config.apply_proxy()
 
-            os.unlink(f.name)
+        expected_url = "http://user:pass@proxy.example.com:8080"
+        assert os.environ["http_proxy"] == expected_url
+        assert os.environ["https_proxy"] == expected_url
+        assert os.environ["HTTP_PROXY"] == expected_url
+        assert os.environ["HTTPS_PROXY"] == expected_url
 
-    def test_apply_proxy_with_special_characters_in_credentials(self):
+    def test_apply_proxy_with_special_characters_in_credentials(self, tmp_path, monkeypatch):
         """Test apply_proxy() URL-encodes special characters in credentials."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write(
-                "proxy:\n"
-                "  enabled: true\n"
-                "  url: http://proxy.example.com:8080\n"
-                "  username: user@name\n"
-                "  password: p:a/s?s#%word\n"
-            )
-            f.flush()
-            config = Config(f.name)
-            config.apply_proxy()
+        for key in self.PROXY_ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
 
-            expected_url = "http://user%40name:p%3Aa%2Fs%3Fs%23%25word@proxy.example.com:8080"
-            assert os.environ["http_proxy"] == expected_url
-            assert os.environ["https_proxy"] == expected_url
-            assert os.environ["HTTP_PROXY"] == expected_url
-            assert os.environ["HTTPS_PROXY"] == expected_url
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "proxy:\n"
+            "  enabled: true\n"
+            "  url: http://proxy.example.com:8080\n"
+            "  username: user@name\n"
+            "  password: p:a/s?s#%word\n"
+        )
+        config = Config(str(config_path))
+        config.apply_proxy()
 
-            os.unlink(f.name)
+        expected_url = "http://user%40name:p%3Aa%2Fs%3Fs%23%25word@proxy.example.com:8080"
+        assert os.environ["http_proxy"] == expected_url
+        assert os.environ["https_proxy"] == expected_url
+        assert os.environ["HTTP_PROXY"] == expected_url
+        assert os.environ["HTTPS_PROXY"] == expected_url
 
-    def test_apply_proxy_disabled_clears_proxy_env_when_proxy_section_exists(self):
+    def test_apply_proxy_disabled_clears_proxy_env_when_proxy_section_exists(self, tmp_path, monkeypatch):
         """Test disabled proxy clears proxy-related env vars when section exists."""
-        for var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]:
-            os.environ[var] = "http://should-be-cleared"
+        for key in self.PROXY_ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
+            monkeypatch.setenv(key, "http://should-be-cleared")
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write(
-                "proxy:\n"
-                "  enabled: false\n"
-                "  url: http://proxy.example.com:8080\n"
-            )
-            f.flush()
-            config = Config(f.name)
-            config.apply_proxy()
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "proxy:\n"
+            "  enabled: false\n"
+            "  url: http://proxy.example.com:8080\n"
+        )
+        config = Config(str(config_path))
+        config.apply_proxy()
 
-            for var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"]:
-                assert var not in os.environ
+        for key in self.PROXY_ENV_KEYS:
+            assert key not in os.environ
 
-            os.unlink(f.name)
-
-    def test_apply_proxy_ipv6_host_preserves_brackets(self):
+    def test_apply_proxy_ipv6_host_preserves_brackets(self, tmp_path, monkeypatch):
         """Test apply_proxy() preserves brackets for IPv6 proxy hosts."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write(
-                "proxy:\n"
-                "  enabled: true\n"
-                "  url: http://[2001:db8::1]:8080\n"
-                "  username: user\n"
-                "  password: pass\n"
-            )
-            f.flush()
-            config = Config(f.name)
-            config.apply_proxy()
+        for key in self.PROXY_ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
 
-            expected_url = "http://user:pass@[2001:db8::1]:8080"
-            assert os.environ["http_proxy"] == expected_url
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "proxy:\n"
+            "  enabled: true\n"
+            "  url: http://[2001:db8::1]:8080\n"
+            "  username: user\n"
+            "  password: pass\n"
+        )
+        config = Config(str(config_path))
+        config.apply_proxy()
 
-            os.unlink(f.name)
+        expected_url = "http://user:pass@[2001:db8::1]:8080"
+        assert os.environ["http_proxy"] == expected_url
 
-    def test_apply_proxy_replaces_existing_userinfo(self):
+    def test_apply_proxy_replaces_existing_userinfo(self, tmp_path, monkeypatch):
         """Test apply_proxy() replaces existing URL userinfo with configured credentials."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write(
-                "proxy:\n"
-                "  enabled: true\n"
-                "  url: http://olduser:oldpass@proxy.example.com:8080\n"
-                "  username: newuser\n"
-                "  password: newpass\n"
-            )
-            f.flush()
-            config = Config(f.name)
-            config.apply_proxy()
+        for key in self.PROXY_ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
 
-            expected_url = "http://newuser:newpass@proxy.example.com:8080"
-            assert os.environ["http_proxy"] == expected_url
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "proxy:\n"
+            "  enabled: true\n"
+            "  url: http://olduser:oldpass@proxy.example.com:8080\n"
+            "  username: newuser\n"
+            "  password: newpass\n"
+        )
+        config = Config(str(config_path))
+        config.apply_proxy()
 
-            os.unlink(f.name)
+        expected_url = "http://newuser:newpass@proxy.example.com:8080"
+        assert os.environ["http_proxy"] == expected_url
 
-    def test_apply_proxy_malformed_or_schemeless_url_not_rewritten_to_none(self):
+    def test_apply_proxy_malformed_or_schemeless_url_not_rewritten_to_none(self, tmp_path, monkeypatch):
         """Test malformed/scheme-less proxy URLs are not rewritten to include @None."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write(
-                "proxy:\n"
-                "  enabled: true\n"
-                "  url: proxy.example.com:8080\n"
-                "  username: user\n"
-                "  password: pass\n"
-            )
-            f.flush()
-            config = Config(f.name)
-            config.apply_proxy()
+        for key in self.PROXY_ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
 
-            assert os.environ["http_proxy"] == "proxy.example.com:8080"
-            assert "@None" not in os.environ["http_proxy"]
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "proxy:\n"
+            "  enabled: true\n"
+            "  url: proxy.example.com:8080\n"
+            "  username: user\n"
+            "  password: pass\n"
+        )
+        config = Config(str(config_path))
+        config.apply_proxy()
 
-            os.unlink(f.name)
+        assert os.environ["http_proxy"] == "proxy.example.com:8080"
+        assert "@None" not in os.environ["http_proxy"]
 
 
 if __name__ == "__main__":
