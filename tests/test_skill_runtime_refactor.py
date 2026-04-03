@@ -20,6 +20,9 @@ from src.skills.runtime import (
     summarize_skill_references,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CREATE_PULL_REQUEST_SKILL_PATH = REPO_ROOT / "skills" / "create-pull-request" / "skill.md"
+
 
 class _Tracer:
     def start_execution(self, **kwargs):
@@ -173,6 +176,35 @@ Body
     assert frontmatter == {}
     assert body.strip() == "Body"
     assert "Failed to parse skill markdown frontmatter" in caplog.text
+
+
+def test_create_pull_request_skill_frontmatter_shape():
+    registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
+    skill = registry._load_skill_file(CREATE_PULL_REQUEST_SKILL_PATH)
+    assert skill is not None
+    assert skill.name == "create-pull-request"
+    assert set(skill.tools) == {
+        "run_command",
+        "github_get_default_branch",
+        "github_create_pull_request",
+    }
+    assert "run_command" in skill.task_tools
+    assert "ref-template.md" in skill.references
+
+
+def test_create_pull_request_runtime_config_contains_expected_blocks():
+    registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
+    skill = registry._load_skill_file(CREATE_PULL_REQUEST_SKILL_PATH)
+    runtime_config = build_skill_runtime_config(skill)
+
+    assert runtime_config.allowed_tools_set == {
+        "run_command",
+        "github_get_default_branch",
+        "github_create_pull_request",
+    }
+    assert "ref-template.md" in runtime_config.prompt_blocks.references_summary
+    instructions = runtime_config.prompt_blocks.developer_instructions
+    assert ("STEP 1" in instructions) or ("Phase 1" in instructions)
 
 
 def test_prompt_layer_assembly_and_reference_context():
