@@ -732,6 +732,83 @@ async def github_get_pr_files(owner: str, repo: str, pull_number: int) -> str:
         return f"Error getting PR files: {e}"
 
 
+async def github_get_pr(owner: str, repo: str, pull_number: int) -> str:
+    """Get compact pull request metadata."""
+    try:
+        pr = await github_channel.get_pull_request(owner, repo, pull_number)
+        title = pr.get("title", "Untitled")
+        body = pr.get("body", "")
+        state = pr.get("state", "unknown")
+        draft = bool(pr.get("draft", False))
+        author = pr.get("user", {}).get("login", "unknown")
+        base_branch = pr.get("base", {}).get("ref", "unknown")
+        head_branch = pr.get("head", {}).get("ref", "unknown")
+        mergeable = pr.get("mergeable")
+        changed_files = pr.get("changed_files", 0)
+        additions = pr.get("additions", 0)
+        deletions = pr.get("deletions", 0)
+        latest_commit_sha = pr.get("head", {}).get("sha", "")
+        mergeable_text = "unknown" if mergeable is None else str(bool(mergeable)).lower()
+
+        lines = [
+            f"**PR {owner}/{repo}#{pull_number}: {title}**",
+            f"- state: {state}",
+            f"- draft: {str(draft).lower()}",
+            f"- author: {author}",
+            f"- base: {base_branch}",
+            f"- head: {head_branch}",
+            f"- mergeable: {mergeable_text}",
+            f"- changed_files: {changed_files}",
+            f"- additions: {additions}",
+            f"- deletions: {deletions}",
+        ]
+        if latest_commit_sha:
+            lines.append(f"- latest_commit_sha: {latest_commit_sha}")
+        if body:
+            lines.extend(["", "**Body:**", body])
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error getting PR metadata: {e}"
+
+
+async def github_get_pr_file_patch(owner: str, repo: str, pull_number: int, path: str) -> str:
+    """Get patch/details for a single changed file in a PR."""
+    try:
+        result = await github_channel.get_pr_files(owner, repo, pull_number)
+        files = result if isinstance(result, list) else result.get("files", [])
+        target = None
+        for item in files:
+            if item.get("filename", "") == path:
+                target = item
+                break
+
+        if target is None:
+            return f"File `{path}` not found in PR #{pull_number}"
+
+        filename = target.get("filename", path)
+        status = target.get("status", "modified")
+        additions = target.get("additions", 0)
+        deletions = target.get("deletions", 0)
+        patch = target.get("patch", "")
+
+        if patch and len(patch) > 12000:
+            patch = patch[:12000] + f"\n\n... (truncated, total {len(patch)} chars)"
+
+        lines = [
+            f"**PR #{pull_number} File Patch: `{filename}`**",
+            f"- status: {status}",
+            f"- additions: {additions}",
+            f"- deletions: {deletions}",
+        ]
+        if patch:
+            lines.extend(["", "```diff", patch, "```"])
+        else:
+            lines.append("- patch: (not available)")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error getting PR file patch: {e}"
+
+
 async def github_get_pr_diff(owner: str, repo: str, pull_number: int) -> str:
     """Get the diff of a PR."""
     try:
