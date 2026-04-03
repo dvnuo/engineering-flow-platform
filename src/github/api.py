@@ -41,6 +41,7 @@ RATE_LIMIT_RETRIES = 5
 INITIAL_BACKOFF = 1.0  # seconds
 MAX_BACKOFF = 60.0  # seconds
 MAX_PR_BODY_CHARS = 4000
+MAX_PR_FILE_PATCH_CHARS = 12000
 
 
 def _is_debug_enabled() -> bool:
@@ -825,8 +826,8 @@ async def github_get_pr_file_patch(owner: str, repo: str, pull_number: int, path
         deletions = target.get("deletions", 0)
         patch = target.get("patch", "")
 
-        if patch and len(patch) > 12000:
-            patch = patch[:12000] + f"\n\n... (truncated, total {len(patch)} chars)"
+        if patch and len(patch) > MAX_PR_FILE_PATCH_CHARS:
+            patch = patch[:MAX_PR_FILE_PATCH_CHARS] + f"\n\n... (truncated, total {len(patch)} chars)"
 
         lines = [
             f"**PR #{pull_number} File Patch: `{filename}`**",

@@ -238,3 +238,16 @@ async def test_github_get_pr_file_patch_dispatch_does_not_fail_on_error_word_in_
 
     result = await execute_tool("github_get_pr_file_patch", owner="acme", repo="repo", pull_number=1, path="x")
     assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_github_get_pr_files_dispatch_does_not_fail_on_error_word_in_content(monkeypatch):
+    from src import execute_tool
+
+    async def fake_github_get_pr_files(owner, repo, pull_number):
+        return "**Files Changed** (1):\n- `x.py` [modified] +1 -0\n\nError handling improvements included."
+
+    monkeypatch.setattr("src.github.github_get_pr_files", fake_github_get_pr_files)
+
+    result = await execute_tool("github_get_pr_files", owner="acme", repo="repo", pull_number=1)
+    assert result.success is True

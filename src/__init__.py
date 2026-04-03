@@ -369,7 +369,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         repo = kwargs.get("repo", "")
         pull_number = kwargs.get("pull_number", 0)
         result = await github_module.github_get_pr_files(owner, repo, pull_number)
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
 
     elif name == "github_get_pr_file_patch":
         owner = kwargs.get("owner", "")
