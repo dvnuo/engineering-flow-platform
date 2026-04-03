@@ -10,7 +10,8 @@ Providers:
 Debug Logging:
 - Enable with log_level: DEBUG in config.yaml
 - Logs: LLM requests, responses, reasoning, tool calls
-- Complete input/output when debug is enabled (no truncation)
+- Debug output uses sanitized previews (redacted + truncated as needed),
+  not full raw request/response bodies
 """
 
 import asyncio
@@ -53,7 +54,7 @@ _HTTPX_TRACE_ENABLED = None
 
 # Debug logging is enabled when logger.level is DEBUG
 # Set log_level: DEBUG in config.yaml or use --debug flag
-# When DEBUG, complete input/output is logged (no truncation)
+# When DEBUG, verbose diagnostics are logged with redacted/truncated previews.
 
 def _setup_httpx_logging():
     """Configure httpx logging based on debug settings."""

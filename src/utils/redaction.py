@@ -93,13 +93,17 @@ def redact_text(text: str) -> str:
     return value
 
 
+def _redact_binary_value(value: bytes | bytearray) -> str:
+    return f"[{type(value).__name__} len={len(value)}]"
+
+
 def _redact_value_internal(value: Any, *, seen: set[int], depth: int, max_depth: int) -> Any:
     if depth > max_depth:
         return REDACTED
     if isinstance(value, str):
         return redact_text(value)
     if isinstance(value, (bytes, bytearray)):
-        return value
+        return _redact_binary_value(value)
 
     is_container = isinstance(value, (Mapping, Sequence, AbstractSet)) and not isinstance(value, (str, bytes, bytearray))
     if is_container:

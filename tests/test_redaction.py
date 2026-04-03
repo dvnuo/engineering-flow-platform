@@ -125,3 +125,16 @@ def test_cycle_is_redacted_safely():
     out = redact_value(data)
     assert out["password"] == "***REDACTED***"
     assert out["self"] == "***REDACTED***"
+
+
+def test_safe_preview_redacts_binary_values_without_exposing_contents():
+    bytes_preview = safe_preview(b"password=secret access_token=abc123", limit=200)
+    bytearray_preview = safe_preview(bytearray(b"password=secret access_token=abc123"), limit=200)
+
+    assert "secret" not in bytes_preview
+    assert "abc123" not in bytes_preview
+    assert "[bytes len=" in bytes_preview
+
+    assert "secret" not in bytearray_preview
+    assert "abc123" not in bytearray_preview
+    assert "[bytearray len=" in bytearray_preview
