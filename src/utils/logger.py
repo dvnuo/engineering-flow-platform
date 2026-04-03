@@ -18,7 +18,7 @@ from typing import Optional, Dict, Any
 import json
 import traceback
 
-from src.utils.redaction import redact_text, redact_value, safe_preview
+from src.utils.redaction import redact_text, redact_value, safe_preview, safe_log_field
 
 
 # Custom log format with detailed info
@@ -118,7 +118,7 @@ class EnhancedLogger:
     def _format_message(self, message: str, **kwargs) -> str:
         """Format message with context."""
         if kwargs:
-            context = " | ".join(f"{k}={safe_preview(v, 120)}" for k, v in kwargs.items())
+            context = " | ".join(f"{k}={safe_log_field(v, 120)}" for k, v in kwargs.items())
             return f"{message} | {context}"
         return message
     

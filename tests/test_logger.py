@@ -63,6 +63,17 @@ class TestEnhancedLogger:
         assert "user=test_user" in result
         assert "action=login" in result
 
+    def test_format_message_kwargs_control_characters_sanitized(self):
+        """Context values should be safe for single-line logs."""
+        logger = EnhancedLogger("test")
+        result = logger._format_message("hello", user="abc\nx\r\ty")
+        assert "\n" not in result
+        assert "\r" not in result
+        assert "\t" not in result
+        assert "\\n" in result
+        assert "\\r" in result
+        assert "\\t" in result
+
     def test_get_logger(self):
         """Test get_logger convenience function."""
         logger = get_logger("test_module")

@@ -1914,7 +1914,7 @@ You have access to the following tools. When a user asks you to do something tha
                 logger.info(f"[SkillMode] [TOOL_FEEDBACK] Added to input_items, output length={len(output_text)}, preview={safe_preview(output_text, 300)}")
                 
                 # Log tool call for skill mode
-                tracer.log_tool_call(tool_name, safe_preview(args_str, 500), safe_preview(output_text, 500))
+                tracer.log_tool_call(tool_name, redact_value(normalized_args), safe_preview(output_text, 500))
                 
                 if not output_text.startswith("Error:"):
                     readonly_markers = ("get", "list", "query", "search", "fetch", "read", "issue", "pr", "file")
