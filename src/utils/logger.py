@@ -18,6 +18,8 @@ from typing import Optional, Dict, Any
 import json
 import traceback
 
+from src.utils.redaction import redact_text, redact_value, safe_preview
+
 
 # Custom log format with detailed info
 DEFAULT_FORMAT = "%(asctime)s | %(levelname)-8s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s"
@@ -25,6 +27,26 @@ DEFAULT_FORMAT = "%(asctime)s | %(levelname)-8s | %(filename)s:%(lineno)d | %(fu
 # Structured log format (JSON)
 STRUCTURED_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s"
 
+
+
+
+class RedactingFilter(logging.Filter):
+    """Log filter that redacts sensitive values in messages and args."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = redact_text(record.msg)
+        else:
+            record.msg = redact_value(record.msg)
+
+        if record.args:
+            if isinstance(record.args, dict):
+                record.args = redact_value(record.args)
+            elif isinstance(record.args, tuple):
+                record.args = tuple(redact_value(arg) for arg in record.args)
+            else:
+                record.args = redact_value(record.args)
+        return True
 
 class StructuredLogger:
     """Structured logger that outputs JSON logs."""
@@ -79,7 +101,7 @@ class EnhancedLogger:
     def _format_message(self, message: str, **kwargs) -> str:
         """Format message with context."""
         if kwargs:
-            context = " | ".join(f"{k}={v}" for k, v in kwargs.items())
+            context = " | ".join(f"{k}={safe_preview(v, 120)}" for k, v in kwargs.items())
             return f"{message} | {context}"
         return message
     
@@ -112,18 +134,18 @@ class EnhancedLogger:
         """Log function call with arguments."""
         msg = f"FUNC_CALL: {func_name}"
         if args:
-            msg += f" | args={args}"
+            msg += f" | args={safe_preview(args, 200)}"
         if kwargs:
-            msg += f" | kwargs={kwargs}"
+            msg += f" | kwargs={safe_preview(kwargs, 200)}"
         self.info(msg)
     
     def log_result(self, func_name: str, result: Any = None, error: str = None):
         """Log function result."""
         msg = f"FUNC_RESULT: {func_name}"
         if result is not None:
-            msg += f" | result={result}"
+            msg += f" | result={safe_preview(result, 200)}"
         if error:
-            msg += f" | error={error}"
+            msg += f" | error={safe_preview(error, 200)}"
         if error:
             self.error(msg)
         else:
@@ -176,6 +198,7 @@ def setup_logging(
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(log_level)
         console_handler.setFormatter(formatter)
+        console_handler.addFilter(RedactingFilter())
         root_logger.addHandler(console_handler)
     
     # File handler with rotation
@@ -188,6 +211,7 @@ def setup_logging(
     )
     file_handler.setLevel(log_level)
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(RedactingFilter())
     root_logger.addHandler(file_handler)
     
     # Error-only file handler (only ERROR and above)
@@ -200,6 +224,7 @@ def setup_logging(
     )
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(formatter)
+    error_handler.addFilter(RedactingFilter())
     root_logger.addHandler(error_handler)
     
     # Log startup info

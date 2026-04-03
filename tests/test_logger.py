@@ -35,6 +35,7 @@ from src.utils.logger import (
     quick_setup,
     DEFAULT_FORMAT,
     STRUCTURED_FORMAT,
+    RedactingFilter,
 )
 
 
@@ -273,6 +274,28 @@ class TestSetupLogging:
         )
         assert logger.level == logging.WARNING
 
+
+
+
+    def test_setup_logging_attaches_redacting_filter(self, tmp_path):
+        """All handlers should have redaction filter attached."""
+        log_dir = tmp_path / "logs"
+        logger = setup_logging(level="INFO", log_dir=str(log_dir), log_file="test.log", console=False)
+        assert logger.handlers
+        assert all(any(isinstance(f, RedactingFilter) for f in h.filters) for h in logger.handlers)
+
+
+class TestRedactionIntegration:
+    def test_log_output_is_redacted(self, capsys, tmp_path):
+        setup_logging(level="INFO", log_dir=str(tmp_path / "logs"), log_file="test.log", console=True)
+        test_logger = logging.getLogger("redact_integration")
+        test_logger.info("Authorization: Bearer supersecret token=abc password=hunter2")
+
+        captured = capsys.readouterr()
+        out = captured.out
+        assert "supersecret" not in out
+        assert "hunter2" not in out
+        assert "***REDACTED***" in out
 
 class TestQuickSetup:
     """Tests for quick_setup function."""
