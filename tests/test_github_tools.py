@@ -11,9 +11,19 @@ def _isolated_home(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def github_modules():
-    github_module = importlib.import_module("src.github")
+def github_modules(monkeypatch, tmp_path):
+    config_path = Path(tmp_path) / ".efp" / "config.yaml"
+    config_path.write_text("{}\n", encoding="utf-8")
+
+    config_module = importlib.import_module("src.config")
+    config_module = importlib.reload(config_module)
+    if hasattr(config_module, "config"):
+        monkeypatch.setattr(config_module.config, "config_path", config_path, raising=False)
+
     github_api = importlib.import_module("src.github.api")
+    github_api = importlib.reload(github_api)
+    github_module = importlib.import_module("src.github")
+    github_module = importlib.reload(github_module)
     return github_module, github_api
 
 
