@@ -410,10 +410,12 @@ class Config:
             password = proxy_config.get("password")
             if username and password:
                 # Parse existing URL and insert credentials
-                from urllib.parse import urlparse, urlunparse
+                from urllib.parse import quote, urlparse, urlunparse
                 parsed = urlparse(url)
                 # Insert credentials into netloc
-                netloc = f"{username}:{password}@{parsed.hostname}"
+                encoded_username = quote(username, safe="")
+                encoded_password = quote(password, safe="")
+                netloc = f"{encoded_username}:{encoded_password}@{parsed.hostname}"
                 if parsed.port:
                     netloc += f":{parsed.port}"
                 url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
