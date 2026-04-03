@@ -972,7 +972,7 @@ def test_get_skill_prompt_includes_resolved_reference_summary(tmp_path):
 
 
 def test_review_pull_request_skill_loads_from_directory_structure():
-    registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
+    registry = SkillRegistry(project_skills_dir=str(REPO_ROOT / "skills"), user_skills_dir="/nonexistent/user/skills")
     registry.load_skills()
     skill = registry.get_skill("review-pull-request")
     assert skill is not None

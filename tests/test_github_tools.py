@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 
 from src.github import api as github_api
@@ -143,3 +144,25 @@ async def test_channel_get_pr_files_passes_pagination_params(monkeypatch):
     assert captured["method"] == "GET"
     assert captured["endpoint"] == "/repos/acme/repo/pulls/99/files"
     assert captured["params"] == {"page": 3, "per_page": 50}
+
+
+@pytest.mark.asyncio
+async def test_github_get_pr_reraises_cancelled_error(monkeypatch):
+    async def _fake_get_pull_request(owner, repo, pull_number):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(github_api.github_channel, "get_pull_request", _fake_get_pull_request)
+
+    with pytest.raises(asyncio.CancelledError):
+        await github_api.github_get_pr("acme", "repo", 1)
+
+
+@pytest.mark.asyncio
+async def test_github_get_pr_file_patch_reraises_cancelled_error(monkeypatch):
+    async def _fake_get_pr_files(owner, repo, pull_number, page=1, per_page=100):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(github_api.github_channel, "get_pr_files", _fake_get_pr_files)
+
+    with pytest.raises(asyncio.CancelledError):
+        await github_api.github_get_pr_file_patch("acme", "repo", 1, "src/app.py")

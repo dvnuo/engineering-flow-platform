@@ -510,7 +510,7 @@ class GitHubChannel:
         pull_number: int,
         page: int = 1,
         per_page: int = 100,
-    ) -> Dict[str, Any]:
+    ) -> List[Dict[str, Any]]:
         """Get files changed in a pull request."""
         logger.info(f"Getting PR files {owner}/{repo}#{pull_number}")
         return await self._request(
@@ -784,6 +784,8 @@ async def github_get_pr(owner: str, repo: str, pull_number: int) -> str:
             quoted_body = "\n".join(f"> {line}" if line else ">" for line in body_display.splitlines())
             lines.extend(["", "**Body (quoted):**", quoted_body])
         return "\n".join(lines)
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         return f"Error getting PR metadata: {e}"
 
@@ -838,6 +840,8 @@ async def github_get_pr_file_patch(owner: str, repo: str, pull_number: int, path
         else:
             lines.append("- patch: (not available)")
         return "\n".join(lines)
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         return f"Error getting PR file patch: {e}"
 
