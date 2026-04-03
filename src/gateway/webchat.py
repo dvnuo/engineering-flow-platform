@@ -48,6 +48,70 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str], Optional[str]]:
+    """Resolve runtime agent identity from server-side state/config, never from client body."""
+    runtime_agent_id: Optional[str] = None
+    runtime_agent_name: Optional[str] = None
+
+    app = request.app
+
+    try:
+        global_config.reload()
+    except Exception:
+        pass
+    config_data = getattr(global_config, "_config", {}) or {}
+
+    def _cfg(path: str) -> str:
+        value = config_data
+        for part in path.split("."):
+            if not isinstance(value, dict):
+                return ""
+            value = value.get(part)
+            if value is None:
+                return ""
+        return str(value).strip()
+
+    raw_agent_id = app.get("agent_id") if hasattr(app, "get") else None
+    raw_agent_name = app.get("agent_name") if hasattr(app, "get") else None
+    if raw_agent_id:
+        runtime_agent_id = str(raw_agent_id).strip() or None
+    if raw_agent_name:
+        runtime_agent_name = str(raw_agent_name).strip() or None
+
+    raw_agent = app.get("agent") if hasattr(app, "get") else None
+    if raw_agent:
+        if isinstance(raw_agent, dict):
+            if not runtime_agent_id:
+                runtime_agent_id = str(raw_agent.get("id") or raw_agent.get("agent_id") or "").strip() or None
+            if not runtime_agent_name:
+                runtime_agent_name = str(raw_agent.get("name") or raw_agent.get("agent_name") or raw_agent.get("display_name") or "").strip() or None
+        else:
+            if not runtime_agent_id:
+                runtime_agent_id = str(getattr(raw_agent, "id", None) or getattr(raw_agent, "agent_id", None) or "").strip() or None
+            if not runtime_agent_name:
+                runtime_agent_name = str(getattr(raw_agent, "name", None) or getattr(raw_agent, "agent_name", None) or getattr(raw_agent, "display_name", None) or "").strip() or None
+
+    if not runtime_agent_name:
+        runtime_agent_name = (
+            _cfg("agent.name")
+            or _cfg("agent.display_name")
+            or _cfg("server.name")
+            or None
+        )
+
+    if not runtime_agent_id:
+        runtime_agent_id = (
+            _cfg("agent.id")
+            or _cfg("server.id")
+            or None
+        )
+
+    if not runtime_agent_name:
+        runtime_agent_name = "Assistant"
+
+    return runtime_agent_id, runtime_agent_name
+
+
 def load_template(filename: str) -> str:
     """Load HTML template from file."""
     template_path = TEMPLATE_DIR / filename
@@ -143,7 +207,16 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Get attachments from new field
         attachments = data.get('attachments', [])
-        logger.info(f"[api_chat] DEBUG: full request data: {data}")
+        portal_user_id = str(data.get("portal_user_id") or "").strip()
+        portal_user_name = str(data.get("portal_user_name") or "").strip()
+        effective_user_name = portal_user_name or "webchat-user"
+        logger.debug(
+            "[api_chat] Request summary: session_id=%s, has_message=%s, attachment_count=%d, portal_user_id_present=%s",
+            session_id,
+            bool(message),
+            len(attachments) if isinstance(attachments, list) else 0,
+            bool(portal_user_id),
+        )
         
         if not message and not attachments:
             return web.json_response({'error': 'Empty message'}, status=400)
@@ -260,11 +333,19 @@ async def api_chat(request: web.Request) -> web.Response:
         model = global_config.llm.get('model', 'gpt-5-mini')
         
         # Run agent (history is managed internally by session_manager)
-        agent = AgentCore(model=model, session_id=session_id)
+        runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
+        agent = AgentCore(
+            model=model,
+            session_id=session_id,
+            agent_id=runtime_agent_id,
+            agent_name=runtime_agent_name,
+        )
         result = await agent.process(
             message=message,
             session_id=session_id,
-            user_name="webchat-user",
+            user_name=effective_user_name,
+            portal_user_id=portal_user_id or None,
+            portal_user_name=portal_user_name or None,
             track_usage=True,
             reasoning_replay=reasoning_replay,
             attached_images=attached_images if attached_images else None,
@@ -408,6 +489,9 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         data = await request.json()
         message = (data.get('message') or '').strip()
         session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
+        portal_user_id = str(data.get("portal_user_id") or "").strip()
+        portal_user_name = str(data.get("portal_user_name") or "").strip()
+        effective_user_name = portal_user_name or "webchat-user"
         
         if not message:
             response = web.json_response({'error': 'Empty message'}, status=400)
@@ -437,13 +521,21 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         model = global_config.llm.get('model', 'gpt-5-mini')
         
         # Run agent and stream response
-        agent = AgentCore(model=model, session_id=session_id)
+        runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
+        agent = AgentCore(
+            model=model,
+            session_id=session_id,
+            agent_id=runtime_agent_id,
+            agent_name=runtime_agent_name,
+        )
         
         # Pass the queue to the agent for real-time events
         result = await agent.process(
             message=message,
             session_id=session_id,
-            user_name="webchat-user",
+            user_name=effective_user_name,
+            portal_user_id=portal_user_id or None,
+            portal_user_name=portal_user_name or None,
             track_usage=True,
             stream_callback=event_queue,
         )
