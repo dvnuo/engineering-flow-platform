@@ -10,7 +10,8 @@ Providers:
 Debug Logging:
 - Enable with log_level: DEBUG in config.yaml
 - Logs: LLM requests, responses, reasoning, tool calls
-- Complete input/output when debug is enabled (no truncation)
+- Debug output uses sanitized previews (redacted + truncated as needed),
+  not full raw request/response bodies
 """
 
 import asyncio
@@ -22,7 +23,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from src.config import config
-from src.utils.truncate import truncate, truncate_with_count
+from src.utils.redaction import redact_value, safe_preview, sanitize_exception_message
 from src.sessions.usage import usage_tracker, estimate_cost
 from .errors import (
     handle_httpx_error,
@@ -53,7 +54,7 @@ _HTTPX_TRACE_ENABLED = None
 
 # Debug logging is enabled when logger.level is DEBUG
 # Set log_level: DEBUG in config.yaml or use --debug flag
-# When DEBUG, complete input/output is logged (no truncation)
+# When DEBUG, verbose diagnostics are logged with redacted/truncated previews.
 
 def _setup_httpx_logging():
     """Configure httpx logging based on debug settings."""
@@ -120,9 +121,9 @@ def _log_request(component: str, url: str, method: str = "POST", headers: Dict =
     logger.debug(f"Method: {method}")
     logger.debug(f"URL: {url}")
     if headers:
-        logger.debug(f"Headers: {json.dumps(_sanitize_headers(headers))}")
+        logger.debug(f"Headers: {safe_preview(redact_value(_sanitize_headers(headers)), 2000)}")
     if payload:
-        logger.debug(f"Payload: {json.dumps(payload, indent=2, default=str)}")
+        logger.debug(f"Payload: {safe_preview(payload, 4000)}")
 
 
 def _log_response(component: str, status: int, body: Any = None):
@@ -132,8 +133,7 @@ def _log_response(component: str, status: int, body: Any = None):
     logger.debug(f"=== [{component}] RESPONSE ===")
     logger.debug(f"Status: {status}")
     if body:
-        body_str = json.dumps(body, indent=2, default=str) if isinstance(body, (dict, list)) else str(body)
-        logger.debug(f"Body: {body_str}")
+        logger.debug(f"Body: {safe_preview(body, 4000)}")
 
 
 def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
@@ -145,11 +145,6 @@ def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
         else:
             sanitized[k] = v
     return sanitized
-
-
-def _truncate_text(text: str, max_length: int = 200) -> str:
-    """Truncate text for logging preview (wrapper for truncate_with_count)."""
-    return truncate_with_count(text, max_length)
 
 
 
@@ -369,8 +364,7 @@ class BaseProvider:
 
                     # Debug: Log response body (truncated)
                     if _is_debug_enabled():
-                        result_str = json.dumps(result, indent=2, default=str)
-                        logger.debug(f"Body: {_truncate_text(result_str, 1000)}")
+                        logger.debug(f"Body: {safe_preview(result, 1000)}")
 
                     return result
 
@@ -379,16 +373,16 @@ class BaseProvider:
                 if _is_debug_enabled():
                     logger.debug(f"=== [LLM] ERROR ===")
                     logger.debug(f"Attempt: {attempt + 1}/{max_retries}")
-                    logger.debug(f"Error: {type(e).__name__}: {e}")
+                    logger.debug(f"Error: {type(e).__name__}: {sanitize_exception_message(e)}")
 
                 if attempt < max_retries - 1:
                     delay = retry_delay * (2 ** attempt)
-                    logger.warning(f"API error, retrying in {delay}s: {e}")
+                    logger.warning(f"API error, retrying in {delay}s: {sanitize_exception_message(e)}")
                     # Log error response body for debugging
                     if hasattr(e, 'response') and e.response is not None:
                         try:
                             error_body = e.response.text
-                            logger.warning(f"Error response: {error_body[:500]}")
+                            logger.warning(f"Error response: {safe_preview(error_body, 500)}")
                         except:
                             pass
                     await asyncio.sleep(delay)
@@ -472,11 +466,11 @@ class OpenAIProvider(BaseProvider):
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(all_messages)}")
             if system_prompt:
-                logger.debug(f"System prompt: {truncate(system_prompt, 200)}")
+                logger.debug(f"System prompt: {safe_preview(system_prompt, 200)}")
             logger.debug(f"Messages preview:")
             for i, msg in enumerate(all_messages[:5]):
                 role = msg.get("role", "unknown")
-                content = truncate(msg.get("content") or "", 100)
+                content = safe_preview(msg.get("content") or "", 100)
                 logger.debug(f"  [{i}] {role}: {content}")
             if len(all_messages) > 5:
                 logger.debug(f"  ... [{len(all_messages) - 5} more messages]")
@@ -499,7 +493,7 @@ class OpenAIProvider(BaseProvider):
             content = message.get("content") or ""
             logger.debug(f"Content length: {len(content)} chars")
             if content:
-                logger.debug(f"Content preview: {truncate(content, 200)}")
+                logger.debug(f"Content preview: {safe_preview(content, 200)}")
             else:
                 logger.debug("Content: (empty - tool call response)")
             
@@ -507,7 +501,7 @@ class OpenAIProvider(BaseProvider):
             reasoning = message.get("reasoning")
             if reasoning:
                 logger.debug(f"Reasoning length: {len(reasoning)} chars")
-                logger.debug(f"Reasoning preview: {truncate(reasoning, 200)}")
+                logger.debug(f"Reasoning preview: {safe_preview(reasoning, 200)}")
             
             tool_calls = message.get("tool_calls", [])
             logger.debug(f"Tool calls: {len(tool_calls)}")
@@ -602,12 +596,12 @@ class OpenAIProvider(BaseProvider):
             logger.debug(f"=== [LLM] RESPONSES API REQUEST ===")
             logger.debug(f"Provider: {self.name}")
             logger.debug(f"Model: {model_name}")
-            logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
+            logger.debug(f"Instructions: {safe_preview(system_prompt or '', 200)}")
             logger.debug(f"Input items count: {len(input_items)}")
 
         # Defensive check: If input_items is empty, immediately return an error to avoid Copilot API 400.
         if not input_items or not any(i.get("content") for i in input_items if isinstance(i, dict)):
-            logger.error(f"[LLM] responses() called with empty input_items, aborting Copilot API call. Payload: {{'messages': {messages}, 'input_items': {input_items}}}")
+            logger.error("[LLM] responses() called with empty input_items, aborting Copilot API call. messages=%s input_items=%s", safe_preview(messages, 300), safe_preview(input_items, 300))
             return {"error": {"message": "Input field missing for Copilot API.", "type": "bad_request", "code": "input_missing"}}
 
         # Use _call_api for centralized retry/backoff behavior
@@ -699,7 +693,7 @@ class OpenAIProvider(BaseProvider):
                         "cost_usd": estimate_cost(model_name, prompt_tokens, completion_tokens)
                     }
                 }
-            logger.error(f"[LLM] Copilot API returned empty content. Payload: {json.dumps(payload, ensure_ascii=False)} Response: {json.dumps(data, ensure_ascii=False)}")
+            logger.error("[LLM] Copilot API returned empty content. payload=%s response=%s", safe_preview(payload, 600), safe_preview(data, 600))
             return {"error": {"message": "Copilot API returned empty message. Please try rephrasing your prompt or check your input.", "type": "empty_response", "code": "empty_message"}}
 
         # Calculate usage
@@ -851,11 +845,11 @@ class GitHubCopilotProvider(BaseProvider):
             logger.debug(f"Model: {payload['model']}")
             logger.debug(f"Messages count: {len(all_messages)}")
             if system_prompt:
-                logger.debug(f"System prompt: {truncate(system_prompt, 200)}")
+                logger.debug(f"System prompt: {safe_preview(system_prompt, 200)}")
             logger.debug(f"Messages preview:")
             for i, msg in enumerate(all_messages[:5]):
                 role = msg.get("role", "unknown")
-                content = truncate(msg.get("content") or "", 100)
+                content = safe_preview(msg.get("content") or "", 100)
                 logger.debug(f"  [{i}] {role}: {content}")
             if len(all_messages) > 5:
                 logger.debug(f"  ... [{len(all_messages) - 5} more messages]")
@@ -880,14 +874,14 @@ class GitHubCopilotProvider(BaseProvider):
             content = message.get("content") or ""
             logger.debug(f"Content length: {len(content)} chars")
             if content:
-                logger.debug(f"Content preview: {truncate(content, 200)}")
+                logger.debug(f"Content preview: {safe_preview(content, 200)}")
             else:
                 logger.debug("Content: (empty - tool call response)")
             # Log reasoning if present
             reasoning = message.get("reasoning")
             if reasoning:
                 logger.debug(f"Reasoning length: {len(reasoning)} chars")
-                logger.debug(f"Reasoning preview: {truncate(reasoning, 200)}")
+                logger.debug(f"Reasoning preview: {safe_preview(reasoning, 200)}")
             tool_calls = message.get("tool_calls", [])
             logger.debug(f"Tool calls: {len(tool_calls)}")
             for tc in tool_calls:
@@ -1003,20 +997,20 @@ class GitHubCopilotProvider(BaseProvider):
         if _is_debug_enabled():
             logger.debug(f"=== [GITHUB COPILOT] RESPONSES API REQUEST ===")
             logger.debug(f"Model: {model_name}")
-            logger.debug(f"Instructions: {truncate(system_prompt or '', 200)}")
+            logger.debug(f"Instructions: {safe_preview(system_prompt or '', 200)}")
             logger.debug(f"Input messages count: {len(input_items)}")
-            logger.debug(f"Input items detail: {json.dumps(input_items, ensure_ascii=False)}")
+            logger.debug(f"Input items detail: {safe_preview(input_items, 1200)}")
 
         # Defensive check: if input_items is empty, return error immediately to avoid Copilot API 400
         if not input_items or not any(i.get("content") for i in input_items if isinstance(i, dict)):
-            logger.error(f"[LLM] responses() called with empty input_items, aborting Copilot API call. Payload: {{'messages': {messages}, 'input_items': {input_items}}}")
+            logger.error("[LLM] responses() called with empty input_items, aborting Copilot API call. messages=%s input_items=%s", safe_preview(messages, 300), safe_preview(input_items, 300))
             return {"error": {"message": "Input field missing for Copilot API.", "type": "bad_request", "code": "input_missing"}}
 
         # Use _call_api for centralized retry/backoff behavior
         data = await self._call_api("/responses", payload)
         if _is_debug_enabled():
             logger.debug(f"=== [GITHUB COPILOT] RESPONSES API RAW RESPONSE ===")
-            logger.debug(json.dumps(data, ensure_ascii=False))
+            logger.debug(safe_preview(data, 2000))
         
         # Debug: Log response (response handled inside _call_api)
         
@@ -1098,7 +1092,7 @@ class GitHubCopilotProvider(BaseProvider):
                         "cost_usd": estimate_cost(model_name, prompt_tokens, completion_tokens)
                     }
                 }
-            logger.error(f"[LLM] Copilot API returned empty content. Payload: {json.dumps(payload, ensure_ascii=False)} Response: {json.dumps(data, ensure_ascii=False)}")
+            logger.error("[LLM] Copilot API returned empty content. payload=%s response=%s", safe_preview(payload, 600), safe_preview(data, 600))
             return {"error": {"message": "Copilot API returned empty message. Please try rephrasing your prompt or check your input.", "type": "empty_response", "code": "empty_message"}}
 
         # Calculate usage
@@ -1275,7 +1269,7 @@ class ClaudeProvider(BaseProvider):
             content = parsed.get("content", "")
             tool_calls = parsed.get("tool_calls", [])
             logger.debug(f"Content length: {len(content)} chars")
-            logger.debug(f"Content preview: {_truncate_text(content, 200)}")
+            logger.debug(f"Content preview: {safe_preview(content, 200)}")
             logger.debug(f"Tool calls: {len(tool_calls)}")
             for tc in tool_calls:
                 tc_name = tc.get("function", {}).get("name", "unknown")
@@ -1451,7 +1445,7 @@ class OllamaProvider(BaseProvider):
             content = result.get("content", "")
             tool_calls = result.get("tool_calls", [])
             logger.debug(f"Content length: {len(content)} chars")
-            logger.debug(f"Content preview: {_truncate_text(content, 200)}")
+            logger.debug(f"Content preview: {safe_preview(content, 200)}")
             logger.debug(f"Tool calls: {len(tool_calls)}")
             for tc in tool_calls:
                 tc_name = tc.get("function", {}).get("name", "unknown")

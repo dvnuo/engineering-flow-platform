@@ -35,6 +35,7 @@ from src.memory.update_manager import MemoryUpdateManager
 from src.agents.thinking import ThinkLevel, normalize_think_level, format_runtime_info
 from src.config import config
 from src.utils.truncate import truncate, truncate_with_count
+from src.utils.redaction import safe_preview, redact_value, sanitize_exception_message
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
 from src.agents.executor import (
@@ -955,7 +956,7 @@ You have access to the following tools. When a user asks you to do something tha
                             text = " ".join([c.get("text", str(c)) for c in content])
                         else:
                             text = str(content)
-                        context_info.append(f"User: {text[:200]}")
+                        context_info.append(f"User: {safe_preview(text, 200)}")
             if context_info:
                 send_event("llm_thinking", {"message": " | ".join(context_info), "iteration": iteration})
             else:
@@ -1130,7 +1131,7 @@ You have access to the following tools. When a user asks you to do something tha
                     # Send actual thinking content if reasoning is available
                     if reasoning_content:
                         send_event("llm_thinking", {
-                            "message": reasoning_content[:500],  # Truncate for display
+                            "message": safe_preview(reasoning_content, 500),  # Truncate for display
                             "thinking": reasoning_content,  # Full thinking for storage
                             "iteration": iteration
                         })
@@ -1146,7 +1147,7 @@ You have access to the following tools. When a user asks you to do something tha
                     user_msg = ""
                     for item in input_items:
                         if item.get("type") == "message" and item.get("role") == "user":
-                            user_msg = item.get("content", "")[:200]
+                            user_msg = safe_preview(item.get("content", ""), 200)
                             break
                     if user_msg:
                         send_event("llm_thinking", {
@@ -1329,14 +1330,14 @@ You have access to the following tools. When a user asks you to do something tha
                             {
                                 "tool": tool_name,
                                 "call_id": call_id,
-                                "result": str(deny_result),
+                                "result": safe_preview(deny_result, 500),
                                 "success": False,
                             },
                         )
                         tracer.log_tool_call(
                             tool_name=tool_name,
-                            arguments=args,
-                            result=str(deny_result),
+                            arguments=redact_value(args),
+                            result=safe_preview(deny_result, 500),
                             success=False,
                         )
                         loop_messages.append(
@@ -1352,7 +1353,7 @@ You have access to the following tools. When a user asks you to do something tha
                             stage="post_tool",
                             session_id=session_id,
                             tool_name=tool_name,
-                            payload={"denied": True, "result": str(deny_result)},
+                            payload={"denied": True, "result": safe_preview(deny_result, 500)},
                             event_callback=send_event,
                         )
                         continue
@@ -1369,11 +1370,11 @@ You have access to the following tools. When a user asks you to do something tha
                     args = {**args, **pre_hook_effects.modified_args}
                 if pre_hook_effects.short_circuit_result is not None:
                     short_result = pre_hook_effects.short_circuit_result
-                    short_result_preview = truncate_with_count(str(short_result), 200)
+                    short_result_preview = safe_preview(short_result, 200)
                     tracer.log_tool_call(
                         tool_name=tool_name,
-                        arguments=args,
-                        result=str(short_result),
+                        arguments=redact_value(args),
+                        result=safe_preview(short_result, 500),
                         success=short_result.success,
                     )
                     loop_messages.append(
@@ -1417,7 +1418,7 @@ You have access to the following tools. When a user asks you to do something tha
                     logger.info(f"[Confirmation] Auto-confirming write operation: {tool_name}")
                 
                 # Execute the tool (task-capable tools go through task manager boundary)
-                logger.info(f"Executing tool: {tool_name} with args: {args}")
+                logger.info(f"Executing tool: {tool_name} with args: {safe_preview(args, 300)}")
                 tool_result = await run_skill_tool_with_task_boundary(
                     runtime_config=active_skill_runtime,
                     session_id=session_id,
@@ -1425,7 +1426,7 @@ You have access to the following tools. When a user asks you to do something tha
                     execute_direct=lambda tn=tool_name, tool_args=args: execute_tool_by_name(tn, **tool_args),
                     event_callback=send_event,
                 )
-                result_preview = truncate_with_count(str(tool_result), 200)
+                result_preview = safe_preview(tool_result, 200)
                 post_hook_effects = apply_skill_hooks(
                     runtime_config=active_skill_runtime,
                     stage="post_tool",
@@ -1436,11 +1437,11 @@ You have access to the following tools. When a user asks you to do something tha
                 )
                 if post_hook_effects.result_override is not None:
                     tool_result = post_hook_effects.result_override
-                    result_preview = truncate_with_count(str(tool_result), 200)
+                    result_preview = safe_preview(tool_result, 200)
                 tracer.log_tool_call(
                     tool_name=tool_name,
-                    arguments=args,
-                    result=str(tool_result),
+                    arguments=redact_value(args),
+                    result=safe_preview(tool_result, 500),
                     success=tool_result.success,
                 )
                 # Send tool result event
@@ -1479,7 +1480,7 @@ You have access to the following tools. When a user asks you to do something tha
                 # Instead, tool results stay in loop_messages for the current request's
                 # execution context and are passed directly to subsequent LLM calls.
                 
-                logger.info(f"Tool result: {truncate_with_count(str(tool_result), 200)}")
+                logger.info(f"Tool result: {safe_preview(tool_result, 200)}")
                 executed_tool_results.append((tool_name, tool_result))
 
             # Narrow passthrough shortcut for direct Jira detail retrieval requests.
@@ -1548,7 +1549,7 @@ You have access to the following tools. When a user asks you to do something tha
         tracer = get_tracer()
         
         logger.debug(f"[SkillMode] ===== _start_skill_mode BEGIN =====")
-        logger.debug(f"[SkillMode] message='{message[:200]}...'")
+        logger.debug(f"[SkillMode] message={safe_preview(message, 200)}")
         logger.debug(f"[SkillMode] session_id={session_id}, skill={skill.name if skill else None}")
         
         usage_data: Dict[str, Any] = {}
@@ -1580,10 +1581,10 @@ You have access to the following tools. When a user asks you to do something tha
 
         # Log skill mode entry
         tracer.log_skill_mode_entry(skill.name, message, session_id)
-        send_skill_event("skill_mode_start", {"skill": skill.name, "message": message[:100]})
+        send_skill_event("skill_mode_start", {"skill": skill.name, "message": safe_preview(message, 100)})
 
         # Generate initial plan (always returns 3-tuple: goal, steps, usage)
-        tracer.log_skill_mode_step("GENERATE_PLAN", "started", f"Creating plan for: {message[:50]}...")
+        tracer.log_skill_mode_step("GENERATE_PLAN", "started", f"Creating plan for: {safe_preview(message, 50)}")
         send_skill_event("skill_step", {"step": "GENERATE_PLAN", "status": "started", "detail": f"Creating plan..."})
         
         goal, steps, plan_usage = await generate_initial_skill_plan(skill, message, model=self.model)
@@ -1638,7 +1639,7 @@ You have access to the following tools. When a user asks you to do something tha
         tracer = get_tracer()
         
         logger.debug(f"[SkillMode] ===== _continue_skill_mode BEGIN =====")
-        logger.debug(f"[SkillMode] message='{message[:200]}...'")
+        logger.debug(f"[SkillMode] message={safe_preview(message, 200)}")
         logger.debug(f"[SkillMode] session_id={session_id}, skill_state keys={list(skill_state.keys()) if skill_state else None}")
         
         usage_data = usage_data or {}
@@ -1647,7 +1648,7 @@ You have access to the following tools. When a user asks you to do something tha
             """Send skill event via stream_callback if available, and also emit to event_bus for WebSocket."""
             import json
             event = json.dumps({"type": event_type, "data": data})
-            logger.debug(f"[SkillMode] [EVENT] type={event_type}, data={json.dumps(data)[:200]}")
+            logger.debug(f"[SkillMode] [EVENT] type={event_type}, data={safe_preview(data, 200)}")
             
             # Send via stream_callback (for SSE)
             if stream_callback:
@@ -1844,14 +1845,14 @@ You have access to the following tools. When a user asks you to do something tha
             function_calls = llm_result.get("function_calls", []) or llm_result.get("tool_calls", []) or []
             turn_state.has_function_calls = bool(function_calls)
 
-            logger.debug(f"[SkillMode] raw_output='{raw_output[:300]}...'")
+            logger.debug(f"[SkillMode] raw_output={safe_preview(raw_output, 300)}")
             logger.debug(f"[SkillMode] function_calls count={len(function_calls)}")
             
             # Log full response if content is empty for debugging
             if not raw_output and not function_calls:
                 logger.warning(f"[SkillMode] WARNING: LLM returned empty content AND no function_calls!")
                 logger.warning(f"[SkillMode] Full llm_result keys: {llm_result.keys() if llm_result else None}")
-                logger.warning(f"[SkillMode] llm_result: {str(llm_result)[:500]}")
+                logger.warning(f"[SkillMode] llm_result: {safe_preview(llm_result, 500)}")
 
             if not function_calls:
                 should_finalize_without_tools = True
@@ -1873,7 +1874,7 @@ You have access to the following tools. When a user asks you to do something tha
                 args_raw = function_payload.get("arguments", {}) or call.get("arguments", {})
                 args_str = args_raw if isinstance(args_raw, str) else json.dumps(args_raw, ensure_ascii=False)
 
-                logger.debug(f"[SkillMode] [TOOL_CALL] tool={tool_name}, args_str='{args_str[:200]}...'")
+                logger.debug(f"[SkillMode] [TOOL_CALL] tool={tool_name}, args={safe_preview(args_str, 200)}")
 
                 input_items.append({
                     "type": "function_call",
@@ -1882,7 +1883,7 @@ You have access to the following tools. When a user asks you to do something tha
                     "arguments": args_str,
                 })
                 
-                round_tool_calls.append((tool_name, args_str[:100]))
+                round_tool_calls.append((tool_name, safe_preview(args_str, 100)))
 
                 normalized_args = _normalize_tool_args(args_str)
                 # ===== CONFIRMATION GATE (skill-mode) =====
@@ -1894,15 +1895,15 @@ You have access to the following tools. When a user asks you to do something tha
                     turn_state.has_write_call = True
                     logger.info(f"[Confirmation][SkillMode] Tool '{tool_name}' requires confirmation, auto-confirming")
                 
-                logger.debug(f"[SkillMode] [TOOL_EXEC] Executing tool={tool_name}, parsed_args={normalized_args}")
+                logger.debug(f"[SkillMode] [TOOL_EXEC] Executing tool={tool_name}, parsed_args={safe_preview(normalized_args, 200)}")
                 executed_any_tool_this_round = True
                 try:
                     tool_result: ToolResult = await execute_tool_by_name(tool_name, **normalized_args)
                     output_text = str(tool_result)
-                    logger.debug(f"[SkillMode] [TOOL_RESULT] tool={tool_name}, result length={len(output_text)}, preview='{output_text[:200]}...'")
+                    logger.debug(f"[SkillMode] [TOOL_RESULT] tool={tool_name}, result length={len(output_text)}, preview={safe_preview(output_text, 200)}")
                 except Exception as tool_exc:
                     output_text = f"Error: Tool '{tool_name}' failed with {tool_exc}"
-                    logger.error(f"[SkillMode] [TOOL_ERROR] tool={tool_name}, error={tool_exc}")
+                    logger.error(f"[SkillMode] [TOOL_ERROR] tool={tool_name}, error={sanitize_exception_message(tool_exc)}")
 
                 input_items.append({
                     "type": "function_call_output",
@@ -1910,10 +1911,10 @@ You have access to the following tools. When a user asks you to do something tha
                     "output": output_text,
                 })
                 
-                logger.info(f"[SkillMode] [TOOL_FEEDBACK] Added to input_items, output length={len(output_text)}, first 300 chars: '{output_text[:300]}'")
+                logger.info(f"[SkillMode] [TOOL_FEEDBACK] Added to input_items, output length={len(output_text)}, preview={safe_preview(output_text, 300)}")
                 
                 # Log tool call for skill mode
-                tracer.log_tool_call(tool_name, args_str, output_text)
+                tracer.log_tool_call(tool_name, redact_value(normalized_args), safe_preview(output_text, 500))
                 
                 if not output_text.startswith("Error:"):
                     readonly_markers = ("get", "list", "query", "search", "fetch", "read", "issue", "pr", "file")
@@ -2038,7 +2039,7 @@ You have access to the following tools. When a user asks you to do something tha
             await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
         
         # Log skill mode action with raw output for debugging
-        logger.info(f"[SkillMode] Parsed action={action}, body_preview='{body[:100] if body else ''}', raw_output_preview='{raw_output[:100] if raw_output else ''}'")
+        logger.info(f"[SkillMode] Parsed action={action}, body_preview={safe_preview(body or '', 100)}, raw_output_preview={safe_preview(raw_output or '', 100)}")
         tracer.log_skill_mode_action(action, body)
 
         if action == "ask_user":
@@ -2050,12 +2051,12 @@ You have access to the following tools. When a user asks you to do something tha
             skill_session.pending_question = question
             skill_session.memory_summary = _update_skill_memory_summary(skill_session, message, question)
             tracer.log_skill_mode_step("ASK_USER", "completed", f"Question: {question[:50]}...")
-            send_skill_event("skill_step", {"step": "ASK_USER", "status": "completed", "detail": question[:200]})
+            send_skill_event("skill_step", {"step": "ASK_USER", "status": "completed", "detail": safe_preview(question, 200)})
             await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
             await session_manager.add_message(session_id, "assistant", question, extra=self._build_agent_author_extra())
             # Get events for UI
             events = tracer.get_events_for_ui(limit=10, session_id=session_id)
-            send_skill_event("skill_complete", {"reason": "ask_user", "question": question[:200]})
+            send_skill_event("skill_complete", {"reason": "ask_user", "question": safe_preview(question, 200)})
             logger.info("[SkillMode][Terminate] reason=%s", skill_session.termination_reason)
             logger.debug(f"[SkillMode] ===== _continue_skill_mode END (ASK_USER) =====")
             return {"response": question, "usage": usage_data, "events": events, "user_message_id": user_message_id}
@@ -2098,8 +2099,8 @@ You have access to the following tools. When a user asks you to do something tha
             }
             tracer.log_skill_mode_step("FINISH", "completed", f"Result: {final_text[:50]}...")
             tracer.log_skill_mode_complete(final_text)
-            send_skill_event("skill_step", {"step": "FINISH", "status": "completed", "detail": final_text[:200]})
-            send_skill_event("skill_complete", {"reason": "finish", "result": final_text[:200]})
+            send_skill_event("skill_step", {"step": "FINISH", "status": "completed", "detail": safe_preview(final_text, 200)})
+            send_skill_event("skill_complete", {"reason": "finish", "result": safe_preview(final_text, 200)})
             await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
             await session_manager.set_active_skill_session(session_id, None)
             finish_extra = self._build_agent_author_extra()
@@ -2120,7 +2121,7 @@ You have access to the following tools. When a user asks you to do something tha
         was_waiting_user = skill_session.status == "waiting_user"
         result_text = body.strip() if body.strip() else raw_output
         tracer.log_skill_mode_step("EXECUTE", "completed", f"Result preview: {result_text[:50]}...")
-        send_skill_event("skill_step", {"step": "EXECUTE", "status": "completed", "detail": result_text[:200]})
+        send_skill_event("skill_step", {"step": "EXECUTE", "status": "completed", "detail": safe_preview(result_text, 200)})
         if len(result_text) < 30:
             result_text = f"{result_text}\n\n(Continuing skill execution, will ask if more info is needed.)"
 

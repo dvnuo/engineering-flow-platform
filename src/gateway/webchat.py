@@ -20,6 +20,7 @@ from src.utils.file_parser.storage import init_storage, _file_metadata, StoredFi
 init_storage()
 from src.utils.file_parser import parse_file
 from src.utils.truncate import truncate
+from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception_message
 
 
 from ruamel.yaml import YAML
@@ -263,7 +264,7 @@ async def api_chat(request: web.Request) -> web.Response:
             except StoredFileNotFoundError:
                 logger.warning(f"[api_chat] File {file_id} not found")
             except Exception as e:
-                logger.warning(f"[api_chat] Failed to process file {file_id}: {e}")
+                logger.warning(f"[api_chat] Failed to process file {safe_preview(file_id, 80)}: {sanitize_exception_message(e)}")
             return False
         
         # 1. Parse @file_ references from message (backward compatibility)
@@ -284,9 +285,9 @@ async def api_chat(request: web.Request) -> web.Response:
                         if fid:
                             await process_file(fid)
                     except ValueError as ve:
-                        logger.warning(f"[api_chat] Prefix lookup failed: {ve}")
+                        logger.warning(f"[api_chat] Prefix lookup failed: {sanitize_exception_message(ve)}")
         except Exception as e:
-            logger.warning(f"[api_chat] @file_ parse error: {e}")
+            logger.warning(f"[api_chat] @file_ parse error: {sanitize_exception_message(e)}")
         
         # 2. Process attachments from new attachments field
         if attachments and isinstance(attachments, list):
@@ -308,8 +309,7 @@ async def api_chat(request: web.Request) -> web.Response:
 
         # Inject file context if user has uploaded files
         original_msg_for_history = message if message.strip() else ("[image]" if attached_images else "")
-        logger.info(f"[api_chat] DEBUG: original_msg_for_history='{original_msg_for_history}', attached_images={len(attached_images) if attached_images else 0}")
-        logger.info(f"[api_chat] DEBUG: message to Copilot API: '{message}'")
+        logger.info("[api_chat] Message summary: session_id=%s attached_images=%d message_length=%d preview=%s", safe_log_field(session_id, 120), len(attached_images) if attached_images else 0, len(original_msg_for_history), safe_preview(original_msg_for_history, 120))
         original_message = message
         try:
             enhanced_message, budget_status, citations = inject_context(
@@ -324,7 +324,7 @@ async def api_chat(request: web.Request) -> web.Response:
                 # Attach citations to request for response
                 request['file_citations'] = citations
         except Exception as e:
-            logger.warning(f"[api_chat] File context injection failed: {e}")
+            logger.warning(f"[api_chat] File context injection failed: {sanitize_exception_message(e)}")
             # Continue without file context if injection fails
         # Revalidate message is not empty to prevent downstream LLM input from being empty
         if not message or not message.strip():
@@ -455,8 +455,8 @@ async def api_chat(request: web.Request) -> web.Response:
         error_details = extract_error_details(e)
         
         # Log full error details
-        logger.error(f"Chat error: {e}")
-        logger.error(f"Error details: {json.dumps(error_details, indent=2)}")
+        logger.error(f"Chat error: {sanitize_exception_message(e)}")
+        logger.error(f"Error details: {safe_preview(error_details, 800)}")
         
         # Return user-friendly error message with optional details
         user_message = str(e)

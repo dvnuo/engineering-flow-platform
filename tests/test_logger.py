@@ -1,6 +1,7 @@
 """Tests for logger utilities."""
 
 import logging
+import io
 import pytest
 
 
@@ -35,6 +36,8 @@ from src.utils.logger import (
     quick_setup,
     DEFAULT_FORMAT,
     STRUCTURED_FORMAT,
+    RedactingFilter,
+    RedactingFormatter,
 )
 
 
@@ -59,6 +62,17 @@ class TestEnhancedLogger:
         assert "hello" in result
         assert "user=test_user" in result
         assert "action=login" in result
+
+    def test_format_message_kwargs_control_characters_sanitized(self):
+        """Context values should be safe for single-line logs."""
+        logger = EnhancedLogger("test")
+        result = logger._format_message("hello", user="abc\nx\r\ty")
+        assert "\n" not in result
+        assert "\r" not in result
+        assert "\t" not in result
+        assert "\\n" in result
+        assert "\\r" in result
+        assert "\\t" in result
 
     def test_get_logger(self):
         """Test get_logger convenience function."""
@@ -273,6 +287,149 @@ class TestSetupLogging:
         )
         assert logger.level == logging.WARNING
 
+
+
+
+    def test_setup_logging_attaches_redacting_filter(self, tmp_path):
+        """All handlers should have redaction filter attached."""
+        log_dir = tmp_path / "logs"
+        logger = setup_logging(level="INFO", log_dir=str(log_dir), log_file="test.log", console=False)
+        assert logger.handlers
+        assert all(any(isinstance(f, RedactingFilter) for f in h.filters) for h in logger.handlers)
+
+
+class TestRedactionIntegration:
+    def test_log_output_is_redacted(self, capsys, tmp_path):
+        setup_logging(level="INFO", log_dir=str(tmp_path / "logs"), log_file="test.log", console=True)
+        test_logger = logging.getLogger("redact_integration")
+        test_logger.info("Authorization: Bearer supersecret token=abc password=hunter2")
+
+        captured = capsys.readouterr()
+        out = captured.out
+        assert "supersecret" not in out
+        assert "hunter2" not in out
+        assert "***REDACTED***" in out
+
+    def test_exception_traceback_is_redacted(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("redact_exception")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.ERROR)
+
+        handler = logging.StreamHandler(stream)
+        handler.addFilter(RedactingFilter())
+        handler.setFormatter(RedactingFormatter("%(levelname)s:%(message)s"))
+        logger.addHandler(handler)
+
+        try:
+            raise ValueError("password=secret access_token=abc123")
+        except ValueError:
+            logger.exception("operation failed")
+
+        output = stream.getvalue()
+        assert "secret" not in output
+        assert "abc123" not in output
+        assert "***REDACTED***" in output
+
+    def test_structured_log_args_are_redacted(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("redact_structured_args")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+
+        handler = logging.StreamHandler(stream)
+        handler.addFilter(RedactingFilter())
+        handler.setFormatter(RedactingFormatter("%(message)s"))
+        logger.addHandler(handler)
+
+        logger.info("payload=%s", {"password": "secret", "nested": {"token": "abc123"}})
+        output = stream.getvalue()
+        assert "secret" not in output
+        assert "abc123" not in output
+        assert "***REDACTED***" in output
+
+    def test_json_string_argument_is_redacted(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("redact_json_arg")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+
+        handler = logging.StreamHandler(stream)
+        handler.addFilter(RedactingFilter())
+        handler.setFormatter(RedactingFormatter("%(message)s"))
+        logger.addHandler(handler)
+
+        logger.info("%s", '{"password": "secret"}')
+        output = stream.getvalue()
+        assert "secret" not in output
+        assert "***REDACTED***" in output
+
+    def test_filter_neutralizes_control_characters(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("redact_ctrl_chars")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+
+        handler = logging.StreamHandler(stream)
+        handler.addFilter(RedactingFilter())
+        handler.setFormatter(RedactingFormatter("%(message)s"))
+        logger.addHandler(handler)
+
+        logger.info("payload=%s", "line1\npassword=secret\tline2\r")
+        output = stream.getvalue()
+        assert "\n" not in output.rstrip("\n")
+        assert "\r" not in output
+        assert "\t" not in output
+        assert "\\n" in output
+        assert "\\r" in output
+        assert "\\t" in output
+        assert "secret" not in output
+        assert "***REDACTED***" in output
+
+    def test_structured_logger_redacts_before_json_stringify(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("structured_redaction")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+
+        handler = logging.StreamHandler(stream)
+        handler.addFilter(RedactingFilter())
+        handler.setFormatter(RedactingFormatter("%(message)s"))
+        logger.addHandler(handler)
+
+        structured = StructuredLogger("structured_redaction", logger)
+        structured.info(
+            "event",
+            details={"openaiApiKey": "sk-secret", "nested": {"githubApiToken": "ghp_abc"}},
+        )
+        output = stream.getvalue()
+        assert "sk-secret" not in output
+        assert "ghp_abc" not in output
+        assert "***REDACTED***" in output
+
+    def test_malformed_formatting_fallback_is_safe(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("redact_bad_format")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+
+        handler = logging.StreamHandler(stream)
+        handler.addFilter(RedactingFilter())
+        handler.setFormatter(RedactingFormatter("%(message)s"))
+        logger.addHandler(handler)
+
+        # Intentionally mismatched placeholders/args.
+        logger.info("payload=%s %s", {"password": "secret", "token": "abc123"})
+        output = stream.getvalue()
+        assert "secret" not in output
+        assert "abc123" not in output
+        assert "***REDACTED***" in output
 
 class TestQuickSetup:
     """Tests for quick_setup function."""
