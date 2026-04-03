@@ -363,7 +363,6 @@ class BaseProvider:
 
                     # Debug: Log response body (truncated)
                     if _is_debug_enabled():
-                        result_str = json.dumps(result, indent=2, default=str)
                         logger.debug(f"Body: {safe_preview(result, 1000)}")
 
                     return result

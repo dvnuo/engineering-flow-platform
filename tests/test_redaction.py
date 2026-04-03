@@ -1,5 +1,7 @@
 """Tests for redaction utilities."""
 
+from collections.abc import Mapping
+
 from src.utils.redaction import redact_text, redact_value, safe_preview
 
 
@@ -75,6 +77,15 @@ def test_assignment_style_patterns_are_redacted():
     assert out.count("***REDACTED***") >= 3
 
 
+def test_json_style_text_patterns_are_redacted():
+    text = '{"password": "secret", "access_token": "abc123", "secret_key": "qwe"}'
+    out = redact_text(text)
+    assert '"password": "secret"' not in out
+    assert '"access_token": "abc123"' not in out
+    assert '"secret_key": "qwe"' not in out
+    assert "***REDACTED***" in out
+
+
 class StringifiesToSecret:
     def __str__(self):
         return "access_token=abc123 password=secret"
@@ -85,3 +96,32 @@ def test_safe_preview_redacts_custom_object_stringification():
     assert "abc123" not in preview
     assert "secret" not in preview
     assert "***REDACTED***" in preview
+
+
+class MappingLike(Mapping):
+    def __init__(self, data):
+        self._data = data
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+
+def test_mapping_like_is_redacted():
+    value = MappingLike({"githubApiToken": "ghp_secret", "nested": {"password": "pw"}})
+    out = redact_value(value)
+    assert out["githubApiToken"] == "***REDACTED***"
+    assert out["nested"]["password"] == "***REDACTED***"
+
+
+def test_cycle_is_redacted_safely():
+    data = {"password": "pw"}
+    data["self"] = data
+    out = redact_value(data)
+    assert out["password"] == "***REDACTED***"
+    assert out["self"] == "***REDACTED***"

@@ -339,6 +339,23 @@ class TestRedactionIntegration:
         assert "abc123" not in output
         assert "***REDACTED***" in output
 
+    def test_json_string_argument_is_redacted(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("redact_json_arg")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+
+        handler = logging.StreamHandler(stream)
+        handler.addFilter(RedactingFilter())
+        handler.setFormatter(RedactingFormatter("%(message)s"))
+        logger.addHandler(handler)
+
+        logger.info("%s", '{"password": "secret"}')
+        output = stream.getvalue()
+        assert "secret" not in output
+        assert "***REDACTED***" in output
+
     def test_malformed_formatting_fallback_is_safe(self):
         stream = io.StringIO()
         logger = logging.getLogger("redact_bad_format")

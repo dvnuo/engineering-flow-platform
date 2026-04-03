@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from collections.abc import Mapping, Sequence, Set as AbstractSet
 from urllib.parse import urlsplit, urlunsplit
 
 from src.utils.truncate import truncate_with_count
@@ -39,6 +40,13 @@ _TEXT_PATTERNS = [
     (re.compile(r"(?i)(\baccess_token\s*[=:]\s*)([^\s&\"',;]+)"), r"\1" + REDACTED),
     (re.compile(r"(?i)(\brefresh_token\s*[=:]\s*)([^\s&\"',;]+)"), r"\1" + REDACTED),
     (re.compile(r"(?i)(\bsecret_key\s*[=:]\s*)([^\s&\"',;]+)"), r"\1" + REDACTED),
+    (re.compile(r'(?i)(["\']password["\']\s*:\s*["\'])([^"\']*)(["\'])'), r"\1" + REDACTED + r"\3"),
+    (re.compile(r'(?i)(["\']token["\']\s*:\s*["\'])([^"\']*)(["\'])'), r"\1" + REDACTED + r"\3"),
+    (re.compile(r'(?i)(["\']access_token["\']\s*:\s*["\'])([^"\']*)(["\'])'), r"\1" + REDACTED + r"\3"),
+    (re.compile(r'(?i)(["\']refresh_token["\']\s*:\s*["\'])([^"\']*)(["\'])'), r"\1" + REDACTED + r"\3"),
+    (re.compile(r'(?i)(["\']api_key["\']\s*:\s*["\'])([^"\']*)(["\'])'), r"\1" + REDACTED + r"\3"),
+    (re.compile(r'(?i)(["\']secret["\']\s*:\s*["\'])([^"\']*)(["\'])'), r"\1" + REDACTED + r"\3"),
+    (re.compile(r'(?i)(["\']secret_key["\']\s*:\s*["\'])([^"\']*)(["\'])'), r"\1" + REDACTED + r"\3"),
     (re.compile(r"\bghp_[A-Za-z0-9_]+\b"), REDACTED),
     (re.compile(r"\bgithub_pat_[A-Za-z0-9_]+\b"), REDACTED),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"), REDACTED),
@@ -85,25 +93,43 @@ def redact_text(text: str) -> str:
     return value
 
 
-def redact_value(value: Any) -> Any:
-    """Recursively redact sensitive values for common container types."""
-    if isinstance(value, dict):
-        redacted: dict[Any, Any] = {}
-        for k, v in value.items():
-            if _is_sensitive_key(k):
-                redacted[k] = REDACTED
-            else:
-                redacted[k] = redact_value(v)
-        return redacted
-    if isinstance(value, list):
-        return [redact_value(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(redact_value(item) for item in value)
-    if isinstance(value, set):
-        return {redact_value(item) for item in value}
+def _redact_value_internal(value: Any, *, seen: set[int], depth: int, max_depth: int) -> Any:
+    if depth > max_depth:
+        return REDACTED
     if isinstance(value, str):
         return redact_text(value)
+    if isinstance(value, (bytes, bytearray)):
+        return value
+
+    is_container = isinstance(value, (Mapping, Sequence, AbstractSet)) and not isinstance(value, (str, bytes, bytearray))
+    if is_container:
+        obj_id = id(value)
+        if obj_id in seen:
+            return REDACTED
+        seen.add(obj_id)
+        try:
+            if isinstance(value, Mapping):
+                redacted: dict[Any, Any] = {}
+                for k, v in value.items():
+                    if _is_sensitive_key(k):
+                        redacted[k] = REDACTED
+                    else:
+                        redacted[k] = _redact_value_internal(v, seen=seen, depth=depth + 1, max_depth=max_depth)
+                return redacted
+            if isinstance(value, tuple):
+                return tuple(_redact_value_internal(item, seen=seen, depth=depth + 1, max_depth=max_depth) for item in value)
+            if isinstance(value, Sequence):
+                return [_redact_value_internal(item, seen=seen, depth=depth + 1, max_depth=max_depth) for item in value]
+            if isinstance(value, AbstractSet):
+                return {_redact_value_internal(item, seen=seen, depth=depth + 1, max_depth=max_depth) for item in value}
+        finally:
+            seen.discard(obj_id)
     return value
+
+
+def redact_value(value: Any) -> Any:
+    """Recursively redact sensitive values for common container types."""
+    return _redact_value_internal(value, seen=set(), depth=0, max_depth=20)
 
 
 def safe_preview(value: Any, limit: int = 200) -> str:
