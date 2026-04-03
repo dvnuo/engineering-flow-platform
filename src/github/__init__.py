@@ -63,6 +63,8 @@ async def github_get_pr(owner: str, repo: str, pull_number: int) -> str:
     """Get GitHub PR details."""
     try:
         return await _api_github_get_pr(owner, repo, pull_number)
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         return f"Error getting PR metadata: {e}"
 

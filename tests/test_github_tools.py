@@ -178,3 +178,14 @@ async def test_github_wrapper_get_pr_file_patch_reraises_cancelled_error(monkeyp
 
     with pytest.raises(asyncio.CancelledError):
         await github_module.github_get_pr_file_patch("acme", "repo", 1, "src/app.py")
+
+
+@pytest.mark.asyncio
+async def test_github_wrapper_get_pr_reraises_cancelled_error(monkeypatch):
+    async def _fake_api_get_pr(owner, repo, pull_number):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(github_module, "_api_github_get_pr", _fake_api_get_pr)
+
+    with pytest.raises(asyncio.CancelledError):
+        await github_module.github_get_pr("acme", "repo", 1)
