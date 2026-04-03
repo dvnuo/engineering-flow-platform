@@ -20,7 +20,7 @@ from src.utils.file_parser.storage import init_storage, _file_metadata, StoredFi
 init_storage()
 from src.utils.file_parser import parse_file
 from src.utils.truncate import truncate
-from src.utils.redaction import safe_preview, sanitize_exception_message
+from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception_message
 
 
 from ruamel.yaml import YAML
@@ -304,7 +304,7 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Inject file context if user has uploaded files
         original_msg_for_history = message if message.strip() else ("[image]" if attached_images else "")
-        logger.info("[api_chat] Message summary: session_id=%s attached_images=%d message_length=%d preview=%s", session_id, len(attached_images) if attached_images else 0, len(original_msg_for_history), safe_preview(original_msg_for_history, 120))
+        logger.info("[api_chat] Message summary: session_id=%s attached_images=%d message_length=%d preview=%s", safe_log_field(session_id, 120), len(attached_images) if attached_images else 0, len(original_msg_for_history), safe_preview(original_msg_for_history, 120))
         original_message = message
         try:
             enhanced_message, budget_status, citations = inject_context(

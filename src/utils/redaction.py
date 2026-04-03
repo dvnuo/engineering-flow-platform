@@ -144,6 +144,13 @@ def safe_preview(value: Any, limit: int = 200) -> str:
     return truncate_with_count(text, limit)
 
 
+def safe_log_field(value: Any, limit: int = 120) -> str:
+    """Sanitize a value for safe single-line log fields."""
+    text = safe_preview(value, limit)
+    text = text.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+    return "".join(ch if ch.isprintable() else "?" for ch in text)
+
+
 def sanitize_exception_message(value: Any) -> str:
     """Sanitize arbitrary exception values for safe logging."""
     return safe_preview(value, limit=500)

@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 
-from src.utils.redaction import redact_text, redact_value, safe_preview
+from src.utils.redaction import redact_text, redact_value, safe_preview, safe_log_field
 
 
 def test_sensitive_dict_keys_are_redacted():
@@ -138,3 +138,13 @@ def test_safe_preview_redacts_binary_values_without_exposing_contents():
     assert "secret" not in bytearray_preview
     assert "abc123" not in bytearray_preview
     assert "[bytearray len=" in bytearray_preview
+
+
+def test_safe_log_field_neutralizes_control_characters():
+    out = safe_log_field("abc\nforged\rline\tend", 120)
+    assert "\n" not in out
+    assert "\r" not in out
+    assert "\t" not in out
+    assert "\\n" in out
+    assert "\\r" in out
+    assert "\\t" in out
