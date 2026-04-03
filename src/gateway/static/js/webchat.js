@@ -1382,130 +1382,133 @@
             }
 
             // Update current session ID from response and persist
-            console.log('[WebChat] data.session_id:', data.session_id);
             if (data.session_id) {
                 currentSessionId = data.session_id;
-                console.log('[WebChat] Received session_id from server:', currentSessionId);
                 localStorage.setItem(SESSION_ID_KEY, currentSessionId);
-                console.log('[WebChat] Saved sessionId to localStorage:', currentSessionId);
-                // Verify it was saved
-                const saved = localStorage.getItem(SESSION_ID_KEY);
-                console.log('[WebChat] Verified localStorage.getItem:', saved);
             }
 
-            // Fetch full session to get complete message history including tool calls/results
-            try {
-                const sessionResponse = await fetch('/api/sessions/' + encodeURIComponent(currentSessionId));
-                const sessionData = await sessionResponse.json();
+            // Helper: check if session has a final assistant message
+            function hasFinalAssistant(sessionData) {
+                if (!sessionData.messages || !sessionData.messages.length) return false;
+                // Find last assistant message
+                const lastMsg = [...sessionData.messages].reverse().find(m => m.role === 'assistant');
+                if (!lastMsg) return false;
+                // Consider non-empty content as final
+                return !!lastMsg.content && lastMsg.content.trim().length > 0;
+            }
 
-                if (sessionData.messages && sessionData.messages.length > 0) {
-                    // Clear loading message and render full history
-                    messagesContainer.innerHTML = '';
+            // Try to fetch session and poll if needed
+            let sessionData = null;
+            let pollCount = 0;
+            const maxPoll = 12; // e.g. 12*1.5s = 18s max
+            const pollInterval = 1500;
+            let gotFinal = false;
 
-                    // Render all messages from session history
-                    sessionData.messages.forEach(msg => {
-                        const role = msg.role || 'user';
-                        // Skip tool messages and placeholder content if debug is disabled
-                        if (!isDebugEnabled()) {
-                            if (role === 'tool') {
-                                return;
-                            }
-                            // Skip tool placeholder messages when debug is off
-                            if (!isDebugEnabled() && isToolPlaceholder(msg.content, role)) {
-                                return;
-                            }
-                        }
-                        const content = msg.content || '';
-                        const timestamp = msg.timestamp || msg.created_at;
-                        addMessage(role, content, timestamp, msg.tool_calls);
-                    });
+            async function pollSessionUntilFinal() {
+                while (pollCount < maxPoll) {
+                    pollCount++;
+                    const sessionResponse = await fetch('/api/sessions/' + encodeURIComponent(currentSessionId));
+                    sessionData = await sessionResponse.json();
+                    if (hasFinalAssistant(sessionData)) {
+                        gotFinal = true;
+                        break;
+                    }
+                    statusSpan.textContent = 'Waiting for final reply... (' + pollCount + ')';
+                    await new Promise(r => setTimeout(r, pollInterval));
+                }
+            }
 
-                    // Scroll to bottom after rendering all messages
-                    scrollToBottom();
+            // First try
+            const sessionResponse = await fetch('/api/sessions/' + encodeURIComponent(currentSessionId));
+            sessionData = await sessionResponse.json();
+            if (!hasFinalAssistant(sessionData)) {
+                // Assistant reply not ready, start polling
+                statusSpan.textContent = 'Waiting for final reply...';
+                await pollSessionUntilFinal();
+            } else {
+                gotFinal = true;
+            }
 
-                    // Show thinking events from session metadata
-                    const metadata = sessionData.metadata || {};
-                    const thinkingEvents = metadata.thinking_events || [];
-                    if (thinkingEvents.length > 0) {
-                        // Get the last assistant message
-                        const assistantMessages = messagesContainer.querySelectorAll('.message.assistant');
-                        if (assistantMessages.length > 0) {
-                            const lastAssistant = assistantMessages[assistantMessages.length - 1];
-                            if (!lastAssistant.classList.contains('has-thinking')) {
-                                // Create events snapshot from stored events
-                                const eventsSnapshot = thinkingEvents.map(event => ({
-                                    type: event.type,
-                                    data: event.data || {},
-                                    display: event.display || {
-                                        icon: '📌',
-                                        name: event.type,
-                                        message: JSON.stringify(event.data || {}).substring(0, 50)
-                                    }
-                                }));
-
-                                // Manually add thinking process button
-                                lastAssistant.classList.add('has-thinking');
-                                const bubble = lastAssistant.querySelector('.message-bubble');
-                                if (bubble) {
-                                    // Create toggle button
-                                    const toggleBtn = document.createElement('button');
-                                    toggleBtn.className = 'thinking-process-toggle';
-                                    const eventCount = eventsSnapshot.length;
-                                    toggleBtn.innerHTML = `
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                            <circle cx="12" cy="12" r="10"/>
-                                            <path d="M12 16v-4"/>
-                                            <path d="M12 8h.01"/>
-                                        </svg>
-                                        <span>View Thinking Process (${eventCount} steps)</span>
-                                        <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                            <polyline points="6 9 12 15 18 9"/>
-                                        </svg>
-                                    `;
-
-                                    // Create content
-                                    const processContent = document.createElement('div');
-                                    processContent.className = 'thinking-process-content';
-                                    processContent.style.display = 'none';
-
-                                    let timelineHtml = '<div class="thinking-timeline">';
-                                    eventsSnapshot.forEach((event, index) => {
-                                        const display = event.display;
-                                        const isLast = index === eventsSnapshot.length - 1;
-                                        timelineHtml += `
-                                            <div class="thinking-item ${isLast ? 'last' : ''}">
-                                                <div class="thinking-icon">${display.icon}</div>
-                                                <div class="thinking-details">
-                                                    <div class="thinking-name">${display.name}</div>
-                                                    <div class="thinking-message">${escapeHtml(display.message)}</div>
-                                                </div>
-                                            </div>`;
-                                    });
-                                    timelineHtml += '</div>';
-
-                                    processContent.innerHTML = timelineHtml;
-
-                                    // Add toggle functionality
-                                    toggleBtn.addEventListener('click', function() {
-                                        const isHidden = processContent.style.display === 'none';
-                                        processContent.style.display = isHidden ? 'block' : 'none';
-                                        toggleBtn.querySelector('.chevron').style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
-                                    });
-
-                                    bubble.appendChild(toggleBtn);
-                                    bubble.appendChild(processContent);
+            // Render messages if got final, else fallback
+            if (gotFinal && sessionData && sessionData.messages && sessionData.messages.length > 0) {
+                messagesContainer.innerHTML = '';
+                sessionData.messages.forEach(msg => {
+                    const role = msg.role || 'user';
+                    if (!isDebugEnabled()) {
+                        if (role === 'tool') return;
+                        if (!isDebugEnabled() && isToolPlaceholder(msg.content, role)) return;
+                    }
+                    const content = msg.content || '';
+                    const timestamp = msg.timestamp || msg.created_at;
+                    addMessage(role, content, timestamp, msg.tool_calls);
+                });
+                scrollToBottom();
+                // Show thinking events from session metadata
+                const metadata = sessionData.metadata || {};
+                const thinkingEvents = metadata.thinking_events || [];
+                if (thinkingEvents.length > 0) {
+                    const assistantMessages = messagesContainer.querySelectorAll('.message.assistant');
+                    if (assistantMessages.length > 0) {
+                        const lastAssistant = assistantMessages[assistantMessages.length - 1];
+                        if (!lastAssistant.classList.contains('has-thinking')) {
+                            const eventsSnapshot = thinkingEvents.map(event => ({
+                                type: event.type,
+                                data: event.data || {},
+                                display: event.display || {
+                                    icon: '📌',
+                                    name: event.type,
+                                    message: JSON.stringify(event.data || {}).substring(0, 50)
                                 }
+                            }));
+                            lastAssistant.classList.add('has-thinking');
+                            const bubble = lastAssistant.querySelector('.message-bubble');
+                            if (bubble) {
+                                const toggleBtn = document.createElement('button');
+                                toggleBtn.className = 'thinking-process-toggle';
+                                const eventCount = eventsSnapshot.length;
+                                toggleBtn.innerHTML = `
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10"/>
+                                        <path d="M12 16v-4"/>
+                                        <path d="M12 8h.01"/>
+                                    </svg>
+                                    <span>View Thinking Process (${eventCount} steps)</span>
+                                    <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <polyline points="6 9 12 15 18 9"/>
+                                    </svg>
+                                `;
+                                const processContent = document.createElement('div');
+                                processContent.className = 'thinking-process-content';
+                                processContent.style.display = 'none';
+                                let timelineHtml = '<div class="thinking-timeline">';
+                                eventsSnapshot.forEach((event, index) => {
+                                    const display = event.display;
+                                    const isLast = index === eventsSnapshot.length - 1;
+                                    timelineHtml += `
+                                        <div class="thinking-item ${isLast ? 'last' : ''}">
+                                            <div class="thinking-icon">${display.icon}</div>
+                                            <div class="thinking-details">
+                                                <div class="thinking-name">${display.name}</div>
+                                                <div class="thinking-message">${escapeHtml(display.message)}</div>
+                                            </div>
+                                        </div>`;
+                                });
+                                timelineHtml += '</div>';
+                                processContent.innerHTML = timelineHtml;
+                                toggleBtn.addEventListener('click', function() {
+                                    const isHidden = processContent.style.display === 'none';
+                                    processContent.style.display = isHidden ? 'block' : 'none';
+                                    toggleBtn.querySelector('.chevron').style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+                                });
+                                bubble.appendChild(toggleBtn);
+                                bubble.appendChild(processContent);
                             }
                         }
                     }
-                } else {
-                    // Fallback to simple response display
-                    addMessage('assistant', data.response);
                 }
-            } catch (sessionError) {
-                console.error('[WebChat] Error loading session:', sessionError);
+            } else {
                 // Fallback to simple response display
-                addMessage('assistant', data.response);
+                addMessage('assistant', data.response || '[No reply received. Please try again later.]');
             }
 
             if (data.usage) {
