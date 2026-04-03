@@ -20,6 +20,9 @@ from src.skills.runtime import (
     summarize_skill_references,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CREATE_PULL_REQUEST_SKILL_PATH = REPO_ROOT / "skills" / "create-pull-request" / "skill.md"
+
 
 class _Tracer:
     def start_execution(self, **kwargs):
@@ -177,7 +180,7 @@ Body
 
 def test_create_pull_request_skill_frontmatter_shape():
     registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
-    skill = registry._load_skill_file(Path("skills/create-pull-request/skill.md"))
+    skill = registry._load_skill_file(CREATE_PULL_REQUEST_SKILL_PATH)
     assert skill is not None
     assert skill.name == "create-pull-request"
     assert set(skill.tools) == {
@@ -191,7 +194,7 @@ def test_create_pull_request_skill_frontmatter_shape():
 
 def test_create_pull_request_runtime_config_contains_expected_blocks():
     registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
-    skill = registry._load_skill_file(Path("skills/create-pull-request/skill.md"))
+    skill = registry._load_skill_file(CREATE_PULL_REQUEST_SKILL_PATH)
     runtime_config = build_skill_runtime_config(skill)
 
     assert runtime_config.allowed_tools_set == {

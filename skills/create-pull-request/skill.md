@@ -47,8 +47,10 @@ STEP 5: Stop after either creating the PR or asking one blocking question.
 
 ## Phase 3 — Determine base branch
 1. Prefer `github_get_default_branch` using arguments `owner`, `repo`.
-2. If unavailable, infer cautiously from strong repo evidence.
-3. If base branch remains ambiguous, ask user and stop.
+2. The tool returns formatted text (for example, `Default branch for owner/repo: **main**`): extract only the raw branch name.
+3. Do not pass markdown formatting or the full sentence as `base`.
+4. If unavailable, infer cautiously from strong repo evidence.
+5. If base branch remains ambiguous, ask user and stop.
 
 ## Phase 4 — Draft PR content (required before PR creation)
 Prepare these sections first:
@@ -72,8 +74,9 @@ If anything critical is missing, ask one concise blocking question and stop.
 
 ## Phase 6 — Create PR or ask user
 - If ready, call `github_create_pull_request`.
-- Required args are `owner`, `repo`, `title`, `body`, `head`, `base`.
-- If not ready, ask user for the missing information and stop.
+- Required args are `owner`, `repo`, `title`, `body`, `head`.
+- Pass `base` whenever it has been determined reliably.
+- If `base` is ambiguous, prefer asking the user and stopping rather than guessing.
 
 ## Local vs GitHub distinction
 - Local inspection is performed with `run_command`.
