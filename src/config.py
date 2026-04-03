@@ -412,13 +412,13 @@ class Config:
                 # Parse existing URL and insert credentials
                 from urllib.parse import quote, urlparse, urlunparse
                 parsed = urlparse(url)
-                # Insert credentials into netloc
-                encoded_username = quote(username, safe="")
-                encoded_password = quote(password, safe="")
-                netloc = f"{encoded_username}:{encoded_password}@{parsed.hostname}"
-                if parsed.port:
-                    netloc += f":{parsed.port}"
-                url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+                hostport = parsed.netloc.rsplit("@", 1)[-1]
+                if parsed.scheme and parsed.netloc and hostport:
+                    # Insert credentials into netloc
+                    encoded_username = quote(username, safe="")
+                    encoded_password = quote(password, safe="")
+                    netloc = f"{encoded_username}:{encoded_password}@{hostport}"
+                    url = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
             
             os.environ["http_proxy"] = url
             os.environ["https_proxy"] = url

@@ -218,6 +218,63 @@ class TestConfigProxy:
 
             os.unlink(f.name)
 
+    def test_apply_proxy_ipv6_host_preserves_brackets(self):
+        """Test apply_proxy() preserves brackets for IPv6 proxy hosts."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write(
+                "proxy:\n"
+                "  enabled: true\n"
+                "  url: http://[2001:db8::1]:8080\n"
+                "  username: user\n"
+                "  password: pass\n"
+            )
+            f.flush()
+            config = Config(f.name)
+            config.apply_proxy()
+
+            expected_url = "http://user:pass@[2001:db8::1]:8080"
+            assert os.environ["http_proxy"] == expected_url
+
+            os.unlink(f.name)
+
+    def test_apply_proxy_replaces_existing_userinfo(self):
+        """Test apply_proxy() replaces existing URL userinfo with configured credentials."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write(
+                "proxy:\n"
+                "  enabled: true\n"
+                "  url: http://olduser:oldpass@proxy.example.com:8080\n"
+                "  username: newuser\n"
+                "  password: newpass\n"
+            )
+            f.flush()
+            config = Config(f.name)
+            config.apply_proxy()
+
+            expected_url = "http://newuser:newpass@proxy.example.com:8080"
+            assert os.environ["http_proxy"] == expected_url
+
+            os.unlink(f.name)
+
+    def test_apply_proxy_malformed_or_schemeless_url_not_rewritten_to_none(self):
+        """Test malformed/scheme-less proxy URLs are not rewritten to include @None."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write(
+                "proxy:\n"
+                "  enabled: true\n"
+                "  url: proxy.example.com:8080\n"
+                "  username: user\n"
+                "  password: pass\n"
+            )
+            f.flush()
+            config = Config(f.name)
+            config.apply_proxy()
+
+            assert os.environ["http_proxy"] == "proxy.example.com:8080"
+            assert "@None" not in os.environ["http_proxy"]
+
+            os.unlink(f.name)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
