@@ -84,3 +84,16 @@ async def test_jira_get_issue_preserves_false_and_zero(monkeypatch):
     assert captured["include_attachment_urls"] is False
     assert captured["max_comments"] == 0
     assert captured["format"] == ""
+
+
+@pytest.mark.asyncio
+async def test_github_get_pr_dispatch_does_not_fail_on_error_word_in_body(monkeypatch):
+    from src import execute_tool
+
+    async def fake_github_get_pr(owner, repo, pull_number):
+        return "**PR acme/repo#1: title**\n\n**Body (quoted):**\n> Includes Error handling details"
+
+    monkeypatch.setattr("src.github.github_get_pr", fake_github_get_pr)
+
+    result = await execute_tool("github_get_pr", owner="acme", repo="repo", pull_number=1)
+    assert result.success is True

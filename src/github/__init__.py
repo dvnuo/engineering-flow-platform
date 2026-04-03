@@ -1,5 +1,6 @@
 """GitHub Integration - Single source of truth for GitHub operations."""
 
+import asyncio
 from typing import Optional
 
 from .api import (
@@ -121,6 +122,8 @@ async def github_get_pr_file_patch(owner: str, repo: str, pull_number: int, path
     """Get patch/details for a single changed file in a PR."""
     try:
         return await _api_github_get_pr_file_patch(owner, repo, pull_number, path)
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         return f"Error getting PR file patch: {e}"
 
