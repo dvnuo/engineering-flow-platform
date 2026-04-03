@@ -189,3 +189,29 @@ async def test_github_wrapper_get_pr_reraises_cancelled_error(monkeypatch):
 
     with pytest.raises(asyncio.CancelledError):
         await github_module.github_get_pr("acme", "repo", 1)
+
+
+@pytest.mark.asyncio
+async def test_github_get_pr_dispatch_does_not_fail_on_error_word_in_body(monkeypatch):
+    from src import execute_tool
+
+    async def fake_github_get_pr(owner, repo, pull_number):
+        return "**PR acme/repo#1: title**\n\n**Body (quoted):**\n> Includes Error handling details"
+
+    monkeypatch.setattr("src.github.github_get_pr", fake_github_get_pr)
+
+    result = await execute_tool("github_get_pr", owner="acme", repo="repo", pull_number=1)
+    assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_github_get_pr_file_patch_dispatch_does_not_fail_on_error_word_in_patch(monkeypatch):
+    from src import execute_tool
+
+    async def fake_github_get_pr_file_patch(owner, repo, pull_number, path):
+        return "**PR #1 File Patch: `x`**\n\n```diff\n+Error reporting path\n```"
+
+    monkeypatch.setattr("src.github.github_get_pr_file_patch", fake_github_get_pr_file_patch)
+
+    result = await execute_tool("github_get_pr_file_patch", owner="acme", repo="repo", pull_number=1, path="x")
+    assert result.success is True
