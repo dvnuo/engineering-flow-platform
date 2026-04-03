@@ -228,6 +228,19 @@ async def test_github_get_pr_dispatch_does_not_fail_on_error_word_in_body(monkey
 
 
 @pytest.mark.asyncio
+async def test_github_get_issue_dispatch_does_not_fail_on_error_word_in_body(monkeypatch):
+    from src import execute_tool
+
+    async def fake_github_get_issue(owner, repo, issue_number):
+        return "**acme/repo#1: title**\n\n**State:** open\n\nContains Error handling details."
+
+    monkeypatch.setattr("src.github.github_get_issue", fake_github_get_issue)
+
+    result = await execute_tool("github_get_issue", owner="acme", repo="repo", issue_number=1)
+    assert result.success is True
+
+
+@pytest.mark.asyncio
 async def test_github_get_pr_file_patch_dispatch_does_not_fail_on_error_word_in_patch(monkeypatch):
     from src import execute_tool
 

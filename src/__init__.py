@@ -341,7 +341,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         repo = kwargs.get("repo", "")
         issue_number = kwargs.get("issue_number", 0)
         result = await github_module.github_get_issue(owner, repo, issue_number)
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
 
     elif name == "github_get_pr":
         owner = kwargs.get("owner", "")
@@ -354,7 +354,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         query = kwargs.get("query", "")
         max_results = kwargs.get("max_results", 10)
         result = await github_module.github_search_issues(query, max_results)
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     elif name == "github_add_comment":
         owner = kwargs.get("owner", "")
@@ -362,7 +362,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         issue_number = kwargs.get("issue_number", 0)
         comment = kwargs.get("comment", "")
         result = await github_module.github_add_comment(owner, repo, issue_number, comment)
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     elif name == "github_get_pr_files":
         owner = kwargs.get("owner", "")
@@ -384,14 +384,14 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         repo = kwargs.get("repo", "")
         pull_number = kwargs.get("pull_number", 0)
         result = await github_module.github_get_pr_diff(owner, repo, pull_number)
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     elif name == "github_get_pr_comments":
         owner = kwargs.get("owner", "")
         repo = kwargs.get("repo", "")
         pull_number = kwargs.get("pull_number", 0)
         result = await github_module.github_get_pr_comments(owner, repo, pull_number)
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     elif name == "github_add_pr_review_comment":
         owner = kwargs.get("owner", "")
@@ -404,26 +404,26 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await github_module.github_add_pr_review_comment(
             owner, repo, pull_number, body, commit_id, path, line
         )
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     elif name == "github_list_pr_reviews":
         owner = kwargs.get("owner", "")
         repo = kwargs.get("repo", "")
         pull_number = kwargs.get("pull_number", 0)
         result = await github_module.github_list_pr_reviews(owner, repo, pull_number)
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     elif name == "github_list_branches":
         owner = kwargs.get("owner", "")
         repo = kwargs.get("repo", "")
         result = await github_module.github_list_branches(owner, repo)
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     elif name == "github_get_default_branch":
         owner = kwargs.get("owner", "")
         repo = kwargs.get("repo", "")
         result = await github_module.github_get_default_branch(owner, repo)
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     elif name == "github_create_branch":
         owner = kwargs.get("owner", "")
@@ -431,7 +431,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         branch_name = kwargs.get("branch_name", "")
         from_branch = kwargs.get("from_branch")
         result = await github_module.github_create_branch(owner, repo, branch_name, from_branch)
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     elif name == "github_get_file_content":
         owner = kwargs.get("owner", "")
@@ -439,7 +439,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         path = kwargs.get("path", "")
         branch = kwargs.get("branch")
         result = await github_module.github_get_file_content(owner, repo, path, branch)
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     elif name == "github_create_pull_request":
         owner = kwargs.get("owner", "")
@@ -449,7 +449,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         head = kwargs.get("head", "")
         base = kwargs.get("base", "main")
         result = await github_module.github_create_pull_request(owner, repo, title, body, head, base)
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     elif name == "github_create_or_update_file":
         owner = kwargs.get("owner", "")
@@ -462,7 +462,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await github_module.github_create_or_update_file(
             owner, repo, path, content, message, sha, branch
         )
-        return ToolResult(success="Error" not in result, content=result)
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     # Confluence tools
     elif name == "confluence_get_page":
