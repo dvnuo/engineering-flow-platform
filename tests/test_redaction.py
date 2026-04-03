@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 
-from src.utils.redaction import redact_text, redact_value, safe_preview, safe_log_field
+from src.utils.redaction import redact_text, redact_value, safe_preview, safe_log_field, sanitize_log_line
 
 
 def test_sensitive_dict_keys_are_redacted():
@@ -148,3 +148,15 @@ def test_safe_log_field_neutralizes_control_characters():
     assert "\\n" in out
     assert "\\r" in out
     assert "\\t" in out
+
+
+def test_sanitize_log_line_neutralizes_control_characters_and_redacts():
+    out = sanitize_log_line("line1\npassword=secret\tline2\r")
+    assert "\n" not in out
+    assert "\r" not in out
+    assert "\t" not in out
+    assert "\\n" in out
+    assert "\\r" in out
+    assert "\\t" in out
+    assert "secret" not in out
+    assert "***REDACTED***" in out

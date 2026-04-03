@@ -151,6 +151,13 @@ def safe_log_field(value: Any, limit: int = 120) -> str:
     return "".join(ch if ch.isprintable() else "?" for ch in text)
 
 
+def sanitize_log_line(value: Any) -> str:
+    """Sanitize a value for safe single-line log output."""
+    text = redact_text(str(value))
+    text = text.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+    return "".join(ch if ch.isprintable() else "?" for ch in text)
+
+
 def sanitize_exception_message(value: Any) -> str:
     """Sanitize arbitrary exception values for safe logging."""
     return safe_preview(value, limit=500)

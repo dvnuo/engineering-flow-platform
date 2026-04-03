@@ -367,6 +367,51 @@ class TestRedactionIntegration:
         assert "secret" not in output
         assert "***REDACTED***" in output
 
+    def test_filter_neutralizes_control_characters(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("redact_ctrl_chars")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+
+        handler = logging.StreamHandler(stream)
+        handler.addFilter(RedactingFilter())
+        handler.setFormatter(RedactingFormatter("%(message)s"))
+        logger.addHandler(handler)
+
+        logger.info("payload=%s", "line1\npassword=secret\tline2\r")
+        output = stream.getvalue()
+        assert "\n" not in output.rstrip("\n")
+        assert "\r" not in output
+        assert "\t" not in output
+        assert "\\n" in output
+        assert "\\r" in output
+        assert "\\t" in output
+        assert "secret" not in output
+        assert "***REDACTED***" in output
+
+    def test_structured_logger_redacts_before_json_stringify(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("structured_redaction")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+
+        handler = logging.StreamHandler(stream)
+        handler.addFilter(RedactingFilter())
+        handler.setFormatter(RedactingFormatter("%(message)s"))
+        logger.addHandler(handler)
+
+        structured = StructuredLogger("structured_redaction", logger)
+        structured.info(
+            "event",
+            details={"openaiApiKey": "sk-secret", "nested": {"githubApiToken": "ghp_abc"}},
+        )
+        output = stream.getvalue()
+        assert "sk-secret" not in output
+        assert "ghp_abc" not in output
+        assert "***REDACTED***" in output
+
     def test_malformed_formatting_fallback_is_safe(self):
         stream = io.StringIO()
         logger = logging.getLogger("redact_bad_format")

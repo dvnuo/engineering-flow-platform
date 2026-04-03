@@ -18,7 +18,7 @@ from typing import Optional, Dict, Any
 import json
 import traceback
 
-from src.utils.redaction import redact_text, redact_value, safe_preview, safe_log_field
+from src.utils.redaction import redact_text, redact_value, safe_preview, safe_log_field, sanitize_log_line
 
 
 # Custom log format with detailed info
@@ -47,12 +47,12 @@ class RedactingFilter(logging.Filter):
             record.msg = redact_value(record.msg)
         try:
             final_message = record.getMessage()
-            record.msg = redact_text(final_message)
+            record.msg = sanitize_log_line(final_message)
             record.args = ()
         except Exception:
-            fallback = redact_text(str(record.msg))
+            fallback = sanitize_log_line(record.msg)
             if sanitized_args:
-                fallback = f"{fallback} | args={redact_text(str(sanitized_args))}"
+                fallback = f"{fallback} | args={sanitize_log_line(sanitized_args)}"
             record.msg = fallback
             record.args = ()
         return True
@@ -85,8 +85,8 @@ class StructuredLogger:
         # Add exception info if available
         if extra and "exc_info" in extra and extra["exc_info"]:
             log_data["traceback"] = traceback.format_exc()
-        
-        self.logger.log(level, json.dumps(log_data))
+
+        self.logger.log(level, json.dumps(redact_value(log_data)))
     
     def debug(self, message: str, **extra) -> None:
         self._log_data(logging.DEBUG, message, extra)
