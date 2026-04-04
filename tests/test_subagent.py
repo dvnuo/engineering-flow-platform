@@ -161,6 +161,38 @@ class TestSessionsSpawn:
         # Cleanup
         _subagent_sessions.clear()
 
+    def test_sessions_spawn_routes_through_execution_bus(self, monkeypatch):
+        from src.agents import subagent
+
+        class _FakeBus:
+            def __init__(self):
+                self.requests = []
+
+            async def execute(self, request):
+                self.requests.append(request)
+                return type(
+                    "R",
+                    (),
+                    {
+                        "output_payload": {
+                            "session_key": request.session_id,
+                            "status": "started",
+                            "task_preview": "Task",
+                            "message": "Sub-agent session started",
+                        }
+                    },
+                )()
+
+        fake_bus = _FakeBus()
+        monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: fake_bus)
+
+        result = subagent.sessions_spawn(task="Task", label="bus-session")
+        data = json.loads(result)
+
+        assert data["status"] == "started"
+        assert fake_bus.requests
+        assert fake_bus.requests[0].execution_type == "subagent"
+
 
 class TestSubAgentSchemas:
     """Tests for subagent_schemas module."""

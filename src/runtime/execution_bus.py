@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, Optional, Protocol
+from typing import Any, Callable, Dict, Optional, Protocol
 import logging
 
-from src.agents.executor import SkillResult, ToolResult, execute_skill, execute_tool_by_name
-from src.agents.subagent import SubAgent
+from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, run_skill_execution
+from src.agents.subagent import run_subagent_execution
 from src.runtime.contracts import ExecutionRequest, ExecutionResult, make_execution_result
 from src.runtime.events import build_runtime_event
 
@@ -32,6 +32,7 @@ class ExecutionBus:
         self._handlers[execution_type] = handler
 
     async def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        self._emit_lifecycle_event("execution.started", request, "started", {"status": "started"})
         handler = self._handlers.get(request.execution_type)
         if handler is None:
             result = make_execution_result(
@@ -39,7 +40,7 @@ class ExecutionBus:
                 status="blocked",
                 output_payload={"error": f"No handler for execution_type={request.execution_type}"},
             )
-            self._emit_runtime_event(request, result)
+            self._emit_lifecycle_event("execution.failed", request, "blocked", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
             return result
 
         try:
@@ -52,8 +53,10 @@ class ExecutionBus:
                 status="error",
                 output_payload={"error": str(exc), "execution_type": request.execution_type},
             )
+            self._emit_lifecycle_event("execution.failed", request, "error", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
+            return result
 
-        self._emit_runtime_event(request, result)
+        self._emit_lifecycle_event("execution.completed", request, result.status, {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
         return result
 
     def _normalize_result(self, request: ExecutionRequest, raw_result: Any) -> ExecutionResult:
@@ -102,26 +105,55 @@ class ExecutionBus:
             output_payload={"value": raw_result},
         )
 
-    def _emit_runtime_event(self, request: ExecutionRequest, result: ExecutionResult) -> None:
+    def _emit_lifecycle_event(
+        self,
+        event_type: str,
+        request: ExecutionRequest,
+        state: str,
+        detail_payload: Dict[str, Any],
+    ) -> None:
         if not self._event_emitter:
             return
+        legacy_type_map = {
+            "execution.started": "execution_started",
+            "execution.completed": "execution_completed",
+            "execution.failed": "execution_failed",
+        }
         payload = build_runtime_event(
-            event_type="execution.completed",
-            state=result.status,
+            event_type=event_type,
+            state=state,
             session_id=request.session_id,
             request_id=request.request_id,
             agent_id=request.agent_id,
-            summary=f"{request.execution_type} execution {result.status}",
-            detail_payload={"output_payload": result.output_payload},
+            summary=f"{request.execution_type} execution {state}",
+            detail_payload={
+                "execution_type": request.execution_type,
+                **detail_payload,
+            },
             legacy_payload={
-                "type": "execution_completed",
+                "type": legacy_type_map.get(event_type, "execution_event"),
                 "execution_type": request.execution_type,
             },
         )
         try:
-            self._event_emitter("execution_completed", payload)
+            self._event_emitter(legacy_type_map.get(event_type, "execution_event"), payload)
         except Exception:
             logger.debug("ExecutionBus event emission failed", exc_info=True)
+
+
+def summarize_output_payload(payload: Dict[str, Any], max_len: int = 240) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {}
+    if not isinstance(payload, dict):
+        return {"preview": str(payload)[:max_len]}
+    for key in ("response", "output", "content", "error", "status"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        text = str(value)
+        summary[key] = text if len(text) <= max_len else f"{text[:max_len]}...[truncated]"
+    if not summary:
+        summary["keys"] = sorted(payload.keys())[:10]
+    return summary
 
 
 def _get_required(payload: Dict[str, Any], key: str) -> Any:
@@ -144,26 +176,25 @@ def build_default_execution_bus(
         skill_name = _get_required(request.input_payload, "skill_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
         kwargs.setdefault("session_id", request.session_id)
-        return await execute_skill(skill_name, **kwargs)
+        return await run_skill_execution(skill_name, **kwargs)
 
     async def tool_handler(request: ExecutionRequest) -> ToolResult:
+        # TODO(phase1): unify broader tool call sites through ExecutionBus when policy/hook coverage is verified.
+        # For now this adapter intentionally reuses the existing execution stack.
         tool_name = _get_required(request.input_payload, "tool_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
         return await execute_tool_by_name(tool_name, **kwargs)
 
     async def subagent_handler(request: ExecutionRequest) -> Dict[str, Any]:
-        task = _get_required(request.input_payload, "task")
-        session_key = request.input_payload.get("session_key") or request.session_id or f"subagent-{request.request_id}"
-        subagent = SubAgent(
-            session_key=session_key,
-            task=task,
+        return await run_subagent_execution(
+            task=_get_required(request.input_payload, "task"),
+            session_key=request.input_payload.get("session_key") or request.session_id or f"subagent-{request.request_id}",
             model=request.input_payload.get("model"),
             thinking=request.input_payload.get("thinking"),
             disable_tools=bool(request.input_payload.get("disable_tools", False)),
+            start_immediately=bool(request.input_payload.get("start_immediately", False)),
+            wait_for_completion=bool(request.input_payload.get("wait_for_completion", False)),
         )
-        await subagent.start()
-        await subagent._task
-        return {"status": subagent.status, "response": subagent.result, "session_key": session_key}
 
     async def event_handler(request: ExecutionRequest) -> ExecutionResult:
         target = request.metadata.get("target_execution_type") or request.input_payload.get("target_execution_type")
