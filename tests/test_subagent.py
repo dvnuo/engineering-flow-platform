@@ -193,6 +193,45 @@ class TestSessionsSpawn:
         assert fake_bus.requests
         assert fake_bus.requests[0].execution_type == "subagent"
 
+    def test_sessions_spawn_surfaces_non_loop_runtime_error(self, monkeypatch):
+        from src.agents import subagent
+
+        class _FakeBus:
+            async def execute(self, request):
+                raise RuntimeError("bus explode")
+
+        monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+
+        with pytest.raises(RuntimeError, match="bus explode"):
+            subagent.sessions_spawn(task="Task", label="error-session")
+
+    def test_sessions_spawn_running_loop_uses_create_task(self, monkeypatch):
+        from src.agents import subagent
+
+        class _FakeBus:
+            async def execute(self, request):
+                return type("R", (), {"output_payload": {"status": "started", "session_key": request.session_id}})()
+
+        class _Loop:
+            def __init__(self):
+                self.tasks = []
+
+            def is_running(self):
+                return True
+
+            def create_task(self, coro):
+                self.tasks.append(coro)
+                coro.close()
+
+        fake_loop = _Loop()
+        monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+        monkeypatch.setattr("src.agents.subagent.asyncio.get_running_loop", lambda: fake_loop)
+
+        result = subagent.sessions_spawn(task="Task", label="loop-session")
+        data = json.loads(result)
+        assert data["status"] == "started"
+        assert fake_loop.tasks
+
 
 class TestSubAgentSchemas:
     """Tests for subagent_schemas module."""

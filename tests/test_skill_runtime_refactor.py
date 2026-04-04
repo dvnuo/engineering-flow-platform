@@ -19,6 +19,7 @@ from src.skills.runtime import (
     build_skill_runtime_config,
     summarize_skill_references,
 )
+from src.agents.skill_mode import generate_initial_skill_plan
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CREATE_PULL_REQUEST_SKILL_PATH = REPO_ROOT / "skills" / "create-pull-request" / "skill.md"
@@ -205,6 +206,32 @@ def test_create_pull_request_runtime_config_contains_expected_blocks():
     assert "ref-template.md" in runtime_config.prompt_blocks.references_summary
     instructions = runtime_config.prompt_blocks.developer_instructions
     assert ("STEP 1" in instructions) or ("Phase 1" in instructions)
+
+
+@pytest.mark.asyncio
+async def test_generate_initial_skill_plan_routes_through_execution_bus(monkeypatch):
+    skill = SimpleNamespace(name="demo", description="demo desc", strategy=[], path="")
+
+    class _FakeBus:
+        def __init__(self):
+            self.requests = []
+
+        def register_handler(self, execution_type, handler):
+            self._handler = handler
+
+        async def execute(self, request):
+            self.requests.append(request)
+            return type("R", (), {"output_payload": {"goal": "g", "steps": [{"id": "1", "type": "execute", "title": "t"}], "usage": {}}})()
+
+    fake_bus = _FakeBus()
+    monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: fake_bus)
+
+    goal, steps, usage = await generate_initial_skill_plan(skill, "do work")
+    assert goal == "g"
+    assert steps[0]["id"] == "1"
+    assert usage == {}
+    assert fake_bus.requests
+    assert fake_bus.requests[0].execution_type == "skill"
 
 
 def test_prompt_layer_assembly_and_reference_context():

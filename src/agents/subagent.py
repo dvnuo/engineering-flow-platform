@@ -339,11 +339,15 @@ def sessions_spawn(
         return result.output_payload
 
     try:
-        response_payload = asyncio.run(_spawn_via_bus())
+        running_loop = asyncio.get_running_loop()
+        has_running_loop = running_loop.is_running()
     except RuntimeError:
+        running_loop = None
+        has_running_loop = False
+
+    if has_running_loop and running_loop is not None:
         # Existing behavior is sync "started"; preserve by scheduling when loop exists.
-        loop = asyncio.get_event_loop()
-        loop.create_task(_spawn_via_bus())
+        running_loop.create_task(_spawn_via_bus())
         response_payload = {
             "session_key": session_key,
             "status": "started",
@@ -354,6 +358,9 @@ def sessions_spawn(
             "cleanup": cleanup,
             "message": f"Sub-agent session '{session_key}' started",
         }
+    else:
+        # Non-running-loop path must surface real runtime failures.
+        response_payload = asyncio.run(_spawn_via_bus())
 
     return json.dumps(response_payload, indent=2)
 

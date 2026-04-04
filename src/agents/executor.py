@@ -333,6 +333,8 @@ async def execute_skill(skill_name: str, **kwargs) -> SkillResult:
     """Execute a skill by name via runtime bus boundary (phase1)."""
     use_execution_bus = bool(kwargs.pop("_use_execution_bus", True))
     if use_execution_bus:
+        # Important recursion boundary:
+        # execute_skill -> ExecutionBus(skill) -> run_skill_execution (direct), never back into execute_skill.
         from src.runtime import build_default_execution_bus, make_execution_request
 
         bus = build_default_execution_bus()
