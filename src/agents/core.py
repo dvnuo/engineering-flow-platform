@@ -2226,5 +2226,34 @@ You have access to the following tools. When a user asks you to do something tha
         return info or {"error": "Session not found"}
 
 
+async def run_chat_execution(
+    agent: "Agent",
+    *,
+    message: str,
+    session_id: str,
+    user_name: Optional[str] = None,
+    track_usage: bool = True,
+    reasoning_replay: Optional[bool] = None,
+    stream_callback: Optional[Callable[[str], None]] = None,
+    attached_images: Optional[List[str]] = None,
+    attachments: Optional[List[str]] = None,
+    portal_user_id: Optional[str] = None,
+    portal_user_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Thin adapter for unified runtime bus chat execution."""
+    return await agent.process(
+        message=message,
+        session_id=session_id,
+        user_name=user_name,
+        track_usage=track_usage,
+        reasoning_replay=reasoning_replay,
+        stream_callback=stream_callback,
+        attached_images=attached_images,
+        attachments=attachments,
+        portal_user_id=portal_user_id,
+        portal_user_name=portal_user_name,
+    )
+
+
 # Global agent instance
 agent = Agent()

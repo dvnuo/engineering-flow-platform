@@ -154,6 +154,19 @@ class TestSessionManagerInfo:
         info = await fresh_session_manager.get_session_info(session_id)
         assert info is None
 
+    @pytest.mark.asyncio
+    async def test_active_skill_session_roundtrip(self, fresh_session_manager):
+        """Active skill session should persist via metadata-compatible path."""
+        import uuid
+
+        session_id = f"skill_{uuid.uuid4().hex[:8]}"
+        await fresh_session_manager.clear_history(session_id)
+        skill_state = {"skill_name": "demo", "step": 2}
+        await fresh_session_manager.set_active_skill_session(session_id, skill_state)
+
+        restored = await fresh_session_manager.get_active_skill_session(session_id)
+        assert restored == skill_state
+
 
 class TestSessionManagerEdgeCases:
     """Edge case tests."""
