@@ -1,10 +1,13 @@
 """GitHub Integration - Single source of truth for GitHub operations."""
 
+import asyncio
 from typing import Optional
 
 from .api import (
     GitHubChannel as GitHubClient,
     github_channel,
+    github_get_pr as _api_github_get_pr,
+    github_get_pr_file_patch as _api_github_get_pr_file_patch,
     github_get_issue,
     github_search_issues,
     github_add_comment,
@@ -25,9 +28,11 @@ __all__ = [
     "GitHubClient",
     "github_channel",
     "github_get_issue",
+    "github_get_pr",
     "github_search_issues",
     "github_add_comment",
     "github_get_pr_files",
+    "github_get_pr_file_patch",
     "github_get_pr_diff",
     "github_get_pr_comments",
     "github_add_pr_review_comment",
@@ -52,6 +57,16 @@ async def github_get_issue(owner: str, repo: str, issue_number: int) -> str:
         return f"**{owner}/{repo}#{issue_number}: {title}**\n\n**State:** {state}\n\n{body}"
     except Exception as e:
         return f"Error getting issue: {e}"
+
+
+async def github_get_pr(owner: str, repo: str, pull_number: int) -> str:
+    """Get GitHub PR details."""
+    try:
+        return await _api_github_get_pr(owner, repo, pull_number)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        return f"Error getting PR metadata: {e}"
 
 
 async def github_search_issues(query: str, max_results: int = 10) -> str:
@@ -103,6 +118,16 @@ async def github_get_pr_files(owner: str, repo: str, pull_number: int) -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"Error getting PR files: {e}"
+
+
+async def github_get_pr_file_patch(owner: str, repo: str, pull_number: int, path: str) -> str:
+    """Get patch/details for a single changed file in a PR."""
+    try:
+        return await _api_github_get_pr_file_patch(owner, repo, pull_number, path)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        return f"Error getting PR file patch: {e}"
 
 
 async def github_get_pr_diff(owner: str, repo: str, pull_number: int) -> str:
@@ -281,6 +306,22 @@ def get_tools_schemas() -> list:
         {
             "type": "function",
             "function": {
+                "name": "github_get_pr",
+                "description": "Get GitHub pull request metadata",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "owner": {"type": "string", "description": "Repository owner (e.g., 'myorg')"},
+                        "repo": {"type": "string", "description": "Repository name"},
+                        "pull_number": {"type": "integer", "description": "PR number"}
+                    },
+                    "required": ["owner", "repo", "pull_number"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "github_create_or_update_file",
                 "description": "Create or update a file in a repository",
                 "parameters": {
@@ -343,6 +384,23 @@ def get_tools_schemas() -> list:
                         "pull_number": {"type": "integer", "description": "PR number"}
                     },
                     "required": ["owner", "repo", "pull_number"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "github_get_pr_file_patch",
+                "description": "Get patch/details for a single changed PR file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "owner": {"type": "string", "description": "Repository owner"},
+                        "repo": {"type": "string", "description": "Repository name"},
+                        "pull_number": {"type": "integer", "description": "PR number"},
+                        "path": {"type": "string", "description": "Changed file path in PR"}
+                    },
+                    "required": ["owner", "repo", "pull_number", "path"]
                 }
             }
         },

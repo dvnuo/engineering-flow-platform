@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -39,6 +40,8 @@ _DEBUG_MODE = os.environ.get("DEBUG_GITHUB", "").lower() in ("1", "true", "yes")
 RATE_LIMIT_RETRIES = 5
 INITIAL_BACKOFF = 1.0  # seconds
 MAX_BACKOFF = 60.0  # seconds
+MAX_PR_BODY_CHARS = 4000
+MAX_PR_FILE_PATCH_CHARS = 12000
 
 
 def _is_debug_enabled() -> bool:
@@ -114,7 +117,7 @@ class GitHubChannel:
         method: str,
         endpoint: str,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> Any:
         """Make an API request with rate limit handling and exponential backoff."""
         url = f"{self.base_url}{endpoint}"
         
@@ -501,11 +504,20 @@ class GitHubChannel:
             params=params
         )
     
-    async def get_pr_files(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
+    async def get_pr_files(
+        self,
+        owner: str,
+        repo: str,
+        pull_number: int,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> List[Dict[str, Any]]:
         """Get files changed in a pull request."""
         logger.info(f"Getting PR files {owner}/{repo}#{pull_number}")
         return await self._request(
-            "GET", f"/repos/{owner}/{repo}/pulls/{pull_number}/files"
+            "GET",
+            f"/repos/{owner}/{repo}/pulls/{pull_number}/files",
+            params={"page": max(page, 1), "per_page": min(max(per_page, 1), 100)},
         )
     
     async def get_pr_diff(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
@@ -730,6 +742,109 @@ async def github_get_pr_files(owner: str, repo: str, pull_number: int) -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"Error getting PR files: {e}"
+
+
+async def github_get_pr(owner: str, repo: str, pull_number: int) -> str:
+    """Get compact pull request metadata."""
+    try:
+        pr = await github_channel.get_pull_request(owner, repo, pull_number)
+        title = pr.get("title", "Untitled")
+        body = pr.get("body", "")
+        state = pr.get("state", "unknown")
+        draft = bool(pr.get("draft", False))
+        author = pr.get("user", {}).get("login", "unknown")
+        base_branch = pr.get("base", {}).get("ref", "unknown")
+        head_branch = pr.get("head", {}).get("ref", "unknown")
+        mergeable = pr.get("mergeable")
+        changed_files = pr.get("changed_files", 0)
+        additions = pr.get("additions", 0)
+        deletions = pr.get("deletions", 0)
+        latest_commit_sha = pr.get("head", {}).get("sha", "")
+        mergeable_text = "unknown" if mergeable is None else str(bool(mergeable)).lower()
+
+        lines = [
+            f"**PR {owner}/{repo}#{pull_number}: {title}**",
+            f"- state: {state}",
+            f"- draft: {str(draft).lower()}",
+            f"- author: {author}",
+            f"- base: {base_branch}",
+            f"- head: {head_branch}",
+            f"- mergeable: {mergeable_text}",
+            f"- changed_files: {changed_files}",
+            f"- additions: {additions}",
+            f"- deletions: {deletions}",
+        ]
+        if latest_commit_sha:
+            lines.append(f"- latest_commit_sha: {latest_commit_sha}")
+        if body:
+            original_length = len(body)
+            body_display = body
+            if len(body_display) > MAX_PR_BODY_CHARS:
+                body_display = body_display[:MAX_PR_BODY_CHARS]
+                body_display += f"\n\n... (truncated, total {original_length} chars)"
+            quoted_body = "\n".join(f"> {line}" if line else ">" for line in body_display.splitlines())
+            lines.extend(["", "**Body (quoted):**", quoted_body])
+        return "\n".join(lines)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        return f"Error getting PR metadata: {e}"
+
+
+def _build_markdown_fence(content: str) -> str:
+    max_run = 0
+    for match in re.finditer(r"`+", content or ""):
+        max_run = max(max_run, len(match.group(0)))
+    return "`" * max(3, max_run + 1)
+
+
+async def github_get_pr_file_patch(owner: str, repo: str, pull_number: int, path: str) -> str:
+    """Get patch/details for a single changed file in a PR."""
+    try:
+        page = 1
+        per_page = 100
+        target = None
+        while True:
+            result = await github_channel.get_pr_files(owner, repo, pull_number, page=page, per_page=per_page)
+            files = result if isinstance(result, list) else result.get("files", [])
+            for item in files:
+                if item.get("filename", "") == path:
+                    target = item
+                    break
+            if target is not None:
+                break
+            if not files or len(files) < per_page:
+                break
+            page += 1
+
+        if target is None:
+            return f"Error: File `{path}` not found in PR #{pull_number}"
+
+        filename = target.get("filename", path)
+        status = target.get("status", "modified")
+        additions = target.get("additions", 0)
+        deletions = target.get("deletions", 0)
+        patch = target.get("patch", "")
+
+        if patch and len(patch) > MAX_PR_FILE_PATCH_CHARS:
+            patch = patch[:MAX_PR_FILE_PATCH_CHARS] + f"\n\n... (truncated, total {len(patch)} chars)"
+
+        lines = [
+            f"**PR #{pull_number} File Patch: `{filename}`**",
+            f"- status: {status}",
+            f"- additions: {additions}",
+            f"- deletions: {deletions}",
+        ]
+        if patch:
+            fence = _build_markdown_fence(patch)
+            lines.extend(["", f"{fence}diff", patch, fence])
+        else:
+            lines.append("- patch: (not available)")
+        return "\n".join(lines)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        return f"Error getting PR file patch: {e}"
 
 
 async def github_get_pr_diff(owner: str, repo: str, pull_number: int) -> str:

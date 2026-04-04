@@ -6,7 +6,9 @@ This directory contains declarative skill definitions (.md files with YAML front
 
 ```
 skills/
-├── review-pr.md           # Single-file skill
+├── review-pull-request/
+│   ├── skill.md          # Directory-based skill
+│   └── references/
 ├── test_case_generator/
 │   └── skill.md          # Directory-based skill
 └── skill_creator/
@@ -22,8 +24,8 @@ skills/
 
 ## Skill Naming Convention
 
-- **Single-file skills**: `skills/*.md` (e.g., `review-pr.md`)
-- **Directory skills**: `skills/*/skill.md` (e.g., `skill_creator/skill.md`)
+- **Single-file skills**: `skills/*.md` (legacy format)
+- **Directory skills**: `skills/*/skill.md` (preferred, e.g., `review-pull-request/skill.md`)
 
 ## Format
 
