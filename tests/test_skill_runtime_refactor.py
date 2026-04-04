@@ -992,7 +992,7 @@ def test_review_pull_request_skill_references_are_discovered():
 
 
 def test_review_pull_request_backward_compatible_trigger_invocation():
-    registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
+    registry = SkillRegistry(project_skills_dir=str(REPO_ROOT / "skills"), user_skills_dir="/nonexistent/user/skills")
     registry.load_skills()
     matches = registry.match_skill("/review-pr 123")
     assert matches
@@ -1000,7 +1000,7 @@ def test_review_pull_request_backward_compatible_trigger_invocation():
 
 
 def test_review_pull_request_backward_compatible_skill_command_invocation():
-    registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
+    registry = SkillRegistry(project_skills_dir=str(REPO_ROOT / "skills"), user_skills_dir="/nonexistent/user/skills")
     registry.load_skills()
     matches = registry.match_skill("/skill review-pr")
     assert matches
