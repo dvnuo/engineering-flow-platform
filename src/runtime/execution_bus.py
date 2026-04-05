@@ -4,14 +4,20 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional, Protocol
 import logging
-import inspect
 
 from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, run_skill_execution
 from src.agents.subagent import run_subagent_execution
 from src.agents.tasks import task_manager
 from src.runtime.contracts import ExecutionRequest, ExecutionResult, make_execution_request, make_execution_result
 from src.runtime.events import build_runtime_event
-from src.runtime.governance import GovernanceHooks
+from src.runtime.governance import GovernanceHooks, as_governance_bus
+from src.runtime.governance_bus import (
+    GovernanceAuditRecord,
+    GovernanceBus,
+    GovernanceDecision,
+    build_default_governance_bus,
+    governance_audit_runtime_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,18 +33,22 @@ class ExecutionBus:
         *,
         event_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         handlers: Optional[Dict[str, ExecutionHandler]] = None,
-        governance: Optional[GovernanceHooks] = None,
+        governance: Optional[GovernanceBus | GovernanceHooks] = None,
     ):
         self._event_emitter = event_emitter
         self._handlers: Dict[str, ExecutionHandler] = dict(handlers) if handlers is not None else {}
-        self._governance = governance or GovernanceHooks()
+        self._governance = as_governance_bus(governance)
 
     def register_handler(self, execution_type: str, handler: ExecutionHandler) -> None:
         self._handlers[execution_type] = handler
 
     async def execute(self, request: ExecutionRequest) -> ExecutionResult:
         await self._persist_last_execution_id(request)
-        await self._safe_governance("before_execute", request=request)
+        decision = await self._safe_before_governance(request)
+        if decision is not None and not decision.allowed:
+            result = self._blocked_result(request, reason=decision.reason, audit=decision.audit_record)
+            self._emit_lifecycle_event("execution.failed", request, "blocked", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
+            return await self._safe_after_governance(request, result)
         self._emit_lifecycle_event("execution.started", request, "started", {"status": "started"})
         handler = self._handlers.get(request.execution_type)
         if handler is None:
@@ -48,14 +58,13 @@ class ExecutionBus:
                 output_payload={"error": f"No handler for execution_type={request.execution_type}"},
             )
             self._emit_lifecycle_event("execution.failed", request, "blocked", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
-            await self._safe_governance("after_execute", request=request, result=result)
-            return result
+            return await self._safe_after_governance(request, result)
 
         try:
             raw_result = await handler(request)
             result = self._normalize_result(request, raw_result)
         except Exception as exc:
-            await self._safe_governance("on_error", request=request, error=exc)
+            error_audit = await self._safe_on_error_governance(request, exc)
             logger.exception("ExecutionBus handler failed for %s", request.execution_type)
             error_payload = _build_error_payload(exc, request.execution_type)
             result = make_execution_result(
@@ -63,15 +72,22 @@ class ExecutionBus:
                 status="error",
                 output_payload=error_payload,
             )
+            if error_audit is not None:
+                result.audit_ref = error_audit.audit_ref
+                result.runtime_events.append(
+                    governance_audit_runtime_event(
+                        request=request,
+                        status=result.status,
+                        audit_record=error_audit,
+                    )
+                )
             self._emit_lifecycle_event("execution.failed", request, "error", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
-            await self._safe_governance("after_execute", request=request, result=result)
-            return result
+            return await self._safe_after_governance(request, result)
 
         failure_statuses = {"error", "blocked"}
         lifecycle_event = "execution.failed" if result.status in failure_statuses else "execution.completed"
         self._emit_lifecycle_event(lifecycle_event, request, result.status, {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
-        await self._safe_governance("after_execute", request=request, result=result)
-        return result
+        return await self._safe_after_governance(request, result)
 
     async def _persist_last_execution_id(self, request: ExecutionRequest) -> None:
         if not self._should_persist_last_execution_id(request):
@@ -90,16 +106,67 @@ class ExecutionBus:
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
         return metadata.get("persist_last_execution_id") is True
 
-    async def _safe_governance(self, hook_name: str, **kwargs: Any) -> None:
+    async def _safe_before_governance(self, request: ExecutionRequest) -> GovernanceDecision:
         try:
-            # Phase 1 contract: hooks are fire-and-forget extension points.
-            hook = getattr(self._governance, hook_name, None)
-            if callable(hook):
-                result = hook(**kwargs)
-                if inspect.isawaitable(result):
-                    await result
+            return await self._governance.before_execute(request)
         except Exception:
-            logger.debug("ExecutionBus governance hook failed: %s", hook_name, exc_info=True)
+            logger.debug("ExecutionBus governance hook failed: %s", "before_execute", exc_info=True)
+            return GovernanceDecision(allowed=True)
+
+    async def _safe_after_governance(self, request: ExecutionRequest, result: ExecutionResult) -> ExecutionResult:
+        try:
+            maybe_result = await self._governance.after_execute(request, result)
+            if isinstance(maybe_result, GovernanceDecision):
+                if maybe_result.result is not None:
+                    return self._normalize_result(request, maybe_result.result)
+                if maybe_result.allowed:
+                    return result
+                return self._blocked_result(request, reason=maybe_result.reason, audit=maybe_result.audit_record)
+            if isinstance(maybe_result, ExecutionResult):
+                return self._normalize_result(request, maybe_result)
+            return result
+        except Exception:
+            logger.debug("ExecutionBus governance hook failed: %s", "after_execute", exc_info=True)
+            return result
+
+    async def _safe_on_error_governance(self, request: ExecutionRequest, error: Exception) -> Optional[GovernanceAuditRecord]:
+        try:
+            return await self._governance.on_error(request, error)
+        except Exception:
+            logger.debug("ExecutionBus governance hook failed: %s", "on_error", exc_info=True)
+            return None
+
+    def _blocked_result(
+        self,
+        request: ExecutionRequest,
+        *,
+        reason: Optional[str],
+        audit: Optional[GovernanceAuditRecord],
+    ) -> ExecutionResult:
+        payload = {
+            "error": "Execution blocked by governance policy",
+            "reason": reason or "governance_blocked",
+            "execution_type": request.execution_type,
+        }
+        runtime_events = []
+        audit_ref = None
+        if audit is not None:
+            audit_ref = audit.audit_ref
+            runtime_events.append(
+                governance_audit_runtime_event(
+                    request=request,
+                    status="blocked",
+                    audit_record=audit,
+                    detail_payload={"reason": reason or "governance_blocked"},
+                )
+            )
+        return make_execution_result(
+            request_id=request.request_id,
+            status="blocked",
+            output_payload=payload,
+            runtime_events=runtime_events,
+            audit_ref=audit_ref,
+        )
 
     def _normalize_result(self, request: ExecutionRequest, raw_result: Any) -> ExecutionResult:
         if isinstance(raw_result, ExecutionResult):
@@ -333,7 +400,7 @@ def build_default_execution_bus(
     *,
     chat_handler: Optional[ExecutionHandler] = None,
     event_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    governance: Optional[GovernanceHooks] = None,
+    governance: Optional[GovernanceBus | GovernanceHooks] = None,
     execute_tool_func: Optional[Callable[..., Any]] = None,
 ) -> ExecutionBus:
     """Build a bus with default skill/tool/subagent/event handlers.
@@ -341,7 +408,7 @@ def build_default_execution_bus(
     Chat handling is intentionally caller-injected via `chat_handler` to avoid
     coupling this runtime module to a single chat orchestration implementation.
     """
-    bus = ExecutionBus(event_emitter=event_emitter, governance=governance)
+    bus = ExecutionBus(event_emitter=event_emitter, governance=governance or build_default_governance_bus())
 
     if chat_handler is not None:
         # Chat is intentionally optional and injected by caller (e.g., webchat/gateway path).
