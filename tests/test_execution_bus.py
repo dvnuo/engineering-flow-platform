@@ -1,5 +1,6 @@
 import pytest
 
+from src import ToolResult
 from src.runtime.contracts import ExecutionResult, make_execution_request, make_execution_result
 from src.runtime.execution_bus import ExecutionBus, build_default_execution_bus
 from src.runtime.events import build_runtime_event
@@ -36,7 +37,11 @@ async def test_execution_bus_preserves_explicit_dict_status():
 
 
 @pytest.mark.asyncio
-async def test_execution_bus_tool_handler_preserves_tool_result_shape():
+async def test_execution_bus_tool_handler_preserves_tool_result_shape(monkeypatch):
+    async def _fake_execute_tool_by_name(_name, **_kwargs):
+        return ToolResult(success=True, content="ok", error=None)
+
+    monkeypatch.setattr("src.runtime.execution_bus.execute_tool_by_name", _fake_execute_tool_by_name)
     bus = build_default_execution_bus()
     req = make_execution_request(
         source_type="system",
@@ -180,3 +185,38 @@ async def test_event_forwarding_uses_distinct_request_id_and_parent_link():
     assert result.request_id == "parent-req"
     assert result.output_payload["forwarded_request_id"] == captured["request_id"]
     assert result.output_payload["parent_request_id"] == "parent-req"
+
+
+@pytest.mark.asyncio
+async def test_event_handler_invalid_target_falls_back_to_queued():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="system",
+        execution_type="event",
+        request_id="parent-req",
+        input_payload={"target_execution_type": {"bad": "type"}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "queued"
+    assert result.output_payload["target_execution_type"] is None
+
+
+@pytest.mark.asyncio
+async def test_subagent_handler_preserves_cleanup(monkeypatch):
+    captured = {}
+
+    async def _fake_run_subagent_execution(**kwargs):
+        captured.update(kwargs)
+        return {"status": "started", "session_key": kwargs["session_key"]}
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_subagent_execution", _fake_run_subagent_execution)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="system",
+        execution_type="subagent",
+        session_id="s-sub",
+        input_payload={"task": "demo", "cleanup": "keep"},
+    )
+    result = await bus.execute(req)
+    assert result.status == "started"
+    assert captured["cleanup"] == "keep"

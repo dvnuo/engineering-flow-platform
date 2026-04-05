@@ -196,13 +196,15 @@ def build_default_execution_bus(
             model=request.input_payload.get("model"),
             thinking=request.input_payload.get("thinking"),
             disable_tools=bool(request.input_payload.get("disable_tools", False)),
+            cleanup=request.input_payload.get("cleanup", "delete"),
             start_immediately=bool(request.input_payload.get("start_immediately", False)),
             wait_for_completion=bool(request.input_payload.get("wait_for_completion", False)),
         )
 
     async def event_handler(request: ExecutionRequest) -> ExecutionResult:
-        target = request.metadata.get("target_execution_type") or request.input_payload.get("target_execution_type")
-        if target in bus._handlers and target != "event":
+        raw_target = request.metadata.get("target_execution_type") or request.input_payload.get("target_execution_type")
+        target = raw_target.strip() if isinstance(raw_target, str) and raw_target.strip() else None
+        if target is not None and target != "event" and target in bus._handlers:
             forwarded = make_execution_request(
                 source_type=request.source_type,
                 source_ref=request.source_ref,
