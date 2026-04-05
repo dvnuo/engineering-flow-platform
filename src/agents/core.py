@@ -2234,7 +2234,7 @@ async def run_chat_execution(
     user_name: Optional[str] = None,
     track_usage: bool = True,
     reasoning_replay: Optional[bool] = None,
-    stream_callback: Optional[Callable[[str], None]] = None,
+    stream_callback: Optional[Any] = None,
     attached_images: Optional[List[str]] = None,
     attachments: Optional[List[str]] = None,
     portal_user_id: Optional[str] = None,

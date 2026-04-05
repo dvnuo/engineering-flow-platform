@@ -214,7 +214,26 @@ def build_default_execution_bus(
                     "forwarded_from_execution_type": request.execution_type,
                 },
             )
-            return await bus.execute(forwarded)
+            forwarded_result = await bus.execute(forwarded)
+            merged_payload: Dict[str, Any] = {}
+            if isinstance(forwarded_result.output_payload, dict):
+                merged_payload.update(forwarded_result.output_payload)
+            merged_payload.update(
+                {
+                    "forwarded_request_id": forwarded.request_id,
+                    "forwarded_execution_type": target,
+                    "parent_request_id": request.request_id,
+                }
+            )
+            return make_execution_result(
+                request_id=request.request_id,
+                status=forwarded_result.status,
+                output_payload=merged_payload,
+                artifacts=forwarded_result.artifacts,
+                runtime_events=forwarded_result.runtime_events,
+                next_action_hint=forwarded_result.next_action_hint,
+                audit_ref=forwarded_result.audit_ref,
+            )
         return make_execution_result(
             request_id=request.request_id,
             status="queued",

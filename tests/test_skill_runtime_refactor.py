@@ -226,9 +226,10 @@ async def test_generate_initial_skill_plan_routes_through_execution_bus(monkeypa
     fake_bus = _FakeBus()
     monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: fake_bus)
 
-    goal, steps = await generate_initial_skill_plan(skill, "do work", return_usage=False)
+    goal, steps, usage = await generate_initial_skill_plan(skill, "do work", return_usage=False)
     assert goal == "g"
     assert steps[0]["id"] == "1"
+    assert usage == {}
     assert fake_bus.requests
     assert fake_bus.requests[0].execution_type == "skill"
 

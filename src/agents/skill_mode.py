@@ -304,18 +304,17 @@ async def generate_initial_skill_plan(
     user_message: str,
     model: Optional[str] = None,
     return_usage: bool = False,
-) -> Union[SkillPlanResult, Tuple[str, List[Dict[str, str]]]]:
+) -> Tuple[str, List[Dict[str, str]], Dict[str, int]]:
     """Generate initial skill plan.
     
     Args:
         skill: The skill to generate plan for
         user_message: User's request message
         model: Optional model override
-        return_usage: If True, always returns 3-tuple including usage
+        return_usage: Backward-compatible argument (result shape is always 3-tuple)
     
     Returns:
-        If return_usage=True: (goal, steps, usage_dict)
-        If return_usage=False: (goal, steps) - for backward compatibility
+        Always returns (goal, steps, usage_dict).
     """
     # Narrow top-level skill-mode planning entrypoint now routes through ExecutionBus.
     # TODO(phase1): evaluate routing deeper internal skill helper calls through ExecutionBus after compatibility validation.
@@ -346,9 +345,9 @@ async def generate_initial_skill_plan(
         "completion_tokens": 0,
         "total_tokens": 0,
     }
-    if return_usage:
-        return goal, steps, usage_data
-    return goal, steps
+    # Compatibility: keep stable 3-tuple arity for existing callers in core/runtime paths.
+    _ = return_usage
+    return goal, steps, usage_data
 
 
 async def _generate_initial_skill_plan_direct(skill: Skill, user_message: str, model: Optional[str] = None) -> Dict[str, Any]:

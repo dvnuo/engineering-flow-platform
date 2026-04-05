@@ -144,8 +144,11 @@ async def test_event_forwarding_uses_distinct_request_id_and_parent_link():
         request_id="parent-req",
         input_payload={"target_execution_type": "chat"},
     )
-    await bus.execute(req)
+    result = await bus.execute(req)
 
     assert captured["request_id"] != "parent-req"
     assert captured["metadata"]["parent_request_id"] == "parent-req"
     assert captured["metadata"]["forwarded_from_execution_type"] == "event"
+    assert result.request_id == "parent-req"
+    assert result.output_payload["forwarded_request_id"] == captured["request_id"]
+    assert result.output_payload["parent_request_id"] == "parent-req"
