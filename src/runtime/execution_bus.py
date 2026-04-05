@@ -73,7 +73,7 @@ class ExecutionBus:
         return result
 
     async def _persist_last_execution_id(self, request: ExecutionRequest) -> None:
-        if not request.session_id:
+        if not self._should_persist_last_execution_id(request):
             return
         try:
             # local import keeps runtime dependency light and avoids import cycles at module load.
@@ -82,6 +82,12 @@ class ExecutionBus:
             await session_manager.set_last_execution_id(request.session_id, request.request_id)
         except Exception:
             logger.debug("ExecutionBus failed to persist last_execution_id", exc_info=True)
+
+    def _should_persist_last_execution_id(self, request: ExecutionRequest) -> bool:
+        if not request.session_id:
+            return False
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        return metadata.get("persist_last_execution_id") is True
 
     def _safe_governance(self, hook_name: str, **kwargs: Any) -> None:
         try:
@@ -292,38 +298,24 @@ def build_default_execution_bus(
         tool_name = _get_required(request.input_payload, "tool_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
         event_callback = request.input_payload.get("event_callback")
-        try:
-            tool_result = await task_manager.run_tool_task(
-                session_id=request.session_id or request.request_id,
-                tool_name=tool_name,
-                coro_factory=lambda: execute_tool_callable(tool_name, **kwargs),
-                event_callback=event_callback if callable(event_callback) else None,
-            )
-            return make_execution_result(
-                request_id=request.request_id,
-                status="success" if tool_result.success else "error",
-                output_payload={
-                    "task_type": "tool_task",
-                    "tool_name": tool_name,
-                    "success": bool(tool_result.success),
-                    "content": tool_result.content,
-                    "error": tool_result.error,
-                    "task_boundary": True,
-                },
-            )
-        except Exception as exc:
-            return make_execution_result(
-                request_id=request.request_id,
-                status="error",
-                output_payload={
-                    "task_type": "tool_task",
-                    "tool_name": tool_name,
-                    "success": False,
-                    "content": "",
-                    "error": str(exc),
-                    "task_boundary": True,
-                },
-            )
+        tool_result = await task_manager.run_tool_task(
+            session_id=request.session_id or request.request_id,
+            tool_name=tool_name,
+            coro_factory=lambda: execute_tool_callable(tool_name, **kwargs),
+            event_callback=event_callback if callable(event_callback) else None,
+        )
+        return make_execution_result(
+            request_id=request.request_id,
+            status="success" if tool_result.success else "error",
+            output_payload={
+                "task_type": "tool_task",
+                "tool_name": tool_name,
+                "success": bool(tool_result.success),
+                "content": tool_result.content,
+                "error": tool_result.error,
+                "task_boundary": True,
+            },
+        )
 
     async def event_handler(request: ExecutionRequest) -> ExecutionResult:
         raw_target = request.metadata.get("target_execution_type") or request.input_payload.get("target_execution_type")

@@ -239,6 +239,7 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
         request_path="/api/chat/stream",
     )
     assert fake_bus.request.metadata["path"] == "/api/chat/stream"
+    assert fake_bus.request.metadata["persist_last_execution_id"] is True
     assert ("event_emitter" not in captured_kwargs) or (captured_kwargs.get("event_emitter") is None)
 
 

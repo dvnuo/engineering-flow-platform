@@ -338,6 +338,53 @@ async def test_execution_bus_task_handler_falls_back_to_request_id_as_session(mo
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_task_handler_exception_uses_outer_error_path(monkeypatch):
+    async def _failing_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        raise RuntimeError("task exploded")
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _failing_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "error"
+    assert result.output_payload["error"] == "task exploded"
+    assert result.output_payload["error_type"] == "RuntimeError"
+    assert result.output_payload["execution_type"] == "task"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_governance_on_error_invoked_for_task_exception(monkeypatch):
+    class _RecordingGovernance(GovernanceHooks):
+        def __init__(self):
+            self.error_seen = None
+
+        def on_error(self, request, error):
+            self.error_seen = (request.execution_type, error.__class__.__name__)
+
+    async def _failing_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        raise RuntimeError("task exploded")
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _failing_run_tool_task)
+    bus = build_default_execution_bus(governance=_RecordingGovernance())
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "error"
+    assert bus._governance.error_seen == ("task", "RuntimeError")
+
+
+@pytest.mark.asyncio
 async def test_execution_bus_task_handler_unsupported_task_type():
     bus = build_default_execution_bus()
     req = make_execution_request(
@@ -388,6 +435,38 @@ async def test_execution_bus_uses_injected_execute_tool_callable_for_tool_and_ta
 
     assert task_result.status == "success"
     assert calls == [("tool_a", {"v": 1}), ("tool_b", {"v": 2})]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_persists_last_execution_id_only_when_opted_in(monkeypatch):
+    calls = []
+
+    async def _record_set_last_execution_id(session_id, request_id):
+        calls.append((session_id, request_id))
+
+    monkeypatch.setattr("src.sessions.manager.session_manager.set_last_execution_id", _record_set_last_execution_id)
+
+    async def _ok(_request):
+        return {"response": "ok"}
+
+    bus = build_default_execution_bus(chat_handler=_ok)
+    no_persist_req = make_execution_request(
+        source_type="chat",
+        execution_type="chat",
+        session_id="s-no-persist",
+        metadata={},
+    )
+    await bus.execute(no_persist_req)
+    assert calls == []
+
+    persist_req = make_execution_request(
+        source_type="chat",
+        execution_type="chat",
+        session_id="s-persist",
+        metadata={"persist_last_execution_id": True},
+    )
+    await bus.execute(persist_req)
+    assert calls == [("s-persist", persist_req.request_id)]
 
 
 def test_make_execution_result_defaults():

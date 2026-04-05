@@ -1165,3 +1165,28 @@ async def test_core_tool_bus_helper_uses_patched_core_execute_tool_callable_for_
     assert tool_result.content == "patched:tool_plain"
     assert task_result.content == "patched:tool_tasked"
     assert calls == [("tool_plain", {"a": 1}), ("tool_tasked", {"b": 2})]
+
+
+@pytest.mark.asyncio
+async def test_core_tool_bus_helper_does_not_persist_last_execution_id_by_default(monkeypatch):
+    persist_calls = []
+
+    async def _fake_set_last_execution_id(session_id, request_id):
+        persist_calls.append((session_id, request_id))
+
+    async def _fake_execute_tool(*args, **kwargs):
+        return ToolResult(success=True, content="ok", error=None)
+
+    monkeypatch.setattr("src.sessions.manager.session_manager.set_last_execution_id", _fake_set_last_execution_id)
+    monkeypatch.setattr("src.agents.core.execute_tool_by_name", _fake_execute_tool)
+
+    result = await _execute_tool_via_runtime_bus(
+        session_id="s-internal",
+        tool_name="demo_tool",
+        args={"k": "v"},
+        runtime_config=None,
+        source_ref="test",
+    )
+
+    assert result.success is True
+    assert persist_calls == []

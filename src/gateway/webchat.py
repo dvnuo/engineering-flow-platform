@@ -100,7 +100,7 @@ async def _run_chat_via_execution_bus(
             "reasoning_replay": reasoning_replay,
             "stream_callback": stream_callback,
         },
-        metadata={"path": request_path},
+        metadata={"path": request_path, "persist_last_execution_id": True},
     )
     execution_result = await bus.execute(execution_request)
     output_payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
