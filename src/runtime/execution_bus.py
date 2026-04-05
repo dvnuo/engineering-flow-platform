@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional, Protocol
 import logging
+import inspect
 
 from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, run_skill_execution
 from src.agents.subagent import run_subagent_execution
@@ -37,7 +38,7 @@ class ExecutionBus:
 
     async def execute(self, request: ExecutionRequest) -> ExecutionResult:
         await self._persist_last_execution_id(request)
-        self._safe_governance("before_execute", request=request)
+        await self._safe_governance("before_execute", request=request)
         self._emit_lifecycle_event("execution.started", request, "started", {"status": "started"})
         handler = self._handlers.get(request.execution_type)
         if handler is None:
@@ -47,14 +48,14 @@ class ExecutionBus:
                 output_payload={"error": f"No handler for execution_type={request.execution_type}"},
             )
             self._emit_lifecycle_event("execution.failed", request, "blocked", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
-            self._safe_governance("after_execute", request=request, result=result)
+            await self._safe_governance("after_execute", request=request, result=result)
             return result
 
         try:
             raw_result = await handler(request)
             result = self._normalize_result(request, raw_result)
         except Exception as exc:
-            self._safe_governance("on_error", request=request, error=exc)
+            await self._safe_governance("on_error", request=request, error=exc)
             logger.exception("ExecutionBus handler failed for %s", request.execution_type)
             error_payload = _build_error_payload(exc, request.execution_type)
             result = make_execution_result(
@@ -63,13 +64,13 @@ class ExecutionBus:
                 output_payload=error_payload,
             )
             self._emit_lifecycle_event("execution.failed", request, "error", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
-            self._safe_governance("after_execute", request=request, result=result)
+            await self._safe_governance("after_execute", request=request, result=result)
             return result
 
         failure_statuses = {"error", "blocked"}
         lifecycle_event = "execution.failed" if result.status in failure_statuses else "execution.completed"
         self._emit_lifecycle_event(lifecycle_event, request, result.status, {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
-        self._safe_governance("after_execute", request=request, result=result)
+        await self._safe_governance("after_execute", request=request, result=result)
         return result
 
     async def _persist_last_execution_id(self, request: ExecutionRequest) -> None:
@@ -89,12 +90,14 @@ class ExecutionBus:
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
         return metadata.get("persist_last_execution_id") is True
 
-    def _safe_governance(self, hook_name: str, **kwargs: Any) -> None:
+    async def _safe_governance(self, hook_name: str, **kwargs: Any) -> None:
         try:
             # Phase 1 contract: hooks are fire-and-forget extension points.
             hook = getattr(self._governance, hook_name, None)
             if callable(hook):
-                hook(**kwargs)
+                result = hook(**kwargs)
+                if inspect.isawaitable(result):
+                    await result
         except Exception:
             logger.debug("ExecutionBus governance hook failed: %s", hook_name, exc_info=True)
 

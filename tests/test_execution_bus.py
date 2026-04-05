@@ -364,6 +364,80 @@ async def test_execution_bus_governance_on_error_invoked():
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_async_governance_hooks_are_awaited():
+    class _AsyncGovernance(GovernanceHooks):
+        def __init__(self):
+            self.calls = []
+
+        async def before_execute(self, request):
+            self.calls.append(("before", request.request_id))
+
+        async def after_execute(self, request, result):
+            self.calls.append(("after", result.status))
+
+    async def _ok(_request):
+        return {"response": "ok"}
+
+    governance = _AsyncGovernance()
+    bus = ExecutionBus(governance=governance)
+    bus.register_handler("chat", _ok)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert governance.calls == [("before", req.request_id), ("after", "success")]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_async_governance_on_error_is_awaited():
+    class _AsyncGovernance(GovernanceHooks):
+        def __init__(self):
+            self.error_seen = None
+
+        async def on_error(self, request, error):
+            self.error_seen = (request.execution_type, error.__class__.__name__)
+
+    async def _bad(_request):
+        raise RuntimeError("boom")
+
+    governance = _AsyncGovernance()
+    bus = ExecutionBus(governance=governance)
+    bus.register_handler("chat", _bad)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+
+    assert result.status == "error"
+    assert governance.error_seen == ("chat", "RuntimeError")
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_async_governance_exceptions_are_swallowed(caplog):
+    class _FailingAsyncGovernance(GovernanceHooks):
+        async def before_execute(self, request):
+            raise RuntimeError("before failed")
+
+        async def after_execute(self, request, result):
+            raise RuntimeError("after failed")
+
+        async def on_error(self, request, error):
+            raise RuntimeError("on_error failed")
+
+    async def _bad(_request):
+        raise RuntimeError("handler boom")
+
+    with caplog.at_level("DEBUG"):
+        bus = ExecutionBus(governance=_FailingAsyncGovernance())
+        bus.register_handler("chat", _bad)
+        req = make_execution_request(source_type="chat", execution_type="chat")
+        result = await bus.execute(req)
+
+    assert result.status == "error"
+    assert "ExecutionBus governance hook failed: before_execute" in caplog.text
+    assert "ExecutionBus governance hook failed: on_error" in caplog.text
+    assert "ExecutionBus governance hook failed: after_execute" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_execution_bus_task_handler_tool_task(monkeypatch):
     captured = {}
 
