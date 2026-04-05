@@ -174,13 +174,21 @@ def _build_error_payload(error: Exception, execution_type: str) -> Dict[str, Any
 
         if isinstance(error, LLMError):
             payload["error"] = getattr(error, "message", str(error))
-            payload["error_type"] = "LLMError"
+            semantic_error_type = getattr(error, "error_type", None)
+            if isinstance(semantic_error_type, str) and semantic_error_type.strip():
+                payload["error_type"] = semantic_error_type.strip()
+            else:
+                payload["error_type"] = payload.get("error_type") or "LLMError"
+            payload["exception_class"] = "LLMError"
             status_code = getattr(error, "status_code", None)
             if status_code is not None:
                 payload["status_code"] = status_code
             details = getattr(error, "details", None)
             if isinstance(details, dict):
                 payload["details"] = details
+            provider = getattr(error, "provider", None)
+            if isinstance(provider, str) and provider.strip():
+                payload["provider"] = provider.strip()
     except Exception:
         pass
     return payload

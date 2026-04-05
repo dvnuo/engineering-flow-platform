@@ -103,6 +103,7 @@ async def test_execution_bus_preserves_structured_llm_error_fields():
             message="Provider failed",
             error_type="bad_request",
             details={"code": "x1"},
+            provider="openai",
             status_code=429,
         )
 
@@ -111,9 +112,11 @@ async def test_execution_bus_preserves_structured_llm_error_fields():
     result = await bus.execute(req)
     assert result.status == "error"
     assert result.output_payload["error"] == "Provider failed"
-    assert result.output_payload["error_type"] == "LLMError"
+    assert result.output_payload["error_type"] == "bad_request"
+    assert result.output_payload["exception_class"] == "LLMError"
     assert result.output_payload["status_code"] == 429
     assert result.output_payload["details"] == {"code": "x1"}
+    assert result.output_payload["provider"] == "openai"
 
 
 @pytest.mark.asyncio
