@@ -1,6 +1,7 @@
 import pytest
 
 from src import ToolResult
+from src.agents.errors import LLMError
 from src.runtime.contracts import ExecutionResult, make_execution_request, make_execution_result
 from src.runtime.execution_bus import ExecutionBus, build_default_execution_bus
 from src.runtime.events import build_runtime_event
@@ -93,6 +94,39 @@ async def test_execution_bus_emits_failed_lifecycle_event():
     event_names = [name for name, _payload in emitted]
     assert event_names == ["execution_started", "execution_failed"]
     assert emitted[1][1]["detail_payload"]["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_preserves_structured_llm_error_fields():
+    async def chat_handler(_request):
+        raise LLMError(
+            message="Provider failed",
+            error_type="bad_request",
+            details={"code": "x1"},
+            status_code=429,
+        )
+
+    bus = build_default_execution_bus(chat_handler=chat_handler)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["error"] == "Provider failed"
+    assert result.output_payload["error_type"] == "LLMError"
+    assert result.output_payload["status_code"] == 429
+    assert result.output_payload["details"] == {"code": "x1"}
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_generic_exception_keeps_backward_compatible_error_payload():
+    async def chat_handler(_request):
+        raise RuntimeError("boom")
+
+    bus = build_default_execution_bus(chat_handler=chat_handler)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["error"] == "boom"
+    assert result.output_payload["error_type"] == "RuntimeError"
 
 
 @pytest.mark.asyncio

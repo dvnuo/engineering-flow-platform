@@ -48,10 +48,11 @@ class ExecutionBus:
             result = self._normalize_result(request, raw_result)
         except Exception as exc:
             logger.exception("ExecutionBus handler failed for %s", request.execution_type)
+            error_payload = _build_error_payload(exc, request.execution_type)
             result = make_execution_result(
                 request_id=request.request_id,
                 status="error",
-                output_payload={"error": str(exc), "execution_type": request.execution_type},
+                output_payload=error_payload,
             )
             self._emit_lifecycle_event("execution.failed", request, "error", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
             return result
@@ -162,6 +163,29 @@ def summarize_output_payload(payload: Dict[str, Any], max_len: int = 240) -> Dic
     return summary
 
 
+def _build_error_payload(error: Exception, execution_type: str) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "error": str(error),
+        "error_type": error.__class__.__name__,
+        "execution_type": execution_type,
+    }
+    try:
+        from src.agents.errors import LLMError  # local import to minimize coupling risk
+
+        if isinstance(error, LLMError):
+            payload["error"] = getattr(error, "message", str(error))
+            payload["error_type"] = "LLMError"
+            status_code = getattr(error, "status_code", None)
+            if status_code is not None:
+                payload["status_code"] = status_code
+            details = getattr(error, "details", None)
+            if isinstance(details, dict):
+                payload["details"] = details
+    except Exception:
+        pass
+    return payload
+
+
 def _get_required(payload: Dict[str, Any], key: str) -> Any:
     if key not in payload:
         raise ValueError(f"Missing required input_payload field: {key}")
@@ -173,9 +197,15 @@ def build_default_execution_bus(
     chat_handler: Optional[ExecutionHandler] = None,
     event_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> ExecutionBus:
+    """Build a bus with default skill/tool/subagent/event handlers.
+
+    Chat handling is intentionally caller-injected via `chat_handler` to avoid
+    coupling this runtime module to a single chat orchestration implementation.
+    """
     bus = ExecutionBus(event_emitter=event_emitter)
 
     if chat_handler is not None:
+        # Chat is intentionally optional and injected by caller (e.g., webchat/gateway path).
         bus.register_handler("chat", chat_handler)
 
     async def skill_handler(request: ExecutionRequest) -> SkillResult:
