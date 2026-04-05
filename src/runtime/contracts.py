@@ -43,6 +43,9 @@ def make_execution_request(
     policy_profile_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> ExecutionRequest:
+    normalized_input_payload = {} if input_payload is None else dict(input_payload)
+    normalized_metadata = {} if metadata is None else dict(metadata)
+    normalized_context_ref = None if context_ref is None else dict(context_ref)
     return ExecutionRequest(
         request_id=request_id or str(uuid.uuid4()),
         source_type=source_type,
@@ -50,10 +53,10 @@ def make_execution_request(
         agent_id=agent_id,
         session_id=session_id,
         execution_type=execution_type,
-        input_payload=input_payload or {},
-        context_ref=context_ref,
+        input_payload=normalized_input_payload,
+        context_ref=normalized_context_ref,
         policy_profile_id=policy_profile_id,
-        metadata=metadata or {},
+        metadata=normalized_metadata,
     )
 
 
@@ -67,12 +70,15 @@ def make_execution_result(
     next_action_hint: Optional[str] = None,
     audit_ref: Optional[str] = None,
 ) -> ExecutionResult:
+    normalized_output_payload = {} if output_payload is None else dict(output_payload)
+    normalized_artifacts = {} if artifacts is None else dict(artifacts)
+    normalized_runtime_events = [] if runtime_events is None else list(runtime_events)
     return ExecutionResult(
         request_id=request_id,
         status=status,
-        output_payload=output_payload or {},
-        artifacts=artifacts or {},
-        runtime_events=runtime_events or [],
+        output_payload=normalized_output_payload,
+        artifacts=normalized_artifacts,
+        runtime_events=normalized_runtime_events,
         next_action_hint=next_action_hint,
         audit_ref=audit_ref,
     )

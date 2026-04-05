@@ -225,7 +225,9 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
         return fake_bus
 
     monkeypatch.setattr(webchat, "build_default_execution_bus", _build_bus)
-    monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
+    async def _fake_run_chat_execution(*args, **kwargs):
+        return {"response": "ignored"}
+    monkeypatch.setattr(webchat, "run_chat_execution", _fake_run_chat_execution)
 
     await webchat._run_chat_via_execution_bus(
         agent=object(),

@@ -119,6 +119,55 @@ def test_make_execution_result_defaults():
     assert result.runtime_events == []
 
 
+def test_make_execution_request_defensive_copies():
+    input_payload = {"a": 1}
+    metadata = {"m": "v"}
+    context_ref = {"c": 2}
+    req = make_execution_request(
+        source_type="chat",
+        execution_type="chat",
+        input_payload=input_payload,
+        metadata=metadata,
+        context_ref=context_ref,
+    )
+    input_payload["a"] = 99
+    metadata["m"] = "changed"
+    context_ref["c"] = 77
+    assert req.input_payload["a"] == 1
+    assert req.metadata["m"] == "v"
+    assert req.context_ref["c"] == 2
+
+
+def test_make_execution_result_defensive_copies_and_explicit_empty():
+    output_payload = {"o": 1}
+    artifacts = {"k": "v"}
+    runtime_events = [{"e": 1}]
+    result = make_execution_result(
+        request_id="r2",
+        status="success",
+        output_payload=output_payload,
+        artifacts=artifacts,
+        runtime_events=runtime_events,
+    )
+    output_payload["o"] = 9
+    artifacts["k"] = "changed"
+    runtime_events.append({"e": 2})
+    assert result.output_payload["o"] == 1
+    assert result.artifacts["k"] == "v"
+    assert len(result.runtime_events) == 1
+
+    empty_result = make_execution_result(
+        request_id="r3",
+        status="success",
+        output_payload={},
+        artifacts={},
+        runtime_events=[],
+    )
+    assert empty_result.output_payload == {}
+    assert empty_result.artifacts == {}
+    assert empty_result.runtime_events == []
+
+
 @pytest.mark.asyncio
 async def test_execute_skill_entrypoint_routes_through_bus(monkeypatch):
     from src.agents import executor
