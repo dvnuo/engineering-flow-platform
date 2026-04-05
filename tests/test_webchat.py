@@ -218,7 +218,13 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
             return type("R", (), {"output_payload": {"response": "ok"}})()
 
     fake_bus = _FakeBus()
-    monkeypatch.setattr(webchat, "build_default_execution_bus", lambda *args, **kwargs: fake_bus)
+    captured_kwargs = {}
+
+    def _build_bus(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return fake_bus
+
+    monkeypatch.setattr(webchat, "build_default_execution_bus", _build_bus)
     monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
 
     await webchat._run_chat_via_execution_bus(
@@ -231,3 +237,4 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
         request_path="/api/chat/stream",
     )
     assert fake_bus.request.metadata["path"] == "/api/chat/stream"
+    assert ("event_emitter" not in captured_kwargs) or (captured_kwargs.get("event_emitter") is None)

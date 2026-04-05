@@ -85,7 +85,11 @@ class ExecutionBus:
                 },
             )
         if isinstance(raw_result, dict):
-            status = "error" if raw_result.get("error") else "success"
+            explicit_status = raw_result.get("status")
+            if isinstance(explicit_status, str) and explicit_status.strip():
+                status = explicit_status.strip()
+            else:
+                status = "error" if raw_result.get("error") else "success"
             return make_execution_result(
                 request_id=request.request_id,
                 status=status,
@@ -131,7 +135,7 @@ class ExecutionBus:
                 **detail_payload,
             },
             legacy_payload={
-                "type": legacy_type_map.get(event_type, "execution_event"),
+                "legacy_type": legacy_type_map.get(event_type, "execution_event"),
                 "execution_type": request.execution_type,
             },
         )

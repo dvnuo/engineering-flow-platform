@@ -25,6 +25,17 @@ async def test_execution_bus_dispatches_and_normalizes_dict_result():
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_preserves_explicit_dict_status():
+    async def chat_handler(_request):
+        return {"status": "queued", "response": "later"}
+
+    bus = build_default_execution_bus(chat_handler=chat_handler)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+    assert result.status == "queued"
+
+
+@pytest.mark.asyncio
 async def test_execution_bus_tool_handler_preserves_tool_result_shape():
     bus = build_default_execution_bus()
     req = make_execution_request(
@@ -56,7 +67,7 @@ async def test_execution_bus_emits_additive_runtime_event():
     event_type, payload = emitted[0]
     assert event_type == "execution_started"
     assert payload["event_type"] == "execution.started"
-    assert payload["type"] == "execution_started"
+    assert payload["legacy_type"] == "execution_started"
     assert emitted[1][0] == "execution_completed"
     assert emitted[1][1]["event_type"] == "execution.completed"
 
@@ -126,6 +137,23 @@ async def test_execute_skill_entrypoint_routes_through_bus(monkeypatch):
     assert fake_bus.request.execution_type == "skill"
     assert result.success is True
     assert result.output == "skill-ok"
+
+
+@pytest.mark.asyncio
+async def test_execute_skill_none_output_maps_to_empty_string(monkeypatch):
+    from src.agents import executor
+
+    class _FakeBus:
+        async def execute(self, request):
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success",
+                output_payload={"output": None, "data": {}},
+            )
+
+    monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+    result = await executor.execute_skill("demo_skill", message="hello")
+    assert result.output == ""
 
 
 @pytest.mark.asyncio

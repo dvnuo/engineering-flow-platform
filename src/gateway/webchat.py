@@ -82,8 +82,7 @@ async def _run_chat_via_execution_bus(
             stream_callback=payload.get("stream_callback"),
         )
 
-    from src.gateway.event_bus import emit_agent_event_sync
-    bus = build_default_execution_bus(chat_handler=_chat_handler, event_emitter=emit_agent_event_sync)
+    bus = build_default_execution_bus(chat_handler=_chat_handler)
     execution_request = make_execution_request(
         request_id=f"chat-{uuid.uuid4()}",
         source_type="chat",

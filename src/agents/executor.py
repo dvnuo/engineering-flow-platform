@@ -351,9 +351,10 @@ async def execute_skill(skill_name: str, **kwargs) -> SkillResult:
         )
         result = await bus.execute(request)
         payload = result.output_payload
+        output_value = payload.get("output")
         return SkillResult(
             success=result.status == "success" and not payload.get("error"),
-            output=str(payload.get("output", "")),
+            output="" if output_value is None else str(output_value),
             error=payload.get("error"),
             data=payload.get("data") if isinstance(payload.get("data"), dict) else {},
         )
