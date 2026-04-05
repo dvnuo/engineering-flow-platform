@@ -161,6 +161,107 @@ class TestSessionsSpawn:
         # Cleanup
         _subagent_sessions.clear()
 
+    def test_sessions_spawn_routes_through_execution_bus(self, monkeypatch):
+        from src.agents import subagent
+
+        class _FakeBus:
+            def __init__(self):
+                self.requests = []
+
+            async def execute(self, request):
+                self.requests.append(request)
+                return type(
+                    "R",
+                    (),
+                    {
+                        "output_payload": {
+                            "session_key": request.session_id,
+                            "status": "started",
+                            "task_preview": "Task",
+                            "message": "Sub-agent session started",
+                        }
+                    },
+                )()
+
+        fake_bus = _FakeBus()
+        monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: fake_bus)
+
+        result = subagent.sessions_spawn(task="Task", label="bus-session")
+        data = json.loads(result)
+
+        assert data["status"] == "started"
+        assert fake_bus.requests
+        assert fake_bus.requests[0].execution_type == "subagent"
+
+    def test_sessions_spawn_surfaces_non_loop_runtime_error(self, monkeypatch):
+        from src.agents import subagent
+
+        class _FakeBus:
+            async def execute(self, request):
+                raise RuntimeError("bus explode")
+
+        monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+
+        with pytest.raises(RuntimeError, match="bus explode"):
+            subagent.sessions_spawn(task="Task", label="error-session")
+
+    def test_sessions_spawn_running_loop_uses_create_task(self, monkeypatch):
+        from src.agents import subagent
+
+        class _FakeBus:
+            async def execute(self, request):
+                return type("R", (), {"output_payload": {"status": "started", "session_key": request.session_id}})()
+
+        class _Task:
+            def __init__(self, coro):
+                self.coro = coro
+                self.callbacks = []
+
+            def add_done_callback(self, cb):
+                self.callbacks.append(cb)
+
+            def close(self):
+                self.coro.close()
+
+        class _Loop:
+            def __init__(self):
+                self.tasks = []
+
+            def is_running(self):
+                return True
+
+            def create_task(self, coro):
+                task = _Task(coro)
+                self.tasks.append(task)
+                return task
+
+        fake_loop = _Loop()
+        monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+        monkeypatch.setattr("src.agents.subagent.asyncio.get_running_loop", lambda: fake_loop)
+
+        result = subagent.sessions_spawn(task="Task", label="loop-session")
+        data = json.loads(result)
+        assert data["status"] == "started"
+        assert fake_loop.tasks
+        assert fake_loop.tasks[0].callbacks
+        assert "loop-session" in subagent._subagent_sessions
+        fake_loop.tasks[0].close()
+
+    def test_background_task_exception_callback_logs(self, monkeypatch):
+        from src.agents import subagent
+
+        class _Task:
+            def cancelled(self):
+                return False
+
+            def exception(self):
+                return RuntimeError("boom")
+
+        log_calls = []
+        monkeypatch.setattr(subagent.logger, "error", lambda *args, **kwargs: log_calls.append(args))
+        subagent._log_background_task_exception(_Task(), "s1")
+        assert log_calls
+
 
 class TestSubAgentSchemas:
     """Tests for subagent_schemas module."""

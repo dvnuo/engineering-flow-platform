@@ -330,13 +330,46 @@ def get_skill_info(skill_name: str) -> Optional[Dict]:
 
 
 async def execute_skill(skill_name: str, **kwargs) -> SkillResult:
-    """Execute a skill by name.
-    
-    Note: Filters out session_id to prevent TypeError since skills
-    don't accept session_id as a parameter.
-    """
-    # Filter out session_id and other unexpected kwargs
-    filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ('session_id',)}
+    """Execute a skill by name via runtime bus boundary (phase1)."""
+    use_execution_bus = bool(kwargs.pop("_use_execution_bus", True))
+    if use_execution_bus:
+        # Important recursion boundary:
+        # execute_skill -> ExecutionBus(skill) -> run_skill_execution (direct), never back into execute_skill.
+        from src.runtime import build_default_execution_bus, make_execution_request
+
+        bus = build_default_execution_bus()
+        request = make_execution_request(
+            source_type="skill",
+            source_ref="executor.execute_skill",
+            execution_type="skill",
+            session_id=kwargs.get("session_id"),
+            input_payload={
+                "skill_name": skill_name,
+                "kwargs": kwargs,
+            },
+            metadata={"entrypoint": "executor.execute_skill"},
+        )
+        result = await bus.execute(request)
+        payload = result.output_payload
+        output_value = payload.get("output")
+        return SkillResult(
+            success=result.status == "success" and not payload.get("error"),
+            output="" if output_value is None else str(output_value),
+            error=payload.get("error"),
+            data=payload.get("data") if isinstance(payload.get("data"), dict) else {},
+        )
+    return await run_skill_execution(skill_name, **kwargs)
+
+
+async def run_skill_execution(skill_name: str, **kwargs) -> SkillResult:
+    """Direct skill execution helper used by ExecutionBus adapters."""
+    # TODO(phase1): route deeper internal skill helper calls through ExecutionBus after compatibility validation.
+    # Filter runtime control/internal kwargs before forwarding to concrete skill implementations.
+    filtered_kwargs = {
+        k: v
+        for k, v in kwargs.items()
+        if k != "session_id" and not k.startswith("_")
+    }
     return await skills_executor.execute_skill(skill_name, **filtered_kwargs)
 
 

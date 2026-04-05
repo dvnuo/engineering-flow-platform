@@ -299,24 +299,69 @@ def _normalize_plan(raw: Dict[str, Any], fallback_goal: str) -> Tuple[str, List[
     return goal, normalized_steps
 
 
-async def generate_initial_skill_plan(skill: Skill, user_message: str, model: Optional[str] = None, return_usage: bool = False) -> Union[SkillPlanResult, Tuple[str, List[Dict[str, str]]]]:
+async def generate_initial_skill_plan(
+    skill: Skill,
+    user_message: str,
+    model: Optional[str] = None,
+    return_usage: bool = False,
+) -> Tuple[str, List[Dict[str, str]], Dict[str, int]]:
     """Generate initial skill plan.
     
     Args:
         skill: The skill to generate plan for
         user_message: User's request message
         model: Optional model override
-        return_usage: If True, always returns 3-tuple including usage
+        return_usage: Backward-compatible argument (result shape is always 3-tuple)
     
     Returns:
-        If return_usage=True: (goal, steps, usage_dict)
-        If return_usage=False: (goal, steps) - for backward compatibility
+        Always returns (goal, steps, usage_dict).
     """
+    # Narrow top-level skill-mode planning entrypoint now routes through ExecutionBus.
+    # TODO(phase1): evaluate routing deeper internal skill helper calls through ExecutionBus after compatibility validation.
+    from src.runtime import build_default_execution_bus, make_execution_request
+
+    async def _skill_plan_handler(_request):
+        return await _generate_initial_skill_plan_direct(skill=skill, user_message=user_message, model=model)
+
+    bus = build_default_execution_bus()
+    bus.register_handler("skill", _skill_plan_handler)
+    request = make_execution_request(
+        source_type="skill",
+        source_ref="skill_mode.generate_initial_skill_plan",
+        execution_type="skill",
+        input_payload={
+            "skill_name": skill.name,
+            "user_message": user_message,
+            "model": model,
+        },
+        metadata={"entrypoint": "skill_mode.generate_initial_skill_plan"},
+    )
+    execution_result = await bus.execute(request)
+    default_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    if execution_result.status == "error":
+        logger.warning("[SkillMode] Bus planner failed, using direct planner fallback")
+        direct_result = await _generate_initial_skill_plan_direct(skill=skill, user_message=user_message, model=model)
+        goal = str(direct_result.get("goal") or skill.description)
+        steps = direct_result.get("steps") if isinstance(direct_result.get("steps"), list) else []
+        usage_data = direct_result.get("usage") if isinstance(direct_result.get("usage"), dict) else default_usage
+    else:
+        payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
+        normalized_goal, normalized_steps = _normalize_plan(payload, fallback_goal=skill.description)
+        payload_steps = payload.get("steps")
+        goal = str(payload.get("goal") or normalized_goal)
+        steps = payload_steps if isinstance(payload_steps, list) and payload_steps else normalized_steps
+        usage_data = payload.get("usage") if isinstance(payload.get("usage"), dict) else default_usage
+
+    # Compatibility: keep stable 3-tuple arity for existing callers in core/runtime paths.
+    _ = return_usage
+    return goal, steps, usage_data
+
+
+async def _generate_initial_skill_plan_direct(skill: Skill, user_message: str, model: Optional[str] = None) -> Dict[str, Any]:
     system_prompt = _build_skill_plan_system_prompt(skill)
     user_prompt = _build_skill_plan_user_prompt(skill, user_message)
 
     provider = (config.llm.get("provider") or getattr(llm_client, "default_provider", "openai")).lower()
-    # Use consistent input format: input_text block for user content
     kwargs = {
         "input_items": [{"role": "user", "content": [{"type": "input_text", "text": user_prompt}]}],
         "system_prompt": system_prompt,
@@ -330,7 +375,6 @@ async def generate_initial_skill_plan(skill: Skill, user_message: str, model: Op
     result = await llm_client.responses(**kwargs)
     content = (result.get("content") or "").strip()
 
-    # Extract usage (always track it internally)
     iter_usage = result.get("usage", {}) or {}
     usage_data = {
         "prompt_tokens": iter_usage.get("prompt_tokens", 0),
@@ -344,9 +388,7 @@ async def generate_initial_skill_plan(skill: Skill, user_message: str, model: Op
     except Exception as exc:
         logger.warning(f"[SkillMode] Failed to parse initial plan JSON, using fallback: {exc}")
         goal, steps = _normalize_plan({}, fallback_goal=skill.description)
-
-    # Always return 3-tuple for consistent type; caller can ignore usage if not needed
-    return goal, steps, usage_data
+    return {"goal": goal, "steps": steps, "usage": usage_data}
 
 
 def _parse_skill_control_marker(output: str) -> Tuple[str, str]:

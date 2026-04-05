@@ -96,6 +96,91 @@ class SubAgent:
         }
 
 
+def _register_subagent_session(
+    *,
+    session_key: str,
+    task: str,
+    model: Optional[str],
+    thinking: Optional[str],
+    cleanup: str,
+    disable_tools: bool,
+) -> SubAgent:
+    existing = _subagent_sessions.get(session_key)
+    if existing and isinstance(existing.get("agent"), SubAgent):
+        return existing["agent"]
+
+    subagent = SubAgent(
+        session_key=session_key,
+        task=task,
+        model=model,
+        thinking=thinking,
+        disable_tools=disable_tools,
+    )
+    _subagent_sessions[session_key] = {
+        "session_key": session_key,
+        "task": task,
+        "model": model,
+        "thinking": thinking,
+        "cleanup": cleanup,
+        "created_at": subagent.created_at,
+        "status": "started",
+        "agent": subagent,
+    }
+    return subagent
+
+
+def _log_background_task_exception(task: asyncio.Task, session_key: str) -> None:
+    if task.cancelled():
+        return
+    try:
+        exc = task.exception()
+    except Exception as error:
+        logger.warning("Sub-agent background task inspection failed for %s: %s", session_key, error)
+        return
+    if exc is not None:
+        logger.error("Sub-agent background task failed for %s: %s", session_key, exc)
+
+
+async def run_subagent_execution(
+    *,
+    task: str,
+    session_key: str,
+    model: Optional[str] = None,
+    thinking: Optional[str] = None,
+    disable_tools: bool = False,
+    cleanup: str = "delete",
+    start_immediately: bool = False,
+    wait_for_completion: bool = False,
+) -> Dict[str, Any]:
+    """Top-level subagent execution adapter used by runtime ExecutionBus."""
+    subagent = _register_subagent_session(
+        session_key=session_key,
+        task=task,
+        model=model,
+        thinking=thinking,
+        cleanup=cleanup,
+        disable_tools=disable_tools,
+    )
+
+    if start_immediately:
+        await subagent.start()
+        if wait_for_completion and getattr(subagent, "_task", None) is not None:
+            await subagent._task
+        _subagent_sessions[session_key]["status"] = subagent.status
+        _subagent_sessions[session_key]["result"] = subagent.result
+
+    return {
+        "session_key": session_key,
+        "status": _subagent_sessions[session_key]["status"],
+        "task_preview": truncate(task, 100),
+        "model": model,
+        "thinking": thinking,
+        "disable_tools": disable_tools,
+        "cleanup": cleanup,
+        "message": f"Sub-agent session '{session_key}' started",
+    }
+
+
 def sessions_list(
     active_minutes: Optional[int] = None,
     limit: Optional[int] = None,
@@ -263,44 +348,66 @@ def sessions_spawn(
     """
     # Generate a unique session key
     session_key = label or f"subagent-{uuid.uuid4().hex[:8]}"
-    
-    # Create the sub-agent
-    subagent = SubAgent(
-        session_key=session_key,
-        task=task,
-        model=model,
-        thinking=thinking,
-        disable_tools=disable_tools,
-    )
-    
-    # Store it
-    _subagent_sessions[session_key] = {
-        "session_key": session_key,
-        "task": task,
-        "model": model,
-        "thinking": thinking,
-        "cleanup": cleanup,
-        "created_at": subagent.created_at,
-        "status": "started",
-        "agent": subagent,
-    }
-    
-    # Log subagent creation with thinking level
     logger.info(f"Spawn subagent: session={session_key}, think_level={thinking}, model={model}")
-    
-    # Note: Actual async execution requires running event loop
-    # The sub-agent will execute when process() is called
-    
-    return json.dumps({
-        "session_key": session_key,
-        "status": "started",
-        "task_preview": truncate(task, 100),
-        "model": model,
-        "thinking": thinking,
-        "disable_tools": disable_tools,
-        "cleanup": cleanup,
-        "message": f"Sub-agent session '{session_key}' started",
-    }, indent=2)
+
+    async def _spawn_via_bus() -> Dict[str, Any]:
+        from src.runtime import build_default_execution_bus, make_execution_request
+
+        bus = build_default_execution_bus()
+        request = make_execution_request(
+            source_type="agent",
+            source_ref="sessions_spawn",
+            execution_type="subagent",
+            session_id=session_key,
+            input_payload={
+                "task": task,
+                "session_key": session_key,
+                "model": model,
+                "thinking": thinking,
+                "disable_tools": disable_tools,
+                "cleanup": cleanup,
+                "start_immediately": False,
+                "wait_for_completion": False,
+            },
+            metadata={"entrypoint": "sessions_spawn"},
+        )
+        result = await bus.execute(request)
+        return result.output_payload
+
+    try:
+        running_loop = asyncio.get_running_loop()
+        has_running_loop = running_loop.is_running()
+    except RuntimeError:
+        running_loop = None
+        has_running_loop = False
+
+    if has_running_loop and running_loop is not None:
+        _register_subagent_session(
+            session_key=session_key,
+            task=task,
+            model=model,
+            thinking=thinking,
+            cleanup=cleanup,
+            disable_tools=disable_tools,
+        )
+        # Existing behavior is sync "started"; preserve by scheduling when loop exists.
+        background_task = running_loop.create_task(_spawn_via_bus())
+        background_task.add_done_callback(lambda task: _log_background_task_exception(task, session_key))
+        response_payload = {
+            "session_key": session_key,
+            "status": "started",
+            "task_preview": truncate(task, 100),
+            "model": model,
+            "thinking": thinking,
+            "disable_tools": disable_tools,
+            "cleanup": cleanup,
+            "message": f"Sub-agent session '{session_key}' started",
+        }
+    else:
+        # Non-running-loop path must surface real runtime failures.
+        response_payload = asyncio.run(_spawn_via_bus())
+
+    return json.dumps(response_payload, indent=2)
 
 
 def get_subagent_result(session_key: str, timeout: int = 30) -> Optional[str]:

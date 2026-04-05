@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -33,10 +34,12 @@ _yaml.indent(mapping=2, sequence=4, offset=2)
 _yaml.width = 4096
 
 from src.agents.core import Agent as AgentCore
+from src.agents.core import run_chat_execution
 from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.config import config as global_config
+from src.runtime import build_default_execution_bus, make_execution_request
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
 from src.sessions.usage import usage_tracker
@@ -47,6 +50,75 @@ logger = logging.getLogger(__name__)
 # Get template and static paths
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+async def _run_chat_via_execution_bus(
+    *,
+    agent: AgentCore,
+    session_id: str,
+    message: str,
+    user_name: str,
+    portal_user_id: Optional[str],
+    portal_user_name: Optional[str],
+    attached_images: Optional[List[str]] = None,
+    attachments: Optional[List[str]] = None,
+    reasoning_replay: Optional[bool] = None,
+    stream_callback: Optional[Any] = None,
+    request_path: str = "/api/chat",
+) -> Dict[str, Any]:
+    async def _chat_handler(execution_request):
+        payload = execution_request.input_payload
+        return await run_chat_execution(
+            agent,
+            message=payload.get("message", ""),
+            session_id=execution_request.session_id or session_id,
+            user_name=payload.get("user_name"),
+            portal_user_id=payload.get("portal_user_id"),
+            portal_user_name=payload.get("portal_user_name"),
+            attached_images=payload.get("attached_images"),
+            attachments=payload.get("attachments"),
+            track_usage=bool(payload.get("track_usage", True)),
+            reasoning_replay=payload.get("reasoning_replay"),
+            stream_callback=payload.get("stream_callback"),
+        )
+
+    bus = build_default_execution_bus(chat_handler=_chat_handler)
+    execution_request = make_execution_request(
+        request_id=f"chat-{uuid.uuid4()}",
+        source_type="chat",
+        source_ref="webchat",
+        execution_type="chat",
+        session_id=session_id,
+        input_payload={
+            "message": message,
+            "user_name": user_name,
+            "portal_user_id": portal_user_id,
+            "portal_user_name": portal_user_name,
+            "attached_images": attached_images,
+            "attachments": attachments,
+            "track_usage": True,
+            "reasoning_replay": reasoning_replay,
+            "stream_callback": stream_callback,
+        },
+        metadata={"path": request_path},
+    )
+    execution_result = await bus.execute(execution_request)
+    output_payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
+    if execution_result.status == "error" or output_payload.get("error"):
+        error_value = output_payload.get("error", "Execution bus error")
+        if isinstance(error_value, dict):
+            error_message = (
+                error_value.get("message")
+                or error_value.get("error")
+                or json.dumps(error_value, ensure_ascii=False)
+            )
+        else:
+            error_message = str(error_value)
+        raise web.HTTPInternalServerError(
+            text=json.dumps({"error": error_message}, ensure_ascii=False),
+            content_type="application/json",
+        )
+    return output_payload
 
 
 def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str], Optional[str]]:
@@ -350,16 +422,17 @@ async def api_chat(request: web.Request) -> web.Response:
             agent_id=runtime_agent_id,
             agent_name=runtime_agent_name,
         )
-        result = await agent.process(
+        result = await _run_chat_via_execution_bus(
+            agent=agent,
             message=message,
             session_id=session_id,
             user_name=effective_user_name,
             portal_user_id=portal_user_id or None,
             portal_user_name=portal_user_name or None,
-            track_usage=True,
             reasoning_replay=reasoning_replay,
             attached_images=attached_images if attached_images else None,
             attachments=attachments if attachments else None,
+            request_path="/api/chat",
         )
         
         # Force save session to persistence
@@ -450,6 +523,8 @@ async def api_chat(request: web.Request) -> web.Response:
         
     except json.JSONDecodeError:
         return web.json_response({'error': 'Invalid JSON'}, status=400)
+    except web.HTTPException:
+        raise
     except Exception as e:
         # Get detailed error information
         error_details = extract_error_details(e)
@@ -540,14 +615,15 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         )
         
         # Pass the queue to the agent for real-time events
-        result = await agent.process(
+        result = await _run_chat_via_execution_bus(
+            agent=agent,
             message=message,
             session_id=session_id,
             user_name=effective_user_name,
             portal_user_id=portal_user_id or None,
             portal_user_name=portal_user_name or None,
-            track_usage=True,
             stream_callback=event_queue,
+            request_path="/api/chat/stream",
         )
         
         # Stream events from queue while agent is running
@@ -592,6 +668,8 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
     except json.JSONDecodeError:
         response = web.json_response({'error': 'Invalid JSON'}, status=400)
         return response
+    except web.HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Stream error: {e}")
         error_data = json.dumps({'error': str(e)})

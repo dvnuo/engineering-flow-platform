@@ -158,3 +158,170 @@ def test_edit_delete_routes_registered():
     # Check new routes exist
     assert '/api/sessions/{session_id}/messages/{message_id}/edit' in routes
     assert '/api/sessions/{session_id}/messages/{message_id}/delete-from-here' in routes
+
+
+@pytest.mark.asyncio
+async def test_chat_execution_bus_adapter_non_stream(monkeypatch):
+    from src.gateway import webchat
+
+    async def fake_run_chat_execution(agent, **kwargs):
+        assert kwargs["portal_user_id"] == "p-1"
+        return {"response": "ok", "usage": {"total_tokens": 1}}
+
+    monkeypatch.setattr(webchat, "run_chat_execution", fake_run_chat_execution)
+    result = await webchat._run_chat_via_execution_bus(
+        agent=object(),
+        session_id="s-chat",
+        message="hello",
+        user_name="u1",
+        portal_user_id="p-1",
+        portal_user_name="Portal User",
+    )
+    assert result["response"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_chat_execution_bus_adapter_stream(monkeypatch):
+    from src.gateway import webchat
+
+    async def fake_run_chat_execution(agent, **kwargs):
+        stream_callback = kwargs.get("stream_callback")
+        await stream_callback.put("{\"type\":\"progress\"}")
+        return {"response": "streamed"}
+
+    monkeypatch.setattr(webchat, "run_chat_execution", fake_run_chat_execution)
+    import asyncio
+    queue = asyncio.Queue()
+    result = await webchat._run_chat_via_execution_bus(
+        agent=object(),
+        session_id="s-stream",
+        message="hello",
+        user_name="u1",
+        portal_user_id=None,
+        portal_user_name=None,
+        stream_callback=queue,
+    )
+    assert result["response"] == "streamed"
+    assert not queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch):
+    from src.gateway import webchat
+
+    class _FakeBus:
+        def __init__(self):
+            self.request = None
+
+        async def execute(self, request):
+            self.request = request
+            return type("R", (), {"status": "success", "output_payload": {"response": "ok"}})()
+
+    fake_bus = _FakeBus()
+    captured_kwargs = {}
+
+    def _build_bus(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return fake_bus
+
+    monkeypatch.setattr(webchat, "build_default_execution_bus", _build_bus)
+    async def _fake_run_chat_execution(*args, **kwargs):
+        return {"response": "ignored"}
+    monkeypatch.setattr(webchat, "run_chat_execution", _fake_run_chat_execution)
+
+    await webchat._run_chat_via_execution_bus(
+        agent=object(),
+        session_id="s-chat",
+        message="hello",
+        user_name="u1",
+        portal_user_id=None,
+        portal_user_name=None,
+        request_path="/api/chat/stream",
+    )
+    assert fake_bus.request.metadata["path"] == "/api/chat/stream"
+    assert ("event_emitter" not in captured_kwargs) or (captured_kwargs.get("event_emitter") is None)
+
+
+@pytest.mark.asyncio
+async def test_chat_execution_bus_adapter_raises_on_error_status(monkeypatch):
+    from aiohttp import web
+    from src.gateway import webchat
+
+    class _FakeBus:
+        async def execute(self, _request):
+            return type("R", (), {"status": "error", "output_payload": {"error": {"message": "boom"}}})()
+
+    monkeypatch.setattr(webchat, "build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+
+    async def _fake_run_chat_execution(*args, **kwargs):
+        return {"response": "ignored"}
+
+    monkeypatch.setattr(webchat, "run_chat_execution", _fake_run_chat_execution)
+
+    with pytest.raises(web.HTTPInternalServerError):
+        await webchat._run_chat_via_execution_bus(
+            agent=object(),
+            session_id="s-chat",
+            message="hello",
+            user_name="u1",
+            portal_user_id=None,
+            portal_user_name=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_api_chat_reraises_http_exception():
+    from aiohttp import web
+    from src.gateway import webchat
+
+    class _Request:
+        app = {}
+
+        async def json(self):
+            raise web.HTTPInternalServerError(text='{"error":"bus failed"}', content_type="application/json")
+
+    with pytest.raises(web.HTTPInternalServerError):
+        await webchat.api_chat(_Request())
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_reraises_http_exception():
+    from aiohttp import web
+    from src.gateway import webchat
+
+    class _Request:
+        app = {}
+
+        async def json(self):
+            raise web.HTTPInternalServerError(text='{"error":"bus failed"}', content_type="application/json")
+
+    with pytest.raises(web.HTTPInternalServerError):
+        await webchat.api_chat_stream(_Request())
+
+
+@pytest.mark.asyncio
+async def test_api_chat_generic_exception_still_returns_error_response():
+    from src.gateway import webchat
+
+    class _Request:
+        app = {}
+
+        async def json(self):
+            raise RuntimeError("bad")
+
+    response = await webchat.api_chat(_Request())
+    assert response.status == 500
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_generic_exception_still_returns_error_response():
+    from src.gateway import webchat
+
+    class _Request:
+        app = {}
+
+        async def json(self):
+            raise RuntimeError("bad")
+
+    response = await webchat.api_chat_stream(_Request())
+    assert response.status == 500
