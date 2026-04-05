@@ -2,37 +2,27 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
-
 from src.runtime.contracts import ExecutionRequest, ExecutionResult
 
 
 class GovernanceHooks:
-    """Minimal no-op governance layer.
+    """Minimal no-op governance extension points.
 
     Phase 1 scope:
     - Safe-by-default and dependency-free.
     - Hook points are additive and non-blocking by design.
-    - Supports in-place metadata/result enrichment for future policy expansion.
+    - Default hooks intentionally perform no mutation.
+    - Future policy/enrichment behavior can be layered on top later.
     """
 
-    def before_execute(self, request: ExecutionRequest) -> Dict[str, Any]:
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
-        metadata.setdefault("governance", {})
-        metadata["governance"].setdefault("before_execute_called", True)
-        request.metadata = metadata
-        return {"governance": {"before_execute_called": True}}
+    def before_execute(self, request: ExecutionRequest) -> None:
+        """Called before handler resolution. Default implementation is no-op."""
+        return None
 
-    def after_execute(self, request: ExecutionRequest, result: ExecutionResult) -> Dict[str, Any]:
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
-        metadata.setdefault("governance", {})
-        metadata["governance"].setdefault("after_execute_called", True)
-        request.metadata = metadata
-        return {"governance": {"after_execute_called": True}}
+    def after_execute(self, request: ExecutionRequest, result: ExecutionResult) -> None:
+        """Called after result normalization. Default implementation is no-op."""
+        return None
 
-    def on_error(self, request: ExecutionRequest, error: Exception) -> Dict[str, Any]:
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
-        metadata.setdefault("governance", {})
-        metadata["governance"]["last_error_type"] = error.__class__.__name__
-        request.metadata = metadata
-        return {"governance": {"error_type": error.__class__.__name__}}
+    def on_error(self, request: ExecutionRequest, error: Exception) -> None:
+        """Called when handler execution raises. Default implementation is no-op."""
+        return None

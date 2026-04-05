@@ -242,6 +242,29 @@ async def test_execution_bus_invokes_governance_hooks():
     assert governance.calls == [("before", req.request_id), ("after", "success")]
 
 
+def test_default_governance_hooks_are_noop_for_request_and_result():
+    hooks = GovernanceHooks()
+    req = make_execution_request(
+        source_type="chat",
+        execution_type="chat",
+        metadata={"existing": "value"},
+    )
+    result = make_execution_result(
+        request_id=req.request_id,
+        status="success",
+        output_payload={"content": "ok"},
+    )
+    original_metadata = dict(req.metadata)
+    original_output = dict(result.output_payload)
+
+    hooks.before_execute(req)
+    hooks.after_execute(req, result)
+    hooks.on_error(req, RuntimeError("boom"))
+
+    assert req.metadata == original_metadata
+    assert result.output_payload == original_output
+
+
 @pytest.mark.asyncio
 async def test_execution_bus_governance_on_error_invoked():
     class _RecordingGovernance(GovernanceHooks):
@@ -267,7 +290,10 @@ async def test_execution_bus_governance_on_error_invoked():
 
 @pytest.mark.asyncio
 async def test_execution_bus_task_handler_tool_task(monkeypatch):
+    captured = {}
+
     async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        captured["session_id"] = session_id
         return ToolResult(success=True, content=f"{tool_name}:{session_id}", error=None)
 
     monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
@@ -285,6 +311,30 @@ async def test_execution_bus_task_handler_tool_task(monkeypatch):
     assert result.output_payload["tool_name"] == "demo_tool"
     assert result.output_payload["task_boundary"] is True
     assert result.output_payload["success"] is True
+    assert captured["session_id"] == "s-task"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_falls_back_to_request_id_as_session(monkeypatch):
+    captured = {}
+
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        captured["session_id"] = session_id
+        return ToolResult(success=True, content=f"{tool_name}:{session_id}", error=None)
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        request_id="req-fallback",
+        source_type="agent",
+        execution_type="task",
+        session_id=None,
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {"x": 1}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert captured["session_id"] == "req-fallback"
 
 
 @pytest.mark.asyncio

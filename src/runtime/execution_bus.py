@@ -85,6 +85,7 @@ class ExecutionBus:
 
     def _safe_governance(self, hook_name: str, **kwargs: Any) -> None:
         try:
+            # Phase 1 contract: hooks are fire-and-forget extension points.
             hook = getattr(self._governance, hook_name, None)
             if callable(hook):
                 hook(**kwargs)
@@ -293,7 +294,7 @@ def build_default_execution_bus(
         event_callback = request.input_payload.get("event_callback")
         try:
             tool_result = await task_manager.run_tool_task(
-                session_id=request.session_id or "runtime-session",
+                session_id=request.session_id or request.request_id,
                 tool_name=tool_name,
                 coro_factory=lambda: execute_tool_callable(tool_name, **kwargs),
                 event_callback=event_callback if callable(event_callback) else None,
