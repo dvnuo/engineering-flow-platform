@@ -26,7 +26,7 @@ class ExecutionBus:
         handlers: Optional[Dict[str, ExecutionHandler]] = None,
     ):
         self._event_emitter = event_emitter
-        self._handlers: Dict[str, ExecutionHandler] = handlers or {}
+        self._handlers: Dict[str, ExecutionHandler] = dict(handlers) if handlers is not None else {}
 
     def register_handler(self, execution_type: str, handler: ExecutionHandler) -> None:
         self._handlers[execution_type] = handler
@@ -56,7 +56,9 @@ class ExecutionBus:
             self._emit_lifecycle_event("execution.failed", request, "error", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
             return result
 
-        self._emit_lifecycle_event("execution.completed", request, result.status, {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
+        failure_statuses = {"error", "blocked"}
+        lifecycle_event = "execution.failed" if result.status in failure_statuses else "execution.completed"
+        self._emit_lifecycle_event(lifecycle_event, request, result.status, {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
         return result
 
     def _normalize_result(self, request: ExecutionRequest, raw_result: Any) -> ExecutionResult:

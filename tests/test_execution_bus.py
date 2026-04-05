@@ -95,6 +95,33 @@ async def test_execution_bus_emits_failed_lifecycle_event():
     assert emitted[1][1]["detail_payload"]["status"] == "error"
 
 
+@pytest.mark.asyncio
+async def test_execution_bus_normalized_error_result_emits_failed_event():
+    emitted = []
+
+    async def chat_handler(_request):
+        return {"error": "nope"}
+
+    bus = build_default_execution_bus(
+        chat_handler=chat_handler,
+        event_emitter=lambda event_type, payload: emitted.append((event_type, payload)),
+    )
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert [name for name, _ in emitted] == ["execution_started", "execution_failed"]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_blocked_result_emits_failed_event():
+    emitted = []
+    bus = build_default_execution_bus(event_emitter=lambda event_type, payload: emitted.append((event_type, payload)))
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert [name for name, _ in emitted] == ["execution_started", "execution_failed"]
+
+
 def test_runtime_event_builder_is_additive_with_legacy_payload():
     event = build_runtime_event(
         event_type="runtime.update",
@@ -269,3 +296,13 @@ async def test_subagent_handler_preserves_cleanup(monkeypatch):
     result = await bus.execute(req)
     assert result.status == "started"
     assert captured["cleanup"] == "keep"
+
+
+def test_execution_bus_copies_handlers_mapping():
+    async def handler(_request):
+        return {"response": "ok"}
+
+    provided = {"chat": handler}
+    bus = ExecutionBus(handlers=provided)
+    provided.clear()
+    assert "chat" in bus._handlers
