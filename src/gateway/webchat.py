@@ -52,6 +52,32 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _sanitize_portal_identity_value(value: Any) -> str:
+    raw = "" if value is None else str(value)
+    cleaned = re.sub(r"[\x00-\x1f\x7f]+", "", raw).strip()
+    return cleaned
+
+
+def _extract_portal_identity(request: web.Request, data: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    headers = getattr(request, "headers", {}) or {}
+    header_user_id = _sanitize_portal_identity_value(headers.get("X-Portal-User-Id"))
+    header_user_name = _sanitize_portal_identity_value(headers.get("X-Portal-User-Name"))
+    body_user_id = _sanitize_portal_identity_value(data.get("portal_user_id"))
+    body_user_name = _sanitize_portal_identity_value(data.get("portal_user_name"))
+
+    resolved_user_id = header_user_id or body_user_id or None
+    resolved_user_name = header_user_name or body_user_name or None
+
+    if header_user_id or header_user_name:
+        source = "headers"
+    elif body_user_id or body_user_name:
+        source = "body"
+    else:
+        source = "none"
+    logger.debug("[portal_identity] resolved_source=%s has_user_id=%s has_user_name=%s", source, bool(resolved_user_id), bool(resolved_user_name))
+    return resolved_user_id, resolved_user_name
+
+
 async def _run_chat_via_execution_bus(
     *,
     agent: AgentCore,
@@ -280,8 +306,7 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Get attachments from new field
         attachments = data.get('attachments', [])
-        portal_user_id = str(data.get("portal_user_id") or "").strip()
-        portal_user_name = str(data.get("portal_user_name") or "").strip()
+        portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         effective_user_name = portal_user_name or "webchat-user"
         logger.debug(
             "[api_chat] Request summary: session_id=%s, has_message=%s, attachment_count=%d, portal_user_id_present=%s",
@@ -427,8 +452,8 @@ async def api_chat(request: web.Request) -> web.Response:
             message=message,
             session_id=session_id,
             user_name=effective_user_name,
-            portal_user_id=portal_user_id or None,
-            portal_user_name=portal_user_name or None,
+            portal_user_id=portal_user_id,
+            portal_user_name=portal_user_name,
             reasoning_replay=reasoning_replay,
             attached_images=attached_images if attached_images else None,
             attachments=attachments if attachments else None,
@@ -574,8 +599,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         data = await request.json()
         message = (data.get('message') or '').strip()
         session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
-        portal_user_id = str(data.get("portal_user_id") or "").strip()
-        portal_user_name = str(data.get("portal_user_name") or "").strip()
+        portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         effective_user_name = portal_user_name or "webchat-user"
         
         if not message:
@@ -620,8 +644,8 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             message=message,
             session_id=session_id,
             user_name=effective_user_name,
-            portal_user_id=portal_user_id or None,
-            portal_user_name=portal_user_name or None,
+            portal_user_id=portal_user_id,
+            portal_user_name=portal_user_name,
             stream_callback=event_queue,
             request_path="/api/chat/stream",
         )
