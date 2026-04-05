@@ -50,12 +50,13 @@ logger = logging.getLogger(__name__)
 # Get template and static paths
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
+MAX_PORTAL_IDENTITY_LENGTH = 256
 
 
 def _sanitize_portal_identity_value(value: Any) -> str:
     raw = "" if value is None else str(value)
     cleaned = re.sub(r"[\x00-\x1f\x7f]+", "", raw).strip()
-    return cleaned
+    return cleaned[:MAX_PORTAL_IDENTITY_LENGTH]
 
 
 def _extract_portal_identity(request: web.Request, data: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:

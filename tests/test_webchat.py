@@ -478,3 +478,33 @@ async def test_api_chat_body_identity_fallback_and_header_precedence(monkeypatch
     await webchat.api_chat(_ConflictRequest())
     assert captured["portal_user_id"] == "header-id"
     assert captured["portal_user_name"] == "header-name"
+
+
+def test_sanitize_portal_identity_value_none_returns_empty():
+    from src.gateway import webchat
+
+    assert webchat._sanitize_portal_identity_value(None) == ""
+
+
+def test_sanitize_portal_identity_value_strips_controls_and_whitespace():
+    from src.gateway import webchat
+
+    assert webchat._sanitize_portal_identity_value(" \r\nabc\t\x00 ") == "abc"
+
+
+def test_sanitize_portal_identity_value_truncates_to_max_length():
+    from src.gateway import webchat
+
+    raw = "x" * (webchat.MAX_PORTAL_IDENTITY_LENGTH + 25)
+    sanitized = webchat._sanitize_portal_identity_value(raw)
+    assert len(sanitized) == webchat.MAX_PORTAL_IDENTITY_LENGTH
+    assert sanitized == "x" * webchat.MAX_PORTAL_IDENTITY_LENGTH
+
+
+def test_sanitize_portal_identity_value_truncation_applies_after_sanitization():
+    from src.gateway import webchat
+
+    raw = " \n" + ("a" * (webchat.MAX_PORTAL_IDENTITY_LENGTH + 10)) + "\r\t "
+    sanitized = webchat._sanitize_portal_identity_value(raw)
+    assert len(sanitized) == webchat.MAX_PORTAL_IDENTITY_LENGTH
+    assert sanitized == "a" * webchat.MAX_PORTAL_IDENTITY_LENGTH
