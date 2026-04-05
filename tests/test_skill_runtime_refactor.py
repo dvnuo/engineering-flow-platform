@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from src import ToolResult
-from src.agents.core import Agent, get_skill_workdir, set_skill_workdir
+from src.agents.core import Agent, get_skill_workdir, set_skill_workdir, _execute_tool_via_runtime_bus
 from src.agents.skill_runtime import build_skill_tool_denied_result
 from src.agents.skill_runtime import (
     build_skill_runtime_event_payload,
@@ -20,6 +20,7 @@ from src.skills.runtime import (
     summarize_skill_references,
 )
 from src.agents.skill_mode import generate_initial_skill_plan
+from src.runtime.contracts import make_execution_result
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CREATE_PULL_REQUEST_SKILL_PATH = REPO_ROOT / "skills" / "create-pull-request" / "skill.md"
@@ -1078,3 +1079,114 @@ def test_review_pull_request_backward_compatible_skill_command_invocation():
     matches = registry.match_skill("/skill review-pr")
     assert matches
     assert matches[0].name == "review-pull-request"
+
+
+@pytest.mark.asyncio
+async def test_core_tool_bus_helper_returns_tool_result_compatible_shape(monkeypatch):
+    class _FakeBus:
+        async def execute(self, request):
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success",
+                output_payload={"success": True, "content": "tool-ok", "error": None},
+            )
+
+    monkeypatch.setattr("src.agents.core.build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+    result = await _execute_tool_via_runtime_bus(
+        session_id="s1",
+        tool_name="demo_tool",
+        args={"value": 1},
+        runtime_config=None,
+        source_ref="test",
+    )
+
+    assert isinstance(result, ToolResult)
+    assert result.success is True
+    assert result.content == "tool-ok"
+
+
+@pytest.mark.asyncio
+async def test_core_tool_bus_helper_builds_bus_without_stale_execute_direct_kwarg(monkeypatch):
+    captured_kwargs = {}
+
+    class _FakeBus:
+        async def execute(self, request):
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success",
+                output_payload={"success": True, "content": "ok"},
+            )
+
+    def _fake_build_default_execution_bus(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return _FakeBus()
+
+    monkeypatch.setattr("src.agents.core.build_default_execution_bus", _fake_build_default_execution_bus)
+    await _execute_tool_via_runtime_bus(
+        session_id="s1",
+        tool_name="demo_tool",
+        args={},
+        runtime_config=None,
+        source_ref="test",
+    )
+
+    assert "execute_direct" not in captured_kwargs
+
+
+@pytest.mark.asyncio
+async def test_core_tool_bus_helper_uses_patched_core_execute_tool_callable_for_tool_and_task(monkeypatch):
+    calls = []
+
+    async def _patched_execute_tool_by_name(tool_name, **kwargs):
+        calls.append((tool_name, kwargs))
+        return ToolResult(success=True, content=f"patched:{tool_name}", error=None)
+
+    async def _inline_task_runner(*, session_id, tool_name, coro_factory, event_callback=None):
+        return await coro_factory()
+
+    monkeypatch.setattr("src.agents.core.execute_tool_by_name", _patched_execute_tool_by_name)
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _inline_task_runner)
+
+    tool_result = await _execute_tool_via_runtime_bus(
+        session_id="s-tool",
+        tool_name="tool_plain",
+        args={"a": 1},
+        runtime_config=None,
+        source_ref="test",
+    )
+    task_result = await _execute_tool_via_runtime_bus(
+        session_id="s-task",
+        tool_name="tool_tasked",
+        args={"b": 2},
+        runtime_config=SimpleNamespace(task_tools=["tool_tasked"]),
+        source_ref="test",
+    )
+
+    assert tool_result.content == "patched:tool_plain"
+    assert task_result.content == "patched:tool_tasked"
+    assert calls == [("tool_plain", {"a": 1}), ("tool_tasked", {"b": 2})]
+
+
+@pytest.mark.asyncio
+async def test_core_tool_bus_helper_does_not_persist_last_execution_id_by_default(monkeypatch):
+    persist_calls = []
+
+    async def _fake_set_last_execution_id(session_id, request_id):
+        persist_calls.append((session_id, request_id))
+
+    async def _fake_execute_tool(*args, **kwargs):
+        return ToolResult(success=True, content="ok", error=None)
+
+    monkeypatch.setattr("src.sessions.manager.session_manager.set_last_execution_id", _fake_set_last_execution_id)
+    monkeypatch.setattr("src.agents.core.execute_tool_by_name", _fake_execute_tool)
+
+    result = await _execute_tool_via_runtime_bus(
+        session_id="s-internal",
+        tool_name="demo_tool",
+        args={"k": "v"},
+        runtime_config=None,
+        source_ref="test",
+    )
+
+    assert result.success is True
+    assert persist_calls == []

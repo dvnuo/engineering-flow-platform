@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional, Protocol
 import logging
+import inspect
 
 from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, run_skill_execution
 from src.agents.subagent import run_subagent_execution
+from src.agents.tasks import task_manager
 from src.runtime.contracts import ExecutionRequest, ExecutionResult, make_execution_request, make_execution_result
 from src.runtime.events import build_runtime_event
+from src.runtime.governance import GovernanceHooks
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +27,18 @@ class ExecutionBus:
         *,
         event_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         handlers: Optional[Dict[str, ExecutionHandler]] = None,
+        governance: Optional[GovernanceHooks] = None,
     ):
         self._event_emitter = event_emitter
         self._handlers: Dict[str, ExecutionHandler] = dict(handlers) if handlers is not None else {}
+        self._governance = governance or GovernanceHooks()
 
     def register_handler(self, execution_type: str, handler: ExecutionHandler) -> None:
         self._handlers[execution_type] = handler
 
     async def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        await self._persist_last_execution_id(request)
+        await self._safe_governance("before_execute", request=request)
         self._emit_lifecycle_event("execution.started", request, "started", {"status": "started"})
         handler = self._handlers.get(request.execution_type)
         if handler is None:
@@ -41,12 +48,14 @@ class ExecutionBus:
                 output_payload={"error": f"No handler for execution_type={request.execution_type}"},
             )
             self._emit_lifecycle_event("execution.failed", request, "blocked", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
+            await self._safe_governance("after_execute", request=request, result=result)
             return result
 
         try:
             raw_result = await handler(request)
             result = self._normalize_result(request, raw_result)
         except Exception as exc:
+            await self._safe_governance("on_error", request=request, error=exc)
             logger.exception("ExecutionBus handler failed for %s", request.execution_type)
             error_payload = _build_error_payload(exc, request.execution_type)
             result = make_execution_result(
@@ -55,12 +64,42 @@ class ExecutionBus:
                 output_payload=error_payload,
             )
             self._emit_lifecycle_event("execution.failed", request, "error", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
+            await self._safe_governance("after_execute", request=request, result=result)
             return result
 
         failure_statuses = {"error", "blocked"}
         lifecycle_event = "execution.failed" if result.status in failure_statuses else "execution.completed"
         self._emit_lifecycle_event(lifecycle_event, request, result.status, {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
+        await self._safe_governance("after_execute", request=request, result=result)
         return result
+
+    async def _persist_last_execution_id(self, request: ExecutionRequest) -> None:
+        if not self._should_persist_last_execution_id(request):
+            return
+        try:
+            # local import keeps runtime dependency light and avoids import cycles at module load.
+            from src.sessions.manager import session_manager
+
+            await session_manager.set_last_execution_id(request.session_id, request.request_id)
+        except Exception:
+            logger.debug("ExecutionBus failed to persist last_execution_id", exc_info=True)
+
+    def _should_persist_last_execution_id(self, request: ExecutionRequest) -> bool:
+        if not request.session_id:
+            return False
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        return metadata.get("persist_last_execution_id") is True
+
+    async def _safe_governance(self, hook_name: str, **kwargs: Any) -> None:
+        try:
+            # Phase 1 contract: hooks are fire-and-forget extension points.
+            hook = getattr(self._governance, hook_name, None)
+            if callable(hook):
+                result = hook(**kwargs)
+                if inspect.isawaitable(result):
+                    await result
+        except Exception:
+            logger.debug("ExecutionBus governance hook failed: %s", hook_name, exc_info=True)
 
     def _normalize_result(self, request: ExecutionRequest, raw_result: Any) -> ExecutionResult:
         if isinstance(raw_result, ExecutionResult):
@@ -128,6 +167,7 @@ class ExecutionBus:
         }
         payload = build_runtime_event(
             event_type=event_type,
+            execution_type=request.execution_type,
             state=state,
             session_id=request.session_id,
             request_id=request.request_id,
@@ -200,21 +240,114 @@ def _get_required(payload: Dict[str, Any], key: str) -> Any:
     return payload[key]
 
 
+def _coerce_task_tool_result(raw_result: Any) -> Dict[str, Any]:
+    """Normalize task tool results from heterogeneous return types."""
+    if isinstance(raw_result, ToolResult) or (
+        hasattr(raw_result, "success") and hasattr(raw_result, "content") and hasattr(raw_result, "error")
+    ):
+        success_value = bool(getattr(raw_result, "success"))
+        content_value = getattr(raw_result, "content")
+        error_value = getattr(raw_result, "error")
+        return {
+            "success": success_value,
+            "content": content_value,
+            "error": error_value,
+            "result": {
+                "success": success_value,
+                "content": content_value,
+                "error": error_value,
+            },
+            "artifacts": {},
+            "runtime_events": [],
+            "next_action_hint": None,
+            "audit_ref": None,
+        }
+
+    if isinstance(raw_result, ExecutionResult):
+        payload = raw_result.output_payload if isinstance(raw_result.output_payload, dict) else {"value": raw_result.output_payload}
+        content = payload.get("content", payload.get("output", payload.get("response", payload.get("value"))))
+        success = raw_result.status not in {"error", "blocked"}
+        return {
+            "success": success,
+            "content": content,
+            "error": payload.get("error"),
+            "result": payload,
+            "artifacts": raw_result.artifacts if isinstance(raw_result.artifacts, dict) else {},
+            "runtime_events": raw_result.runtime_events if isinstance(raw_result.runtime_events, list) else [],
+            "next_action_hint": raw_result.next_action_hint,
+            "audit_ref": raw_result.audit_ref,
+        }
+
+    if isinstance(raw_result, dict):
+        explicit_success = raw_result.get("success")
+        explicit_status = raw_result.get("status")
+        if isinstance(explicit_success, bool):
+            success = explicit_success
+        elif isinstance(explicit_status, str) and explicit_status.strip():
+            success = explicit_status.strip() not in {"error", "blocked"}
+        else:
+            success = False if raw_result.get("error") else True
+        content = raw_result.get("content", raw_result.get("output", raw_result.get("response", raw_result.get("value"))))
+        error_value = raw_result.get("error")
+        if (error_value is None or error_value == "") and not success:
+            if isinstance(content, str) and content.strip():
+                error_value = content.strip()
+            elif isinstance(explicit_status, str) and explicit_status.strip():
+                error_value = f"Task tool result reported status={explicit_status.strip()}"
+        return {
+            "success": success,
+            "content": content,
+            "error": error_value,
+            "result": raw_result,
+            "artifacts": {},
+            "runtime_events": [],
+            "next_action_hint": None,
+            "audit_ref": None,
+        }
+
+    if isinstance(raw_result, str):
+        return {
+            "success": True,
+            "content": raw_result,
+            "error": None,
+            "result": {"value": raw_result},
+            "artifacts": {},
+            "runtime_events": [],
+            "next_action_hint": None,
+            "audit_ref": None,
+        }
+
+    return {
+        "success": True,
+        "content": raw_result,
+        "error": None,
+        "result": {"value": raw_result},
+        "artifacts": {},
+        "runtime_events": [],
+        "next_action_hint": None,
+        "audit_ref": None,
+    }
+
+
 def build_default_execution_bus(
     *,
     chat_handler: Optional[ExecutionHandler] = None,
     event_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    governance: Optional[GovernanceHooks] = None,
+    execute_tool_func: Optional[Callable[..., Any]] = None,
 ) -> ExecutionBus:
     """Build a bus with default skill/tool/subagent/event handlers.
 
     Chat handling is intentionally caller-injected via `chat_handler` to avoid
     coupling this runtime module to a single chat orchestration implementation.
     """
-    bus = ExecutionBus(event_emitter=event_emitter)
+    bus = ExecutionBus(event_emitter=event_emitter, governance=governance)
 
     if chat_handler is not None:
         # Chat is intentionally optional and injected by caller (e.g., webchat/gateway path).
         bus.register_handler("chat", chat_handler)
+
+    execute_tool_callable = execute_tool_func or execute_tool_by_name
 
     async def skill_handler(request: ExecutionRequest) -> SkillResult:
         skill_name = _get_required(request.input_payload, "skill_name")
@@ -227,7 +360,7 @@ def build_default_execution_bus(
         # For now this adapter intentionally reuses the existing execution stack.
         tool_name = _get_required(request.input_payload, "tool_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
-        return await execute_tool_by_name(tool_name, **kwargs)
+        return await execute_tool_callable(tool_name, **kwargs)
 
     async def subagent_handler(request: ExecutionRequest) -> Dict[str, Any]:
         return await run_subagent_execution(
@@ -239,6 +372,47 @@ def build_default_execution_bus(
             cleanup=request.input_payload.get("cleanup", "delete"),
             start_immediately=bool(request.input_payload.get("start_immediately", False)),
             wait_for_completion=bool(request.input_payload.get("wait_for_completion", False)),
+        )
+
+    async def task_handler(request: ExecutionRequest) -> ExecutionResult:
+        task_type = request.input_payload.get("task_type")
+        if task_type != "tool_task":
+            return make_execution_result(
+                request_id=request.request_id,
+                status="blocked",
+                output_payload={
+                    "task_type": task_type,
+                    "success": False,
+                    "error": f"Unsupported task_type: {task_type}",
+                    "task_boundary": True,
+                },
+            )
+        tool_name = _get_required(request.input_payload, "tool_name")
+        kwargs = dict(request.input_payload.get("kwargs") or {})
+        event_callback = request.input_payload.get("event_callback")
+        raw_task_result = await task_manager.run_tool_task(
+            session_id=request.session_id or request.request_id,
+            tool_name=tool_name,
+            coro_factory=lambda: execute_tool_callable(tool_name, **kwargs),
+            event_callback=event_callback if callable(event_callback) else None,
+        )
+        normalized = _coerce_task_tool_result(raw_task_result)
+        return make_execution_result(
+            request_id=request.request_id,
+            status="success" if normalized["success"] else "error",
+            output_payload={
+                "task_type": "tool_task",
+                "tool_name": tool_name,
+                "success": bool(normalized["success"]),
+                "content": normalized["content"],
+                "error": normalized["error"],
+                "task_boundary": True,
+                "result": normalized["result"],
+            },
+            artifacts=normalized["artifacts"],
+            runtime_events=normalized["runtime_events"],
+            next_action_hint=normalized["next_action_hint"],
+            audit_ref=normalized["audit_ref"],
         )
 
     async def event_handler(request: ExecutionRequest) -> ExecutionResult:
@@ -288,6 +462,7 @@ def build_default_execution_bus(
 
     bus.register_handler("skill", skill_handler)
     bus.register_handler("tool", tool_handler)
+    bus.register_handler("task", task_handler)
     bus.register_handler("subagent", subagent_handler)
     bus.register_handler("event", event_handler)
     return bus

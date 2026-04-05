@@ -432,6 +432,21 @@ class SessionManager:
                 )
             )
 
+    async def set_last_execution_id(self, session_id: str, request_id: Optional[str]) -> None:
+        """Record latest runtime execution request id in session metadata.
+
+        This updates in-memory session metadata; persistence is deferred to
+        normal session save paths (e.g. add_message autosave, save_all, shutdown).
+        """
+        if not session_id or not request_id:
+            return
+        session = await self.get_session(session_id)
+        metadata = session.setdefault("metadata", {})
+        metadata["last_execution_id"] = request_id
+        session["updated_at"] = datetime.now().isoformat()
+        # Metadata-only execution id updates are intentionally deferred to the
+        # next normal persistence path (e.g. add_message autosave, save_all, shutdown).
+
     async def clear_history(self, session_id: str) -> None:
         """Clear session history."""
         if session_id in self.sessions:

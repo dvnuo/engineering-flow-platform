@@ -5,6 +5,7 @@ from src.agents.errors import LLMError
 from src.runtime.contracts import ExecutionResult, make_execution_request, make_execution_result
 from src.runtime.execution_bus import ExecutionBus, build_default_execution_bus
 from src.runtime.events import build_runtime_event
+from src.runtime.governance import GovernanceHooks
 
 
 @pytest.mark.asyncio
@@ -76,6 +77,11 @@ async def test_execution_bus_emits_additive_runtime_event():
     assert payload["legacy_type"] == "execution_started"
     assert emitted[1][0] == "execution_completed"
     assert emitted[1][1]["event_type"] == "execution.completed"
+    assert emitted[0][1]["event"] == "execution.started"
+    assert emitted[0][1]["execution_id"] == emitted[0][1]["request_id"]
+    assert emitted[0][1]["type"] == "chat"
+    assert emitted[0][1]["payload"]["execution_type"] == "chat"
+    assert emitted[0][1]["timestamp"] == emitted[0][1]["created_at"]
 
 
 @pytest.mark.asyncio
@@ -162,18 +168,688 @@ async def test_execution_bus_blocked_result_emits_failed_event():
 def test_runtime_event_builder_is_additive_with_legacy_payload():
     event = build_runtime_event(
         event_type="runtime.update",
+        execution_type="chat",
         state="success",
         session_id="s3",
         request_id="r3",
         agent_id="a3",
         summary="done",
         detail_payload={"k": "v"},
-        legacy_payload={"type": "legacy", "data": {"k": "v"}},
+        legacy_payload={"legacy_type": "legacy", "data": {"k": "v"}},
     )
 
     assert event["detail_payload"] == {"k": "v"}
-    assert event["type"] == "legacy"
+    assert event["type"] == "chat"
+    assert event["legacy_type"] == "legacy"
     assert event["data"] == {"k": "v"}
+    assert event["event"] == "runtime.update"
+    assert event["execution_id"] == "r3"
+    assert event["timestamp"] == event["created_at"]
+
+
+def test_runtime_event_builder_uses_explicit_execution_type_aliases_when_provided():
+    event = build_runtime_event(
+        event_type="runtime.update",
+        execution_type="chat",
+        state="ok",
+        session_id="s1",
+        request_id="r1",
+        agent_id="a1",
+        summary="ok",
+        detail_payload={"k": "v"},
+    )
+    assert event["type"] == "chat"
+    assert event["execution_type"] == "chat"
+
+
+def test_runtime_event_builder_allows_legacy_type_when_execution_type_missing():
+    event = build_runtime_event(
+        event_type="runtime.update",
+        execution_type=None,
+        state="ok",
+        session_id="s1",
+        request_id="r1",
+        agent_id="a1",
+        summary="ok",
+        detail_payload={"k": "v"},
+        legacy_payload={"type": "legacy-type"},
+    )
+    assert event["type"] == "legacy-type"
+
+
+def test_runtime_event_builder_allows_legacy_execution_type_when_missing():
+    event = build_runtime_event(
+        event_type="runtime.update",
+        execution_type=None,
+        state="ok",
+        session_id="s1",
+        request_id="r1",
+        agent_id="a1",
+        summary="ok",
+        detail_payload={"k": "v"},
+        legacy_payload={"execution_type": "legacy-execution"},
+    )
+    assert event["execution_type"] == "legacy-execution"
+
+
+def test_runtime_event_builder_legacy_payload_does_not_override_alias_collisions():
+    event = build_runtime_event(
+        event_type="execution.completed",
+        execution_type="tool",
+        state="success",
+        session_id="s1",
+        request_id="r1",
+        agent_id="a1",
+        summary="done",
+        detail_payload={"content": "ok"},
+        legacy_payload={
+            "type": "legacy-type",
+            "event": "legacy-event",
+            "execution_id": "legacy-exec",
+            "payload": {"legacy": True},
+            "timestamp": "legacy-ts",
+            "legacy_type": "legacy_execution_completed",
+        },
+    )
+
+    assert event["type"] == "tool"
+    assert event["event"] == "execution.completed"
+    assert event["execution_id"] == "r1"
+    assert event["payload"] == {"content": "ok"}
+    assert event["timestamp"] == event["created_at"]
+    assert event["legacy_type"] == "legacy_execution_completed"
+
+
+def test_runtime_event_builder_calls_utcnow_once(monkeypatch):
+    from datetime import datetime as _datetime
+    from src.runtime import events as events_module
+
+    class _DatetimeStub:
+        calls = 0
+
+        @classmethod
+        def utcnow(cls):
+            cls.calls += 1
+            return _datetime(2026, 1, 1, 0, 0, 0)
+
+    monkeypatch.setattr(events_module, "datetime", _DatetimeStub)
+    event = events_module.build_runtime_event(
+        event_type="runtime.update",
+        state="ok",
+        session_id="s1",
+        request_id="r1",
+        agent_id="a1",
+        summary="ok",
+        detail_payload={"execution_type": "chat"},
+    )
+    assert _DatetimeStub.calls == 1
+    assert event["timestamp"] == event["created_at"]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_invokes_governance_hooks():
+    class _RecordingGovernance(GovernanceHooks):
+        def __init__(self):
+            self.calls = []
+
+        def before_execute(self, request):
+            self.calls.append(("before", request.request_id))
+            return {}
+
+        def after_execute(self, request, result):
+            self.calls.append(("after", result.status))
+            return {}
+
+        def on_error(self, request, error):
+            self.calls.append(("error", error.__class__.__name__))
+            return {}
+
+    async def _ok(_request):
+        return {"response": "ok"}
+
+    governance = _RecordingGovernance()
+    bus = ExecutionBus(governance=governance)
+    bus.register_handler("chat", _ok)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert governance.calls == [("before", req.request_id), ("after", "success")]
+
+
+def test_default_governance_hooks_are_noop_for_request_and_result():
+    hooks = GovernanceHooks()
+    req = make_execution_request(
+        source_type="chat",
+        execution_type="chat",
+        metadata={"existing": "value"},
+    )
+    result = make_execution_result(
+        request_id=req.request_id,
+        status="success",
+        output_payload={"content": "ok"},
+    )
+    original_metadata = dict(req.metadata)
+    original_output = dict(result.output_payload)
+
+    hooks.before_execute(req)
+    hooks.after_execute(req, result)
+    hooks.on_error(req, RuntimeError("boom"))
+
+    assert req.metadata == original_metadata
+    assert result.output_payload == original_output
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_governance_on_error_invoked():
+    class _RecordingGovernance(GovernanceHooks):
+        def __init__(self):
+            self.error_seen = None
+
+        def on_error(self, request, error):
+            self.error_seen = error.__class__.__name__
+            return {}
+
+    async def _bad(_request):
+        raise RuntimeError("boom")
+
+    governance = _RecordingGovernance()
+    bus = ExecutionBus(governance=governance)
+    bus.register_handler("chat", _bad)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+
+    assert result.status == "error"
+    assert governance.error_seen == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_async_governance_hooks_are_awaited():
+    class _AsyncGovernance(GovernanceHooks):
+        def __init__(self):
+            self.calls = []
+
+        async def before_execute(self, request):
+            self.calls.append(("before", request.request_id))
+
+        async def after_execute(self, request, result):
+            self.calls.append(("after", result.status))
+
+    async def _ok(_request):
+        return {"response": "ok"}
+
+    governance = _AsyncGovernance()
+    bus = ExecutionBus(governance=governance)
+    bus.register_handler("chat", _ok)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert governance.calls == [("before", req.request_id), ("after", "success")]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_async_governance_on_error_is_awaited():
+    class _AsyncGovernance(GovernanceHooks):
+        def __init__(self):
+            self.error_seen = None
+
+        async def on_error(self, request, error):
+            self.error_seen = (request.execution_type, error.__class__.__name__)
+
+    async def _bad(_request):
+        raise RuntimeError("boom")
+
+    governance = _AsyncGovernance()
+    bus = ExecutionBus(governance=governance)
+    bus.register_handler("chat", _bad)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+
+    assert result.status == "error"
+    assert governance.error_seen == ("chat", "RuntimeError")
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_async_governance_exceptions_are_swallowed(caplog):
+    class _FailingAsyncGovernance(GovernanceHooks):
+        async def before_execute(self, request):
+            raise RuntimeError("before failed")
+
+        async def after_execute(self, request, result):
+            raise RuntimeError("after failed")
+
+        async def on_error(self, request, error):
+            raise RuntimeError("on_error failed")
+
+    async def _bad(_request):
+        raise RuntimeError("handler boom")
+
+    with caplog.at_level("DEBUG"):
+        bus = ExecutionBus(governance=_FailingAsyncGovernance())
+        bus.register_handler("chat", _bad)
+        req = make_execution_request(source_type="chat", execution_type="chat")
+        result = await bus.execute(req)
+
+    assert result.status == "error"
+    assert "ExecutionBus governance hook failed: before_execute" in caplog.text
+    assert "ExecutionBus governance hook failed: on_error" in caplog.text
+    assert "ExecutionBus governance hook failed: after_execute" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_tool_task(monkeypatch):
+    captured = {}
+
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        captured["session_id"] = session_id
+        return ToolResult(success=True, content=f"{tool_name}:{session_id}", error=None)
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {"x": 1}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["task_type"] == "tool_task"
+    assert result.output_payload["tool_name"] == "demo_tool"
+    assert result.output_payload["task_boundary"] is True
+    assert result.output_payload["success"] is True
+    assert captured["session_id"] == "s-task"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_accepts_toolresult_like_object(monkeypatch):
+    class _ToolResultLike:
+        def __init__(self):
+            self.success = True
+            self.content = "like-ok"
+            self.error = None
+
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return _ToolResultLike()
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["content"] == "like-ok"
+    assert result.output_payload["result"]["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_accepts_dict_result(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"success": True, "output": "dict-ok", "meta": "x"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["content"] == "dict-ok"
+    assert result.output_payload["result"]["meta"] == "x"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_dict_status_error_maps_to_failure(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"status": "error", "content": "failed"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["success"] is False
+    assert result.output_payload["error"] is not None
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_dict_status_blocked_maps_to_failure(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"status": "blocked", "content": "blocked"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["success"] is False
+    assert result.output_payload["error"] is not None
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_dict_status_success_maps_to_success(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"status": "success", "content": "ok"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert result.output_payload["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_dict_explicit_success_overrides_status(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"success": True, "status": "error", "content": "ok"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert result.output_payload["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_status_error_uses_content_fallback_for_error(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"status": "error", "content": "permission denied"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["error"] == "permission denied"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_explicit_error_wins_over_fallback(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"status": "error", "content": "permission denied", "error": "explicit failure"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["error"] == "explicit failure"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_dict_without_status_keeps_existing_inference(monkeypatch):
+    async def _error_only(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"error": "boom"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _error_only)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["success"] is False
+
+    async def _content_only(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"content": "ok"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _content_only)
+    result2 = await bus.execute(req)
+    assert result2.status == "success"
+    assert result2.output_payload["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_accepts_string_result(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return "string-ok"
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["content"] == "string-ok"
+    assert result.output_payload["result"]["value"] == "string-ok"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_accepts_execution_result(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return make_execution_result(
+            request_id="inner-1",
+            status="success",
+            output_payload={"response": "inner-ok"},
+            artifacts={"a": 1},
+            runtime_events=[{"evt": "x"}],
+            next_action_hint="next",
+            audit_ref="audit-1",
+        )
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["content"] == "inner-ok"
+    assert result.output_payload["result"]["response"] == "inner-ok"
+    assert result.artifacts == {"a": 1}
+    assert result.runtime_events == [{"evt": "x"}]
+    assert result.next_action_hint == "next"
+    assert result.audit_ref == "audit-1"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_falls_back_to_request_id_as_session(monkeypatch):
+    captured = {}
+
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        captured["session_id"] = session_id
+        return ToolResult(success=True, content=f"{tool_name}:{session_id}", error=None)
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        request_id="req-fallback",
+        source_type="agent",
+        execution_type="task",
+        session_id=None,
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {"x": 1}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert captured["session_id"] == "req-fallback"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_exception_uses_outer_error_path(monkeypatch):
+    async def _failing_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        raise RuntimeError("task exploded")
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _failing_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "error"
+    assert result.output_payload["error"] == "task exploded"
+    assert result.output_payload["error_type"] == "RuntimeError"
+    assert result.output_payload["execution_type"] == "task"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_governance_on_error_invoked_for_task_exception(monkeypatch):
+    class _RecordingGovernance(GovernanceHooks):
+        def __init__(self):
+            self.error_seen = None
+
+        def on_error(self, request, error):
+            self.error_seen = (request.execution_type, error.__class__.__name__)
+
+    async def _failing_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        raise RuntimeError("task exploded")
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _failing_run_tool_task)
+    bus = build_default_execution_bus(governance=_RecordingGovernance())
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "error"
+    assert bus._governance.error_seen == ("task", "RuntimeError")
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_unsupported_task_type():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={"task_type": "unknown_task"},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_uses_injected_execute_tool_callable_for_tool_and_task():
+    calls = []
+
+    async def _injected_execute(tool_name, **kwargs):
+        calls.append((tool_name, kwargs))
+        return ToolResult(success=True, content=f"injected:{tool_name}", error=None)
+
+    async def _inline_task_runner(*, session_id, tool_name, coro_factory, event_callback=None):
+        return await coro_factory()
+
+    bus = build_default_execution_bus(execute_tool_func=_injected_execute)
+    req_tool = make_execution_request(
+        source_type="agent",
+        execution_type="tool",
+        session_id="s-injected",
+        input_payload={"tool_name": "tool_a", "kwargs": {"v": 1}},
+    )
+    tool_result = await bus.execute(req_tool)
+    assert tool_result.status == "success"
+
+    from src.runtime import execution_bus as execution_bus_module
+
+    original_runner = execution_bus_module.task_manager.run_tool_task
+    execution_bus_module.task_manager.run_tool_task = _inline_task_runner
+    try:
+        req_task = make_execution_request(
+            source_type="agent",
+            execution_type="task",
+            session_id="s-injected",
+            input_payload={"task_type": "tool_task", "tool_name": "tool_b", "kwargs": {"v": 2}},
+        )
+        task_result = await bus.execute(req_task)
+    finally:
+        execution_bus_module.task_manager.run_tool_task = original_runner
+
+    assert task_result.status == "success"
+    assert calls == [("tool_a", {"v": 1}), ("tool_b", {"v": 2})]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_persists_last_execution_id_only_when_opted_in(monkeypatch):
+    calls = []
+
+    async def _record_set_last_execution_id(session_id, request_id):
+        calls.append((session_id, request_id))
+
+    monkeypatch.setattr("src.sessions.manager.session_manager.set_last_execution_id", _record_set_last_execution_id)
+
+    async def _ok(_request):
+        return {"response": "ok"}
+
+    bus = build_default_execution_bus(chat_handler=_ok)
+    no_persist_req = make_execution_request(
+        source_type="chat",
+        execution_type="chat",
+        session_id="s-no-persist",
+        metadata={},
+    )
+    await bus.execute(no_persist_req)
+    assert calls == []
+
+    persist_req = make_execution_request(
+        source_type="chat",
+        execution_type="chat",
+        session_id="s-persist",
+        metadata={"persist_last_execution_id": True},
+    )
+    await bus.execute(persist_req)
+    assert calls == [("s-persist", persist_req.request_id)]
 
 
 def test_make_execution_result_defaults():

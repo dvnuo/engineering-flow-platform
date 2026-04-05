@@ -42,7 +42,7 @@ from src.agents.executor import (
     skills_executor,
     SkillResult,
     get_tools_schemas,
-    execute_tool_by_name,
+    execute_tool_by_name,  # compatibility export for tests and legacy patch points
     ToolResult,
 )
 from src.agents.tool_result_policy import should_passthrough_tool_result
@@ -53,9 +53,9 @@ from src.agents.skill_runtime import (
     get_effective_skill_runtime_prompt,
     get_skill_reference_attachment,
     resolve_prompt_execution_boundary,
-    run_skill_tool_with_task_boundary,
 )
 from src.skills.runtime import SkillRuntimeConfig
+from src.runtime import build_default_execution_bus, make_execution_request
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +150,72 @@ def _is_lookup_only_skill(skill: Any, skill_session: SkillSession, message: str)
     if any(word in tokens for word in generate_words):
         return False
     return any(word in tokens for word in lookup_words)
+
+
+async def _execute_tool_via_runtime_bus(
+    *,
+    session_id: str,
+    tool_name: str,
+    args: Dict[str, Any],
+    runtime_config: Optional[SkillRuntimeConfig] = None,
+    event_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    source_ref: str = "agents.core",
+) -> ToolResult:
+    """Phase 1 compatibility helper to route tool/task execution through ExecutionBus.
+
+    NOTE: this bridge keeps legacy monkeypatch/patch-point behavior while routing through the bus.
+    """
+    use_task_boundary = bool(runtime_config and tool_name in set(runtime_config.task_tools))
+    execution_type = "task" if use_task_boundary else "tool"
+    input_payload: Dict[str, Any]
+    if use_task_boundary:
+        input_payload = {
+            "task_type": "tool_task",
+            "tool_name": tool_name,
+            "kwargs": dict(args),
+            "event_callback": event_callback,
+        }
+    else:
+        input_payload = {"tool_name": tool_name, "kwargs": dict(args)}
+
+    bus = build_default_execution_bus(execute_tool_func=execute_tool_by_name)
+    request = make_execution_request(
+        source_type="agent",
+        source_ref=source_ref,
+        execution_type=execution_type,
+        session_id=session_id,
+        input_payload=input_payload,
+        metadata={"tool_name": tool_name, "task_boundary": use_task_boundary},
+    )
+    result = await bus.execute(request)
+    payload: Dict[str, Any] = result.output_payload if isinstance(result.output_payload, dict) else {"value": result.output_payload}
+    explicit_success = payload.get("success")
+    if isinstance(explicit_success, bool):
+        payload_success = explicit_success
+    elif payload.get("error"):
+        payload_success = False
+    else:
+        payload_success = True
+    success = result.status not in {"error", "blocked"} and payload_success
+    content = payload.get("content")
+    if content is None:
+        content = payload.get("output")
+    if content is None:
+        content = payload.get("response")
+    if content is None:
+        content = payload.get("value")
+    if content is None and payload.get("error"):
+        content = f"Error: {payload.get('error')}"
+    if content is None:
+        content = ""
+    error = payload.get("error")
+    if error is None and result.status == "blocked":
+        error = "Execution blocked"
+    return ToolResult(
+        success=success,
+        content=str(content),
+        error=error,
+    )
 
 
 @dataclass
@@ -1417,14 +1483,15 @@ You have access to the following tools. When a user asks you to do something tha
                     # TODO: Implement actual user confirmation flow
                     logger.info(f"[Confirmation] Auto-confirming write operation: {tool_name}")
                 
-                # Execute the tool (task-capable tools go through task manager boundary)
+                # Execute the tool through runtime bus (task-capable tools route to task boundary).
                 logger.info(f"Executing tool: {tool_name} with args: {safe_preview(args, 300)}")
-                tool_result = await run_skill_tool_with_task_boundary(
+                tool_result = await _execute_tool_via_runtime_bus(
                     runtime_config=active_skill_runtime,
                     session_id=session_id,
                     tool_name=tool_name,
-                    execute_direct=lambda tn=tool_name, tool_args=args: execute_tool_by_name(tn, **tool_args),
                     event_callback=send_event,
+                    args=args,
+                    source_ref="agents.core.tool_loop",
                 )
                 result_preview = safe_preview(tool_result, 200)
                 post_hook_effects = apply_skill_hooks(
@@ -1671,6 +1738,15 @@ You have access to the following tools. When a user asks you to do something tha
 
         skill_session = SkillSession.from_dict(skill_state)
         skill = skill or skill_registry.get_skill(skill_session.skill_name)
+        try:
+            skill_runtime_config = skill_registry.get_skill_runtime_config(skill) if skill else None
+        except Exception:
+            logger.debug(
+                "[SkillMode] Failed to resolve runtime config for skill %s; continuing without runtime config",
+                getattr(skill, "name", None),
+                exc_info=True,
+            )
+            skill_runtime_config = None
         if not skill:
             await session_manager.set_active_skill_session(session_id, None)
             fallback = "Skill session was cleared because the skill definition is unavailable."
@@ -1898,7 +1974,13 @@ You have access to the following tools. When a user asks you to do something tha
                 logger.debug(f"[SkillMode] [TOOL_EXEC] Executing tool={tool_name}, parsed_args={safe_preview(normalized_args, 200)}")
                 executed_any_tool_this_round = True
                 try:
-                    tool_result: ToolResult = await execute_tool_by_name(tool_name, **normalized_args)
+                    tool_result: ToolResult = await _execute_tool_via_runtime_bus(
+                        runtime_config=skill_runtime_config,
+                        session_id=session_id,
+                        tool_name=tool_name,
+                        args=normalized_args,
+                        source_ref="agents.core.skill_mode_loop",
+                    )
                     output_text = str(tool_result)
                     logger.debug(f"[SkillMode] [TOOL_RESULT] tool={tool_name}, result length={len(output_text)}, preview={safe_preview(output_text, 200)}")
                 except Exception as tool_exc:

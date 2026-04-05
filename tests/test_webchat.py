@@ -1,5 +1,6 @@
 """Tests for WebChat UI module."""
 
+import asyncio
 import os
 import pytest
 from pathlib import Path
@@ -239,7 +240,36 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
         request_path="/api/chat/stream",
     )
     assert fake_bus.request.metadata["path"] == "/api/chat/stream"
+    assert fake_bus.request.metadata["persist_last_execution_id"] is True
     assert ("event_emitter" not in captured_kwargs) or (captured_kwargs.get("event_emitter") is None)
+
+
+@pytest.mark.asyncio
+async def test_chat_execution_bus_adapter_persists_last_execution_id(monkeypatch):
+    from src.gateway import webchat
+
+    calls = []
+
+    async def _fake_set_last_execution_id(session_id, request_id):
+        calls.append((session_id, request_id))
+
+    async def fake_run_chat_execution(agent, **kwargs):
+        return {"response": "ok"}
+
+    monkeypatch.setattr(webchat.session_manager, "set_last_execution_id", _fake_set_last_execution_id)
+    monkeypatch.setattr(webchat, "run_chat_execution", fake_run_chat_execution)
+
+    await webchat._run_chat_via_execution_bus(
+        agent=object(),
+        session_id="s-meta",
+        message="hello",
+        user_name="u1",
+        portal_user_id=None,
+        portal_user_name=None,
+    )
+    assert calls
+    assert calls[0][0] == "s-meta"
+    assert str(calls[0][1]).startswith("chat-")
 
 
 @pytest.mark.asyncio
@@ -325,3 +355,156 @@ async def test_api_chat_stream_generic_exception_still_returns_error_response():
 
     response = await webchat.api_chat_stream(_Request())
     assert response.status == 500
+
+
+@pytest.mark.asyncio
+async def test_api_chat_resolves_portal_identity_from_headers(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+
+    async def _fake_get_session(_session_id):
+        return {"history": [{}], "channel": "", "metadata": {}}
+
+    async def _fake_save_session(**kwargs):
+        return True
+
+    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+    monkeypatch.setattr(webchat.session_persistence, "save_session", _fake_save_session)
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-User-Id": " hdr-user \r\n", "X-Portal-User-Name": " hdr-name\t"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s1"}
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
+    assert captured["portal_user_id"] == "hdr-user"
+    assert captured["portal_user_name"] == "hdr-name"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_resolves_portal_identity_from_headers(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data)
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-User-Id": "stream-user", "X-Portal-User-Name": "stream-name"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s2"}
+
+    resp = await webchat.api_chat_stream(_Request())
+    assert resp.status == 200
+    assert captured["portal_user_id"] == "stream-user"
+    assert captured["portal_user_name"] == "stream-name"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_body_identity_fallback_and_header_precedence(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+
+    async def _fake_get_session(_session_id):
+        return {"history": [{}], "channel": "", "metadata": {}}
+
+    async def _fake_save_session(**kwargs):
+        return True
+
+    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+    monkeypatch.setattr(webchat.session_persistence, "save_session", _fake_save_session)
+
+    class _BodyOnlyRequest:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s3", "portal_user_id": "body-id", "portal_user_name": "body-name"}
+
+    await webchat.api_chat(_BodyOnlyRequest())
+    assert captured["portal_user_id"] == "body-id"
+    assert captured["portal_user_name"] == "body-name"
+
+    class _ConflictRequest:
+        app = {}
+        headers = {"X-Portal-User-Id": "header-id", "X-Portal-User-Name": "header-name"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s4", "portal_user_id": "body-id", "portal_user_name": "body-name"}
+
+    await webchat.api_chat(_ConflictRequest())
+    assert captured["portal_user_id"] == "header-id"
+    assert captured["portal_user_name"] == "header-name"
+
+
+def test_sanitize_portal_identity_value_none_returns_empty():
+    from src.gateway import webchat
+
+    assert webchat._sanitize_portal_identity_value(None) == ""
+
+
+def test_sanitize_portal_identity_value_strips_controls_and_whitespace():
+    from src.gateway import webchat
+
+    assert webchat._sanitize_portal_identity_value(" \r\nabc\t\x00 ") == "abc"
+
+
+def test_sanitize_portal_identity_value_truncates_to_max_length():
+    from src.gateway import webchat
+
+    raw = "x" * (webchat.MAX_PORTAL_IDENTITY_LENGTH + 25)
+    sanitized = webchat._sanitize_portal_identity_value(raw)
+    assert len(sanitized) == webchat.MAX_PORTAL_IDENTITY_LENGTH
+    assert sanitized == "x" * webchat.MAX_PORTAL_IDENTITY_LENGTH
+
+
+def test_sanitize_portal_identity_value_truncation_applies_after_sanitization():
+    from src.gateway import webchat
+
+    raw = " \n" + ("a" * (webchat.MAX_PORTAL_IDENTITY_LENGTH + 10)) + "\r\t "
+    sanitized = webchat._sanitize_portal_identity_value(raw)
+    assert len(sanitized) == webchat.MAX_PORTAL_IDENTITY_LENGTH
+    assert sanitized == "a" * webchat.MAX_PORTAL_IDENTITY_LENGTH
