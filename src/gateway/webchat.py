@@ -523,6 +523,8 @@ async def api_chat(request: web.Request) -> web.Response:
         
     except json.JSONDecodeError:
         return web.json_response({'error': 'Invalid JSON'}, status=400)
+    except web.HTTPException:
+        raise
     except Exception as e:
         # Get detailed error information
         error_details = extract_error_details(e)
@@ -666,6 +668,8 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
     except json.JSONDecodeError:
         response = web.json_response({'error': 'Invalid JSON'}, status=400)
         return response
+    except web.HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Stream error: {e}")
         error_data = json.dumps({'error': str(e)})

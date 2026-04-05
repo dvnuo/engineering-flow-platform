@@ -267,3 +267,61 @@ async def test_chat_execution_bus_adapter_raises_on_error_status(monkeypatch):
             portal_user_id=None,
             portal_user_name=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_api_chat_reraises_http_exception():
+    from aiohttp import web
+    from src.gateway import webchat
+
+    class _Request:
+        app = {}
+
+        async def json(self):
+            raise web.HTTPInternalServerError(text='{"error":"bus failed"}', content_type="application/json")
+
+    with pytest.raises(web.HTTPInternalServerError):
+        await webchat.api_chat(_Request())
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_reraises_http_exception():
+    from aiohttp import web
+    from src.gateway import webchat
+
+    class _Request:
+        app = {}
+
+        async def json(self):
+            raise web.HTTPInternalServerError(text='{"error":"bus failed"}', content_type="application/json")
+
+    with pytest.raises(web.HTTPInternalServerError):
+        await webchat.api_chat_stream(_Request())
+
+
+@pytest.mark.asyncio
+async def test_api_chat_generic_exception_still_returns_error_response():
+    from src.gateway import webchat
+
+    class _Request:
+        app = {}
+
+        async def json(self):
+            raise RuntimeError("bad")
+
+    response = await webchat.api_chat(_Request())
+    assert response.status == 500
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_generic_exception_still_returns_error_response():
+    from src.gateway import webchat
+
+    class _Request:
+        app = {}
+
+        async def json(self):
+            raise RuntimeError("bad")
+
+    response = await webchat.api_chat_stream(_Request())
+    assert response.status == 500
