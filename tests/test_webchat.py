@@ -243,6 +243,34 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_chat_execution_bus_adapter_persists_last_execution_id(monkeypatch):
+    from src.gateway import webchat
+
+    calls = []
+
+    async def _fake_set_last_execution_id(session_id, request_id):
+        calls.append((session_id, request_id))
+
+    async def fake_run_chat_execution(agent, **kwargs):
+        return {"response": "ok"}
+
+    monkeypatch.setattr(webchat.session_manager, "set_last_execution_id", _fake_set_last_execution_id)
+    monkeypatch.setattr(webchat, "run_chat_execution", fake_run_chat_execution)
+
+    await webchat._run_chat_via_execution_bus(
+        agent=object(),
+        session_id="s-meta",
+        message="hello",
+        user_name="u1",
+        portal_user_id=None,
+        portal_user_name=None,
+    )
+    assert calls
+    assert calls[0][0] == "s-meta"
+    assert str(calls[0][1]).startswith("chat-")
+
+
+@pytest.mark.asyncio
 async def test_chat_execution_bus_adapter_raises_on_error_status(monkeypatch):
     from aiohttp import web
     from src.gateway import webchat

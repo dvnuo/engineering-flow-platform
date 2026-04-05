@@ -432,6 +432,25 @@ class SessionManager:
                 )
             )
 
+    async def set_last_execution_id(self, session_id: str, request_id: Optional[str]) -> None:
+        """Persist latest runtime execution request id in session metadata."""
+        if not session_id or not request_id:
+            return
+        session = await self.get_session(session_id)
+        metadata = session.setdefault("metadata", {})
+        metadata["last_execution_id"] = request_id
+        session["updated_at"] = datetime.now().isoformat()
+
+        if self.auto_save and self.persistence_enabled:
+            asyncio.create_task(
+                session_persistence.save_session(
+                    session_id=session_id,
+                    channel=session.get("channel", ""),
+                    messages=session.get("history", []),
+                    metadata=session.get("metadata", {}),
+                )
+            )
+
     async def clear_history(self, session_id: str) -> None:
         """Clear session history."""
         if session_id in self.sessions:

@@ -5,6 +5,7 @@ from src.agents.errors import LLMError
 from src.runtime.contracts import ExecutionResult, make_execution_request, make_execution_result
 from src.runtime.execution_bus import ExecutionBus, build_default_execution_bus
 from src.runtime.events import build_runtime_event
+from src.runtime.governance import GovernanceHooks
 
 
 @pytest.mark.asyncio
@@ -76,6 +77,11 @@ async def test_execution_bus_emits_additive_runtime_event():
     assert payload["legacy_type"] == "execution_started"
     assert emitted[1][0] == "execution_completed"
     assert emitted[1][1]["event_type"] == "execution.completed"
+    assert emitted[0][1]["event"] == "execution.started"
+    assert emitted[0][1]["execution_id"] == emitted[0][1]["request_id"]
+    assert emitted[0][1]["type"] == "chat"
+    assert emitted[0][1]["payload"]["execution_type"] == "chat"
+    assert emitted[0][1]["timestamp"] == emitted[0][1]["created_at"]
 
 
 @pytest.mark.asyncio
@@ -174,6 +180,98 @@ def test_runtime_event_builder_is_additive_with_legacy_payload():
     assert event["detail_payload"] == {"k": "v"}
     assert event["type"] == "legacy"
     assert event["data"] == {"k": "v"}
+    assert event["event"] == "runtime.update"
+    assert event["execution_id"] == "r3"
+    assert event["timestamp"] == event["created_at"]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_invokes_governance_hooks():
+    class _RecordingGovernance(GovernanceHooks):
+        def __init__(self):
+            self.calls = []
+
+        def before_execute(self, request):
+            self.calls.append(("before", request.request_id))
+            return {}
+
+        def after_execute(self, request, result):
+            self.calls.append(("after", result.status))
+            return {}
+
+        def on_error(self, request, error):
+            self.calls.append(("error", error.__class__.__name__))
+            return {}
+
+    async def _ok(_request):
+        return {"response": "ok"}
+
+    governance = _RecordingGovernance()
+    bus = ExecutionBus(governance=governance)
+    bus.register_handler("chat", _ok)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert governance.calls == [("before", req.request_id), ("after", "success")]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_governance_on_error_invoked():
+    class _RecordingGovernance(GovernanceHooks):
+        def __init__(self):
+            self.error_seen = None
+
+        def on_error(self, request, error):
+            self.error_seen = error.__class__.__name__
+            return {}
+
+    async def _bad(_request):
+        raise RuntimeError("boom")
+
+    governance = _RecordingGovernance()
+    bus = ExecutionBus(governance=governance)
+    bus.register_handler("chat", _bad)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+
+    assert result.status == "error"
+    assert governance.error_seen == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_tool_task(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return ToolResult(success=True, content=f"{tool_name}:{session_id}", error=None)
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {"x": 1}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["task_type"] == "tool_task"
+    assert result.output_payload["tool_name"] == "demo_tool"
+    assert result.output_payload["task_boundary"] is True
+    assert result.output_payload["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_unsupported_task_type():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={"task_type": "unknown_task"},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["success"] is False
 
 
 def test_make_execution_result_defaults():

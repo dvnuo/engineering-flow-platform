@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from src import ToolResult
-from src.agents.core import Agent, get_skill_workdir, set_skill_workdir
+from src.agents.core import Agent, get_skill_workdir, set_skill_workdir, _execute_tool_via_runtime_bus
 from src.agents.skill_runtime import build_skill_tool_denied_result
 from src.agents.skill_runtime import (
     build_skill_runtime_event_payload,
@@ -20,6 +20,7 @@ from src.skills.runtime import (
     summarize_skill_references,
 )
 from src.agents.skill_mode import generate_initial_skill_plan
+from src.runtime.contracts import make_execution_result
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CREATE_PULL_REQUEST_SKILL_PATH = REPO_ROOT / "skills" / "create-pull-request" / "skill.md"
@@ -1078,3 +1079,27 @@ def test_review_pull_request_backward_compatible_skill_command_invocation():
     matches = registry.match_skill("/skill review-pr")
     assert matches
     assert matches[0].name == "review-pull-request"
+
+
+@pytest.mark.asyncio
+async def test_core_tool_bus_helper_returns_tool_result_compatible_shape(monkeypatch):
+    class _FakeBus:
+        async def execute(self, request):
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success",
+                output_payload={"success": True, "content": "tool-ok", "error": None},
+            )
+
+    monkeypatch.setattr("src.agents.core.build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+    result = await _execute_tool_via_runtime_bus(
+        session_id="s1",
+        tool_name="demo_tool",
+        args={"value": 1},
+        runtime_config=None,
+        source_ref="test",
+    )
+
+    assert isinstance(result, ToolResult)
+    assert result.success is True
+    assert result.content == "tool-ok"
