@@ -155,6 +155,57 @@ class TestSessionManagerInfo:
         assert info is None
 
     @pytest.mark.asyncio
+    async def test_set_last_execution_id_updates_in_memory_without_triggering_save(self, fresh_session_manager):
+        import uuid
+
+        session_id = f"exec_meta_{uuid.uuid4().hex[:8]}"
+        session = await fresh_session_manager.get_session(session_id)
+        before_updated_at = session.get("updated_at")
+        save_calls = []
+
+        async def _fake_save_session(**kwargs):
+            save_calls.append(kwargs)
+            return True
+
+        fresh_session_manager.auto_save = True
+        fresh_session_manager.persistence_enabled = True
+        from src.sessions import manager as manager_module
+        original_save = manager_module.session_persistence.save_session
+        manager_module.session_persistence.save_session = _fake_save_session
+        try:
+            await fresh_session_manager.set_last_execution_id(session_id, "req-123")
+        finally:
+            manager_module.session_persistence.save_session = original_save
+
+        assert session["metadata"]["last_execution_id"] == "req-123"
+        assert session["updated_at"] != before_updated_at
+        assert save_calls == []
+
+    @pytest.mark.asyncio
+    async def test_add_message_still_uses_normal_persistence_path(self, fresh_session_manager):
+        import uuid
+
+        session_id = f"persist_msg_{uuid.uuid4().hex[:8]}"
+        save_calls = []
+
+        async def _fake_save_session(**kwargs):
+            save_calls.append(kwargs)
+            return True
+
+        fresh_session_manager.auto_save = True
+        fresh_session_manager.persistence_enabled = True
+        from src.sessions import manager as manager_module
+        original_save = manager_module.session_persistence.save_session
+        manager_module.session_persistence.save_session = _fake_save_session
+        try:
+            await fresh_session_manager.add_message(session_id, "user", "hello", wait_for_save=True)
+        finally:
+            manager_module.session_persistence.save_session = original_save
+
+        assert save_calls
+        assert save_calls[0]["session_id"] == session_id
+
+    @pytest.mark.asyncio
     async def test_active_skill_session_roundtrip(self, fresh_session_manager):
         """Active skill session should persist via metadata-compatible path."""
         import uuid

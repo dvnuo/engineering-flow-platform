@@ -440,16 +440,8 @@ class SessionManager:
         metadata = session.setdefault("metadata", {})
         metadata["last_execution_id"] = request_id
         session["updated_at"] = datetime.now().isoformat()
-
-        if self.auto_save and self.persistence_enabled:
-            asyncio.create_task(
-                session_persistence.save_session(
-                    session_id=session_id,
-                    channel=session.get("channel", ""),
-                    messages=session.get("history", []),
-                    metadata=session.get("metadata", {}),
-                )
-            )
+        # Metadata-only execution id updates are intentionally deferred to the
+        # next normal persistence path (e.g. add_message autosave, save_all, shutdown).
 
     async def clear_history(self, session_id: str) -> None:
         """Clear session history."""
