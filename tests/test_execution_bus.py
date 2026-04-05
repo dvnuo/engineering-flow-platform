@@ -185,6 +185,32 @@ def test_runtime_event_builder_is_additive_with_legacy_payload():
     assert event["timestamp"] == event["created_at"]
 
 
+def test_runtime_event_builder_calls_utcnow_once(monkeypatch):
+    from datetime import datetime as _datetime
+    from src.runtime import events as events_module
+
+    class _DatetimeStub:
+        calls = 0
+
+        @classmethod
+        def utcnow(cls):
+            cls.calls += 1
+            return _datetime(2026, 1, 1, 0, 0, 0)
+
+    monkeypatch.setattr(events_module, "datetime", _DatetimeStub)
+    event = events_module.build_runtime_event(
+        event_type="runtime.update",
+        state="ok",
+        session_id="s1",
+        request_id="r1",
+        agent_id="a1",
+        summary="ok",
+        detail_payload={"execution_type": "chat"},
+    )
+    assert _DatetimeStub.calls == 1
+    assert event["timestamp"] == event["created_at"]
+
+
 @pytest.mark.asyncio
 async def test_execution_bus_invokes_governance_hooks():
     class _RecordingGovernance(GovernanceHooks):
@@ -272,6 +298,46 @@ async def test_execution_bus_task_handler_unsupported_task_type():
     result = await bus.execute(req)
     assert result.status == "blocked"
     assert result.output_payload["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_uses_injected_execute_tool_callable_for_tool_and_task():
+    calls = []
+
+    async def _injected_execute(tool_name, **kwargs):
+        calls.append((tool_name, kwargs))
+        return ToolResult(success=True, content=f"injected:{tool_name}", error=None)
+
+    async def _inline_task_runner(*, session_id, tool_name, coro_factory, event_callback=None):
+        return await coro_factory()
+
+    bus = build_default_execution_bus(execute_tool_func=_injected_execute)
+    req_tool = make_execution_request(
+        source_type="agent",
+        execution_type="tool",
+        session_id="s-injected",
+        input_payload={"tool_name": "tool_a", "kwargs": {"v": 1}},
+    )
+    tool_result = await bus.execute(req_tool)
+    assert tool_result.status == "success"
+
+    from src.runtime import execution_bus as execution_bus_module
+
+    original_runner = execution_bus_module.task_manager.run_tool_task
+    execution_bus_module.task_manager.run_tool_task = _inline_task_runner
+    try:
+        req_task = make_execution_request(
+            source_type="agent",
+            execution_type="task",
+            session_id="s-injected",
+            input_payload={"task_type": "tool_task", "tool_name": "tool_b", "kwargs": {"v": 2}},
+        )
+        task_result = await bus.execute(req_task)
+    finally:
+        execution_bus_module.task_manager.run_tool_task = original_runner
+
+    assert task_result.status == "success"
+    assert calls == [("tool_a", {"v": 1}), ("tool_b", {"v": 2})]
 
 
 def test_make_execution_result_defaults():

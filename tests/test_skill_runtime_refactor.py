@@ -1103,3 +1103,65 @@ async def test_core_tool_bus_helper_returns_tool_result_compatible_shape(monkeyp
     assert isinstance(result, ToolResult)
     assert result.success is True
     assert result.content == "tool-ok"
+
+
+@pytest.mark.asyncio
+async def test_core_tool_bus_helper_builds_bus_without_stale_execute_direct_kwarg(monkeypatch):
+    captured_kwargs = {}
+
+    class _FakeBus:
+        async def execute(self, request):
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success",
+                output_payload={"success": True, "content": "ok"},
+            )
+
+    def _fake_build_default_execution_bus(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return _FakeBus()
+
+    monkeypatch.setattr("src.agents.core.build_default_execution_bus", _fake_build_default_execution_bus)
+    await _execute_tool_via_runtime_bus(
+        session_id="s1",
+        tool_name="demo_tool",
+        args={},
+        runtime_config=None,
+        source_ref="test",
+    )
+
+    assert "execute_direct" not in captured_kwargs
+
+
+@pytest.mark.asyncio
+async def test_core_tool_bus_helper_uses_patched_core_execute_tool_callable_for_tool_and_task(monkeypatch):
+    calls = []
+
+    async def _patched_execute_tool_by_name(tool_name, **kwargs):
+        calls.append((tool_name, kwargs))
+        return ToolResult(success=True, content=f"patched:{tool_name}", error=None)
+
+    async def _inline_task_runner(*, session_id, tool_name, coro_factory, event_callback=None):
+        return await coro_factory()
+
+    monkeypatch.setattr("src.agents.core.execute_tool_by_name", _patched_execute_tool_by_name)
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _inline_task_runner)
+
+    tool_result = await _execute_tool_via_runtime_bus(
+        session_id="s-tool",
+        tool_name="tool_plain",
+        args={"a": 1},
+        runtime_config=None,
+        source_ref="test",
+    )
+    task_result = await _execute_tool_via_runtime_bus(
+        session_id="s-task",
+        tool_name="tool_tasked",
+        args={"b": 2},
+        runtime_config=SimpleNamespace(task_tools=["tool_tasked"]),
+        source_ref="test",
+    )
+
+    assert tool_result.content == "patched:tool_plain"
+    assert task_result.content == "patched:tool_tasked"
+    assert calls == [("tool_plain", {"a": 1}), ("tool_tasked", {"b": 2})]

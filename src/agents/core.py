@@ -163,7 +163,7 @@ async def _execute_tool_via_runtime_bus(
 ) -> ToolResult:
     """Phase 1 compatibility helper to route tool/task execution through ExecutionBus.
 
-    NOTE: `execute_tool_by_name` is still available for compatibility and non-migrated paths.
+    NOTE: this bridge keeps legacy monkeypatch/patch-point behavior while routing through the bus.
     """
     use_task_boundary = bool(runtime_config and tool_name in set(runtime_config.task_tools))
     execution_type = "task" if use_task_boundary else "tool"
@@ -178,7 +178,7 @@ async def _execute_tool_via_runtime_bus(
     else:
         input_payload = {"tool_name": tool_name, "kwargs": dict(args)}
 
-    bus = build_default_execution_bus()
+    bus = build_default_execution_bus(execute_tool_func=execute_tool_by_name)
     request = make_execution_request(
         source_type="agent",
         source_ref=source_ref,
@@ -188,21 +188,33 @@ async def _execute_tool_via_runtime_bus(
         metadata={"tool_name": tool_name, "task_boundary": use_task_boundary},
     )
     result = await bus.execute(request)
-    payload = result.output_payload if isinstance(result.output_payload, dict) else {}
-    success = result.status not in {"error", "blocked"} and payload.get("success", True) is not False
+    payload: Dict[str, Any] = result.output_payload if isinstance(result.output_payload, dict) else {"value": result.output_payload}
+    explicit_success = payload.get("success")
+    if isinstance(explicit_success, bool):
+        payload_success = explicit_success
+    elif payload.get("error"):
+        payload_success = False
+    else:
+        payload_success = True
+    success = result.status not in {"error", "blocked"} and payload_success
     content = payload.get("content")
     if content is None:
         content = payload.get("output")
     if content is None:
         content = payload.get("response")
+    if content is None:
+        content = payload.get("value")
     if content is None and payload.get("error"):
         content = f"Error: {payload.get('error')}"
     if content is None:
         content = ""
+    error = payload.get("error")
+    if error is None and result.status == "blocked":
+        error = "Execution blocked"
     return ToolResult(
         success=success,
         content=str(content),
-        error=payload.get("error"),
+        error=error,
     )
 
 

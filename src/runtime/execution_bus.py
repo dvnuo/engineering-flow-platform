@@ -235,6 +235,7 @@ def build_default_execution_bus(
     chat_handler: Optional[ExecutionHandler] = None,
     event_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     governance: Optional[GovernanceHooks] = None,
+    execute_tool_func: Optional[Callable[..., Any]] = None,
 ) -> ExecutionBus:
     """Build a bus with default skill/tool/subagent/event handlers.
 
@@ -247,6 +248,8 @@ def build_default_execution_bus(
         # Chat is intentionally optional and injected by caller (e.g., webchat/gateway path).
         bus.register_handler("chat", chat_handler)
 
+    execute_tool_callable = execute_tool_func or execute_tool_by_name
+
     async def skill_handler(request: ExecutionRequest) -> SkillResult:
         skill_name = _get_required(request.input_payload, "skill_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
@@ -258,7 +261,7 @@ def build_default_execution_bus(
         # For now this adapter intentionally reuses the existing execution stack.
         tool_name = _get_required(request.input_payload, "tool_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
-        return await execute_tool_by_name(tool_name, **kwargs)
+        return await execute_tool_callable(tool_name, **kwargs)
 
     async def subagent_handler(request: ExecutionRequest) -> Dict[str, Any]:
         return await run_subagent_execution(
@@ -292,7 +295,7 @@ def build_default_execution_bus(
             tool_result = await task_manager.run_tool_task(
                 session_id=request.session_id or "runtime-session",
                 tool_name=tool_name,
-                coro_factory=lambda: execute_tool_by_name(tool_name, **kwargs),
+                coro_factory=lambda: execute_tool_callable(tool_name, **kwargs),
                 event_callback=event_callback if callable(event_callback) else None,
             )
             return make_execution_result(
