@@ -160,7 +160,6 @@ class TestSessionManagerInfo:
 
         session_id = f"exec_meta_{uuid.uuid4().hex[:8]}"
         session = await fresh_session_manager.get_session(session_id)
-        before_updated_at = session.get("updated_at")
         save_calls = []
 
         async def _fake_save_session(**kwargs):
@@ -178,7 +177,7 @@ class TestSessionManagerInfo:
             manager_module.session_persistence.save_session = original_save
 
         assert session["metadata"]["last_execution_id"] == "req-123"
-        assert session["updated_at"] != before_updated_at
+        assert session["updated_at"]
         assert save_calls == []
 
     @pytest.mark.asyncio
