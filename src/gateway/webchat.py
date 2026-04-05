@@ -64,6 +64,7 @@ async def _run_chat_via_execution_bus(
     attachments: Optional[List[str]] = None,
     reasoning_replay: Optional[bool] = None,
     stream_callback: Optional[Any] = None,
+    request_path: str = "/api/chat",
 ) -> Dict[str, Any]:
     async def _chat_handler(execution_request):
         payload = execution_request.input_payload
@@ -100,7 +101,7 @@ async def _run_chat_via_execution_bus(
             "reasoning_replay": reasoning_replay,
             "stream_callback": stream_callback,
         },
-        metadata={"path": "/api/chat"},
+        metadata={"path": request_path},
     )
     execution_result = await bus.execute(execution_request)
     return execution_result.output_payload
@@ -417,6 +418,7 @@ async def api_chat(request: web.Request) -> web.Response:
             reasoning_replay=reasoning_replay,
             attached_images=attached_images if attached_images else None,
             attachments=attachments if attachments else None,
+            request_path="/api/chat",
         )
         
         # Force save session to persistence
@@ -605,6 +607,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             portal_user_id=portal_user_id or None,
             portal_user_name=portal_user_name or None,
             stream_callback=event_queue,
+            request_path="/api/chat/stream",
         )
         
         # Stream events from queue while agent is running

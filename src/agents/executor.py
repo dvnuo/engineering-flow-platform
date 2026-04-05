@@ -363,9 +363,12 @@ async def execute_skill(skill_name: str, **kwargs) -> SkillResult:
 async def run_skill_execution(skill_name: str, **kwargs) -> SkillResult:
     """Direct skill execution helper used by ExecutionBus adapters."""
     # TODO(phase1): route deeper internal skill helper calls through ExecutionBus after compatibility validation.
-    # Note: Filters out session_id to prevent TypeError since skills don't accept session_id as a parameter.
-    # Filter out session_id and other unexpected kwargs
-    filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ('session_id',)}
+    # Filter runtime control/internal kwargs before forwarding to concrete skill implementations.
+    filtered_kwargs = {
+        k: v
+        for k, v in kwargs.items()
+        if k != "session_id" and not k.startswith("_")
+    }
     return await skills_executor.execute_skill(skill_name, **filtered_kwargs)
 
 

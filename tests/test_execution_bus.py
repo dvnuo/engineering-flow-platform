@@ -30,7 +30,7 @@ async def test_execution_bus_tool_handler_preserves_tool_result_shape():
     req = make_execution_request(
         source_type="system",
         execution_type="tool",
-        input_payload={"tool_name": "run_command", "kwargs": {"command": "echo execution-bus"}},
+        input_payload={"tool_name": "run_command", "kwargs": {"cmd": "echo", "args": ["execution-bus"]}},
     )
 
     result = await bus.execute(req)
@@ -126,3 +126,26 @@ async def test_execute_skill_entrypoint_routes_through_bus(monkeypatch):
     assert fake_bus.request.execution_type == "skill"
     assert result.success is True
     assert result.output == "skill-ok"
+
+
+@pytest.mark.asyncio
+async def test_event_forwarding_uses_distinct_request_id_and_parent_link():
+    captured = {}
+
+    async def chat_handler(request):
+        captured["request_id"] = request.request_id
+        captured["metadata"] = request.metadata
+        return {"response": "ok"}
+
+    bus = build_default_execution_bus(chat_handler=chat_handler)
+    req = make_execution_request(
+        source_type="system",
+        execution_type="event",
+        request_id="parent-req",
+        input_payload={"target_execution_type": "chat"},
+    )
+    await bus.execute(req)
+
+    assert captured["request_id"] != "parent-req"
+    assert captured["metadata"]["parent_request_id"] == "parent-req"
+    assert captured["metadata"]["forwarded_from_execution_type"] == "event"

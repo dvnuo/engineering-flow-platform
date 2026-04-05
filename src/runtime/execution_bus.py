@@ -7,7 +7,7 @@ import logging
 
 from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, run_skill_execution
 from src.agents.subagent import run_subagent_execution
-from src.runtime.contracts import ExecutionRequest, ExecutionResult, make_execution_result
+from src.runtime.contracts import ExecutionRequest, ExecutionResult, make_execution_request, make_execution_result
 from src.runtime.events import build_runtime_event
 
 logger = logging.getLogger(__name__)
@@ -199,8 +199,7 @@ def build_default_execution_bus(
     async def event_handler(request: ExecutionRequest) -> ExecutionResult:
         target = request.metadata.get("target_execution_type") or request.input_payload.get("target_execution_type")
         if target in bus._handlers and target != "event":
-            forwarded = ExecutionRequest(
-                request_id=request.request_id,
+            forwarded = make_execution_request(
                 source_type=request.source_type,
                 source_ref=request.source_ref,
                 agent_id=request.agent_id,
@@ -209,7 +208,11 @@ def build_default_execution_bus(
                 input_payload=request.input_payload,
                 context_ref=request.context_ref,
                 policy_profile_id=request.policy_profile_id,
-                metadata=request.metadata,
+                metadata={
+                    **(request.metadata or {}),
+                    "parent_request_id": request.request_id,
+                    "forwarded_from_execution_type": request.execution_type,
+                },
             )
             return await bus.execute(forwarded)
         return make_execution_result(

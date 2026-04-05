@@ -203,3 +203,31 @@ async def test_chat_execution_bus_adapter_stream(monkeypatch):
     )
     assert result["response"] == "streamed"
     assert not queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch):
+    from src.gateway import webchat
+
+    class _FakeBus:
+        def __init__(self):
+            self.request = None
+
+        async def execute(self, request):
+            self.request = request
+            return type("R", (), {"output_payload": {"response": "ok"}})()
+
+    fake_bus = _FakeBus()
+    monkeypatch.setattr(webchat, "build_default_execution_bus", lambda *args, **kwargs: fake_bus)
+    monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
+
+    await webchat._run_chat_via_execution_bus(
+        agent=object(),
+        session_id="s-chat",
+        message="hello",
+        user_name="u1",
+        portal_user_id=None,
+        portal_user_name=None,
+        request_path="/api/chat/stream",
+    )
+    assert fake_bus.request.metadata["path"] == "/api/chat/stream"

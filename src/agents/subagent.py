@@ -96,18 +96,19 @@ class SubAgent:
         }
 
 
-async def run_subagent_execution(
+def _register_subagent_session(
     *,
-    task: str,
     session_key: str,
-    model: Optional[str] = None,
-    thinking: Optional[str] = None,
-    disable_tools: bool = False,
-    cleanup: str = "delete",
-    start_immediately: bool = False,
-    wait_for_completion: bool = False,
-) -> Dict[str, Any]:
-    """Top-level subagent execution adapter used by runtime ExecutionBus."""
+    task: str,
+    model: Optional[str],
+    thinking: Optional[str],
+    cleanup: str,
+    disable_tools: bool,
+) -> SubAgent:
+    existing = _subagent_sessions.get(session_key)
+    if existing and isinstance(existing.get("agent"), SubAgent):
+        return existing["agent"]
+
     subagent = SubAgent(
         session_key=session_key,
         task=task,
@@ -125,6 +126,41 @@ async def run_subagent_execution(
         "status": "started",
         "agent": subagent,
     }
+    return subagent
+
+
+def _log_background_task_exception(task: asyncio.Task, session_key: str) -> None:
+    if task.cancelled():
+        return
+    try:
+        exc = task.exception()
+    except Exception as error:
+        logger.warning("Sub-agent background task inspection failed for %s: %s", session_key, error)
+        return
+    if exc is not None:
+        logger.error("Sub-agent background task failed for %s: %s", session_key, exc)
+
+
+async def run_subagent_execution(
+    *,
+    task: str,
+    session_key: str,
+    model: Optional[str] = None,
+    thinking: Optional[str] = None,
+    disable_tools: bool = False,
+    cleanup: str = "delete",
+    start_immediately: bool = False,
+    wait_for_completion: bool = False,
+) -> Dict[str, Any]:
+    """Top-level subagent execution adapter used by runtime ExecutionBus."""
+    subagent = _register_subagent_session(
+        session_key=session_key,
+        task=task,
+        model=model,
+        thinking=thinking,
+        cleanup=cleanup,
+        disable_tools=disable_tools,
+    )
 
     if start_immediately:
         await subagent.start()
@@ -346,8 +382,17 @@ def sessions_spawn(
         has_running_loop = False
 
     if has_running_loop and running_loop is not None:
+        _register_subagent_session(
+            session_key=session_key,
+            task=task,
+            model=model,
+            thinking=thinking,
+            cleanup=cleanup,
+            disable_tools=disable_tools,
+        )
         # Existing behavior is sync "started"; preserve by scheduling when loop exists.
-        running_loop.create_task(_spawn_via_bus())
+        background_task = running_loop.create_task(_spawn_via_bus())
+        background_task.add_done_callback(lambda task: _log_background_task_exception(task, session_key))
         response_payload = {
             "session_key": session_key,
             "status": "started",

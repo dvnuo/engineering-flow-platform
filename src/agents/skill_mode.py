@@ -299,7 +299,12 @@ def _normalize_plan(raw: Dict[str, Any], fallback_goal: str) -> Tuple[str, List[
     return goal, normalized_steps
 
 
-async def generate_initial_skill_plan(skill: Skill, user_message: str, model: Optional[str] = None, return_usage: bool = False) -> Union[SkillPlanResult, Tuple[str, List[Dict[str, str]]]]:
+async def generate_initial_skill_plan(
+    skill: Skill,
+    user_message: str,
+    model: Optional[str] = None,
+    return_usage: bool = False,
+) -> Union[SkillPlanResult, Tuple[str, List[Dict[str, str]]]]:
     """Generate initial skill plan.
     
     Args:
@@ -341,7 +346,9 @@ async def generate_initial_skill_plan(skill: Skill, user_message: str, model: Op
         "completion_tokens": 0,
         "total_tokens": 0,
     }
-    return goal, steps, usage_data
+    if return_usage:
+        return goal, steps, usage_data
+    return goal, steps
 
 
 async def _generate_initial_skill_plan_direct(skill: Skill, user_message: str, model: Optional[str] = None) -> Dict[str, Any]:
