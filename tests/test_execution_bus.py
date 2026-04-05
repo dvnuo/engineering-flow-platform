@@ -315,6 +315,104 @@ async def test_execution_bus_task_handler_tool_task(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_task_handler_accepts_toolresult_like_object(monkeypatch):
+    class _ToolResultLike:
+        def __init__(self):
+            self.success = True
+            self.content = "like-ok"
+            self.error = None
+
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return _ToolResultLike()
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["content"] == "like-ok"
+    assert result.output_payload["result"]["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_accepts_dict_result(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"success": True, "output": "dict-ok", "meta": "x"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["content"] == "dict-ok"
+    assert result.output_payload["result"]["meta"] == "x"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_accepts_string_result(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return "string-ok"
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["content"] == "string-ok"
+    assert result.output_payload["result"]["value"] == "string-ok"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_accepts_execution_result(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return make_execution_result(
+            request_id="inner-1",
+            status="success",
+            output_payload={"response": "inner-ok"},
+            artifacts={"a": 1},
+            runtime_events=[{"evt": "x"}],
+            next_action_hint="next",
+            audit_ref="audit-1",
+        )
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["content"] == "inner-ok"
+    assert result.output_payload["result"]["response"] == "inner-ok"
+    assert result.artifacts == {"a": 1}
+    assert result.runtime_events == [{"evt": "x"}]
+    assert result.next_action_hint == "next"
+    assert result.audit_ref == "audit-1"
+
+
+@pytest.mark.asyncio
 async def test_execution_bus_task_handler_falls_back_to_request_id_as_session(monkeypatch):
     captured = {}
 

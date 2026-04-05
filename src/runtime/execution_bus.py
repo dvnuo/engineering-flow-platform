@@ -237,6 +237,86 @@ def _get_required(payload: Dict[str, Any], key: str) -> Any:
     return payload[key]
 
 
+def _coerce_task_tool_result(raw_result: Any) -> Dict[str, Any]:
+    """Normalize task tool results from heterogeneous return types."""
+    if isinstance(raw_result, ToolResult) or (
+        hasattr(raw_result, "success") and hasattr(raw_result, "content") and hasattr(raw_result, "error")
+    ):
+        success_value = bool(getattr(raw_result, "success"))
+        content_value = getattr(raw_result, "content")
+        error_value = getattr(raw_result, "error")
+        return {
+            "success": success_value,
+            "content": content_value,
+            "error": error_value,
+            "result": {
+                "success": success_value,
+                "content": content_value,
+                "error": error_value,
+            },
+            "artifacts": {},
+            "runtime_events": [],
+            "next_action_hint": None,
+            "audit_ref": None,
+        }
+
+    if isinstance(raw_result, ExecutionResult):
+        payload = raw_result.output_payload if isinstance(raw_result.output_payload, dict) else {"value": raw_result.output_payload}
+        content = payload.get("content", payload.get("output", payload.get("response", payload.get("value"))))
+        success = raw_result.status not in {"error", "blocked"}
+        return {
+            "success": success,
+            "content": content,
+            "error": payload.get("error"),
+            "result": payload,
+            "artifacts": raw_result.artifacts if isinstance(raw_result.artifacts, dict) else {},
+            "runtime_events": raw_result.runtime_events if isinstance(raw_result.runtime_events, list) else [],
+            "next_action_hint": raw_result.next_action_hint,
+            "audit_ref": raw_result.audit_ref,
+        }
+
+    if isinstance(raw_result, dict):
+        explicit_success = raw_result.get("success")
+        if isinstance(explicit_success, bool):
+            success = explicit_success
+        else:
+            success = False if raw_result.get("error") else True
+        content = raw_result.get("content", raw_result.get("output", raw_result.get("response", raw_result.get("value"))))
+        return {
+            "success": success,
+            "content": content,
+            "error": raw_result.get("error"),
+            "result": raw_result,
+            "artifacts": {},
+            "runtime_events": [],
+            "next_action_hint": None,
+            "audit_ref": None,
+        }
+
+    if isinstance(raw_result, str):
+        return {
+            "success": True,
+            "content": raw_result,
+            "error": None,
+            "result": {"value": raw_result},
+            "artifacts": {},
+            "runtime_events": [],
+            "next_action_hint": None,
+            "audit_ref": None,
+        }
+
+    return {
+        "success": True,
+        "content": raw_result,
+        "error": None,
+        "result": {"value": raw_result},
+        "artifacts": {},
+        "runtime_events": [],
+        "next_action_hint": None,
+        "audit_ref": None,
+    }
+
+
 def build_default_execution_bus(
     *,
     chat_handler: Optional[ExecutionHandler] = None,
@@ -298,23 +378,29 @@ def build_default_execution_bus(
         tool_name = _get_required(request.input_payload, "tool_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
         event_callback = request.input_payload.get("event_callback")
-        tool_result = await task_manager.run_tool_task(
+        raw_task_result = await task_manager.run_tool_task(
             session_id=request.session_id or request.request_id,
             tool_name=tool_name,
             coro_factory=lambda: execute_tool_callable(tool_name, **kwargs),
             event_callback=event_callback if callable(event_callback) else None,
         )
+        normalized = _coerce_task_tool_result(raw_task_result)
         return make_execution_result(
             request_id=request.request_id,
-            status="success" if tool_result.success else "error",
+            status="success" if normalized["success"] else "error",
             output_payload={
                 "task_type": "tool_task",
                 "tool_name": tool_name,
-                "success": bool(tool_result.success),
-                "content": tool_result.content,
-                "error": tool_result.error,
+                "success": bool(normalized["success"]),
+                "content": normalized["content"],
+                "error": normalized["error"],
                 "task_boundary": True,
+                "result": normalized["result"],
             },
+            artifacts=normalized["artifacts"],
+            runtime_events=normalized["runtime_events"],
+            next_action_hint=normalized["next_action_hint"],
+            audit_ref=normalized["audit_ref"],
         )
 
     async def event_handler(request: ExecutionRequest) -> ExecutionResult:
