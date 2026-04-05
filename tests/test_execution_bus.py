@@ -391,6 +391,104 @@ async def test_execution_bus_task_handler_accepts_dict_result(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_task_handler_dict_status_error_maps_to_failure(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"status": "error", "content": "failed"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_dict_status_blocked_maps_to_failure(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"status": "blocked", "content": "blocked"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_dict_status_success_maps_to_success(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"status": "success", "content": "ok"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert result.output_payload["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_dict_explicit_success_overrides_status(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"success": True, "status": "error", "content": "ok"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert result.output_payload["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_dict_without_status_keeps_existing_inference(monkeypatch):
+    async def _error_only(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"error": "boom"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _error_only)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["success"] is False
+
+    async def _content_only(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"content": "ok"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _content_only)
+    result2 = await bus.execute(req)
+    assert result2.status == "success"
+    assert result2.output_payload["success"] is True
+
+
+@pytest.mark.asyncio
 async def test_execution_bus_task_handler_accepts_string_result(monkeypatch):
     async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
         return "string-ok"

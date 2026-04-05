@@ -277,8 +277,11 @@ def _coerce_task_tool_result(raw_result: Any) -> Dict[str, Any]:
 
     if isinstance(raw_result, dict):
         explicit_success = raw_result.get("success")
+        explicit_status = raw_result.get("status")
         if isinstance(explicit_success, bool):
             success = explicit_success
+        elif isinstance(explicit_status, str) and explicit_status.strip():
+            success = explicit_status.strip() not in {"error", "blocked"}
         else:
             success = False if raw_result.get("error") else True
         content = raw_result.get("content", raw_result.get("output", raw_result.get("response", raw_result.get("value"))))
