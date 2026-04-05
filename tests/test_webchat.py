@@ -215,7 +215,7 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
 
         async def execute(self, request):
             self.request = request
-            return type("R", (), {"output_payload": {"response": "ok"}})()
+            return type("R", (), {"status": "success", "output_payload": {"response": "ok"}})()
 
     fake_bus = _FakeBus()
     captured_kwargs = {}
@@ -240,3 +240,30 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
     )
     assert fake_bus.request.metadata["path"] == "/api/chat/stream"
     assert ("event_emitter" not in captured_kwargs) or (captured_kwargs.get("event_emitter") is None)
+
+
+@pytest.mark.asyncio
+async def test_chat_execution_bus_adapter_raises_on_error_status(monkeypatch):
+    from aiohttp import web
+    from src.gateway import webchat
+
+    class _FakeBus:
+        async def execute(self, _request):
+            return type("R", (), {"status": "error", "output_payload": {"error": {"message": "boom"}}})()
+
+    monkeypatch.setattr(webchat, "build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+
+    async def _fake_run_chat_execution(*args, **kwargs):
+        return {"response": "ignored"}
+
+    monkeypatch.setattr(webchat, "run_chat_execution", _fake_run_chat_execution)
+
+    with pytest.raises(web.HTTPInternalServerError):
+        await webchat._run_chat_via_execution_bus(
+            agent=object(),
+            session_id="s-chat",
+            message="hello",
+            user_name="u1",
+            portal_user_id=None,
+            portal_user_name=None,
+        )

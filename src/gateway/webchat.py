@@ -103,7 +103,22 @@ async def _run_chat_via_execution_bus(
         metadata={"path": request_path},
     )
     execution_result = await bus.execute(execution_request)
-    return execution_result.output_payload
+    output_payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
+    if execution_result.status == "error" or output_payload.get("error"):
+        error_value = output_payload.get("error", "Execution bus error")
+        if isinstance(error_value, dict):
+            error_message = (
+                error_value.get("message")
+                or error_value.get("error")
+                or json.dumps(error_value, ensure_ascii=False)
+            )
+        else:
+            error_message = str(error_value)
+        raise web.HTTPInternalServerError(
+            text=json.dumps({"error": error_message}, ensure_ascii=False),
+            content_type="application/json",
+        )
+    return output_payload
 
 
 def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str], Optional[str]]:

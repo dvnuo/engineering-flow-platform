@@ -337,14 +337,21 @@ async def generate_initial_skill_plan(
         metadata={"entrypoint": "skill_mode.generate_initial_skill_plan"},
     )
     execution_result = await bus.execute(request)
-    payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
-    goal = str(payload.get("goal") or skill.description)
-    steps = payload.get("steps") if isinstance(payload.get("steps"), list) else []
-    usage_data = payload.get("usage") if isinstance(payload.get("usage"), dict) else {
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "total_tokens": 0,
-    }
+    default_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    if execution_result.status == "error":
+        logger.warning("[SkillMode] Bus planner failed, using direct planner fallback")
+        direct_result = await _generate_initial_skill_plan_direct(skill=skill, user_message=user_message, model=model)
+        goal = str(direct_result.get("goal") or skill.description)
+        steps = direct_result.get("steps") if isinstance(direct_result.get("steps"), list) else []
+        usage_data = direct_result.get("usage") if isinstance(direct_result.get("usage"), dict) else default_usage
+    else:
+        payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
+        normalized_goal, normalized_steps = _normalize_plan(payload, fallback_goal=skill.description)
+        payload_steps = payload.get("steps")
+        goal = str(payload.get("goal") or normalized_goal)
+        steps = payload_steps if isinstance(payload_steps, list) and payload_steps else normalized_steps
+        usage_data = payload.get("usage") if isinstance(payload.get("usage"), dict) else default_usage
+
     # Compatibility: keep stable 3-tuple arity for existing callers in core/runtime paths.
     _ = return_usage
     return goal, steps, usage_data

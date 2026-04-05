@@ -221,7 +221,7 @@ async def test_generate_initial_skill_plan_routes_through_execution_bus(monkeypa
 
         async def execute(self, request):
             self.requests.append(request)
-            return type("R", (), {"output_payload": {"goal": "g", "steps": [{"id": "1", "type": "execute", "title": "t"}], "usage": {}}})()
+            return type("R", (), {"status": "success", "output_payload": {"goal": "g", "steps": [{"id": "1", "type": "execute", "title": "t"}], "usage": {}}})()
 
     fake_bus = _FakeBus()
     monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: fake_bus)
@@ -237,6 +237,47 @@ async def test_generate_initial_skill_plan_routes_through_execution_bus(monkeypa
     assert goal2 == "g"
     assert steps2[0]["id"] == "1"
     assert usage2 == {}
+
+
+@pytest.mark.asyncio
+async def test_generate_initial_skill_plan_falls_back_to_direct_on_bus_error(monkeypatch):
+    skill = SimpleNamespace(name="demo", description="demo desc", strategy=[], path="")
+
+    class _FakeBus:
+        def register_handler(self, execution_type, handler):
+            self._handler = handler
+
+        async def execute(self, request):
+            return type("R", (), {"status": "error", "output_payload": {"error": "x"}})()
+
+    async def _direct(*args, **kwargs):
+        return {"goal": "direct-goal", "steps": [{"id": "d1", "type": "execute", "title": "direct"}], "usage": {"total_tokens": 5}}
+
+    monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+    monkeypatch.setattr("src.agents.skill_mode._generate_initial_skill_plan_direct", _direct)
+
+    goal, steps, usage = await generate_initial_skill_plan(skill, "do work")
+    assert goal == "direct-goal"
+    assert steps[0]["id"] == "d1"
+    assert usage["total_tokens"] == 5
+
+
+@pytest.mark.asyncio
+async def test_generate_initial_skill_plan_normalizes_malformed_payload(monkeypatch):
+    skill = SimpleNamespace(name="demo", description="demo desc", strategy=[], path="")
+
+    class _FakeBus:
+        def register_handler(self, execution_type, handler):
+            self._handler = handler
+
+        async def execute(self, request):
+            return type("R", (), {"status": "success", "output_payload": {"goal": "", "steps": []}})()
+
+    monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+    goal, steps, usage = await generate_initial_skill_plan(skill, "do work")
+    assert goal == "demo desc"
+    assert steps  # fallback from _normalize_plan should not be empty
+    assert isinstance(usage, dict)
 
 
 def test_prompt_layer_assembly_and_reference_context():
