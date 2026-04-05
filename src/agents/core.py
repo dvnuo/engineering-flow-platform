@@ -1741,6 +1741,11 @@ You have access to the following tools. When a user asks you to do something tha
         try:
             skill_runtime_config = skill_registry.get_skill_runtime_config(skill) if skill else None
         except Exception:
+            logger.debug(
+                "[SkillMode] Failed to resolve runtime config for skill %s; continuing without runtime config",
+                getattr(skill, "name", None),
+                exc_info=True,
+            )
             skill_runtime_config = None
         if not skill:
             await session_manager.set_active_skill_session(session_id, None)

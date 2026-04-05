@@ -206,6 +206,29 @@ async def test_ask_user_path(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_continue_skill_mode_logs_runtime_config_resolution_failure(monkeypatch, caplog):
+    failing_registry = SimpleNamespace(
+        get_skill=lambda *_: None,
+        get_skill_runtime_config=lambda *_: (_ for _ in ()).throw(RuntimeError("config boom")),
+    )
+    monkeypatch.setattr("src.skills.skill_registry", failing_registry)
+
+    responses = [
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[ASK_USER]\nPlease provide repository name.", "function_calls": [], "usage": {}},
+    ]
+    with caplog.at_level("DEBUG"):
+        result, snapshots, _ = await run_replay_case(monkeypatch, responses=responses)
+
+    assert "Please provide repository name" in result["response"]
+    assert terminal_reasons(snapshots)[-1] == "ask_user"
+    assert (
+        "[SkillMode] Failed to resolve runtime config for skill lookup; continuing without runtime config"
+        in caplog.text
+    )
+
+
+@pytest.mark.asyncio
 async def test_finalizer_attempts_reset_on_later_finalize_cycle(monkeypatch):
     # First cycle: consume full finalizer retry budget.
     first_responses = [
