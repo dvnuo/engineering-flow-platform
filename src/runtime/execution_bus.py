@@ -285,10 +285,16 @@ def _coerce_task_tool_result(raw_result: Any) -> Dict[str, Any]:
         else:
             success = False if raw_result.get("error") else True
         content = raw_result.get("content", raw_result.get("output", raw_result.get("response", raw_result.get("value"))))
+        error_value = raw_result.get("error")
+        if (error_value is None or error_value == "") and not success:
+            if isinstance(content, str) and content.strip():
+                error_value = content.strip()
+            elif isinstance(explicit_status, str) and explicit_status.strip():
+                error_value = f"Task tool result reported status={explicit_status.strip()}"
         return {
             "success": success,
             "content": content,
-            "error": raw_result.get("error"),
+            "error": error_value,
             "result": raw_result,
             "artifacts": {},
             "runtime_events": [],

@@ -187,6 +187,51 @@ def test_runtime_event_builder_is_additive_with_legacy_payload():
     assert event["timestamp"] == event["created_at"]
 
 
+def test_runtime_event_builder_uses_explicit_execution_type_aliases_when_provided():
+    event = build_runtime_event(
+        event_type="runtime.update",
+        execution_type="chat",
+        state="ok",
+        session_id="s1",
+        request_id="r1",
+        agent_id="a1",
+        summary="ok",
+        detail_payload={"k": "v"},
+    )
+    assert event["type"] == "chat"
+    assert event["execution_type"] == "chat"
+
+
+def test_runtime_event_builder_allows_legacy_type_when_execution_type_missing():
+    event = build_runtime_event(
+        event_type="runtime.update",
+        execution_type=None,
+        state="ok",
+        session_id="s1",
+        request_id="r1",
+        agent_id="a1",
+        summary="ok",
+        detail_payload={"k": "v"},
+        legacy_payload={"type": "legacy-type"},
+    )
+    assert event["type"] == "legacy-type"
+
+
+def test_runtime_event_builder_allows_legacy_execution_type_when_missing():
+    event = build_runtime_event(
+        event_type="runtime.update",
+        execution_type=None,
+        state="ok",
+        session_id="s1",
+        request_id="r1",
+        agent_id="a1",
+        summary="ok",
+        detail_payload={"k": "v"},
+        legacy_payload={"execution_type": "legacy-execution"},
+    )
+    assert event["execution_type"] == "legacy-execution"
+
+
 def test_runtime_event_builder_legacy_payload_does_not_override_alias_collisions():
     event = build_runtime_event(
         event_type="execution.completed",
@@ -406,6 +451,7 @@ async def test_execution_bus_task_handler_dict_status_error_maps_to_failure(monk
     result = await bus.execute(req)
     assert result.status == "error"
     assert result.output_payload["success"] is False
+    assert result.output_payload["error"] is not None
 
 
 @pytest.mark.asyncio
@@ -424,6 +470,7 @@ async def test_execution_bus_task_handler_dict_status_blocked_maps_to_failure(mo
     result = await bus.execute(req)
     assert result.status == "error"
     assert result.output_payload["success"] is False
+    assert result.output_payload["error"] is not None
 
 
 @pytest.mark.asyncio
@@ -460,6 +507,42 @@ async def test_execution_bus_task_handler_dict_explicit_success_overrides_status
     result = await bus.execute(req)
     assert result.status == "success"
     assert result.output_payload["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_status_error_uses_content_fallback_for_error(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"status": "error", "content": "permission denied"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["error"] == "permission denied"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_explicit_error_wins_over_fallback(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return {"status": "error", "content": "permission denied", "error": "explicit failure"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["error"] == "explicit failure"
 
 
 @pytest.mark.asyncio

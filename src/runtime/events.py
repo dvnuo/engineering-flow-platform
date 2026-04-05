@@ -38,13 +38,14 @@ def build_runtime_event(
         "request_id": request_id,
         "agent_id": agent_id,
         "summary": summary,
-        "type": resolved_execution_type,
-        "execution_type": resolved_execution_type,
         "payload": normalized_detail,
         "detail_payload": normalized_detail,
         "timestamp": created_at,
         "created_at": created_at,
     }
+    if isinstance(resolved_execution_type, str) and resolved_execution_type.strip():
+        event["type"] = resolved_execution_type.strip()
+        event["execution_type"] = resolved_execution_type.strip()
     if legacy_payload:
         for key, value in legacy_payload.items():
             event.setdefault(key, value)
