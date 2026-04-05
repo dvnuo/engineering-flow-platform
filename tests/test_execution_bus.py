@@ -168,21 +168,51 @@ async def test_execution_bus_blocked_result_emits_failed_event():
 def test_runtime_event_builder_is_additive_with_legacy_payload():
     event = build_runtime_event(
         event_type="runtime.update",
+        execution_type="chat",
         state="success",
         session_id="s3",
         request_id="r3",
         agent_id="a3",
         summary="done",
         detail_payload={"k": "v"},
-        legacy_payload={"type": "legacy", "data": {"k": "v"}},
+        legacy_payload={"legacy_type": "legacy", "data": {"k": "v"}},
     )
 
     assert event["detail_payload"] == {"k": "v"}
-    assert event["type"] == "legacy"
+    assert event["type"] == "chat"
+    assert event["legacy_type"] == "legacy"
     assert event["data"] == {"k": "v"}
     assert event["event"] == "runtime.update"
     assert event["execution_id"] == "r3"
     assert event["timestamp"] == event["created_at"]
+
+
+def test_runtime_event_builder_legacy_payload_does_not_override_alias_collisions():
+    event = build_runtime_event(
+        event_type="execution.completed",
+        execution_type="tool",
+        state="success",
+        session_id="s1",
+        request_id="r1",
+        agent_id="a1",
+        summary="done",
+        detail_payload={"content": "ok"},
+        legacy_payload={
+            "type": "legacy-type",
+            "event": "legacy-event",
+            "execution_id": "legacy-exec",
+            "payload": {"legacy": True},
+            "timestamp": "legacy-ts",
+            "legacy_type": "legacy_execution_completed",
+        },
+    )
+
+    assert event["type"] == "tool"
+    assert event["event"] == "execution.completed"
+    assert event["execution_id"] == "r1"
+    assert event["payload"] == {"content": "ok"}
+    assert event["timestamp"] == event["created_at"]
+    assert event["legacy_type"] == "legacy_execution_completed"
 
 
 def test_runtime_event_builder_calls_utcnow_once(monkeypatch):

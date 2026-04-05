@@ -46,5 +46,6 @@ def build_runtime_event(
         "created_at": created_at,
     }
     if legacy_payload:
-        event.update(legacy_payload)
+        for key, value in legacy_payload.items():
+            event.setdefault(key, value)
     return event
