@@ -1,4 +1,5 @@
 import json
+import inspect
 
 import pytest
 
@@ -108,3 +109,63 @@ def test_subagent_sessions_spawn_uses_execute_subagent_orchestration(monkeypatch
     assert forwarded["cleanup"] == "keep"
     assert forwarded["start_immediately"] is False
     assert forwarded["wait_for_completion"] is False
+
+
+@pytest.mark.asyncio
+async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        captured.update(kwargs)
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"success": True},
+                "artifacts": {},
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+
+    class _Request:
+        async def json(self):
+            return {
+                "task_id": "task-rt-1",
+                "task_type": "adapter_action_task",
+                "shared_context_ref": "ctx://abc",
+                "input_payload": {"action_id": "adapter:jira:read_issue", "kwargs": {"issue_key": "PROJ-1"}},
+            }
+
+    response = await webchat.api_tasks_execute(_Request())
+    payload = json.loads(response.body)
+
+    assert response.status == 200
+    assert payload["task_id"] == "task-rt-1"
+    assert captured["request_id"] == "task-task-rt-1"
+    assert captured["metadata"]["task_id"] == "task-rt-1"
+    assert captured["metadata"]["portal_task_id"] == "task-rt-1"
+    assert captured["metadata"]["shared_context_ref"] == "ctx://abc"
+
+
+def test_entrypoints_do_not_reintroduce_direct_bus_construction():
+    from src.agents import executor, skill_mode, subagent
+    from src.gateway import webchat
+
+    sources = {
+        "executor": inspect.getsource(executor),
+        "skill_mode": inspect.getsource(skill_mode),
+        "subagent": inspect.getsource(subagent),
+        "webchat": inspect.getsource(webchat),
+    }
+    forbidden = ("build_default_execution_bus(", "make_execution_request(")
+    for name, source in sources.items():
+        for token in forbidden:
+            assert token not in source, f"{name} unexpectedly contains {token}"

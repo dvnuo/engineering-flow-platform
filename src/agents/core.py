@@ -79,6 +79,7 @@ def get_skill_workdir() -> Optional[str]:
 # When DEBUG, complete input/output is logged (no truncation)
 
 _DEBUG_ENABLED = None  # Lazy initialization
+_TOOL_RESULT_GOVERNANCE_ATTR = "_governance"
 
 
 def _is_debug_enabled() -> bool:
@@ -152,15 +153,23 @@ def _is_lookup_only_skill(skill: Any, skill_session: SkillSession, message: str)
 
 
 def _attach_governance_hint(tool_result: ToolResult, governance_payload: Dict[str, Any]) -> ToolResult:
+    # Phase 2 compatibility bridge:
+    # GovernanceBus remains the policy decision source.
+    # This metadata on ToolResult is only a transitional carrier for legacy
+    # agent-loop hint consumption; avoid direct getattr/setattr usage elsewhere.
     """Attach governance metadata onto ToolResult in one explicit bridge helper."""
     payload = governance_payload if isinstance(governance_payload, dict) else {}
-    setattr(tool_result, "_governance", dict(payload))
+    setattr(tool_result, _TOOL_RESULT_GOVERNANCE_ATTR, dict(payload))
     return tool_result
 
 
 def _read_governance_hint(tool_result: ToolResult) -> Dict[str, Any]:
+    # Phase 2 compatibility bridge:
+    # GovernanceBus computes policy hints; this accessor only reads the
+    # transitional ToolResult metadata shape for legacy loop decisions.
+    # Keep access centralized to avoid implicit contract drift.
     """Read governance metadata from ToolResult and always return a dict."""
-    payload = getattr(tool_result, "_governance", {})
+    payload = getattr(tool_result, _TOOL_RESULT_GOVERNANCE_ATTR, {})
     if isinstance(payload, dict):
         return dict(payload)
     return {}
