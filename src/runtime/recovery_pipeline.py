@@ -5,13 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from src.runtime.contracts import SessionSnapshot, make_session_snapshot
 from src.runtime.events import build_runtime_event
 
 
 @dataclass
 class RecoverySnapshot:
+    snapshot_version: str
     session_id: str
-    message_count: int
+    persisted_session: Dict[str, Any] = field(default_factory=dict)
+    runtime_state: Dict[str, Any] = field(default_factory=dict)
+    reconstructed_state: Dict[str, Any] = field(default_factory=dict)
+    # compatibility fields retained for existing callers/tests
+    message_count: int = 0
     metadata: Dict[str, Any] = field(default_factory=dict)
     active_skill_session: Optional[Dict[str, Any]] = None
     last_execution_id: Optional[str] = None
@@ -26,8 +32,11 @@ class RecoverySnapshot:
 class RecoveryHydrationResult:
     session_id: str
     recovered: bool
+    snapshot_version: Optional[str] = None
     active_skill_session: Optional[Dict[str, Any]] = None
     last_execution_id: Optional[str] = None
+    runtime_state: Dict[str, Any] = field(default_factory=dict)
+    reconstructed_state: Dict[str, Any] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     runtime_events: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -56,41 +65,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             return None
         session = session_info["session"]
         source = session_info["source"]
-        metadata = _metadata_from_session(session)
-        active_skill_session = _extract_active_skill_session(session)
-        last_execution_id = _extract_last_execution_id(session)
-        message_count = len(session.get("history") or [])
-
-        snapshot = RecoverySnapshot(
-            session_id=session_id,
-            message_count=message_count,
-            metadata=metadata,
-            active_skill_session=active_skill_session,
-            last_execution_id=last_execution_id,
-            created_at=_safe_string(session.get("created_at")),
-            updated_at=_safe_string(session.get("updated_at")),
-            summary_flags={
-                "has_history": bool(session.get("history")),
-                "has_active_skill_session": active_skill_session is not None,
-                "has_last_execution_id": bool(last_execution_id),
-                "source": source,
-            },
-            runtime_events=[
-                self._event(
-                    session_id,
-                    "recovery.snapshot_built",
-                    "snapshot_built",
-                    {
-                        "source": source,
-                        "message_count": message_count,
-                        "has_active_skill_session": active_skill_session is not None,
-                        "has_last_execution_id": bool(last_execution_id),
-                        "warning_count": 0,
-                    },
-                )
-            ],
-        )
-        return snapshot
+        return await self._build_snapshot_from_session(session_id=session_id, session=session, source=source)
 
     async def hydrate_session_state(self, session_id: str) -> RecoveryHydrationResult:
         if not session_id:
@@ -130,15 +105,16 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             )
 
         session_record = session_info["session"]
-        source = session_info["source"]
-
-        metadata = _metadata_from_session(session_record)
-        active_skill_session = _extract_active_skill_session(session_record)
-        if session_record.get("active_skill_session") is None and metadata.get("active_skill_session") is not None:
-            warnings.append("active_skill_session_restored_from_metadata")
-
-        last_execution_id = _extract_last_execution_id(session_record)
-        message_count = len(session_record.get("history") or [])
+        snapshot = await self._build_snapshot_from_session(
+            session_id=session_id,
+            session=session_record,
+            source=session_info["source"],
+            warnings=warnings,
+        )
+        metadata = dict(snapshot.metadata)
+        active_skill_session = snapshot.active_skill_session
+        last_execution_id = snapshot.last_execution_id
+        message_count = snapshot.message_count
 
         runtime_events.append(
             self._event(
@@ -146,7 +122,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                 "recovery.hydrated",
                 "hydrated",
                 {
-                    "source": source,
+                    "source": snapshot.reconstructed_state.get("recovery_source"),
                     "message_count": message_count,
                     "has_active_skill_session": active_skill_session is not None,
                     "has_last_execution_id": bool(last_execution_id),
@@ -158,8 +134,11 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
         return RecoveryHydrationResult(
             session_id=session_id,
             recovered=True,
+            snapshot_version=snapshot.snapshot_version,
             active_skill_session=active_skill_session,
             last_execution_id=last_execution_id,
+            runtime_state=dict(snapshot.runtime_state),
+            reconstructed_state=dict(snapshot.reconstructed_state),
             warnings=warnings,
             runtime_events=runtime_events,
             metadata=metadata,
@@ -219,6 +198,112 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             detail_payload=detail_payload,
             legacy_payload={"legacy_type": event_type.replace(".", "_")},
         )
+
+    async def _build_snapshot_from_session(
+        self,
+        *,
+        session_id: str,
+        session: Dict[str, Any],
+        source: str,
+        warnings: Optional[List[str]] = None,
+    ) -> RecoverySnapshot:
+        runtime_warnings = warnings if warnings is not None else []
+        metadata = _metadata_from_session(session)
+        active_skill_session = _extract_active_skill_session(session)
+        if session.get("active_skill_session") is None and metadata.get("active_skill_session") is not None:
+            runtime_warnings.append("active_skill_session_restored_from_metadata")
+        last_execution_id = _extract_last_execution_id(session)
+        message_count = len(session.get("history") or [])
+        pending_tool_tasks = await self._safe_pending_tool_tasks(session_id, runtime_warnings)
+        active_subagents = await self._safe_active_subagents(runtime_warnings)
+        pending_delegations = metadata.get("pending_delegations") if isinstance(metadata.get("pending_delegations"), list) else []
+        runtime_state = {
+            "active_skill_session": active_skill_session,
+            "last_execution_id": last_execution_id,
+            "pending_tool_tasks": pending_tool_tasks,
+            "active_subagents": active_subagents,
+            "pending_delegations": list(pending_delegations),
+        }
+        reconstructed_state = {
+            "has_history": bool(session.get("history")),
+            "has_active_skill_session": active_skill_session is not None,
+            "has_last_execution_id": bool(last_execution_id),
+            "has_pending_tool_tasks": bool(pending_tool_tasks),
+            "has_active_subagents": bool(active_subagents),
+            "has_pending_delegations": bool(pending_delegations),
+            "recovery_source": source,
+        }
+        persisted_session = {
+            "history": list(session.get("history") or []),
+            "messages": list(session.get("history") or []),
+            "metadata": metadata,
+            "created_at": _safe_string(session.get("created_at")),
+            "updated_at": _safe_string(session.get("updated_at")),
+        }
+        contract_snapshot: SessionSnapshot = make_session_snapshot(
+            snapshot_version="phase3.v1",
+            session_id=session_id,
+            persisted_session=persisted_session,
+            runtime_state=runtime_state,
+            reconstructed_state=reconstructed_state,
+            created_at=persisted_session.get("created_at"),
+            updated_at=persisted_session.get("updated_at"),
+        )
+        return RecoverySnapshot(
+            snapshot_version=contract_snapshot.snapshot_version,
+            session_id=contract_snapshot.session_id,
+            persisted_session=contract_snapshot.persisted_session,
+            runtime_state=contract_snapshot.runtime_state,
+            reconstructed_state=contract_snapshot.reconstructed_state,
+            message_count=message_count,
+            metadata=metadata,
+            active_skill_session=active_skill_session,
+            last_execution_id=last_execution_id,
+            created_at=contract_snapshot.created_at,
+            updated_at=contract_snapshot.updated_at,
+            summary_flags={
+                "has_history": reconstructed_state["has_history"],
+                "has_active_skill_session": reconstructed_state["has_active_skill_session"],
+                "has_last_execution_id": reconstructed_state["has_last_execution_id"],
+                "source": source,
+            },
+            warnings=list(runtime_warnings),
+            runtime_events=[
+                self._event(
+                    session_id,
+                    "recovery.snapshot_built",
+                    "snapshot_built",
+                    {
+                        "source": source,
+                        "message_count": message_count,
+                        "has_active_skill_session": active_skill_session is not None,
+                        "has_last_execution_id": bool(last_execution_id),
+                        "has_pending_tool_tasks": bool(pending_tool_tasks),
+                        "has_active_subagents": bool(active_subagents),
+                        "has_pending_delegations": bool(pending_delegations),
+                        "warning_count": len(runtime_warnings),
+                    },
+                )
+            ],
+        )
+
+    async def _safe_pending_tool_tasks(self, session_id: str, warnings: List[str]) -> List[Dict[str, Any]]:
+        try:
+            from src.agents.tasks import task_manager
+
+            return task_manager.list_task_summaries(session_id=session_id)
+        except Exception:
+            warnings.append("pending_tool_tasks_unavailable")
+            return []
+
+    async def _safe_active_subagents(self, warnings: List[str]) -> List[Dict[str, Any]]:
+        try:
+            from src.agents.subagent import list_active_subagent_summaries
+
+            return list_active_subagent_summaries()
+        except Exception:
+            warnings.append("active_subagents_unavailable")
+            return []
 
 
 def _metadata_from_session(session: Dict[str, Any]) -> Dict[str, Any]:

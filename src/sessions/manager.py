@@ -447,6 +447,54 @@ class SessionManager:
         # Metadata-only execution id updates are intentionally deferred to the
         # next normal persistence path (e.g. add_message autosave, save_all, shutdown).
 
+    async def add_pending_delegation(self, session_id: str, delegation_record: Dict[str, Any]) -> None:
+        """Add a lightweight pending delegation record to session metadata."""
+        if not session_id or not isinstance(delegation_record, dict):
+            return
+        session = await self.get_session(session_id)
+        metadata = session.setdefault("metadata", {})
+        pending = metadata.get("pending_delegations")
+        pending_list = list(pending) if isinstance(pending, list) else []
+        delegation_id = delegation_record.get("delegation_id")
+        if delegation_id:
+            pending_list = [item for item in pending_list if item.get("delegation_id") != delegation_id]
+        pending_list.append(dict(delegation_record))
+        metadata["pending_delegations"] = pending_list
+        session["updated_at"] = datetime.now().isoformat()
+
+    async def complete_pending_delegation(
+        self,
+        session_id: str,
+        delegation_id: str,
+        *,
+        status: str,
+    ) -> None:
+        """Mark pending delegation as completed and remove from pending list."""
+        if not session_id or not delegation_id:
+            return
+        session = await self.get_session(session_id)
+        metadata = session.setdefault("metadata", {})
+        pending = metadata.get("pending_delegations")
+        pending_list = list(pending) if isinstance(pending, list) else []
+        matched: Optional[Dict[str, Any]] = None
+        remaining: List[Dict[str, Any]] = []
+        for item in pending_list:
+            if not isinstance(item, dict):
+                continue
+            if item.get("delegation_id") == delegation_id:
+                matched = dict(item)
+                continue
+            remaining.append(item)
+        metadata["pending_delegations"] = remaining
+        if matched is not None:
+            completed = metadata.get("completed_delegations")
+            completed_list = list(completed) if isinstance(completed, list) else []
+            matched["status"] = status
+            matched["completed_at"] = datetime.now().isoformat()
+            completed_list.append(matched)
+            metadata["completed_delegations"] = completed_list[-50:]
+        session["updated_at"] = datetime.now().isoformat()
+
     async def recover_session_state(self, session_id: str) -> Dict[str, Any]:
         """Recover runtime-facing session state through the runtime recovery pipeline."""
         from src.runtime.recovery_pipeline import get_recovery_pipeline
@@ -456,8 +504,11 @@ class SessionManager:
         return {
             "session_id": hydration.session_id,
             "recovered": hydration.recovered,
+            "snapshot_version": hydration.snapshot_version,
             "active_skill_session": hydration.active_skill_session,
             "last_execution_id": hydration.last_execution_id,
+            "runtime_state": dict(hydration.runtime_state),
+            "reconstructed_state": dict(hydration.reconstructed_state),
             "warnings": list(hydration.warnings),
             "runtime_events": list(hydration.runtime_events),
             "metadata": dict(hydration.metadata),

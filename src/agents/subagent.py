@@ -129,6 +129,26 @@ def _register_subagent_session(
     return subagent
 
 
+def list_active_subagent_summaries(*, session_key_prefix: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return serializable summaries for active sub-agent sessions."""
+    summaries: List[Dict[str, Any]] = []
+    for session_key, state in _subagent_sessions.items():
+        if session_key_prefix and not session_key.startswith(session_key_prefix):
+            continue
+        summaries.append(
+            {
+                "session_key": session_key,
+                "task": state.get("task"),
+                "status": state.get("status"),
+                "model": state.get("model"),
+                "thinking": state.get("thinking"),
+                "created_at": state.get("created_at"),
+            }
+        )
+    summaries.sort(key=lambda item: (item.get("created_at") or "", item.get("session_key") or ""))
+    return summaries
+
+
 def _log_background_task_exception(task: asyncio.Task, session_key: str) -> None:
     if task.cancelled():
         return

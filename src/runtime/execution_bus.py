@@ -4,13 +4,21 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional, Protocol
 import logging
+from datetime import datetime
 
 from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, run_skill_execution
 from src.agents.subagent import run_subagent_execution
 from src.agents.tasks import task_manager
 from src.runtime.adapter_executor import execute_adapter_action
 from src.runtime.capability_registry import get_capability_registry
-from src.runtime.contracts import ExecutionRequest, ExecutionResult, make_execution_request, make_execution_result
+from src.runtime.contracts import (
+    DelegationResult,
+    ExecutionRequest,
+    ExecutionResult,
+    make_delegation_result,
+    make_execution_request,
+    make_execution_result,
+)
 from src.runtime.events import build_runtime_event
 from src.runtime.governance import GovernanceHooks, as_governance_bus
 from src.runtime.governance_bus import (
@@ -487,6 +495,161 @@ def build_default_execution_bus(
     async def task_handler(request: ExecutionRequest) -> ExecutionResult:
         task_id = bus._resolve_task_id(request)
         task_type = request.input_payload.get("task_type")
+        if task_type == "delegation_task":
+            delegation_id = _get_required(request.input_payload, "delegation_id")
+            objective = _get_required(request.input_payload, "objective")
+            visibility = _get_required(request.input_payload, "visibility")
+            if visibility not in {"leader_only", "group_visible"}:
+                return make_execution_result(
+                    request_id=request.request_id,
+                    status="blocked",
+                    output_payload={
+                        "task_type": task_type,
+                        "delegation_id": delegation_id,
+                        "success": False,
+                        "error": f"Unsupported visibility: {visibility}",
+                        "task_boundary": True,
+                    },
+                )
+            skill_name = request.input_payload.get("skill_name")
+            if not isinstance(skill_name, str) or not skill_name.strip():
+                delegation_result = make_delegation_result(
+                    delegation_id=delegation_id,
+                    assignee_agent_id=request.input_payload.get("assignee_agent_id"),
+                    status="blocked",
+                    blockers=["missing_skill_name"],
+                    summary="Delegation blocked: skill_name is required for delegation_task",
+                    raw_result={"error": "missing_skill_name"},
+                    audit_trace={"request_id": request.request_id, "task_id": task_id},
+                )
+                runtime_events = [
+                    build_runtime_event(
+                        event_type="task.delegation.failed",
+                        execution_type=request.execution_type,
+                        state="failed",
+                        session_id=request.session_id,
+                        request_id=request.request_id,
+                        agent_id=request.agent_id,
+                        summary=f"delegation task {delegation_id}",
+                        task_id=task_id,
+                        detail_payload={
+                            "delegation_id": delegation_id,
+                            "group_id": request.input_payload.get("group_id"),
+                            "parent_agent_id": request.input_payload.get("parent_agent_id"),
+                            "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
+                            "visibility": visibility,
+                            "skill_name": skill_name,
+                            "scoped_context_ref": request.input_payload.get("scoped_context_ref"),
+                        },
+                        legacy_payload={"legacy_type": "task_delegation"},
+                    )
+                ]
+                return make_execution_result(
+                    request_id=request.request_id,
+                    status="blocked",
+                    output_payload={
+                        "task_type": task_type,
+                        "delegation_id": delegation_id,
+                        "success": False,
+                        "delegation_result": delegation_result.__dict__,
+                        "error": "missing_skill_name",
+                        "task_boundary": True,
+                    },
+                    runtime_events=runtime_events,
+                )
+
+            pending_record = {
+                "delegation_id": delegation_id,
+                "task_id": task_id,
+                "objective": objective,
+                "group_id": request.input_payload.get("group_id"),
+                "parent_agent_id": request.input_payload.get("parent_agent_id"),
+                "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
+                "visibility": visibility,
+                "skill_name": skill_name.strip(),
+                "status": "pending",
+                "created_at": datetime.utcnow().isoformat() + "Z",
+            }
+            if request.session_id:
+                try:
+                    from src.sessions.manager import session_manager
+
+                    await session_manager.add_pending_delegation(request.session_id, pending_record)
+                except Exception:
+                    logger.debug("ExecutionBus failed to add pending delegation metadata", exc_info=True)
+
+            skill_success = False
+            skill_error = None
+            raw_skill_result: Dict[str, Any] = {}
+            try:
+                skill_kwargs = dict(request.input_payload.get("skill_kwargs") or {})
+                skill_kwargs.setdefault("session_id", request.session_id)
+                skill_result = await run_skill_execution(skill_name.strip(), **skill_kwargs)
+                normalized_skill = bus._normalize_result(request, skill_result)
+                raw_skill_result = dict(normalized_skill.output_payload or {})
+                skill_success = normalized_skill.status not in {"error", "blocked"}
+                skill_error = raw_skill_result.get("error")
+                delegation_result: DelegationResult = make_delegation_result(
+                    delegation_id=delegation_id,
+                    assignee_agent_id=request.input_payload.get("assignee_agent_id"),
+                    status="completed" if skill_success else "failed",
+                    summary=raw_skill_result.get("output") or raw_skill_result.get("content"),
+                    artifacts=[],
+                    blockers=[] if skill_success else [str(skill_error or "skill_execution_failed")],
+                    next_recommendation=None if skill_success else "review_blockers",
+                    audit_trace={"request_id": request.request_id, "task_id": task_id, "skill_name": skill_name.strip()},
+                    raw_result=raw_skill_result,
+                )
+                runtime_events = list(normalized_skill.runtime_events or [])
+                runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+                runtime_events.append(
+                    build_runtime_event(
+                        event_type="task.delegation.completed" if skill_success else "task.delegation.failed",
+                        execution_type=request.execution_type,
+                        state="completed" if skill_success else "failed",
+                        session_id=request.session_id,
+                        request_id=request.request_id,
+                        agent_id=request.agent_id,
+                        summary=f"delegation task {delegation_id}",
+                        task_id=task_id,
+                        detail_payload={
+                            "delegation_id": delegation_id,
+                            "group_id": request.input_payload.get("group_id"),
+                            "parent_agent_id": request.input_payload.get("parent_agent_id"),
+                            "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
+                            "visibility": visibility,
+                            "skill_name": skill_name.strip(),
+                            "scoped_context_ref": request.input_payload.get("scoped_context_ref"),
+                        },
+                        legacy_payload={"legacy_type": "task_delegation"},
+                    )
+                )
+                return make_execution_result(
+                    request_id=request.request_id,
+                    status="success" if skill_success else "error",
+                    output_payload={
+                        "task_type": task_type,
+                        "delegation_id": delegation_id,
+                        "success": skill_success,
+                        "delegation_result": delegation_result.__dict__,
+                        "error": skill_error,
+                        "task_boundary": True,
+                    },
+                    runtime_events=runtime_events,
+                )
+            finally:
+                if request.session_id:
+                    try:
+                        from src.sessions.manager import session_manager
+
+                        await session_manager.complete_pending_delegation(
+                            request.session_id,
+                            delegation_id,
+                            status="completed" if skill_success else "failed",
+                        )
+                    except Exception:
+                        logger.debug("ExecutionBus failed to complete pending delegation metadata", exc_info=True)
+
         if task_type == "adapter_action_task":
             action_id = _get_required(request.input_payload, "action_id")
             kwargs = dict(request.input_payload.get("kwargs") or {})
