@@ -16,6 +16,13 @@ from src.runtime.governance_bus import (
     GovernanceDecision,
     build_default_governance_bus,
 )
+from src.runtime.recovery_pipeline import (
+    DefaultRecoveryPipeline,
+    RecoveryHydrationResult,
+    RecoveryPipeline,
+    RecoverySnapshot,
+    build_default_recovery_pipeline,
+)
 
 __all__ = [
     "ExecutionRequest",
@@ -26,10 +33,15 @@ __all__ = [
     "GovernanceDecision",
     "GovernanceAuditRecord",
     "DefaultGovernanceBus",
+    "RecoverySnapshot",
+    "RecoveryHydrationResult",
+    "RecoveryPipeline",
+    "DefaultRecoveryPipeline",
     "make_execution_request",
     "make_execution_result",
     "build_default_execution_bus",
     "build_default_governance_bus",
+    "build_default_recovery_pipeline",
     "build_runtime_event",
     "normalize_event_payload",
 ]

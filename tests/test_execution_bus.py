@@ -6,6 +6,7 @@ from src.runtime.contracts import ExecutionResult, make_execution_request, make_
 from src.runtime.execution_bus import ExecutionBus, build_default_execution_bus
 from src.runtime.events import build_runtime_event
 from src.runtime.governance import GovernanceHooks
+from src.runtime.governance_bus import GovernanceDecision
 
 
 @pytest.mark.asyncio
@@ -435,6 +436,64 @@ async def test_execution_bus_async_governance_exceptions_are_swallowed(caplog):
     assert "ExecutionBus governance hook failed: before_execute" in caplog.text
     assert "ExecutionBus governance hook failed: on_error" in caplog.text
     assert "ExecutionBus governance hook failed: after_execute" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_emits_terminal_event_from_final_governed_result():
+    emitted = []
+
+    class _BlockingAfterGovernance(GovernanceHooks):
+        def after_execute(self, request, result):
+            result.status = "blocked"
+            result.output_payload["status"] = "blocked-by-governance"
+            result.audit_ref = "audit-final"
+            result.runtime_events.append({"event_type": "governance.enriched"})
+            return GovernanceDecision(allowed=False, reason="post_policy_block", result=result)
+
+    async def _ok(_request):
+        return {"response": "ok"}
+
+    bus = ExecutionBus(
+        governance=_BlockingAfterGovernance(),
+        event_emitter=lambda event_type, payload: emitted.append((event_type, payload)),
+    )
+    bus.register_handler("chat", _ok)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+
+    assert result.status == "blocked"
+    assert result.audit_ref == "audit-final"
+    assert any(evt.get("event_type") == "governance.enriched" for evt in result.runtime_events)
+    assert [name for name, _ in emitted] == ["execution_started", "execution_failed"]
+    assert emitted[-1][1]["detail_payload"]["status"] == "blocked"
+    assert emitted[-1][1]["detail_payload"]["output_summary"]["status"] == "blocked-by-governance"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_error_lifecycle_uses_post_governance_final_status():
+    emitted = []
+
+    class _ErrorToBlockedGovernance(GovernanceHooks):
+        def after_execute(self, request, result):
+            if result.status == "error":
+                result.status = "blocked"
+                result.output_payload["status"] = "blocked-after-error"
+            return result
+
+    async def _bad(_request):
+        raise RuntimeError("boom")
+
+    bus = ExecutionBus(
+        governance=_ErrorToBlockedGovernance(),
+        event_emitter=lambda event_type, payload: emitted.append((event_type, payload)),
+    )
+    bus.register_handler("chat", _bad)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+
+    assert result.status == "blocked"
+    assert [name for name, _ in emitted] == ["execution_started", "execution_failed"]
+    assert emitted[-1][1]["detail_payload"]["status"] == "blocked"
 
 
 @pytest.mark.asyncio

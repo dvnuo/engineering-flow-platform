@@ -47,8 +47,9 @@ class ExecutionBus:
         decision = await self._safe_before_governance(request)
         if decision is not None and not decision.allowed:
             result = self._blocked_result(request, reason=decision.reason, audit=decision.audit_record)
-            self._emit_lifecycle_event("execution.failed", request, "blocked", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
-            return await self._safe_after_governance(request, result)
+            final_result = await self._safe_after_governance(request, result)
+            self._emit_terminal_lifecycle_event(request, final_result)
+            return final_result
         self._emit_lifecycle_event("execution.started", request, "started", {"status": "started"})
         handler = self._handlers.get(request.execution_type)
         if handler is None:
@@ -57,8 +58,9 @@ class ExecutionBus:
                 status="blocked",
                 output_payload={"error": f"No handler for execution_type={request.execution_type}"},
             )
-            self._emit_lifecycle_event("execution.failed", request, "blocked", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
-            return await self._safe_after_governance(request, result)
+            final_result = await self._safe_after_governance(request, result)
+            self._emit_terminal_lifecycle_event(request, final_result)
+            return final_result
 
         try:
             raw_result = await handler(request)
@@ -81,13 +83,13 @@ class ExecutionBus:
                         audit_record=error_audit,
                     )
                 )
-            self._emit_lifecycle_event("execution.failed", request, "error", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
-            return await self._safe_after_governance(request, result)
+            final_result = await self._safe_after_governance(request, result)
+            self._emit_terminal_lifecycle_event(request, final_result)
+            return final_result
 
-        failure_statuses = {"error", "blocked"}
-        lifecycle_event = "execution.failed" if result.status in failure_statuses else "execution.completed"
-        self._emit_lifecycle_event(lifecycle_event, request, result.status, {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
-        return await self._safe_after_governance(request, result)
+        final_result = await self._safe_after_governance(request, result)
+        self._emit_terminal_lifecycle_event(request, final_result)
+        return final_result
 
     async def _persist_last_execution_id(self, request: ExecutionRequest) -> None:
         if not self._should_persist_last_execution_id(request):
@@ -166,6 +168,16 @@ class ExecutionBus:
             output_payload=payload,
             runtime_events=runtime_events,
             audit_ref=audit_ref,
+        )
+
+    def _emit_terminal_lifecycle_event(self, request: ExecutionRequest, result: ExecutionResult) -> None:
+        failure_statuses = {"error", "blocked"}
+        lifecycle_event = "execution.failed" if result.status in failure_statuses else "execution.completed"
+        self._emit_lifecycle_event(
+            lifecycle_event,
+            request,
+            result.status,
+            {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)},
         )
 
     def _normalize_result(self, request: ExecutionRequest, raw_result: Any) -> ExecutionResult:
