@@ -563,6 +563,7 @@ async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
     assert captured["metadata"]["portal_workflow_rule_id"] == "wf-1"
     assert captured["metadata"]["shared_context_ref"] == "ctx://1"
     assert captured["metadata"]["custom"] == "value"
+    assert captured["input_payload"]["shared_context_ref"] == "ctx://1"
     assert captured["context_ref"] == {"workspace": "w1"}
     assert captured["request_id"] == "task-task-1"
 

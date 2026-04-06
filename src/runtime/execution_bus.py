@@ -473,6 +473,14 @@ def _as_dict(value: Any) -> dict:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _non_empty_string(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            return stripped
+    return None
+
+
 def _build_structured_delegation_payload_from_skill_output(
     *,
     raw_skill_result: Dict[str, Any],
@@ -587,6 +595,10 @@ def build_default_execution_bus(
             leader_agent_id = request.input_payload.get("leader_agent_id")
             materialized_context_ref = _as_dict(request.context_ref)
             shared_context_materialized = bool(materialized_context_ref)
+            metadata = request.metadata if isinstance(request.metadata, dict) else {}
+            resolved_shared_context_ref = _non_empty_string(request.input_payload.get("shared_context_ref")) or _non_empty_string(
+                metadata.get("shared_context_ref")
+            )
             common_event_detail = {
                 "delegation_id": delegation_id,
                 "group_id": request.input_payload.get("group_id"),
@@ -595,6 +607,7 @@ def build_default_execution_bus(
                 "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
                 "visibility": visibility,
                 "skill_name": skill_name,
+                "shared_context_ref": resolved_shared_context_ref,
                 "scoped_context_ref": request.input_payload.get("scoped_context_ref"),
                 "shared_context_materialized": shared_context_materialized,
             }
@@ -683,7 +696,7 @@ def build_default_execution_bus(
                 "parent_agent_id": request.input_payload.get("parent_agent_id"),
                 "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
                 "visibility": visibility,
-                "shared_context_ref": request.input_payload.get("shared_context_ref"),
+                "shared_context_ref": resolved_shared_context_ref,
                 "shared_context_materialized": shared_context_materialized,
                 "skill_name": skill_name.strip(),
                 "status": "pending",
@@ -710,7 +723,7 @@ def build_default_execution_bus(
                     "parent_agent_id": request.input_payload.get("parent_agent_id"),
                     "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
                     "objective": objective,
-                    "shared_context_ref": request.input_payload.get("shared_context_ref"),
+                    "shared_context_ref": resolved_shared_context_ref,
                     "scoped_context_ref": request.input_payload.get("scoped_context_ref"),
                     "context_ref": dict(materialized_context_ref),
                     "shared_context_materialized": shared_context_materialized,

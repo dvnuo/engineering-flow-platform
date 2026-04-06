@@ -1117,6 +1117,49 @@ async def test_execution_bus_task_handler_delegation_task_invalid_visibility_emi
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_task_handler_delegation_task_resolves_shared_context_ref_from_metadata(monkeypatch):
+    captured = {}
+
+    async def _fake_run_skill_execution(skill_name, **kwargs):
+        captured["kwargs"] = kwargs
+        return {"success": True, "output": "ok"}
+
+    class _SessionManager:
+        def __init__(self):
+            self.added = []
+
+        async def add_pending_delegation(self, session_id, delegation_record):
+            self.added.append(delegation_record)
+
+        async def complete_pending_delegation(self, session_id, delegation_id, *, status):
+            return None
+
+    sm = _SessionManager()
+    monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
+    monkeypatch.setattr("src.sessions.manager.session_manager", sm)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-del",
+        metadata={"shared_context_ref": "ctx://from-metadata"},
+        input_payload={
+            "task_type": "delegation_task",
+            "delegation_id": "del-meta-ref",
+            "objective": "Review",
+            "visibility": "leader_only",
+            "skill_name": "demo_skill",
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert captured["kwargs"]["delegation_context"]["shared_context_ref"] == "ctx://from-metadata"
+    assert sm.added[0]["shared_context_ref"] == "ctx://from-metadata"
+    delegation_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.completed")
+    assert delegation_event["detail_payload"]["shared_context_ref"] == "ctx://from-metadata"
+
+
+@pytest.mark.asyncio
 async def test_execute_runtime_task_request_forwards_context_ref_to_execution_request(monkeypatch):
     from src.runtime import chat_orchestration_adapter as adapter
 

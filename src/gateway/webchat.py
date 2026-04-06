@@ -773,6 +773,9 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
 
         merged_input_payload = dict(parsed["input_payload"])
         merged_input_payload["task_type"] = parsed["task_type"]
+        # shared_context_ref is transported top-level and mirrored into input_payload for canonical task handler consumption.
+        if parsed["shared_context_ref"]:
+            merged_input_payload["shared_context_ref"] = parsed["shared_context_ref"]
 
         metadata = dict(parsed["metadata"])
         metadata["task_id"] = parsed["task_id"]
