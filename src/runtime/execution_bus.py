@@ -8,6 +8,8 @@ import logging
 from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, run_skill_execution
 from src.agents.subagent import run_subagent_execution
 from src.agents.tasks import task_manager
+from src.runtime.adapter_executor import execute_adapter_action
+from src.runtime.capability_registry import get_capability_registry
 from src.runtime.contracts import ExecutionRequest, ExecutionResult, make_execution_request, make_execution_result
 from src.runtime.events import build_runtime_event
 from src.runtime.governance import GovernanceHooks, as_governance_bus
@@ -18,6 +20,7 @@ from src.runtime.governance_bus import (
     build_default_governance_bus,
     governance_audit_runtime_event,
 )
+from src.runtime.jira_workflow_review import run_jira_workflow_review
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +458,102 @@ def build_default_execution_bus(
 
     async def task_handler(request: ExecutionRequest) -> ExecutionResult:
         task_type = request.input_payload.get("task_type")
+        if task_type == "adapter_action_task":
+            action_id = _get_required(request.input_payload, "action_id")
+            kwargs = dict(request.input_payload.get("kwargs") or {})
+            registry = get_capability_registry()
+            descriptor = registry.get(action_id)
+            if descriptor is None or descriptor.type != "adapter_action":
+                return make_execution_result(
+                    request_id=request.request_id,
+                    status="blocked",
+                    output_payload={
+                        "task_type": task_type,
+                        "action_id": action_id,
+                        "success": False,
+                        "error": f"Unknown or non-adapter action_id: {action_id}",
+                        "task_boundary": True,
+                    },
+                )
+            adapter_result = await execute_adapter_action(action_id, kwargs)
+            runtime_events = list(adapter_result.get("runtime_events") or [])
+            requires_identity_binding = bool(descriptor.requires_identity_binding)
+            runtime_events.append(
+                build_runtime_event(
+                    event_type="task.adapter_action.completed" if adapter_result.get("success") else "task.adapter_action.failed",
+                    execution_type=request.execution_type,
+                    state="completed" if adapter_result.get("success") else "failed",
+                    session_id=request.session_id,
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    summary=f"adapter action {action_id}",
+                    detail_payload={
+                        "task_type": task_type,
+                        "action_id": action_id,
+                        "requires_identity_binding": requires_identity_binding,
+                        "capability_policy_tags": descriptor.policy_tags,
+                        "success": bool(adapter_result.get("success")),
+                    },
+                    legacy_payload={"legacy_type": "task_adapter_action"},
+                )
+            )
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success" if adapter_result.get("success") else "error",
+                output_payload={
+                    "task_type": task_type,
+                    "action_id": action_id,
+                    "success": bool(adapter_result.get("success")),
+                    "error": adapter_result.get("error"),
+                    "task_boundary": True,
+                    "requires_identity_binding": requires_identity_binding,
+                    "result": adapter_result.get("result"),
+                },
+                runtime_events=runtime_events,
+            )
+
+        if task_type == "jira_workflow_review_task":
+            workflow_payload = {
+                "issue_key": _get_required(request.input_payload, "issue_key"),
+                "review_comment": request.input_payload.get("review_comment"),
+                "transition": request.input_payload.get("transition"),
+                "assignee": request.input_payload.get("assignee"),
+                "fields": request.input_payload.get("fields"),
+                "transition_comment": request.input_payload.get("transition_comment"),
+            }
+            workflow_result = await run_jira_workflow_review(workflow_payload)
+            runtime_events = list(workflow_result.get("runtime_events") or [])
+            runtime_events.append(
+                build_runtime_event(
+                    event_type="task.jira_workflow_review.completed" if workflow_result.get("success") else "task.jira_workflow_review.failed",
+                    execution_type=request.execution_type,
+                    state="completed" if workflow_result.get("success") else "failed",
+                    session_id=request.session_id,
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    summary="jira workflow review task",
+                    detail_payload={
+                        "task_type": task_type,
+                        "issue_key": workflow_result.get("issue_key"),
+                        "success": bool(workflow_result.get("success")),
+                        "actions_applied": len(workflow_result.get("actions_applied") or []),
+                    },
+                    legacy_payload={"legacy_type": "task_jira_workflow_review"},
+                )
+            )
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success" if workflow_result.get("success") else "error",
+                output_payload={
+                    "task_type": task_type,
+                    "success": bool(workflow_result.get("success")),
+                    "error": workflow_result.get("error"),
+                    "task_boundary": True,
+                    "result": workflow_result,
+                },
+                runtime_events=runtime_events,
+            )
+
         if task_type != "tool_task":
             return make_execution_result(
                 request_id=request.request_id,
