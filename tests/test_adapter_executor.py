@@ -41,3 +41,19 @@ async def test_execute_jira_workflow_action_transition_issue(monkeypatch):
     assert result["success"] is True
     assert result["system"] == "jira"
     assert result["action_name"] == "transition_issue"
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_add_comment(monkeypatch):
+    async def _fake_add_comment(issue_key, comment):
+        return f"Comment added to {issue_key}: {comment}"
+
+    monkeypatch.setattr("src.jira.jira_add_comment", _fake_add_comment)
+
+    result = await execute_adapter_action(
+        "adapter:jira:add_comment",
+        {"issue_key": "PROJ-4", "comment": "Looks good"},
+    )
+
+    assert result["success"] is True
+    assert result["action_id"] == "adapter:jira:add_comment"

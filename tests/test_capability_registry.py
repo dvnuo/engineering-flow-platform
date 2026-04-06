@@ -55,6 +55,7 @@ def test_default_registry_includes_skill_and_adapter_capabilities():
     assert adapters
     assert any(item.capability_id.startswith("adapter:github:") for item in adapters)
     assert any(item.capability_id.startswith("adapter:jira:") for item in adapters)
+    assert any(item.capability_id == "adapter:jira:add_comment" for item in adapters)
 
 
 def test_descriptor_fields_preserved():

@@ -768,6 +768,45 @@ async def test_execution_bus_task_handler_adapter_action_task_success(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_task_handler_adapter_action_add_comment(monkeypatch):
+    class _Registry:
+        @staticmethod
+        def get(action_id):
+            return CapabilityDescriptor(
+                capability_id=action_id,
+                type="adapter_action",
+                name="add_comment",
+                requires_identity_binding=True,
+                policy_tags=["jira", "write", "comment"],
+            )
+
+    async def _fake_execute_adapter_action(action_id, kwargs):
+        return {
+            "success": True,
+            "error": None,
+            "result": {"message": "ok"},
+            "runtime_events": [{"event_type": "task.adapter_action.completed"}],
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.get_capability_registry", lambda: _Registry())
+    monkeypatch.setattr("src.runtime.execution_bus.execute_adapter_action", _fake_execute_adapter_action)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={
+            "task_type": "adapter_action_task",
+            "action_id": "adapter:jira:add_comment",
+            "kwargs": {"issue_key": "PROJ-7", "comment": "done"},
+        },
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["action_id"] == "adapter:jira:add_comment"
+
+
+@pytest.mark.asyncio
 async def test_execution_bus_task_handler_adapter_action_unknown_is_blocked(monkeypatch):
     class _Registry:
         @staticmethod
@@ -799,6 +838,10 @@ async def test_execution_bus_task_handler_jira_workflow_review_task(monkeypatch)
             "assignee_updated": payload.get("assignee"),
             "transitioned_to": payload.get("transition"),
             "updated_fields": payload.get("fields") or {},
+            "workflow_outcome": "approved",
+            "approved": True,
+            "skill_name": payload.get("skill_name"),
+            "reassignment_target": payload.get("success_reassign_to"),
             "success": True,
             "error": None,
             "runtime_events": [{"event_type": "task.jira_workflow_review.completed"}],
@@ -812,6 +855,9 @@ async def test_execution_bus_task_handler_jira_workflow_review_task(monkeypatch)
         input_payload={
             "task_type": "jira_workflow_review_task",
             "issue_key": "PROJ-55",
+            "skill_name": "review_skill",
+            "success_transition": "Done",
+            "success_reassign_to": "reporter",
             "review_comment": "ok",
             "transition": "Done",
             "assignee": "bob",
@@ -823,6 +869,8 @@ async def test_execution_bus_task_handler_jira_workflow_review_task(monkeypatch)
     assert result.status == "success"
     assert result.output_payload["task_type"] == "jira_workflow_review_task"
     assert result.output_payload["result"]["issue_key"] == "PROJ-55"
+    assert result.output_payload["workflow_outcome"] == "approved"
+    assert result.output_payload["actions_applied"] == [{"action": "read_issue", "success": True}]
 
 
 @pytest.mark.asyncio

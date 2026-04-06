@@ -95,4 +95,21 @@ def build_jira_adapter_capabilities() -> List[AdapterActionDescriptor]:
             requires_identity_binding=True,
             source_ref="src.jira",
         ),
+        AdapterActionDescriptor(
+            action_id="adapter:jira:add_comment",
+            adapter="jira",
+            name="add_comment",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "issue_key": {"type": "string"},
+                    "comment": {"type": "string"},
+                },
+                "required": ["issue_key", "comment"],
+            },
+            output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
+            policy_tags=["jira", "write", "comment"],
+            requires_identity_binding=True,
+            source_ref="src.jira",
+        ),
     ]

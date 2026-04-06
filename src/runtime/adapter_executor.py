@@ -108,6 +108,7 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
         "adapter:jira:update_issue": "update_issue",
         "adapter:jira:assign_issue": "assign_issue",
         "adapter:jira:transition_issue": "transition_issue",
+        "adapter:jira:add_comment": "add_comment",
     }
     jira_action = action_map.get(normalized_action_id)
     if jira_action is None:
