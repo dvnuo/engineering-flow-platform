@@ -74,6 +74,11 @@ def governance_audit_runtime_event(
     audit_record: GovernanceAuditRecord,
     detail_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    task_id = metadata.get("task_id") if isinstance(metadata.get("task_id"), str) and metadata.get("task_id").strip() else None
+    if task_id is None:
+        payload_task_id = request.input_payload.get("task_id")
+        task_id = payload_task_id.strip() if isinstance(payload_task_id, str) and payload_task_id.strip() else None
     return build_runtime_event(
         event_type="governance.audit",
         execution_type=request.execution_type,
@@ -82,6 +87,7 @@ def governance_audit_runtime_event(
         request_id=request.request_id,
         agent_id=request.agent_id,
         summary=audit_record.message,
+        task_id=task_id,
         detail_payload={
             "audit_ref": audit_record.audit_ref,
             "stage": audit_record.stage,
@@ -143,30 +149,21 @@ class DefaultGovernanceBus(GovernanceBus):
         return GovernanceDecision(allowed=True)
 
     async def after_execute(self, request: ExecutionRequest, result: ExecutionResult) -> ExecutionResult:
-        # Phase 2 transition note:
-        # We keep the public after_execute hook stable, and explicitly carry
-        # result validate/enforce semantics through internal helper functions.
-        result, notes = self._normalize_execution_result_for_policy(request, result)
-        result, policy_notes = self._apply_policy_post_validation(request, result)
+        # after_execute ordering contract (Phase 2 closeout):
+        # 1) normalize/validate ExecutionResult contract
+        # 2) apply policy enforcement/hints
+        # 3) append governance audit event for any amendments
+        result, notes = self._validate_result_contract(request, result)
+        result, policy_notes = self._apply_policy_enforcement(request, result)
         notes.extend(policy_notes)
+        return self._append_governance_audit_event(request, result, notes)
 
-        if notes:
-            audit = make_governance_audit_record(
-                request=request,
-                stage="after_execute",
-                message="Governance post-processing amended execution result",
-                metadata={"notes": notes},
-            )
-            result.audit_ref = result.audit_ref or audit.audit_ref
-            result.runtime_events.append(
-                governance_audit_runtime_event(
-                    request=request,
-                    status=result.status,
-                    audit_record=audit,
-                    detail_payload={"notes": notes},
-                )
-            )
-        return result
+    def _validate_result_contract(
+        self,
+        request: ExecutionRequest,
+        result: ExecutionResult,
+    ) -> tuple[ExecutionResult, list[str]]:
+        return self._normalize_execution_result_for_policy(request, result)
 
     def _normalize_execution_result_for_policy(
         self,
@@ -215,6 +212,38 @@ class DefaultGovernanceBus(GovernanceBus):
                     # Policy wiring must stay non-blocking.
                     pass
         return result, notes
+
+    def _apply_policy_enforcement(
+        self,
+        request: ExecutionRequest,
+        result: ExecutionResult,
+    ) -> tuple[ExecutionResult, list[str]]:
+        return self._apply_policy_post_validation(request, result)
+
+    def _append_governance_audit_event(
+        self,
+        request: ExecutionRequest,
+        result: ExecutionResult,
+        notes: list[str],
+    ) -> ExecutionResult:
+        if not notes:
+            return result
+        audit = make_governance_audit_record(
+            request=request,
+            stage="after_execute",
+            message="Governance post-processing amended execution result",
+            metadata={"notes": notes},
+        )
+        result.audit_ref = result.audit_ref or audit.audit_ref
+        result.runtime_events.append(
+            governance_audit_runtime_event(
+                request=request,
+                status=result.status,
+                audit_record=audit,
+                detail_payload={"notes": notes},
+            )
+        )
+        return result
 
     async def on_error(self, request: ExecutionRequest, error: Exception) -> Optional[GovernanceAuditRecord]:
         return make_governance_audit_record(

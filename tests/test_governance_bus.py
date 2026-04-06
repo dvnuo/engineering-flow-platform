@@ -202,6 +202,59 @@ async def test_default_governance_event_result_status_normalization():
 
 
 @pytest.mark.asyncio
+async def test_legacy_governance_after_execute_return_is_coerced_to_execution_result():
+    class _LegacyHooks(GovernanceHooks):
+        def after_execute(self, request, result):
+            from src.runtime.contracts import ExecutionResult
+
+            return ExecutionResult(
+                request_id="legacy-inner",
+                status="",
+                output_payload="raw-string",  # type: ignore[arg-type]
+            )
+
+    async def _ok(_request):
+        return {"response": "ok"}
+
+    bus = ExecutionBus(governance=_LegacyHooks())
+    bus.register_handler("chat", _ok)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+
+    assert isinstance(result.output_payload, dict)
+    assert result.request_id == req.request_id
+
+
+@pytest.mark.asyncio
+async def test_default_governance_after_execute_order_normalize_then_policy_then_audit():
+    bus = build_default_governance_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool"},
+        metadata={"latest_user_message": "show me result", "tool_calls_count": 1},
+    )
+    # deliberately invalid status + non-dict output to trigger normalize path and notes
+    from src.runtime.contracts import ExecutionResult
+    result = ExecutionResult(
+        request_id=req.request_id,
+        status="invalid",
+        output_payload="payload",  # type: ignore[arg-type]
+    )
+
+    final_result = await bus.after_execute(req, result)
+
+    assert final_result.status == "error"
+    assert isinstance(final_result.output_payload, dict)
+    assert final_result.runtime_events
+    last_event = final_result.runtime_events[-1]
+    assert last_event.get("event_type") == "governance.audit"
+    notes = last_event.get("detail_payload", {}).get("notes", [])
+    assert "invalid_status_coerced" in notes
+    assert "output_payload_normalized" in notes
+
+
+@pytest.mark.asyncio
 async def test_build_default_execution_bus_uses_default_governance_bus():
     bus = build_default_execution_bus()
     assert bus._governance.__class__.__name__ == build_default_governance_bus().__class__.__name__

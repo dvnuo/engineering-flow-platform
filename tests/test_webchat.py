@@ -211,22 +211,12 @@ async def test_chat_execution_bus_adapter_stream(monkeypatch):
 async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch):
     from src.gateway import webchat
 
-    class _FakeBus:
-        def __init__(self):
-            self.request = None
+    captured = {}
+    async def _fake_execute_chat_orchestration(**kwargs):
+        captured.update(kwargs)
+        return type("R", (), {"status": "success", "output_payload": {"response": "ok"}})()
 
-        async def execute(self, request):
-            self.request = request
-            return type("R", (), {"status": "success", "output_payload": {"response": "ok"}})()
-
-    fake_bus = _FakeBus()
-    captured_kwargs = {}
-
-    def _build_bus(*args, **kwargs):
-        captured_kwargs.update(kwargs)
-        return fake_bus
-
-    monkeypatch.setattr(webchat, "build_default_execution_bus", _build_bus)
+    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
     async def _fake_run_chat_execution(*args, **kwargs):
         return {"response": "ignored"}
     monkeypatch.setattr(webchat, "run_chat_execution", _fake_run_chat_execution)
@@ -240,9 +230,8 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
         portal_user_name=None,
         request_path="/api/chat/stream",
     )
-    assert fake_bus.request.metadata["path"] == "/api/chat/stream"
-    assert fake_bus.request.metadata["persist_last_execution_id"] is True
-    assert ("event_emitter" not in captured_kwargs) or (captured_kwargs.get("event_emitter") is None)
+    assert captured["metadata"]["path"] == "/api/chat/stream"
+    assert captured["metadata"]["persist_last_execution_id"] is True
 
 
 @pytest.mark.asyncio
@@ -278,11 +267,10 @@ async def test_chat_execution_bus_adapter_raises_on_error_status(monkeypatch):
     from aiohttp import web
     from src.gateway import webchat
 
-    class _FakeBus:
-        async def execute(self, _request):
+    async def _fake_execute_chat_orchestration(**kwargs):
             return type("R", (), {"status": "error", "output_payload": {"error": {"message": "boom"}}})()
 
-    monkeypatch.setattr(webchat, "build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
 
     async def _fake_run_chat_execution(*args, **kwargs):
         return {"response": "ignored"}
@@ -571,6 +559,7 @@ async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
     assert captured["request"].execution_type == "task"
     assert captured["request"].input_payload["task_type"] == "adapter_action_task"
     assert captured["request"].metadata["portal_task_id"] == "task-1"
+    assert captured["request"].metadata["task_id"] == "task-1"
     assert captured["request"].metadata["portal_task_source"] == "portal"
     assert captured["request"].metadata["portal_workflow_rule_id"] == "wf-1"
     assert captured["request"].metadata["shared_context_ref"] == "ctx://1"
@@ -625,6 +614,7 @@ async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkey
     class _FakeBus:
         async def execute(self, execution_request):
             captured["request"] = execution_request
+            task_id = execution_request.metadata.get("task_id")
             return type(
                 "R",
                 (),
@@ -641,7 +631,7 @@ async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkey
                         "success": True,
                     },
                     "artifacts": {},
-                    "runtime_events": [{"event_type": "task.github_review.completed"}],
+                    "runtime_events": [{"event_type": "task.github_review.completed", "task_id": task_id}],
                     "next_action_hint": None,
                     "audit_ref": None,
                 },
@@ -667,6 +657,8 @@ async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkey
     assert body["execution_type"] == "task"
     assert body["status"] == "success"
     assert captured["request"].input_payload["task_type"] == "github_review_task"
+    assert captured["request"].metadata["task_id"] == "gh-task-1"
+    assert body["runtime_events"][0]["task_id"] == "gh-task-1"
 
 
 @pytest.mark.asyncio

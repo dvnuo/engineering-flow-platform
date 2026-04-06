@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Optional
 import inspect
 
-from src.runtime.contracts import ExecutionRequest, ExecutionResult
+from src.runtime.contracts import ExecutionRequest, ExecutionResult, make_execution_result
 from src.runtime.governance_bus import GovernanceBus, GovernanceDecision, NoopGovernanceBus
 
 
@@ -40,8 +40,20 @@ class LegacyGovernanceHooksAdapter(GovernanceBus):
         return GovernanceDecision(allowed=True)
 
     async def after_execute(self, request: ExecutionRequest, result: ExecutionResult) -> ExecutionResult:
-        await _call_maybe_awaitable(self._hooks.after_execute, request, result)
-        return result
+        hook_result = await _call_maybe_awaitable(self._hooks.after_execute, request, result)
+        if isinstance(hook_result, GovernanceDecision):
+            if hook_result.result is not None:
+                return _coerce_execution_result_contract(request, hook_result.result)
+            if hook_result.allowed:
+                return _coerce_execution_result_contract(request, result)
+            return make_execution_result(
+                request_id=request.request_id,
+                status="blocked",
+                output_payload={"error": hook_result.reason or "blocked_by_legacy_governance"},
+            )
+        if isinstance(hook_result, ExecutionResult):
+            return _coerce_execution_result_contract(request, hook_result)
+        return _coerce_execution_result_contract(request, result)
 
     async def on_error(self, request: ExecutionRequest, error: Exception) -> None:
         await _call_maybe_awaitable(self._hooks.on_error, request, error)
@@ -53,6 +65,22 @@ async def _call_maybe_awaitable(callable_obj: Any, *args: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+def _coerce_execution_result_contract(request: ExecutionRequest, result: ExecutionResult) -> ExecutionResult:
+    output_payload = result.output_payload if isinstance(result.output_payload, dict) else {"value": str(result.output_payload)}
+    status = result.status if isinstance(result.status, str) and result.status.strip() else "error"
+    artifacts = result.artifacts if isinstance(result.artifacts, dict) else {}
+    runtime_events = result.runtime_events if isinstance(result.runtime_events, list) else []
+    return make_execution_result(
+        request_id=request.request_id,
+        status=status,
+        output_payload=output_payload,
+        artifacts=artifacts,
+        runtime_events=runtime_events,
+        next_action_hint=result.next_action_hint,
+        audit_ref=result.audit_ref,
+    )
 
 
 def as_governance_bus(governance: Optional[Any]) -> GovernanceBus:

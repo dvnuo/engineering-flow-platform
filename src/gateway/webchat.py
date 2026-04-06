@@ -39,6 +39,7 @@ from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.config import config as global_config
+from src.runtime.chat_orchestration_adapter import execute_chat_orchestration
 from src.runtime import build_default_execution_bus, make_execution_request
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
@@ -164,13 +165,10 @@ async def _run_chat_via_execution_bus(
             stream_callback=payload.get("stream_callback"),
         )
 
-    bus = build_default_execution_bus(chat_handler=_chat_handler)
-    execution_request = make_execution_request(
+    execution_result = await execute_chat_orchestration(
         request_id=f"chat-{uuid.uuid4()}",
-        source_type="chat",
-        source_ref="webchat",
-        execution_type="chat",
         session_id=session_id,
+        source_ref="webchat",
         input_payload={
             "message": message,
             "user_name": user_name,
@@ -183,8 +181,8 @@ async def _run_chat_via_execution_bus(
             "stream_callback": stream_callback,
         },
         metadata={"path": request_path, "persist_last_execution_id": True},
+        chat_handler=_chat_handler,
     )
-    execution_result = await bus.execute(execution_request)
     output_payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
     if execution_result.status == "error" or output_payload.get("error"):
         error_value = output_payload.get("error", "Execution bus error")
@@ -773,6 +771,7 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
         merged_input_payload["task_type"] = parsed["task_type"]
 
         metadata = dict(parsed["metadata"])
+        metadata["task_id"] = parsed["task_id"]
         metadata["portal_task_id"] = parsed["task_id"]
         metadata["path"] = "/api/tasks/execute"
         if parsed["source"]:

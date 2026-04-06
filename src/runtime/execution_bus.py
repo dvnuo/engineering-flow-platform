@@ -183,6 +183,32 @@ class ExecutionBus:
             {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)},
         )
 
+    def _resolve_task_id(self, request: ExecutionRequest) -> Optional[str]:
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        metadata_task_id = metadata.get("task_id")
+        if isinstance(metadata_task_id, str) and metadata_task_id.strip():
+            return metadata_task_id.strip()
+        payload_task_id = request.input_payload.get("task_id")
+        if isinstance(payload_task_id, str) and payload_task_id.strip():
+            return payload_task_id.strip()
+        return None
+
+    def _attach_task_id_to_runtime_events(self, runtime_events: list[Dict[str, Any]], task_id: Optional[str]) -> list[Dict[str, Any]]:
+        if not task_id:
+            return runtime_events
+        normalized_events: list[Dict[str, Any]] = []
+        for event in runtime_events:
+            if isinstance(event, dict):
+                if not event.get("task_id"):
+                    enriched = dict(event)
+                    enriched["task_id"] = task_id
+                    normalized_events.append(enriched)
+                else:
+                    normalized_events.append(event)
+            else:
+                normalized_events.append({"value": event, "task_id": task_id})
+        return normalized_events
+
     def _normalize_result(self, request: ExecutionRequest, raw_result: Any) -> ExecutionResult:
         if isinstance(raw_result, ExecutionResult):
             return raw_result
@@ -242,6 +268,7 @@ class ExecutionBus:
     ) -> None:
         if not self._event_emitter:
             return
+        task_id = self._resolve_task_id(request) if request.execution_type == "task" else None
         legacy_type_map = {
             "execution.started": "execution_started",
             "execution.completed": "execution_completed",
@@ -255,6 +282,7 @@ class ExecutionBus:
             request_id=request.request_id,
             agent_id=request.agent_id,
             summary=f"{request.execution_type} execution {state}",
+            task_id=task_id,
             detail_payload={
                 "execution_type": request.execution_type,
                 **detail_payload,
@@ -457,6 +485,7 @@ def build_default_execution_bus(
         )
 
     async def task_handler(request: ExecutionRequest) -> ExecutionResult:
+        task_id = bus._resolve_task_id(request)
         task_type = request.input_payload.get("task_type")
         if task_type == "adapter_action_task":
             action_id = _get_required(request.input_payload, "action_id")
@@ -477,6 +506,7 @@ def build_default_execution_bus(
                 )
             adapter_result = await execute_adapter_action(action_id, kwargs)
             runtime_events = list(adapter_result.get("runtime_events") or [])
+            runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
             requires_identity_binding = bool(descriptor.requires_identity_binding)
             runtime_events.append(
                 build_runtime_event(
@@ -487,6 +517,7 @@ def build_default_execution_bus(
                     request_id=request.request_id,
                     agent_id=request.agent_id,
                     summary=f"adapter action {action_id}",
+                    task_id=task_id,
                     detail_payload={
                         "task_type": task_type,
                         "action_id": action_id,
@@ -536,6 +567,7 @@ def build_default_execution_bus(
             }
             workflow_result = await run_jira_workflow_review(workflow_payload)
             runtime_events = list(workflow_result.get("runtime_events") or [])
+            runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
             runtime_events.append(
                 build_runtime_event(
                     event_type="task.jira_workflow_review.completed" if workflow_result.get("success") else "task.jira_workflow_review.failed",
@@ -545,6 +577,7 @@ def build_default_execution_bus(
                     request_id=request.request_id,
                     agent_id=request.agent_id,
                     summary="jira workflow review task",
+                    task_id=task_id,
                     detail_payload={
                         "task_type": task_type,
                         "issue_key": workflow_result.get("issue_key"),
@@ -594,6 +627,7 @@ def build_default_execution_bus(
             )
 
             runtime_events = list(review_result.get("runtime_events") or [])
+            runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
             review_summary = None
             if isinstance(review_result.get("result"), dict):
                 review_summary = review_result.get("result", {}).get("summary")
@@ -615,6 +649,7 @@ def build_default_execution_bus(
                         },
                     )
                     runtime_events.extend(add_comment_result.get("runtime_events") or [])
+                    runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
                     comment_written = bool(add_comment_result.get("success"))
                     if not comment_written:
                         error_value = add_comment_result.get("error") or "Failed to write GitHub review comment"
@@ -631,6 +666,7 @@ def build_default_execution_bus(
                     request_id=request.request_id,
                     agent_id=request.agent_id,
                     summary="github review task",
+                    task_id=task_id,
                     detail_payload={
                         "task_type": task_type,
                         "owner": owner,
@@ -681,6 +717,27 @@ def build_default_execution_bus(
             event_callback=event_callback if callable(event_callback) else None,
         )
         normalized = _coerce_task_tool_result(raw_task_result)
+        runtime_events = list(normalized["runtime_events"]) if isinstance(normalized["runtime_events"], list) else []
+        runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+        runtime_events.append(
+            build_runtime_event(
+                event_type="task.tool.completed" if normalized["success"] else "task.tool.failed",
+                execution_type=request.execution_type,
+                state="completed" if normalized["success"] else "failed",
+                session_id=request.session_id,
+                request_id=request.request_id,
+                agent_id=request.agent_id,
+                summary=f"tool task {tool_name}",
+                task_id=task_id,
+                detail_payload={
+                    "task_type": "tool_task",
+                    "tool_name": tool_name,
+                    "success": bool(normalized["success"]),
+                    "error": normalized["error"],
+                },
+                legacy_payload={"legacy_type": "task_tool"},
+            )
+        )
         return make_execution_result(
             request_id=request.request_id,
             status="success" if normalized["success"] else "error",
@@ -694,7 +751,7 @@ def build_default_execution_bus(
                 "result": normalized["result"],
             },
             artifacts=normalized["artifacts"],
-            runtime_events=normalized["runtime_events"],
+            runtime_events=runtime_events,
             next_action_hint=normalized["next_action_hint"],
             audit_ref=normalized["audit_ref"],
         )

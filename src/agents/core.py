@@ -55,7 +55,7 @@ from src.agents.skill_runtime import (
     resolve_prompt_execution_boundary,
 )
 from src.skills.runtime import SkillRuntimeConfig
-from src.runtime import build_default_execution_bus, make_execution_request
+from src.runtime.chat_orchestration_adapter import execute_tool_or_task_orchestration
 
 logger = logging.getLogger(__name__)
 
@@ -178,16 +178,15 @@ async def _execute_tool_via_runtime_bus(
     else:
         input_payload = {"tool_name": tool_name, "kwargs": dict(args)}
 
-    bus = build_default_execution_bus(execute_tool_func=execute_tool_by_name)
-    request = make_execution_request(
+    result = await execute_tool_or_task_orchestration(
         source_type="agent",
         source_ref=source_ref,
         execution_type=execution_type,
         session_id=session_id,
         input_payload=input_payload,
         metadata={"tool_name": tool_name, "task_boundary": use_task_boundary},
+        execute_tool_func=execute_tool_by_name,
     )
-    result = await bus.execute(request)
     payload: Dict[str, Any] = result.output_payload if isinstance(result.output_payload, dict) else {"value": result.output_payload}
     explicit_success = payload.get("success")
     if isinstance(explicit_success, bool):
