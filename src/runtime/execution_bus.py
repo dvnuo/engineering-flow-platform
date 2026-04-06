@@ -538,6 +538,54 @@ def _build_structured_delegation_payload_from_skill_output(
     }
 
 
+def _extract_strict_delegation_payload_from_skill_output(
+    *,
+    raw_skill_result: Dict[str, Any],
+    runtime_audit_trace: Dict[str, Any],
+) -> tuple[Dict[str, Any], list[str]]:
+    validation_errors: list[str] = []
+    nested = raw_skill_result.get("delegation_result")
+    if not isinstance(nested, dict):
+        validation_errors.append("delegation_result must be an object")
+        return (
+            {
+                "summary": None,
+                "artifacts": [],
+                "blockers": [],
+                "next_recommendation": None,
+                "audit_trace": dict(runtime_audit_trace),
+                "status": "failed",
+            },
+            validation_errors,
+        )
+
+    summary = nested.get("summary")
+    artifacts = nested.get("artifacts", [])
+    blockers = nested.get("blockers", [])
+    next_recommendation = nested.get("next_recommendation")
+    nested_status = nested.get("status")
+
+    audit_trace = nested.get("audit_trace")
+    if isinstance(audit_trace, dict):
+        merged_audit_trace = {**audit_trace, **runtime_audit_trace}
+    else:
+        merged_audit_trace = dict(runtime_audit_trace)
+        if "audit_trace" in nested:
+            validation_errors.append("audit_trace must be a dict")
+
+    return (
+        {
+            "summary": summary,
+            "artifacts": artifacts,
+            "blockers": blockers,
+            "next_recommendation": next_recommendation,
+            "audit_trace": merged_audit_trace,
+            "status": nested_status,
+        },
+        validation_errors,
+    )
+
+
 def _validate_delegation_result_payload(payload: Dict[str, Any]) -> list[str]:
     errors: list[str] = []
     summary = payload.get("summary")
@@ -654,6 +702,10 @@ def build_default_execution_bus(
             materialized_context_ref = _as_dict(request.context_ref)
             shared_context_materialized = bool(materialized_context_ref)
             metadata = request.metadata if isinstance(request.metadata, dict) else {}
+            strict_delegation_result = bool(
+                request.input_payload.get("strict_delegation_result") is True
+                or metadata.get("strict_delegation_result") is True
+            )
             leader_session_id = _non_empty_string(metadata.get("portal_leader_session_id")) or request.session_id
             resolved_shared_context_ref = _non_empty_string(request.input_payload.get("shared_context_ref")) or _non_empty_string(
                 metadata.get("shared_context_ref")
@@ -670,6 +722,7 @@ def build_default_execution_bus(
                 "scoped_context_ref": request.input_payload.get("scoped_context_ref"),
                 "shared_context_materialized": shared_context_materialized,
                 "leader_session_id": leader_session_id,
+                "strict_delegation_result": strict_delegation_result,
             }
 
             def _delegation_failure_result(
@@ -691,6 +744,7 @@ def build_default_execution_bus(
                         "task_id": task_id,
                         "leader_agent_id": leader_agent_id,
                         "leader_session_id": leader_session_id,
+                        "strict_delegation_result": strict_delegation_result,
                     },
                 )
                 # Runtime contract remains canonical (summary/artifacts). Portal maps these to DB column names.
@@ -800,6 +854,7 @@ def build_default_execution_bus(
                     "visibility": visibility,
                     "request_metadata": dict(request.metadata or {}),
                     "leader_session_id": leader_session_id,
+                    "strict_delegation_result": strict_delegation_result,
                 }
                 skill_kwargs["delegation_context"] = delegation_context
                 skill_kwargs.setdefault("session_id", request.session_id)
@@ -814,13 +869,21 @@ def build_default_execution_bus(
                     "skill_name": skill_name.strip(),
                     "leader_agent_id": leader_agent_id,
                     "leader_session_id": leader_session_id,
+                    "strict_delegation_result": strict_delegation_result,
                 }
-                structured_payload = _build_structured_delegation_payload_from_skill_output(
-                    raw_skill_result=raw_skill_result,
-                    success=skill_success,
-                    error=skill_error,
-                    runtime_audit_trace=runtime_audit_trace,
-                )
+                strict_extraction_errors: list[str] = []
+                if strict_delegation_result:
+                    structured_payload, strict_extraction_errors = _extract_strict_delegation_payload_from_skill_output(
+                        raw_skill_result=raw_skill_result,
+                        runtime_audit_trace=runtime_audit_trace,
+                    )
+                else:
+                    structured_payload = _build_structured_delegation_payload_from_skill_output(
+                        raw_skill_result=raw_skill_result,
+                        success=skill_success,
+                        error=skill_error,
+                        runtime_audit_trace=runtime_audit_trace,
+                    )
                 delegation_result: DelegationResult = make_delegation_result(
                     delegation_id=delegation_id,
                     assignee_agent_id=request.input_payload.get("assignee_agent_id"),
@@ -844,8 +907,11 @@ def build_default_execution_bus(
                     "audit_trace": delegation_result.audit_trace,
                     "raw_result": delegation_result.raw_result,
                 }
+                if strict_delegation_result and isinstance(structured_payload.get("status"), str):
+                    delegation_payload["status"] = structured_payload.get("status")
                 delegation_validation_errors = _validate_delegation_result_payload(delegation_payload)
-                if delegation_validation_errors:
+                all_delegation_validation_errors = [*strict_extraction_errors, *delegation_validation_errors]
+                if all_delegation_validation_errors:
                     skill_success = False
                     existing_blockers = _as_list_of_strings(delegation_payload.get("blockers"))
                     delegation_payload["blockers"] = [*existing_blockers, "invalid_delegation_result"]
@@ -864,7 +930,7 @@ def build_default_execution_bus(
                             detail_payload={
                                 **common_event_detail,
                                 "skill_name": skill_name.strip(),
-                                "validation_errors": delegation_validation_errors,
+                                "validation_errors": all_delegation_validation_errors,
                             },
                             legacy_payload={"legacy_type": "task_delegation"},
                         )
