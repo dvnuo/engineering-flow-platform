@@ -114,6 +114,10 @@ def _parse_task_execute_request(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(metadata, dict):
         raise ValueError("metadata must be a JSON object")
 
+    context_ref = data.get("context_ref")
+    if context_ref is not None and not isinstance(context_ref, dict):
+        raise ValueError("context_ref must be a JSON object")
+
     return {
         "task_id": task_id,
         "task_type": task_type,
@@ -122,6 +126,7 @@ def _parse_task_execute_request(data: Dict[str, Any]) -> Dict[str, Any]:
         "source": _optional_string(data, "source"),
         "workflow_rule_id": _optional_string(data, "workflow_rule_id"),
         "shared_context_ref": _optional_string(data, "shared_context_ref"),
+        "context_ref": dict(context_ref or {}),
         "metadata": dict(metadata),
     }
 
@@ -786,6 +791,7 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             source_ref=parsed["source"] or "portal",
             execution_type="task",
             session_id=parsed["session_id"],
+            context_ref=parsed["context_ref"] or None,
             input_payload=merged_input_payload,
             metadata=metadata,
         )

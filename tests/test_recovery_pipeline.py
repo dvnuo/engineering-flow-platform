@@ -112,6 +112,8 @@ async def test_recovery_snapshot_includes_task_and_subagent_summaries(monkeypatc
     assert snapshot.reconstructed_state["has_pending_tool_tasks"] is True
     assert snapshot.reconstructed_state["has_active_subagents"] is True
     assert snapshot.reconstructed_state["has_pending_delegations"] is True
+    assert snapshot.reconstructed_state["has_shared_context_ref"] is False
+    assert snapshot.reconstructed_state["has_materialized_context_ref"] is False
 
 
 @pytest.mark.asyncio
@@ -156,6 +158,34 @@ async def test_recovery_snapshot_subagents_are_scoped_by_parent_session(monkeypa
     assert snapshot is not None
     assert captured["parent_session_id"] == "s-scope"
     assert snapshot.runtime_state["active_subagents"][0]["parent_session_id"] == "s-scope"
+
+
+@pytest.mark.asyncio
+async def test_recovery_snapshot_includes_shared_context_hints(monkeypatch):
+    class _StubSessionManager:
+        sessions = {
+            "s-context": {
+                "history": [],
+                "metadata": {
+                    "pending_delegations": [
+                        {
+                            "delegation_id": "d-context",
+                            "shared_context_ref": "ctx://shared/1",
+                            "shared_context_materialized": True,
+                        }
+                    ]
+                },
+            }
+        }
+
+    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.agents.tasks.task_manager.list_task_summaries", lambda session_id=None: [])
+    monkeypatch.setattr("src.agents.subagent.list_active_subagent_summaries", lambda parent_session_id=None: [])
+
+    snapshot = await DefaultRecoveryPipeline().build_snapshot("s-context")
+    assert snapshot is not None
+    assert snapshot.reconstructed_state["has_shared_context_ref"] is True
+    assert snapshot.reconstructed_state["has_materialized_context_ref"] is True
 
 
 @pytest.mark.asyncio

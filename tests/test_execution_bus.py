@@ -949,6 +949,7 @@ async def test_execution_bus_task_handler_delegation_task_success(monkeypatch):
     delegation_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.completed")
     assert delegation_event["task_id"] == "task-del-1"
     assert delegation_event["detail_payload"]["leader_agent_id"] == "leader-1"
+    assert delegation_event["detail_payload"]["shared_context_materialized"] is True
     assert result.output_payload["delegation_result"]["audit_trace"]["leader_agent_id"] == "leader-1"
 
 
@@ -1030,6 +1031,8 @@ async def test_execution_bus_task_handler_delegation_task_top_level_structured_f
     assert payload["audit_trace"]["top_level"] is True
     assert captured["kwargs"]["delegation_context"]["shared_context_materialized"] is False
     assert captured["kwargs"]["delegation_context"]["context_ref"] == {}
+    delegation_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.failed")
+    assert delegation_event["detail_payload"]["shared_context_materialized"] is False
 
 
 @pytest.mark.asyncio
@@ -1108,8 +1111,35 @@ async def test_execution_bus_task_handler_delegation_task_invalid_visibility_emi
     failed_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.failed")
     assert failed_event["detail_payload"]["visibility"] == "public"
     assert failed_event["detail_payload"]["leader_agent_id"] == "leader-vis"
+    assert failed_event["detail_payload"]["shared_context_materialized"] is False
     assert result.output_payload["delegation_result"]["audit_trace"]["leader_agent_id"] == "leader-vis"
     assert failed_event["task_id"] == "task-del-vis"
+
+
+@pytest.mark.asyncio
+async def test_execute_runtime_task_request_forwards_context_ref_to_execution_request(monkeypatch):
+    from src.runtime import chat_orchestration_adapter as adapter
+
+    captured = {}
+
+    class _FakeBus:
+        async def execute(self, request):
+            captured["context_ref"] = request.context_ref
+            return make_execution_result(request_id=request.request_id, status="success", output_payload={"ok": True})
+
+    monkeypatch.setattr(adapter, "build_default_execution_bus", lambda **kwargs: _FakeBus())
+    result = await adapter.execute_runtime_task_request(
+        request_id="task-ctx-1",
+        source_type="task",
+        source_ref="portal",
+        execution_type="task",
+        session_id="s-1",
+        context_ref={"workspace": "w1"},
+        input_payload={"task_type": "delegation_task", "delegation_id": "d1", "objective": "x", "visibility": "leader_only", "skill_name": "demo"},
+        metadata={},
+    )
+    assert result.status == "success"
+    assert captured["context_ref"] == {"workspace": "w1"}
 
 
 @pytest.mark.asyncio

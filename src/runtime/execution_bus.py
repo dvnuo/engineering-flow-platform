@@ -585,6 +585,8 @@ def build_default_execution_bus(
             visibility = _get_required(request.input_payload, "visibility")
             skill_name = request.input_payload.get("skill_name")
             leader_agent_id = request.input_payload.get("leader_agent_id")
+            materialized_context_ref = _as_dict(request.context_ref)
+            shared_context_materialized = bool(materialized_context_ref)
             common_event_detail = {
                 "delegation_id": delegation_id,
                 "group_id": request.input_payload.get("group_id"),
@@ -594,6 +596,7 @@ def build_default_execution_bus(
                 "visibility": visibility,
                 "skill_name": skill_name,
                 "scoped_context_ref": request.input_payload.get("scoped_context_ref"),
+                "shared_context_materialized": shared_context_materialized,
             }
 
             def _delegation_failure_result(
@@ -680,6 +683,8 @@ def build_default_execution_bus(
                 "parent_agent_id": request.input_payload.get("parent_agent_id"),
                 "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
                 "visibility": visibility,
+                "shared_context_ref": request.input_payload.get("shared_context_ref"),
+                "shared_context_materialized": shared_context_materialized,
                 "skill_name": skill_name.strip(),
                 "status": "pending",
                 "created_at": datetime.utcnow().isoformat() + "Z",
@@ -697,6 +702,7 @@ def build_default_execution_bus(
             raw_skill_result: Dict[str, Any] = {}
             try:
                 skill_kwargs = dict(raw_skill_kwargs or {})
+                # shared_context_ref/scoped_context_ref are logical refs; context_ref is the materialized payload when present.
                 delegation_context = {
                     "delegation_id": delegation_id,
                     "group_id": request.input_payload.get("group_id"),
@@ -706,8 +712,8 @@ def build_default_execution_bus(
                     "objective": objective,
                     "shared_context_ref": request.input_payload.get("shared_context_ref"),
                     "scoped_context_ref": request.input_payload.get("scoped_context_ref"),
-                    "context_ref": _as_dict(request.context_ref),
-                    "shared_context_materialized": bool(_as_dict(request.context_ref)),
+                    "context_ref": dict(materialized_context_ref),
+                    "shared_context_materialized": shared_context_materialized,
                     "input_artifacts": list(request.input_payload.get("input_artifacts") or []),
                     "expected_output_schema": dict(request.input_payload.get("expected_output_schema") or {}),
                     "deadline": request.input_payload.get("deadline"),

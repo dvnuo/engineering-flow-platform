@@ -231,6 +231,8 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             "has_pending_tool_tasks": bool(pending_tool_tasks),
             "has_active_subagents": bool(active_subagents),
             "has_pending_delegations": bool(pending_delegations),
+            "has_shared_context_ref": _has_shared_context_ref(metadata),
+            "has_materialized_context_ref": _has_materialized_context_ref(metadata),
             "recovery_source": source,
         }
         persisted_session = {
@@ -329,6 +331,40 @@ def _extract_last_execution_id(session: Dict[str, Any]) -> Optional[str]:
     if isinstance(last_execution_id, str) and last_execution_id.strip():
         return last_execution_id.strip()
     return None
+
+
+def _has_shared_context_ref(metadata: Dict[str, Any]) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    value = metadata.get("shared_context_ref")
+    if isinstance(value, str) and value.strip():
+        return True
+    pending = metadata.get("pending_delegations")
+    if isinstance(pending, list):
+        for item in pending:
+            if isinstance(item, dict):
+                ref = item.get("shared_context_ref")
+                if isinstance(ref, str) and ref.strip():
+                    return True
+    return False
+
+
+def _has_materialized_context_ref(metadata: Dict[str, Any]) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    if metadata.get("shared_context_materialized") is True:
+        return True
+    pending = metadata.get("pending_delegations")
+    if isinstance(pending, list):
+        for item in pending:
+            if not isinstance(item, dict):
+                continue
+            if item.get("shared_context_materialized") is True:
+                return True
+            context_ref = item.get("context_ref")
+            if isinstance(context_ref, dict) and bool(context_ref):
+                return True
+    return False
 
 
 def _safe_string(value: Any) -> Optional[str]:
