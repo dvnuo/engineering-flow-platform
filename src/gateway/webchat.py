@@ -781,6 +781,9 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
         metadata["task_id"] = parsed["task_id"]
         metadata["portal_task_id"] = parsed["task_id"]
         metadata["path"] = "/api/tasks/execute"
+        metadata["external_triggered"] = True
+        metadata["auto_run"] = True
+        metadata["governance_target"] = parsed["task_type"]
         if parsed["source"]:
             metadata["portal_task_source"] = parsed["source"]
         if parsed["workflow_rule_id"]:
