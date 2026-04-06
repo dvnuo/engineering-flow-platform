@@ -351,13 +351,10 @@ def sessions_spawn(
     logger.info(f"Spawn subagent: session={session_key}, think_level={thinking}, model={model}")
 
     async def _spawn_via_bus() -> Dict[str, Any]:
-        from src.runtime import build_default_execution_bus, make_execution_request
+        from src.runtime.chat_orchestration_adapter import execute_subagent_orchestration
 
-        bus = build_default_execution_bus()
-        request = make_execution_request(
-            source_type="agent",
+        result = await execute_subagent_orchestration(
             source_ref="sessions_spawn",
-            execution_type="subagent",
             session_id=session_key,
             input_payload={
                 "task": task,
@@ -371,7 +368,6 @@ def sessions_spawn(
             },
             metadata={"entrypoint": "sessions_spawn"},
         )
-        result = await bus.execute(request)
         return result.output_payload
 
     try:

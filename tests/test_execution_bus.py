@@ -6,6 +6,8 @@ from src.runtime.contracts import ExecutionResult, make_execution_request, make_
 from src.runtime.execution_bus import ExecutionBus, build_default_execution_bus
 from src.runtime.events import build_runtime_event
 from src.runtime.governance import GovernanceHooks
+from src.runtime.governance_bus import GovernanceDecision
+from src.runtime.capability_registry import CapabilityDescriptor
 
 
 @pytest.mark.asyncio
@@ -438,6 +440,64 @@ async def test_execution_bus_async_governance_exceptions_are_swallowed(caplog):
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_emits_terminal_event_from_final_governed_result():
+    emitted = []
+
+    class _BlockingAfterGovernance(GovernanceHooks):
+        def after_execute(self, request, result):
+            result.status = "blocked"
+            result.output_payload["status"] = "blocked-by-governance"
+            result.audit_ref = "audit-final"
+            result.runtime_events.append({"event_type": "governance.enriched"})
+            return GovernanceDecision(allowed=False, reason="post_policy_block", result=result)
+
+    async def _ok(_request):
+        return {"response": "ok"}
+
+    bus = ExecutionBus(
+        governance=_BlockingAfterGovernance(),
+        event_emitter=lambda event_type, payload: emitted.append((event_type, payload)),
+    )
+    bus.register_handler("chat", _ok)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+
+    assert result.status == "blocked"
+    assert result.audit_ref == "audit-final"
+    assert any(evt.get("event_type") == "governance.enriched" for evt in result.runtime_events)
+    assert [name for name, _ in emitted] == ["execution_started", "execution_failed"]
+    assert emitted[-1][1]["detail_payload"]["status"] == "blocked"
+    assert emitted[-1][1]["detail_payload"]["output_summary"]["status"] == "blocked-by-governance"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_error_lifecycle_uses_post_governance_final_status():
+    emitted = []
+
+    class _ErrorToBlockedGovernance(GovernanceHooks):
+        def after_execute(self, request, result):
+            if result.status == "error":
+                result.status = "blocked"
+                result.output_payload["status"] = "blocked-after-error"
+            return result
+
+    async def _bad(_request):
+        raise RuntimeError("boom")
+
+    bus = ExecutionBus(
+        governance=_ErrorToBlockedGovernance(),
+        event_emitter=lambda event_type, payload: emitted.append((event_type, payload)),
+    )
+    bus.register_handler("chat", _bad)
+    req = make_execution_request(source_type="chat", execution_type="chat")
+    result = await bus.execute(req)
+
+    assert result.status == "blocked"
+    assert [name for name, _ in emitted] == ["execution_started", "execution_failed"]
+    assert emitted[-1][1]["detail_payload"]["status"] == "blocked"
+
+
+@pytest.mark.asyncio
 async def test_execution_bus_task_handler_tool_task(monkeypatch):
     captured = {}
 
@@ -663,6 +723,414 @@ async def test_execution_bus_task_handler_accepts_string_result(monkeypatch):
     assert result.status == "success"
     assert result.output_payload["content"] == "string-ok"
     assert result.output_payload["result"]["value"] == "string-ok"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_adapter_action_task_success(monkeypatch):
+    class _Registry:
+        @staticmethod
+        def get(action_id):
+            return CapabilityDescriptor(
+                capability_id=action_id,
+                type="adapter_action",
+                name="read_issue",
+                requires_identity_binding=True,
+                policy_tags=["jira", "read"],
+            )
+
+    async def _fake_execute_adapter_action(action_id, kwargs):
+        return {
+            "success": True,
+            "error": None,
+            "result": {"issue": "ok"},
+            "runtime_events": [{"event_type": "task.adapter_action.completed"}],
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.get_capability_registry", lambda: _Registry())
+    monkeypatch.setattr("src.runtime.execution_bus.execute_adapter_action", _fake_execute_adapter_action)
+
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={
+            "task_type": "adapter_action_task",
+            "action_id": "adapter:jira:read_issue",
+            "kwargs": {"issue_key": "PROJ-1"},
+        },
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["task_type"] == "adapter_action_task"
+    assert result.output_payload["action_id"] == "adapter:jira:read_issue"
+    assert result.output_payload["requires_identity_binding"] is True
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_adapter_action_add_comment(monkeypatch):
+    class _Registry:
+        @staticmethod
+        def get(action_id):
+            return CapabilityDescriptor(
+                capability_id=action_id,
+                type="adapter_action",
+                name="add_comment",
+                requires_identity_binding=True,
+                policy_tags=["jira", "write", "comment"],
+            )
+
+    async def _fake_execute_adapter_action(action_id, kwargs):
+        return {
+            "success": True,
+            "error": None,
+            "result": {"message": "ok"},
+            "runtime_events": [{"event_type": "task.adapter_action.completed"}],
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.get_capability_registry", lambda: _Registry())
+    monkeypatch.setattr("src.runtime.execution_bus.execute_adapter_action", _fake_execute_adapter_action)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={
+            "task_type": "adapter_action_task",
+            "action_id": "adapter:jira:add_comment",
+            "kwargs": {"issue_key": "PROJ-7", "comment": "done"},
+        },
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["action_id"] == "adapter:jira:add_comment"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_adapter_action_unknown_is_blocked(monkeypatch):
+    class _Registry:
+        @staticmethod
+        def get(_action_id):
+            return None
+
+    monkeypatch.setattr("src.runtime.execution_bus.get_capability_registry", lambda: _Registry())
+
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:missing", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "blocked"
+    assert "Unknown or non-adapter action_id" in result.output_payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_adapter_action_github_success(monkeypatch):
+    class _Registry:
+        @staticmethod
+        def get(action_id):
+            return CapabilityDescriptor(
+                capability_id=action_id,
+                type="adapter_action",
+                name="review_pull_request",
+                requires_identity_binding=True,
+                policy_tags=["github", "review"],
+            )
+
+    async def _fake_execute_adapter_action(action_id, kwargs):
+        return {
+            "success": True,
+            "error": None,
+            "result": {"summary": "review summary"},
+            "runtime_events": [{"event_type": "task.adapter_action.completed"}],
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.get_capability_registry", lambda: _Registry())
+    monkeypatch.setattr("src.runtime.execution_bus.execute_adapter_action", _fake_execute_adapter_action)
+
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={
+            "task_type": "adapter_action_task",
+            "action_id": "adapter:github:review_pull_request",
+            "kwargs": {"owner": "acme", "repo": "demo", "pull_number": 10},
+        },
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["action_id"] == "adapter:github:review_pull_request"
+    assert result.output_payload["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_adapter_action_github_failed(monkeypatch):
+    class _Registry:
+        @staticmethod
+        def get(action_id):
+            return CapabilityDescriptor(
+                capability_id=action_id,
+                type="adapter_action",
+                name="add_comment",
+                requires_identity_binding=True,
+                policy_tags=["github", "comment"],
+            )
+
+    async def _fake_execute_adapter_action(action_id, kwargs):
+        return {
+            "success": False,
+            "error": "unsupported github action",
+            "result": {},
+            "runtime_events": [{"event_type": "task.adapter_action.failed"}],
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.get_capability_registry", lambda: _Registry())
+    monkeypatch.setattr("src.runtime.execution_bus.execute_adapter_action", _fake_execute_adapter_action)
+
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={
+            "task_type": "adapter_action_task",
+            "action_id": "adapter:github:add_comment",
+            "kwargs": {"owner": "acme", "repo": "demo", "pull_number": 10, "comment": "x"},
+        },
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "error"
+    assert result.output_payload["success"] is False
+    assert result.output_payload["error"] == "unsupported github action"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_jira_workflow_review_task(monkeypatch):
+    async def _fake_run_jira_workflow_review(payload):
+        return {
+            "issue_key": payload["issue_key"],
+            "reviewed": True,
+            "actions_applied": [{"action": "read_issue", "success": True}],
+            "comment_added": True,
+            "assignee_updated": payload.get("assignee"),
+            "transitioned_to": payload.get("transition"),
+            "updated_fields": payload.get("fields") or {},
+            "workflow_outcome": "approved",
+            "approved": True,
+            "skill_name": payload.get("skill_name"),
+            "reassignment_target": payload.get("success_reassign_to"),
+            "success": True,
+            "error": None,
+            "runtime_events": [{"event_type": "task.jira_workflow_review.completed"}],
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_jira_workflow_review", _fake_run_jira_workflow_review)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={
+            "task_type": "jira_workflow_review_task",
+            "issue_key": "PROJ-55",
+            "skill_name": "review_skill",
+            "success_transition": "Done",
+            "success_reassign_to": "reporter",
+            "review_comment": "ok",
+            "transition": "Done",
+            "assignee": "bob",
+            "fields": {"summary": "x"},
+        },
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["task_type"] == "jira_workflow_review_task"
+    assert result.output_payload["result"]["issue_key"] == "PROJ-55"
+    assert result.output_payload["workflow_outcome"] == "approved"
+    assert result.output_payload["actions_applied"] == [{"action": "read_issue", "success": True}]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_events_include_task_id_for_jira_workflow(monkeypatch):
+    async def _fake_run_jira_workflow_review(payload):
+        return {
+            "issue_key": payload["issue_key"],
+            "success": True,
+            "error": None,
+            "runtime_events": [{"event_type": "task.jira_workflow_review.started"}],
+            "actions_applied": [],
+            "workflow_outcome": "approved",
+            "approved": True,
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_jira_workflow_review", _fake_run_jira_workflow_review)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        metadata={"task_id": "task-jira-1"},
+        input_payload={"task_type": "jira_workflow_review_task", "issue_key": "PROJ-55"},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert any(evt.get("event_type") == "task.jira_workflow_review.completed" and evt.get("task_id") == "task-jira-1" for evt in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_github_review_task_success(monkeypatch):
+    calls = []
+
+    async def _fake_execute_adapter_action(action_id, kwargs):
+        calls.append((action_id, kwargs))
+        if action_id == "adapter:github:review_pull_request":
+            return {
+                "success": True,
+                "error": None,
+                "result": {"summary": "LGTM with minor suggestions"},
+                "runtime_events": [{"event_type": "task.adapter_action.completed"}],
+            }
+        if action_id == "adapter:github:add_comment":
+            return {
+                "success": True,
+                "error": None,
+                "result": {"comment_id": 99},
+                "runtime_events": [{"event_type": "task.adapter_action.completed"}],
+            }
+        raise AssertionError("unexpected action")
+
+    monkeypatch.setattr("src.runtime.execution_bus.execute_adapter_action", _fake_execute_adapter_action)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 42},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["task_type"] == "github_review_task"
+    assert result.output_payload["comment_written"] is True
+    assert result.output_payload["success"] is True
+    assert any(evt.get("event_type") == "task.github_review.completed" for evt in result.runtime_events)
+    assert [c[0] for c in calls] == ["adapter:github:review_pull_request", "adapter:github:add_comment"]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_events_include_task_id_for_github_review(monkeypatch):
+    async def _fake_execute_adapter_action(action_id, kwargs):
+        if action_id == "adapter:github:review_pull_request":
+            return {"success": True, "error": None, "result": {"summary": "ok"}, "runtime_events": []}
+        if action_id == "adapter:github:add_comment":
+            return {"success": True, "error": None, "result": {"comment_id": 1}, "runtime_events": []}
+        return {"success": False, "error": "bad", "result": {}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.execution_bus.execute_adapter_action", _fake_execute_adapter_action)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        metadata={"task_id": "task-gh-1"},
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 1},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert any(evt.get("event_type") == "task.github_review.completed" and evt.get("task_id") == "task-gh-1" for evt in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_github_review_task_comment_writeback_failure(monkeypatch):
+    async def _fake_execute_adapter_action(action_id, kwargs):
+        if action_id == "adapter:github:review_pull_request":
+            return {
+                "success": True,
+                "error": None,
+                "result": {"summary": "Needs changes"},
+                "runtime_events": [{"event_type": "task.adapter_action.completed"}],
+            }
+        if action_id == "adapter:github:add_comment":
+            return {
+                "success": False,
+                "error": "permission denied",
+                "result": {},
+                "runtime_events": [{"event_type": "task.adapter_action.failed"}],
+            }
+        raise AssertionError("unexpected action")
+
+    monkeypatch.setattr("src.runtime.execution_bus.execute_adapter_action", _fake_execute_adapter_action)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 42},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "error"
+    assert result.output_payload["success"] is False
+    assert result.output_payload["comment_written"] is False
+    assert result.output_payload["error"] == "permission denied"
+    assert any(evt.get("event_type") == "task.github_review.failed" for evt in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_tool_events_include_task_id(monkeypatch):
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return "done"
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        metadata={"task_id": "task-tool-1"},
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert any(evt.get("event_type") == "task.tool.completed" and evt.get("task_id") == "task-tool-1" for evt in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_terminal_lifecycle_events_include_task_id(monkeypatch):
+    emitted = []
+
+    async def _fake_run_tool_task(*, session_id, tool_name, coro_factory, event_callback=None):
+        return "done"
+
+    monkeypatch.setattr("src.runtime.execution_bus.task_manager.run_tool_task", _fake_run_tool_task)
+    bus = build_default_execution_bus(event_emitter=lambda event_type, payload: emitted.append((event_type, payload)))
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        metadata={"task_id": "task-lifecycle-1"},
+        input_payload={"task_type": "tool_task", "tool_name": "demo_tool", "kwargs": {}},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    terminal_payload = emitted[-1][1]
+    assert terminal_payload.get("event_type") == "execution.completed"
+    assert terminal_payload.get("task_id") == "task-lifecycle-1"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_github_review_task_missing_required_fields():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo"},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "error"
+    assert "Missing required input_payload field: pull_number" in result.output_payload["error"]
 
 
 @pytest.mark.asyncio

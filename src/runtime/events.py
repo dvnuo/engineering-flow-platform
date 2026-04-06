@@ -21,6 +21,7 @@ def build_runtime_event(
     request_id: Optional[str],
     agent_id: Optional[str],
     summary: str,
+    task_id: Optional[str] = None,
     detail_payload: Optional[Dict[str, Any]] = None,
     legacy_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -46,6 +47,8 @@ def build_runtime_event(
     if isinstance(resolved_execution_type, str) and resolved_execution_type.strip():
         event["type"] = resolved_execution_type.strip()
         event["execution_type"] = resolved_execution_type.strip()
+    if task_id is not None:
+        event["task_id"] = task_id
     if legacy_payload:
         for key, value in legacy_payload.items():
             event.setdefault(key, value)

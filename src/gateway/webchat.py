@@ -39,7 +39,7 @@ from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.config import config as global_config
-from src.runtime import build_default_execution_bus, make_execution_request
+from src.runtime.chat_orchestration_adapter import execute_chat_orchestration, execute_runtime_task_request
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
 from src.sessions.usage import usage_tracker
@@ -79,6 +79,61 @@ def _extract_portal_identity(request: web.Request, data: Dict[str, Any]) -> tupl
     return resolved_user_id, resolved_user_name
 
 
+def _require_non_empty_string(data: Dict[str, Any], key: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{key} is required and must be a non-empty string")
+    return value.strip()
+
+
+def _optional_string(data: Dict[str, Any], key: str) -> Optional[str]:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    stripped = value.strip()
+    return stripped or None
+
+
+def _parse_task_execute_request(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse and validate /api/tasks/execute request payload."""
+    if not isinstance(data, dict):
+        raise ValueError("Request body must be a JSON object")
+
+    task_id = _require_non_empty_string(data, "task_id")
+    task_type = _require_non_empty_string(data, "task_type")
+
+    input_payload = data.get("input_payload")
+    if not isinstance(input_payload, dict):
+        raise ValueError("input_payload is required and must be a JSON object")
+
+    metadata = data.get("metadata", {})
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be a JSON object")
+
+    return {
+        "task_id": task_id,
+        "task_type": task_type,
+        "input_payload": dict(input_payload),
+        "session_id": _optional_string(data, "session_id"),
+        "source": _optional_string(data, "source"),
+        "workflow_rule_id": _optional_string(data, "workflow_rule_id"),
+        "shared_context_ref": _optional_string(data, "shared_context_ref"),
+        "metadata": dict(metadata),
+    }
+
+
+def _json_compatible(value: Any) -> Any:
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        return str(value)
+
+
 async def _run_chat_via_execution_bus(
     *,
     agent: AgentCore,
@@ -109,13 +164,10 @@ async def _run_chat_via_execution_bus(
             stream_callback=payload.get("stream_callback"),
         )
 
-    bus = build_default_execution_bus(chat_handler=_chat_handler)
-    execution_request = make_execution_request(
+    execution_result = await execute_chat_orchestration(
         request_id=f"chat-{uuid.uuid4()}",
-        source_type="chat",
-        source_ref="webchat",
-        execution_type="chat",
         session_id=session_id,
+        source_ref="webchat",
         input_payload={
             "message": message,
             "user_name": user_name,
@@ -128,8 +180,8 @@ async def _run_chat_via_execution_bus(
             "stream_callback": stream_callback,
         },
         metadata={"path": request_path, "persist_last_execution_id": True},
+        chat_handler=_chat_handler,
     )
-    execution_result = await bus.execute(execution_request)
     output_payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
     if execution_result.status == "error" or output_payload.get("error"):
         error_value = output_payload.get("error", "Execution bus error")
@@ -703,6 +755,71 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         except Exception:
             pass
         return web.Response(status=500, text=str(e))
+
+
+async def api_tasks_execute(request: web.Request) -> web.Response:
+    """Handle runtime task execution requests.
+
+    POST /api/tasks/execute
+    """
+    try:
+        data = await request.json()
+        parsed = _parse_task_execute_request(data)
+
+        merged_input_payload = dict(parsed["input_payload"])
+        merged_input_payload["task_type"] = parsed["task_type"]
+
+        metadata = dict(parsed["metadata"])
+        metadata["task_id"] = parsed["task_id"]
+        metadata["portal_task_id"] = parsed["task_id"]
+        metadata["path"] = "/api/tasks/execute"
+        if parsed["source"]:
+            metadata["portal_task_source"] = parsed["source"]
+        if parsed["workflow_rule_id"]:
+            metadata["portal_workflow_rule_id"] = parsed["workflow_rule_id"]
+        if parsed["shared_context_ref"]:
+            metadata["shared_context_ref"] = parsed["shared_context_ref"]
+
+        execution_result = await execute_runtime_task_request(
+            request_id=f"task-{parsed['task_id']}",
+            source_type="task",
+            source_ref=parsed["source"] or "portal",
+            execution_type="task",
+            session_id=parsed["session_id"],
+            input_payload=merged_input_payload,
+            metadata=metadata,
+        )
+
+        status = execution_result.status
+        is_ok = status == "success"
+        output_payload = execution_result.output_payload
+
+        response_payload: Dict[str, Any] = {
+            "ok": is_ok,
+            "task_id": parsed["task_id"],
+            "execution_type": "task",
+            "request_id": execution_result.request_id,
+            "status": status,
+            "output_payload": _json_compatible(output_payload),
+            "artifacts": _json_compatible(execution_result.artifacts),
+            "runtime_events": _json_compatible(execution_result.runtime_events),
+            "next_action_hint": execution_result.next_action_hint,
+            "audit_ref": execution_result.audit_ref,
+        }
+        if status in {"error", "blocked"}:
+            if isinstance(output_payload, dict):
+                response_payload["error"] = output_payload.get("error") or output_payload
+            else:
+                response_payload["error"] = str(output_payload)
+
+        return web.json_response(response_payload)
+    except (json.JSONDecodeError, ContentTypeError):
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.error("Task execution API error: %s", sanitize_exception_message(exc), exc_info=True)
+        return web.json_response({"error": "Internal server error"}, status=500)
 
 
 async def api_sessions(request: web.Request) -> web.Response:
@@ -2380,6 +2497,7 @@ def setup_webchat_routes(app: web.Application):
         GET  /static/*     - Static files (CSS, JS)
         POST /api/chat     - Send message
         POST /api/chat/stream - Send message (streaming SSE)
+        POST /api/tasks/execute - Execute structured runtime task
         GET  /api/sessions - List recent sessions
         GET  /api/sessions/{session_id} - Load session messages
         GET  /api/files    - Browse files
@@ -2392,6 +2510,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/static/{path:.*}', serve_static)
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)
+    app.router.add_post('/api/tasks/execute', api_tasks_execute)
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/sessions/{session_id}', api_load_session)
     app.router.add_get('/api/sessions/{session_id}/chatlog', api_session_chatlog)
@@ -2436,6 +2555,7 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  GET  /static/*     - Static files (CSS, JS)")
     logger.info("  POST /api/chat     - Send message")
     logger.info("  POST /api/chat/stream - Send message (streaming SSE)")
+    logger.info("  POST /api/tasks/execute - Execute structured runtime task")
     logger.info("  GET  /api/sessions - List recent sessions")
     logger.info("  GET  /api/sessions/{id} - Load session messages")
     logger.info("  GET  /api/files    - Browse files")

@@ -4,14 +4,23 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional, Protocol
 import logging
-import inspect
 
 from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, run_skill_execution
 from src.agents.subagent import run_subagent_execution
 from src.agents.tasks import task_manager
+from src.runtime.adapter_executor import execute_adapter_action
+from src.runtime.capability_registry import get_capability_registry
 from src.runtime.contracts import ExecutionRequest, ExecutionResult, make_execution_request, make_execution_result
 from src.runtime.events import build_runtime_event
-from src.runtime.governance import GovernanceHooks
+from src.runtime.governance import GovernanceHooks, as_governance_bus
+from src.runtime.governance_bus import (
+    GovernanceAuditRecord,
+    GovernanceBus,
+    GovernanceDecision,
+    build_default_governance_bus,
+    governance_audit_runtime_event,
+)
+from src.runtime.jira_workflow_review import run_jira_workflow_review
 
 logger = logging.getLogger(__name__)
 
@@ -27,18 +36,23 @@ class ExecutionBus:
         *,
         event_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         handlers: Optional[Dict[str, ExecutionHandler]] = None,
-        governance: Optional[GovernanceHooks] = None,
+        governance: Optional[GovernanceBus | GovernanceHooks] = None,
     ):
         self._event_emitter = event_emitter
         self._handlers: Dict[str, ExecutionHandler] = dict(handlers) if handlers is not None else {}
-        self._governance = governance or GovernanceHooks()
+        self._governance = as_governance_bus(governance)
 
     def register_handler(self, execution_type: str, handler: ExecutionHandler) -> None:
         self._handlers[execution_type] = handler
 
     async def execute(self, request: ExecutionRequest) -> ExecutionResult:
         await self._persist_last_execution_id(request)
-        await self._safe_governance("before_execute", request=request)
+        decision = await self._safe_before_governance(request)
+        if decision is not None and not decision.allowed:
+            result = self._blocked_result(request, reason=decision.reason, audit=decision.audit_record)
+            final_result = await self._safe_after_governance(request, result)
+            self._emit_terminal_lifecycle_event(request, final_result)
+            return final_result
         self._emit_lifecycle_event("execution.started", request, "started", {"status": "started"})
         handler = self._handlers.get(request.execution_type)
         if handler is None:
@@ -47,15 +61,15 @@ class ExecutionBus:
                 status="blocked",
                 output_payload={"error": f"No handler for execution_type={request.execution_type}"},
             )
-            self._emit_lifecycle_event("execution.failed", request, "blocked", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
-            await self._safe_governance("after_execute", request=request, result=result)
-            return result
+            final_result = await self._safe_after_governance(request, result)
+            self._emit_terminal_lifecycle_event(request, final_result)
+            return final_result
 
         try:
             raw_result = await handler(request)
             result = self._normalize_result(request, raw_result)
         except Exception as exc:
-            await self._safe_governance("on_error", request=request, error=exc)
+            error_audit = await self._safe_on_error_governance(request, exc)
             logger.exception("ExecutionBus handler failed for %s", request.execution_type)
             error_payload = _build_error_payload(exc, request.execution_type)
             result = make_execution_result(
@@ -63,15 +77,22 @@ class ExecutionBus:
                 status="error",
                 output_payload=error_payload,
             )
-            self._emit_lifecycle_event("execution.failed", request, "error", {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
-            await self._safe_governance("after_execute", request=request, result=result)
-            return result
+            if error_audit is not None:
+                result.audit_ref = error_audit.audit_ref
+                result.runtime_events.append(
+                    governance_audit_runtime_event(
+                        request=request,
+                        status=result.status,
+                        audit_record=error_audit,
+                    )
+                )
+            final_result = await self._safe_after_governance(request, result)
+            self._emit_terminal_lifecycle_event(request, final_result)
+            return final_result
 
-        failure_statuses = {"error", "blocked"}
-        lifecycle_event = "execution.failed" if result.status in failure_statuses else "execution.completed"
-        self._emit_lifecycle_event(lifecycle_event, request, result.status, {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)})
-        await self._safe_governance("after_execute", request=request, result=result)
-        return result
+        final_result = await self._safe_after_governance(request, result)
+        self._emit_terminal_lifecycle_event(request, final_result)
+        return final_result
 
     async def _persist_last_execution_id(self, request: ExecutionRequest) -> None:
         if not self._should_persist_last_execution_id(request):
@@ -90,16 +111,103 @@ class ExecutionBus:
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
         return metadata.get("persist_last_execution_id") is True
 
-    async def _safe_governance(self, hook_name: str, **kwargs: Any) -> None:
+    async def _safe_before_governance(self, request: ExecutionRequest) -> GovernanceDecision:
         try:
-            # Phase 1 contract: hooks are fire-and-forget extension points.
-            hook = getattr(self._governance, hook_name, None)
-            if callable(hook):
-                result = hook(**kwargs)
-                if inspect.isawaitable(result):
-                    await result
+            return await self._governance.before_execute(request)
         except Exception:
-            logger.debug("ExecutionBus governance hook failed: %s", hook_name, exc_info=True)
+            logger.debug("ExecutionBus governance hook failed: %s", "before_execute", exc_info=True)
+            return GovernanceDecision(allowed=True)
+
+    async def _safe_after_governance(self, request: ExecutionRequest, result: ExecutionResult) -> ExecutionResult:
+        try:
+            maybe_result = await self._governance.after_execute(request, result)
+            if isinstance(maybe_result, GovernanceDecision):
+                if maybe_result.result is not None:
+                    return self._normalize_result(request, maybe_result.result)
+                if maybe_result.allowed:
+                    return result
+                return self._blocked_result(request, reason=maybe_result.reason, audit=maybe_result.audit_record)
+            if isinstance(maybe_result, ExecutionResult):
+                return self._normalize_result(request, maybe_result)
+            return result
+        except Exception:
+            logger.debug("ExecutionBus governance hook failed: %s", "after_execute", exc_info=True)
+            return result
+
+    async def _safe_on_error_governance(self, request: ExecutionRequest, error: Exception) -> Optional[GovernanceAuditRecord]:
+        try:
+            return await self._governance.on_error(request, error)
+        except Exception:
+            logger.debug("ExecutionBus governance hook failed: %s", "on_error", exc_info=True)
+            return None
+
+    def _blocked_result(
+        self,
+        request: ExecutionRequest,
+        *,
+        reason: Optional[str],
+        audit: Optional[GovernanceAuditRecord],
+    ) -> ExecutionResult:
+        payload = {
+            "error": "Execution blocked by governance policy",
+            "reason": reason or "governance_blocked",
+            "execution_type": request.execution_type,
+        }
+        runtime_events = []
+        audit_ref = None
+        if audit is not None:
+            audit_ref = audit.audit_ref
+            runtime_events.append(
+                governance_audit_runtime_event(
+                    request=request,
+                    status="blocked",
+                    audit_record=audit,
+                    detail_payload={"reason": reason or "governance_blocked"},
+                )
+            )
+        return make_execution_result(
+            request_id=request.request_id,
+            status="blocked",
+            output_payload=payload,
+            runtime_events=runtime_events,
+            audit_ref=audit_ref,
+        )
+
+    def _emit_terminal_lifecycle_event(self, request: ExecutionRequest, result: ExecutionResult) -> None:
+        failure_statuses = {"error", "blocked"}
+        lifecycle_event = "execution.failed" if result.status in failure_statuses else "execution.completed"
+        self._emit_lifecycle_event(
+            lifecycle_event,
+            request,
+            result.status,
+            {"status": result.status, "output_summary": summarize_output_payload(result.output_payload)},
+        )
+
+    def _resolve_task_id(self, request: ExecutionRequest) -> Optional[str]:
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        metadata_task_id = metadata.get("task_id")
+        if isinstance(metadata_task_id, str) and metadata_task_id.strip():
+            return metadata_task_id.strip()
+        payload_task_id = request.input_payload.get("task_id")
+        if isinstance(payload_task_id, str) and payload_task_id.strip():
+            return payload_task_id.strip()
+        return None
+
+    def _attach_task_id_to_runtime_events(self, runtime_events: list[Dict[str, Any]], task_id: Optional[str]) -> list[Dict[str, Any]]:
+        if not task_id:
+            return runtime_events
+        normalized_events: list[Dict[str, Any]] = []
+        for event in runtime_events:
+            if isinstance(event, dict):
+                if not event.get("task_id"):
+                    enriched = dict(event)
+                    enriched["task_id"] = task_id
+                    normalized_events.append(enriched)
+                else:
+                    normalized_events.append(event)
+            else:
+                normalized_events.append({"value": event, "task_id": task_id})
+        return normalized_events
 
     def _normalize_result(self, request: ExecutionRequest, raw_result: Any) -> ExecutionResult:
         if isinstance(raw_result, ExecutionResult):
@@ -160,6 +268,7 @@ class ExecutionBus:
     ) -> None:
         if not self._event_emitter:
             return
+        task_id = self._resolve_task_id(request) if request.execution_type == "task" else None
         legacy_type_map = {
             "execution.started": "execution_started",
             "execution.completed": "execution_completed",
@@ -173,6 +282,7 @@ class ExecutionBus:
             request_id=request.request_id,
             agent_id=request.agent_id,
             summary=f"{request.execution_type} execution {state}",
+            task_id=task_id,
             detail_payload={
                 "execution_type": request.execution_type,
                 **detail_payload,
@@ -333,7 +443,7 @@ def build_default_execution_bus(
     *,
     chat_handler: Optional[ExecutionHandler] = None,
     event_emitter: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-    governance: Optional[GovernanceHooks] = None,
+    governance: Optional[GovernanceBus | GovernanceHooks] = None,
     execute_tool_func: Optional[Callable[..., Any]] = None,
 ) -> ExecutionBus:
     """Build a bus with default skill/tool/subagent/event handlers.
@@ -341,7 +451,7 @@ def build_default_execution_bus(
     Chat handling is intentionally caller-injected via `chat_handler` to avoid
     coupling this runtime module to a single chat orchestration implementation.
     """
-    bus = ExecutionBus(event_emitter=event_emitter, governance=governance)
+    bus = ExecutionBus(event_emitter=event_emitter, governance=governance or build_default_governance_bus())
 
     if chat_handler is not None:
         # Chat is intentionally optional and injected by caller (e.g., webchat/gateway path).
@@ -375,7 +485,217 @@ def build_default_execution_bus(
         )
 
     async def task_handler(request: ExecutionRequest) -> ExecutionResult:
+        task_id = bus._resolve_task_id(request)
         task_type = request.input_payload.get("task_type")
+        if task_type == "adapter_action_task":
+            action_id = _get_required(request.input_payload, "action_id")
+            kwargs = dict(request.input_payload.get("kwargs") or {})
+            registry = get_capability_registry()
+            descriptor = registry.get(action_id)
+            if descriptor is None or descriptor.type != "adapter_action":
+                return make_execution_result(
+                    request_id=request.request_id,
+                    status="blocked",
+                    output_payload={
+                        "task_type": task_type,
+                        "action_id": action_id,
+                        "success": False,
+                        "error": f"Unknown or non-adapter action_id: {action_id}",
+                        "task_boundary": True,
+                    },
+                )
+            adapter_result = await execute_adapter_action(action_id, kwargs)
+            runtime_events = list(adapter_result.get("runtime_events") or [])
+            runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+            requires_identity_binding = bool(descriptor.requires_identity_binding)
+            runtime_events.append(
+                build_runtime_event(
+                    event_type="task.adapter_action.completed" if adapter_result.get("success") else "task.adapter_action.failed",
+                    execution_type=request.execution_type,
+                    state="completed" if adapter_result.get("success") else "failed",
+                    session_id=request.session_id,
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    summary=f"adapter action {action_id}",
+                    task_id=task_id,
+                    detail_payload={
+                        "task_type": task_type,
+                        "action_id": action_id,
+                        "requires_identity_binding": requires_identity_binding,
+                        "capability_policy_tags": descriptor.policy_tags,
+                        "success": bool(adapter_result.get("success")),
+                    },
+                    legacy_payload={"legacy_type": "task_adapter_action"},
+                )
+            )
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success" if adapter_result.get("success") else "error",
+                output_payload={
+                    "task_type": task_type,
+                    "action_id": action_id,
+                    "success": bool(adapter_result.get("success")),
+                    "error": adapter_result.get("error"),
+                    "task_boundary": True,
+                    "requires_identity_binding": requires_identity_binding,
+                    "result": adapter_result.get("result"),
+                },
+                runtime_events=runtime_events,
+            )
+
+        if task_type == "jira_workflow_review_task":
+            workflow_payload = {
+                "issue_key": _get_required(request.input_payload, "issue_key"),
+                "skill_name": request.input_payload.get("skill_name"),
+                "skill_kwargs": request.input_payload.get("skill_kwargs"),
+                "success_transition": request.input_payload.get("success_transition"),
+                "failure_transition": request.input_payload.get("failure_transition"),
+                "success_reassign_to": request.input_payload.get("success_reassign_to"),
+                "failure_reassign_to": request.input_payload.get("failure_reassign_to"),
+                "explicit_success_assignee": request.input_payload.get("explicit_success_assignee"),
+                "explicit_failure_assignee": request.input_payload.get("explicit_failure_assignee"),
+                "review_comment_template": request.input_payload.get("review_comment_template"),
+                "transition_comment_template": request.input_payload.get("transition_comment_template"),
+                "fields_on_success": request.input_payload.get("fields_on_success"),
+                "fields_on_failure": request.input_payload.get("fields_on_failure"),
+                "workflow_context": request.input_payload.get("workflow_context"),
+                "review_comment": request.input_payload.get("review_comment"),
+                "transition": request.input_payload.get("transition"),
+                "assignee": request.input_payload.get("assignee"),
+                "fields": request.input_payload.get("fields"),
+                "transition_comment": request.input_payload.get("transition_comment"),
+            }
+            workflow_result = await run_jira_workflow_review(workflow_payload)
+            runtime_events = list(workflow_result.get("runtime_events") or [])
+            runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+            runtime_events.append(
+                build_runtime_event(
+                    event_type="task.jira_workflow_review.completed" if workflow_result.get("success") else "task.jira_workflow_review.failed",
+                    execution_type=request.execution_type,
+                    state="completed" if workflow_result.get("success") else "failed",
+                    session_id=request.session_id,
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    summary="jira workflow review task",
+                    task_id=task_id,
+                    detail_payload={
+                        "task_type": task_type,
+                        "issue_key": workflow_result.get("issue_key"),
+                        "skill_name": workflow_result.get("skill_name") or workflow_payload.get("skill_name"),
+                        "workflow_outcome": workflow_result.get("workflow_outcome"),
+                        "approved": workflow_result.get("approved"),
+                        "success_transition": workflow_payload.get("success_transition"),
+                        "failure_transition": workflow_payload.get("failure_transition"),
+                        "reassignment_target": workflow_result.get("reassignment_target"),
+                        "success": bool(workflow_result.get("success")),
+                        "actions_applied": len(workflow_result.get("actions_applied") or []),
+                    },
+                    legacy_payload={"legacy_type": "task_jira_workflow_review"},
+                )
+            )
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success" if workflow_result.get("success") else "error",
+                output_payload={
+                    "task_type": task_type,
+                    "success": bool(workflow_result.get("success")),
+                    "error": workflow_result.get("error"),
+                    "task_boundary": True,
+                    "workflow_outcome": workflow_result.get("workflow_outcome"),
+                    "actions_applied": workflow_result.get("actions_applied") or [],
+                    "result": workflow_result,
+                },
+                runtime_events=runtime_events,
+            )
+
+        if task_type == "github_review_task":
+            owner = _get_required(request.input_payload, "owner")
+            repo = _get_required(request.input_payload, "repo")
+            pull_number = _get_required(request.input_payload, "pull_number")
+            review_comment_input = request.input_payload.get("comment")
+            review_metadata = request.input_payload.get("metadata")
+
+            review_result = await execute_adapter_action(
+                "adapter:github:review_pull_request",
+                {
+                    "owner": owner,
+                    "repo": repo,
+                    "pull_number": pull_number,
+                    "comment": review_comment_input,
+                    "metadata": review_metadata,
+                },
+            )
+
+            runtime_events = list(review_result.get("runtime_events") or [])
+            runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+            review_summary = None
+            if isinstance(review_result.get("result"), dict):
+                review_summary = review_result.get("result", {}).get("summary")
+            if review_summary is None:
+                review_summary = review_comment_input
+            comment_written = False
+            error_value = review_result.get("error")
+
+            if review_result.get("success"):
+                comment_body = review_summary if isinstance(review_summary, str) and review_summary.strip() else review_comment_input
+                if isinstance(comment_body, str) and comment_body.strip():
+                    add_comment_result = await execute_adapter_action(
+                        "adapter:github:add_comment",
+                        {
+                            "owner": owner,
+                            "repo": repo,
+                            "pull_number": pull_number,
+                            "comment": comment_body,
+                        },
+                    )
+                    runtime_events.extend(add_comment_result.get("runtime_events") or [])
+                    runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+                    comment_written = bool(add_comment_result.get("success"))
+                    if not comment_written:
+                        error_value = add_comment_result.get("error") or "Failed to write GitHub review comment"
+                else:
+                    error_value = "Review succeeded but no summary/comment text available for write-back"
+
+            success_value = bool(review_result.get("success")) and comment_written and not error_value
+            runtime_events.append(
+                build_runtime_event(
+                    event_type="task.github_review.completed" if success_value else "task.github_review.failed",
+                    execution_type=request.execution_type,
+                    state="completed" if success_value else "failed",
+                    session_id=request.session_id,
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    summary="github review task",
+                    task_id=task_id,
+                    detail_payload={
+                        "task_type": task_type,
+                        "owner": owner,
+                        "repo": repo,
+                        "pull_number": pull_number,
+                        "comment_written": comment_written,
+                        "success": success_value,
+                        "error": error_value,
+                    },
+                    legacy_payload={"legacy_type": "task_github_review"},
+                )
+            )
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success" if success_value else "error",
+                output_payload={
+                    "task_type": task_type,
+                    "owner": owner,
+                    "repo": repo,
+                    "pull_number": pull_number,
+                    "review_summary": review_summary,
+                    "comment_written": comment_written,
+                    "success": success_value,
+                    "error": error_value,
+                    "task_boundary": True,
+                },
+                runtime_events=runtime_events,
+            )
+
         if task_type != "tool_task":
             return make_execution_result(
                 request_id=request.request_id,
@@ -397,6 +717,27 @@ def build_default_execution_bus(
             event_callback=event_callback if callable(event_callback) else None,
         )
         normalized = _coerce_task_tool_result(raw_task_result)
+        runtime_events = list(normalized["runtime_events"]) if isinstance(normalized["runtime_events"], list) else []
+        runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+        runtime_events.append(
+            build_runtime_event(
+                event_type="task.tool.completed" if normalized["success"] else "task.tool.failed",
+                execution_type=request.execution_type,
+                state="completed" if normalized["success"] else "failed",
+                session_id=request.session_id,
+                request_id=request.request_id,
+                agent_id=request.agent_id,
+                summary=f"tool task {tool_name}",
+                task_id=task_id,
+                detail_payload={
+                    "task_type": "tool_task",
+                    "tool_name": tool_name,
+                    "success": bool(normalized["success"]),
+                    "error": normalized["error"],
+                },
+                legacy_payload={"legacy_type": "task_tool"},
+            )
+        )
         return make_execution_result(
             request_id=request.request_id,
             status="success" if normalized["success"] else "error",
@@ -410,7 +751,7 @@ def build_default_execution_bus(
                 "result": normalized["result"],
             },
             artifacts=normalized["artifacts"],
-            runtime_events=normalized["runtime_events"],
+            runtime_events=runtime_events,
             next_action_hint=normalized["next_action_hint"],
             audit_ref=normalized["audit_ref"],
         )

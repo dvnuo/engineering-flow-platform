@@ -447,6 +447,22 @@ class SessionManager:
         # Metadata-only execution id updates are intentionally deferred to the
         # next normal persistence path (e.g. add_message autosave, save_all, shutdown).
 
+    async def recover_session_state(self, session_id: str) -> Dict[str, Any]:
+        """Recover runtime-facing session state through the runtime recovery pipeline."""
+        from src.runtime.recovery_pipeline import get_recovery_pipeline
+
+        pipeline = get_recovery_pipeline()
+        hydration = await pipeline.hydrate_session_state(session_id)
+        return {
+            "session_id": hydration.session_id,
+            "recovered": hydration.recovered,
+            "active_skill_session": hydration.active_skill_session,
+            "last_execution_id": hydration.last_execution_id,
+            "warnings": list(hydration.warnings),
+            "runtime_events": list(hydration.runtime_events),
+            "metadata": dict(hydration.metadata),
+        }
+
     async def clear_history(self, session_id: str) -> None:
         """Clear session history."""
         if session_id in self.sessions:

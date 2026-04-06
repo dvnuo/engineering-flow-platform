@@ -45,7 +45,6 @@ from src.agents.executor import (
     execute_tool_by_name,  # compatibility export for tests and legacy patch points
     ToolResult,
 )
-from src.agents.tool_result_policy import should_passthrough_tool_result
 from src.agents.skill_runtime import (
     apply_skill_hooks,
     build_skill_runtime_event_payload,
@@ -55,7 +54,7 @@ from src.agents.skill_runtime import (
     resolve_prompt_execution_boundary,
 )
 from src.skills.runtime import SkillRuntimeConfig
-from src.runtime import build_default_execution_bus, make_execution_request
+from src.runtime.chat_orchestration_adapter import execute_tool_or_task_orchestration
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +79,7 @@ def get_skill_workdir() -> Optional[str]:
 # When DEBUG, complete input/output is logged (no truncation)
 
 _DEBUG_ENABLED = None  # Lazy initialization
+_TOOL_RESULT_GOVERNANCE_ATTR = "_governance"
 
 
 def _is_debug_enabled() -> bool:
@@ -152,6 +152,29 @@ def _is_lookup_only_skill(skill: Any, skill_session: SkillSession, message: str)
     return any(word in tokens for word in lookup_words)
 
 
+def _attach_governance_hint(tool_result: ToolResult, governance_payload: Dict[str, Any]) -> ToolResult:
+    # Phase 2 compatibility bridge:
+    # GovernanceBus remains the policy decision source.
+    # This metadata on ToolResult is only a transitional carrier for legacy
+    # agent-loop hint consumption; avoid direct getattr/setattr usage elsewhere.
+    """Attach governance metadata onto ToolResult in one explicit bridge helper."""
+    payload = governance_payload if isinstance(governance_payload, dict) else {}
+    setattr(tool_result, _TOOL_RESULT_GOVERNANCE_ATTR, dict(payload))
+    return tool_result
+
+
+def _read_governance_hint(tool_result: ToolResult) -> Dict[str, Any]:
+    # Phase 2 compatibility bridge:
+    # GovernanceBus computes policy hints; this accessor only reads the
+    # transitional ToolResult metadata shape for legacy loop decisions.
+    # Keep access centralized to avoid implicit contract drift.
+    """Read governance metadata from ToolResult and always return a dict."""
+    payload = getattr(tool_result, _TOOL_RESULT_GOVERNANCE_ATTR, {})
+    if isinstance(payload, dict):
+        return dict(payload)
+    return {}
+
+
 async def _execute_tool_via_runtime_bus(
     *,
     session_id: str,
@@ -178,16 +201,15 @@ async def _execute_tool_via_runtime_bus(
     else:
         input_payload = {"tool_name": tool_name, "kwargs": dict(args)}
 
-    bus = build_default_execution_bus(execute_tool_func=execute_tool_by_name)
-    request = make_execution_request(
+    result = await execute_tool_or_task_orchestration(
         source_type="agent",
         source_ref=source_ref,
         execution_type=execution_type,
         session_id=session_id,
         input_payload=input_payload,
         metadata={"tool_name": tool_name, "task_boundary": use_task_boundary},
+        execute_tool_func=execute_tool_by_name,
     )
-    result = await bus.execute(request)
     payload: Dict[str, Any] = result.output_payload if isinstance(result.output_payload, dict) else {"value": result.output_payload}
     explicit_success = payload.get("success")
     if isinstance(explicit_success, bool):
@@ -211,11 +233,14 @@ async def _execute_tool_via_runtime_bus(
     error = payload.get("error")
     if error is None and result.status == "blocked":
         error = "Execution blocked"
-    return ToolResult(
+    tool_result = ToolResult(
         success=success,
         content=str(content),
         error=error,
     )
+    governance_artifacts = result.artifacts if isinstance(result.artifacts, dict) else {}
+    governance_payload = governance_artifacts.get("governance") if isinstance(governance_artifacts.get("governance"), dict) else {}
+    return _attach_governance_hint(tool_result, governance_payload)
 
 
 @dataclass
@@ -1552,13 +1577,13 @@ You have access to the following tools. When a user asks you to do something tha
 
             # Narrow passthrough shortcut for direct Jira detail retrieval requests.
             if len(executed_tool_results) == 1:
-                single_tool_name, single_tool_result = executed_tool_results[0]
-                if should_passthrough_tool_result(
-                    latest_user_message=message,
-                    tool_name=single_tool_name,
-                    tool_result=single_tool_result,
-                    tool_calls_count=len(function_calls),
-                ):
+                _single_tool_name, single_tool_result = executed_tool_results[0]
+                governance_hint = _read_governance_hint(single_tool_result)
+                passthrough_recommended = bool(
+                    isinstance(governance_hint, dict)
+                    and governance_hint.get("tool_result_passthrough_recommended") is True
+                )
+                if passthrough_recommended:
                     passthrough_content = str(single_tool_result.content)
                     await session_manager.add_message(session_id, "assistant", passthrough_content, extra=self._build_agent_author_extra())
                     send_event("complete", {
