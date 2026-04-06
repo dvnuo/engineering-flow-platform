@@ -43,6 +43,15 @@ async def run_jira_workflow_review(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     runtime_events: List[Dict[str, Any]] = []
     actions_applied: List[Dict[str, Any]] = []
+    for warning in plan.normalization_warnings:
+        runtime_events.append(
+            _event(
+                "recovery.warning",
+                "warning",
+                plan.issue_key,
+                {"warning": warning},
+            )
+        )
 
     read_outcome = await execute_jira_workflow_action("read_issue", {"issue_key": plan.issue_key})
     if not read_outcome.get("success"):

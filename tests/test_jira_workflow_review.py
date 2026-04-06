@@ -165,3 +165,129 @@ async def test_backward_compatible_direct_payload_path_without_skill_name(monkey
     assert result["workflow_outcome"] == "approved"
     assert result["transitioned_to"] == "Done"
     assert result["assignee_updated"] == "legacy-owner"
+
+
+@pytest.mark.asyncio
+async def test_workflow_context_json_object_string_is_accepted(monkeypatch):
+    captured = {}
+
+    async def _fake_execute_jira_workflow_action(action_name, kwargs):
+        if action_name == "read_issue":
+            return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
+        return {"success": True, "result": "ok", "error": None}
+
+    async def _fake_run_skill_execution(skill_name, **kwargs):
+        captured["workflow_context"] = kwargs.get("workflow_context")
+        return SkillResult(success=True, output="ok", data={"approved": True, "comment": "c"})
+
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.run_skill_execution", _fake_run_skill_execution)
+
+    result = await run_jira_workflow_review(
+        {
+            "issue_key": "PROJ-14",
+            "skill_name": "review_skill",
+            "workflow_context": '{\"rule\":\"x\",\"threshold\":2}',
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["workflow_context"] == {"rule": "x", "threshold": 2}
+
+
+@pytest.mark.asyncio
+async def test_malformed_workflow_fields_emit_warning_and_continue(monkeypatch):
+    captured = {}
+
+    async def _fake_execute_jira_workflow_action(action_name, kwargs):
+        if action_name == "read_issue":
+            return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
+        return {"success": True, "result": "ok", "error": None}
+
+    async def _fake_run_skill_execution(skill_name, **kwargs):
+        captured["skill_kwargs"] = kwargs
+        return SkillResult(success=True, output="ok", data={"approved": True})
+
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.run_skill_execution", _fake_run_skill_execution)
+
+    result = await run_jira_workflow_review(
+        {
+            "issue_key": "PROJ-15",
+            "skill_name": "review_skill",
+            "workflow_context": "{bad json",
+            "skill_kwargs": "[1,2,3]",
+            "fields_on_success": "123",
+            "fields_on_failure": "[\"x\"]",
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["skill_kwargs"]["workflow_context"] == {}
+    warnings = [evt.get("detail_payload", {}).get("warning") for evt in result["runtime_events"] if evt.get("event_type") == "recovery.warning"]
+    assert "invalid_workflow_context_json" in warnings
+    assert "invalid_skill_kwargs_type" in warnings
+    assert "invalid_fields_on_success_type" in warnings
+    assert "invalid_fields_on_failure_type" in warnings
+
+
+@pytest.mark.asyncio
+async def test_mapping_fields_json_object_strings_are_accepted(monkeypatch):
+    actions = []
+
+    async def _fake_execute_jira_workflow_action(action_name, kwargs):
+        actions.append((action_name, dict(kwargs)))
+        if action_name == "read_issue":
+            return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
+        return {"success": True, "result": "ok", "error": None}
+
+    async def _fake_run_skill_execution(skill_name, **kwargs):
+        return SkillResult(success=True, output="ok", data={"decision": "approved"})
+
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.run_skill_execution", _fake_run_skill_execution)
+
+    result = await run_jira_workflow_review(
+        {
+            "issue_key": "PROJ-16",
+            "skill_name": "review_skill",
+            "skill_kwargs": '{\"mode\":\"strict\"}',
+            "fields_on_success": '{\"summary\":\"ok\"}',
+            "fields_on_failure": '{\"summary\":\"no\"}',
+        }
+    )
+
+    assert result["success"] is True
+    update_calls = [kwargs for name, kwargs in actions if name == "update_issue"]
+    assert update_calls
+    assert update_calls[0]["fields"] == {"summary": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_workflow_context_non_object_json_is_ignored(monkeypatch):
+    captured = {}
+
+    async def _fake_execute_jira_workflow_action(action_name, kwargs):
+        if action_name == "read_issue":
+            return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
+        return {"success": True, "result": "ok", "error": None}
+
+    async def _fake_run_skill_execution(skill_name, **kwargs):
+        captured["workflow_context"] = kwargs.get("workflow_context")
+        return SkillResult(success=True, output="ok", data={"approved": True})
+
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.run_skill_execution", _fake_run_skill_execution)
+
+    result = await run_jira_workflow_review(
+        {
+            "issue_key": "PROJ-17",
+            "skill_name": "review_skill",
+            "workflow_context": "[1,2,3]",
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["workflow_context"] == {}
+    warnings = [evt.get("detail_payload", {}).get("warning") for evt in result["runtime_events"] if evt.get("event_type") == "recovery.warning"]
+    assert "invalid_workflow_context_type" in warnings

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
+import json
 
 
 @dataclass
@@ -22,6 +23,7 @@ class JiraWorkflowReviewPlan:
     fields_on_success: Dict[str, Any] = field(default_factory=dict)
     fields_on_failure: Dict[str, Any] = field(default_factory=dict)
     workflow_context: Dict[str, Any] = field(default_factory=dict)
+    normalization_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -36,10 +38,24 @@ class JiraWorkflowReviewOutcome:
 def normalize_workflow_review_payload(payload: Dict[str, Any]) -> JiraWorkflowReviewPlan:
     data = dict(payload or {})
     issue_key = str(data.get("issue_key") or "").strip()
+    warnings: list[str] = []
+    skill_kwargs, skill_kwargs_warning = _coerce_optional_mapping(data.get("skill_kwargs"), "skill_kwargs")
+    if skill_kwargs_warning:
+        warnings.append(skill_kwargs_warning)
+    fields_on_success, fields_on_success_warning = _coerce_optional_mapping(data.get("fields_on_success") or data.get("fields"), "fields_on_success")
+    if fields_on_success_warning:
+        warnings.append(fields_on_success_warning)
+    fields_on_failure, fields_on_failure_warning = _coerce_optional_mapping(data.get("fields_on_failure"), "fields_on_failure")
+    if fields_on_failure_warning:
+        warnings.append(fields_on_failure_warning)
+    workflow_context, workflow_context_warning = _coerce_optional_mapping(data.get("workflow_context"), "workflow_context")
+    if workflow_context_warning:
+        warnings.append(workflow_context_warning)
+
     return JiraWorkflowReviewPlan(
         issue_key=issue_key,
         skill_name=_clean_optional_str(data.get("skill_name")),
-        skill_kwargs=dict(data.get("skill_kwargs") or {}),
+        skill_kwargs=skill_kwargs,
         success_transition=_clean_optional_str(data.get("success_transition") or data.get("transition")),
         failure_transition=_clean_optional_str(data.get("failure_transition")),
         success_reassign_to=_clean_optional_str(data.get("success_reassign_to")),
@@ -48,9 +64,10 @@ def normalize_workflow_review_payload(payload: Dict[str, Any]) -> JiraWorkflowRe
         explicit_failure_assignee=_clean_optional_str(data.get("explicit_failure_assignee")),
         review_comment_template=_clean_optional_str(data.get("review_comment_template") or data.get("review_comment")),
         transition_comment_template=_clean_optional_str(data.get("transition_comment_template") or data.get("transition_comment")),
-        fields_on_success=dict(data.get("fields_on_success") or data.get("fields") or {}),
-        fields_on_failure=dict(data.get("fields_on_failure") or {}),
-        workflow_context=dict(data.get("workflow_context") or {}),
+        fields_on_success=fields_on_success,
+        fields_on_failure=fields_on_failure,
+        workflow_context=workflow_context,
+        normalization_warnings=warnings,
     )
 
 
@@ -194,3 +211,26 @@ def _clean_optional_str(value: Any) -> Optional[str]:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _coerce_optional_mapping(value: Any, field_name: str) -> tuple[dict[str, Any], Optional[str]]:
+    if value is None:
+        return {}, None
+    if isinstance(value, dict):
+        return dict(value), None
+    if isinstance(value, str):
+        parsed, warning = _coerce_json_object_string(value, field_name)
+        if parsed is not None:
+            return parsed, None
+        return {}, warning
+    return {}, f"invalid_{field_name}_type"
+
+
+def _coerce_json_object_string(value: str, field_name: str) -> tuple[dict[str, Any] | None, Optional[str]]:
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return None, f"invalid_{field_name}_json"
+    if isinstance(parsed, dict):
+        return dict(parsed), None
+    return None, f"invalid_{field_name}_type"
