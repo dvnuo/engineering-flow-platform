@@ -36,6 +36,9 @@ async def test_recovery_snapshot_builds_from_in_memory_session(monkeypatch):
     assert snapshot.persisted_session["history"][0]["content"] == "hi"
     assert snapshot.runtime_state["active_skill_session"] == {"skill": "demo"}
     assert snapshot.reconstructed_state["has_active_skill_session"] is True
+    assert snapshot.reconstructed_state["has_compaction_summary"] is False
+    assert snapshot.reconstructed_state["has_session_memory_summary"] is False
+    assert snapshot.reconstructed_state["needs_recovery_reconcile"] is False
     assert any(evt.get("event_type") == "recovery.snapshot_built" for evt in snapshot.runtime_events)
     assert snapshot.summary_flags["source"] == "memory"
 
@@ -189,6 +192,29 @@ async def test_recovery_snapshot_includes_shared_context_hints(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_recovery_snapshot_includes_compaction_and_session_memory_hints(monkeypatch):
+    class _StubSessionManager:
+        sessions = {
+            "s-compact": {
+                "history": [
+                    {"role": "system", "type": "compaction_summary", "content": "compacted"},
+                ],
+                "metadata": {"session_memory_file": "/tmp/memory/2026-01-01.md"},
+            }
+        }
+
+    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.agents.tasks.task_manager.list_task_summaries", lambda session_id=None: [])
+    monkeypatch.setattr("src.agents.subagent.list_active_subagent_summaries", lambda parent_session_id=None: [])
+
+    snapshot = await DefaultRecoveryPipeline().build_snapshot("s-compact")
+    assert snapshot is not None
+    assert snapshot.reconstructed_state["has_compaction_summary"] is True
+    assert snapshot.reconstructed_state["has_session_memory_summary"] is True
+    assert snapshot.reconstructed_state["needs_recovery_reconcile"] is True
+
+
+@pytest.mark.asyncio
 async def test_recovery_pipeline_hydrates_from_metadata_fallback(monkeypatch):
     class _StubSessionManager:
         sessions = {}
@@ -233,6 +259,9 @@ async def test_recovery_pipeline_hydrates_from_metadata_fallback(monkeypatch):
     hydrated_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "recovery.hydrated")
     assert hydrated_event["detail_payload"]["source"] == "persistence"
     assert hydrated_event["detail_payload"]["message_count"] == 0
+    assert "has_compaction_summary" in hydrated_event["detail_payload"]
+    assert "has_session_memory_summary" in hydrated_event["detail_payload"]
+    assert "needs_recovery_reconcile" in hydrated_event["detail_payload"]
 
 
 @pytest.mark.asyncio
@@ -314,6 +343,10 @@ async def test_recovery_reconcile_after_persisted_fallback_has_reconciled_event(
 
     assert result.recovered is True
     assert any(evt.get("event_type") == "recovery.reconciled" for evt in result.runtime_events)
+    reconciled_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "recovery.reconciled")
+    assert "has_compaction_summary" in reconciled_event["detail_payload"]
+    assert "has_session_memory_summary" in reconciled_event["detail_payload"]
+    assert "needs_recovery_reconcile" in reconciled_event["detail_payload"]
 
 
 @pytest.mark.asyncio

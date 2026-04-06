@@ -126,6 +126,9 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                     "message_count": message_count,
                     "has_active_skill_session": active_skill_session is not None,
                     "has_last_execution_id": bool(last_execution_id),
+                    "has_compaction_summary": bool(snapshot.reconstructed_state.get("has_compaction_summary")),
+                    "has_session_memory_summary": bool(snapshot.reconstructed_state.get("has_session_memory_summary")),
+                    "needs_recovery_reconcile": bool(snapshot.reconstructed_state.get("needs_recovery_reconcile")),
                     "warning_count": len(warnings),
                 },
             )
@@ -149,6 +152,9 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
         reconciliation_hint = {
             "has_active_skill_session": hydration.active_skill_session is not None,
             "has_last_execution_id": bool(hydration.last_execution_id),
+            "has_compaction_summary": bool(hydration.reconstructed_state.get("has_compaction_summary")),
+            "has_session_memory_summary": bool(hydration.reconstructed_state.get("has_session_memory_summary")),
+            "needs_recovery_reconcile": bool(hydration.reconstructed_state.get("needs_recovery_reconcile")),
             "warning_count": len(hydration.warnings),
         }
         hydration.runtime_events.append(
@@ -217,6 +223,8 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
         pending_tool_tasks = await self._safe_pending_tool_tasks(session_id, runtime_warnings)
         active_subagents = await self._safe_active_subagents(session_id, runtime_warnings)
         pending_delegations = metadata.get("pending_delegations") if isinstance(metadata.get("pending_delegations"), list) else []
+        compaction_summary = _find_compaction_summary(session.get("history") or [])
+        session_memory_summary = _find_session_memory_summary(metadata, session.get("history") or [])
         runtime_state = {
             "active_skill_session": active_skill_session,
             "last_execution_id": last_execution_id,
@@ -224,13 +232,31 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             "active_subagents": active_subagents,
             "pending_delegations": list(pending_delegations),
         }
+        has_pending_tool_tasks = bool(pending_tool_tasks)
+        has_active_subagents = bool(active_subagents)
+        has_pending_delegations = bool(pending_delegations)
+        has_compaction_summary = compaction_summary is not None
+        has_session_memory_summary = session_memory_summary is not None
+        # runtime_state = active recoverable execution state
+        # reconstructed_state = lightweight derived restore/reconcile hints, including compaction/memory
         reconstructed_state = {
             "has_history": bool(session.get("history")),
             "has_active_skill_session": active_skill_session is not None,
             "has_last_execution_id": bool(last_execution_id),
-            "has_pending_tool_tasks": bool(pending_tool_tasks),
-            "has_active_subagents": bool(active_subagents),
-            "has_pending_delegations": bool(pending_delegations),
+            "has_pending_tool_tasks": has_pending_tool_tasks,
+            "has_active_subagents": has_active_subagents,
+            "has_pending_delegations": has_pending_delegations,
+            "has_compaction_summary": has_compaction_summary,
+            "has_session_memory_summary": has_session_memory_summary,
+            "needs_recovery_reconcile": any(
+                (
+                    has_pending_delegations,
+                    has_pending_tool_tasks,
+                    has_active_subagents,
+                    has_compaction_summary,
+                    has_session_memory_summary,
+                )
+            ),
             "has_shared_context_ref": _has_shared_context_ref(metadata),
             "has_materialized_context_ref": _has_materialized_context_ref(metadata),
             "recovery_source": source,
@@ -283,6 +309,9 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                         "has_pending_tool_tasks": bool(pending_tool_tasks),
                         "has_active_subagents": bool(active_subagents),
                         "has_pending_delegations": bool(pending_delegations),
+                        "has_compaction_summary": has_compaction_summary,
+                        "has_session_memory_summary": has_session_memory_summary,
+                        "needs_recovery_reconcile": reconstructed_state["needs_recovery_reconcile"],
                         "warning_count": len(runtime_warnings),
                     },
                 )
@@ -365,6 +394,39 @@ def _has_materialized_context_ref(metadata: Dict[str, Any]) -> bool:
             if isinstance(context_ref, dict) and bool(context_ref):
                 return True
     return False
+
+
+def _find_compaction_summary(history: list[dict]) -> Optional[dict]:
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "compaction_summary":
+            return dict(item)
+        item_metadata = item.get("metadata")
+        if isinstance(item_metadata, dict) and item_metadata.get("type") == "compaction_summary":
+            return dict(item)
+    return None
+
+
+def _find_session_memory_summary(metadata: dict, history: list[dict]) -> Optional[dict]:
+    if isinstance(metadata, dict):
+        for key in ("session_memory_summary", "session_memory_file", "session_memory_saved_at"):
+            value = metadata.get(key)
+            if value:
+                return {"source": "metadata", "key": key}
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "session_memory_summary":
+            return dict(item)
+        item_metadata = item.get("metadata")
+        if isinstance(item_metadata, dict) and item_metadata.get("type") == "session_memory_summary":
+            return dict(item)
+        if item.get("role") == "system":
+            marker = item.get("session_memory_summary")
+            if marker:
+                return dict(item)
+    return None
 
 
 def _safe_string(value: Any) -> Optional[str]:
