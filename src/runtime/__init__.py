@@ -22,6 +22,8 @@ from src.runtime.recovery_pipeline import (
     RecoveryPipeline,
     RecoverySnapshot,
     build_default_recovery_pipeline,
+    get_recovery_pipeline,
+    recovery_pipeline,
 )
 
 __all__ = [
@@ -37,6 +39,8 @@ __all__ = [
     "RecoveryHydrationResult",
     "RecoveryPipeline",
     "DefaultRecoveryPipeline",
+    "get_recovery_pipeline",
+    "recovery_pipeline",
     "make_execution_request",
     "make_execution_result",
     "build_default_execution_bus",

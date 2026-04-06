@@ -51,19 +51,19 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
         if not session_id:
             return None
 
-        from src.sessions.manager import session_manager
-
-        session = session_manager.sessions.get(session_id)
-        if not isinstance(session, dict):
+        session_info = await self._load_session_info(session_id, hydrate_via_manager=False)
+        if session_info is None:
             return None
-
+        session = session_info["session"]
+        source = session_info["source"]
         metadata = _metadata_from_session(session)
         active_skill_session = _extract_active_skill_session(session)
         last_execution_id = _extract_last_execution_id(session)
+        message_count = len(session.get("history") or [])
 
         snapshot = RecoverySnapshot(
             session_id=session_id,
-            message_count=len(session.get("history") or []),
+            message_count=message_count,
             metadata=metadata,
             active_skill_session=active_skill_session,
             last_execution_id=last_execution_id,
@@ -73,6 +73,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                 "has_history": bool(session.get("history")),
                 "has_active_skill_session": active_skill_session is not None,
                 "has_last_execution_id": bool(last_execution_id),
+                "source": source,
             },
             runtime_events=[
                 self._event(
@@ -80,9 +81,11 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                     "recovery.snapshot_built",
                     "snapshot_built",
                     {
-                        "message_count": len(session.get("history") or []),
+                        "source": source,
+                        "message_count": message_count,
                         "has_active_skill_session": active_skill_session is not None,
                         "has_last_execution_id": bool(last_execution_id),
+                        "warning_count": 0,
                     },
                 )
             ],
@@ -98,39 +101,36 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                 runtime_events=[self._event(session_id, "recovery.warning", "warning", {"warning": "missing_session_id"})],
             )
 
-        from src.sessions.manager import session_manager
-        from src.sessions.persistence import session_persistence
-
         warnings: List[str] = []
         runtime_events: List[Dict[str, Any]] = []
-
-        session_record = session_manager.sessions.get(session_id)
-        source = "memory"
-
-        if not isinstance(session_record, dict):
-            persisted = await session_persistence.load_session(session_id)
-            if persisted is None:
-                warnings.append("session_not_found")
-                runtime_events.append(self._event(session_id, "recovery.warning", "warning", {"warning": "session_not_found"}))
-                return RecoveryHydrationResult(
-                    session_id=session_id,
-                    recovered=False,
-                    warnings=warnings,
-                    runtime_events=runtime_events,
-                    metadata={},
+        session_info = await self._load_session_info(session_id, hydrate_via_manager=True)
+        if session_info is None:
+            warnings.append("session_not_found")
+            runtime_events.append(
+                self._event(
+                    session_id,
+                    "recovery.warning",
+                    "warning",
+                    {
+                        "warning": "session_not_found",
+                        "source": "missing",
+                        "message_count": 0,
+                        "has_active_skill_session": False,
+                        "has_last_execution_id": False,
+                        "warning_count": len(warnings),
+                    },
                 )
-            source = "persistence"
-            # Reuse existing manager restoration path where possible.
-            try:
-                session_record = await session_manager.get_session(session_id)
-            except Exception:
-                session_record = {
-                    "history": persisted.get("messages", []),
-                    "metadata": persisted.get("metadata", {}),
-                    "active_skill_session": persisted.get("active_skill_session"),
-                    "created_at": persisted.get("created_at"),
-                    "updated_at": persisted.get("updated_at"),
-                }
+            )
+            return RecoveryHydrationResult(
+                session_id=session_id,
+                recovered=False,
+                warnings=warnings,
+                runtime_events=runtime_events,
+                metadata={},
+            )
+
+        session_record = session_info["session"]
+        source = session_info["source"]
 
         metadata = _metadata_from_session(session_record)
         active_skill_session = _extract_active_skill_session(session_record)
@@ -138,6 +138,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             warnings.append("active_skill_session_restored_from_metadata")
 
         last_execution_id = _extract_last_execution_id(session_record)
+        message_count = len(session_record.get("history") or [])
 
         runtime_events.append(
             self._event(
@@ -146,6 +147,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                 "hydrated",
                 {
                     "source": source,
+                    "message_count": message_count,
                     "has_active_skill_session": active_skill_session is not None,
                     "has_last_execution_id": bool(last_execution_id),
                     "warning_count": len(warnings),
@@ -175,10 +177,35 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                 session_id,
                 "recovery.reconciled",
                 "reconciled" if hydration.recovered else "warning",
-                reconciliation_hint,
+                {
+                    **reconciliation_hint,
+                    "warning_count": len(hydration.warnings),
+                },
             )
         )
         return hydration
+
+    async def _load_session_info(self, session_id: str, *, hydrate_via_manager: bool) -> Optional[Dict[str, Any]]:
+        from src.sessions.manager import session_manager
+        from src.sessions.persistence import session_persistence
+
+        memory_session = session_manager.sessions.get(session_id)
+        if isinstance(memory_session, dict):
+            return {"source": "memory", "session": _normalize_session_record(memory_session, source="memory")}
+
+        persisted = await session_persistence.load_session(session_id)
+        if not isinstance(persisted, dict):
+            return None
+
+        if hydrate_via_manager:
+            try:
+                hydrated = await session_manager.get_session(session_id)
+                if isinstance(hydrated, dict):
+                    return {"source": "persistence", "session": _normalize_session_record(hydrated, source="persistence")}
+            except Exception:
+                pass
+
+        return {"source": "persistence", "session": _normalize_session_record(persisted, source="persistence")}
 
     def _event(self, session_id: str, event_type: str, state: str, detail_payload: Dict[str, Any]) -> Dict[str, Any]:
         return build_runtime_event(
@@ -227,3 +254,31 @@ def _safe_string(value: Any) -> Optional[str]:
 
 def build_default_recovery_pipeline() -> RecoveryPipeline:
     return DefaultRecoveryPipeline()
+
+
+def _normalize_session_record(session_record: Dict[str, Any], *, source: str) -> Dict[str, Any]:
+    metadata = session_record.get("metadata")
+    normalized_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    history = session_record.get("history")
+    if history is None:
+        history = session_record.get("messages")
+    normalized_history = list(history) if isinstance(history, list) else []
+
+    return {
+        "history": normalized_history,
+        "metadata": normalized_metadata,
+        "active_skill_session": session_record.get("active_skill_session"),
+        "created_at": session_record.get("created_at"),
+        "updated_at": session_record.get("updated_at"),
+        "_recovery_source": source,
+    }
+
+
+_default_recovery_pipeline = build_default_recovery_pipeline()
+
+
+def get_recovery_pipeline() -> RecoveryPipeline:
+    return _default_recovery_pipeline
+
+
+recovery_pipeline = _default_recovery_pipeline
