@@ -1,5 +1,7 @@
 import pytest
 import importlib
+import asyncio
+import copy
 
 from src.runtime.recovery_pipeline import RecoveryHydrationResult
 from src.sessions.manager import SessionManager
@@ -64,3 +66,46 @@ async def test_session_manager_pending_delegation_metadata_lifecycle():
     assert isinstance(completed, list)
     assert completed[-1]["delegation_id"] == "del-meta-1"
     assert completed[-1]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_session_manager_metadata_updates_schedule_persistence(monkeypatch):
+    manager = SessionManager(auto_save=True)
+    manager.persistence_enabled = True
+    session_id = "session-persist-metadata"
+    await manager.get_session(session_id)
+
+    save_calls = []
+
+    async def _fake_save_session(*, session_id, channel, messages, metadata):
+        save_calls.append(
+            {
+                "session_id": session_id,
+                "channel": channel,
+                "messages": list(messages),
+                "metadata": copy.deepcopy(metadata),
+            }
+        )
+
+    created_tasks = []
+
+    def _run_now(coro):
+        created_tasks.append(coro)
+        loop = asyncio.get_running_loop()
+        return loop.create_task(coro)
+
+    monkeypatch.setattr("src.sessions.manager.session_persistence.save_session", _fake_save_session)
+    monkeypatch.setattr("src.sessions.manager.asyncio.create_task", _run_now)
+
+    await manager.set_last_execution_id(session_id, "req-1")
+    await manager.add_pending_delegation(session_id, {"delegation_id": "del-1", "status": "pending"})
+    await manager.complete_pending_delegation(session_id, "del-1", status="completed")
+    await asyncio.sleep(0)
+
+    assert len(created_tasks) == 3
+    assert len(save_calls) == 3
+    metadata_states = [call["metadata"] for call in save_calls]
+    assert any(state.get("last_execution_id") == "req-1" for state in metadata_states)
+    final_session = await manager.get_session(session_id)
+    assert final_session["metadata"]["pending_delegations"] == []
+    assert final_session["metadata"]["completed_delegations"][-1]["delegation_id"] == "del-1"

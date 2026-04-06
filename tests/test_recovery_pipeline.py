@@ -91,7 +91,17 @@ async def test_recovery_snapshot_includes_task_and_subagent_summaries(monkeypatc
     )
     monkeypatch.setattr(
         "src.agents.subagent.list_active_subagent_summaries",
-        lambda: [{"session_key": "sa1", "task": "x", "status": "running", "model": "gpt", "thinking": "low", "created_at": "now"}],
+        lambda parent_session_id=None: [
+            {
+                "session_key": "sa1",
+                "task": "x",
+                "status": "running",
+                "model": "gpt",
+                "thinking": "low",
+                "created_at": "now",
+                "parent_session_id": parent_session_id,
+            }
+        ],
     )
 
     snapshot = await DefaultRecoveryPipeline().build_snapshot("s-recovery")
@@ -116,7 +126,7 @@ async def test_recovery_snapshot_registry_failures_are_soft(monkeypatch):
     )
     monkeypatch.setattr(
         "src.agents.subagent.list_active_subagent_summaries",
-        lambda: (_ for _ in ()).throw(RuntimeError("subagent registry down")),
+        lambda parent_session_id=None: (_ for _ in ()).throw(RuntimeError("subagent registry down")),
     )
 
     snapshot = await DefaultRecoveryPipeline().build_snapshot("s-soft")
@@ -125,6 +135,27 @@ async def test_recovery_snapshot_registry_failures_are_soft(monkeypatch):
     assert snapshot.runtime_state["active_subagents"] == []
     assert "pending_tool_tasks_unavailable" in snapshot.warnings
     assert "active_subagents_unavailable" in snapshot.warnings
+
+
+@pytest.mark.asyncio
+async def test_recovery_snapshot_subagents_are_scoped_by_parent_session(monkeypatch):
+    class _StubSessionManager:
+        sessions = {"s-scope": {"history": [], "metadata": {}}}
+
+    captured = {}
+
+    def _fake_subagent_summaries(parent_session_id=None):
+        captured["parent_session_id"] = parent_session_id
+        return [{"session_key": "only-this", "status": "started", "parent_session_id": parent_session_id}]
+
+    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.agents.tasks.task_manager.list_task_summaries", lambda session_id=None: [])
+    monkeypatch.setattr("src.agents.subagent.list_active_subagent_summaries", _fake_subagent_summaries)
+
+    snapshot = await DefaultRecoveryPipeline().build_snapshot("s-scope")
+    assert snapshot is not None
+    assert captured["parent_session_id"] == "s-scope"
+    assert snapshot.runtime_state["active_subagents"][0]["parent_session_id"] == "s-scope"
 
 
 @pytest.mark.asyncio

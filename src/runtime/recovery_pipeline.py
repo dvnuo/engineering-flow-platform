@@ -215,7 +215,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
         last_execution_id = _extract_last_execution_id(session)
         message_count = len(session.get("history") or [])
         pending_tool_tasks = await self._safe_pending_tool_tasks(session_id, runtime_warnings)
-        active_subagents = await self._safe_active_subagents(runtime_warnings)
+        active_subagents = await self._safe_active_subagents(session_id, runtime_warnings)
         pending_delegations = metadata.get("pending_delegations") if isinstance(metadata.get("pending_delegations"), list) else []
         runtime_state = {
             "active_skill_session": active_skill_session,
@@ -296,11 +296,11 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             warnings.append("pending_tool_tasks_unavailable")
             return []
 
-    async def _safe_active_subagents(self, warnings: List[str]) -> List[Dict[str, Any]]:
+    async def _safe_active_subagents(self, session_id: str, warnings: List[str]) -> List[Dict[str, Any]]:
         try:
             from src.agents.subagent import list_active_subagent_summaries
 
-            return list_active_subagent_summaries()
+            return list_active_subagent_summaries(parent_session_id=session_id)
         except Exception:
             warnings.append("active_subagents_unavailable")
             return []

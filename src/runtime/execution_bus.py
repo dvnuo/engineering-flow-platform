@@ -484,6 +484,7 @@ def build_default_execution_bus(
         return await run_subagent_execution(
             task=_get_required(request.input_payload, "task"),
             session_key=request.input_payload.get("session_key") or request.session_id or f"subagent-{request.request_id}",
+            parent_session_id=request.session_id,
             model=request.input_payload.get("model"),
             thinking=request.input_payload.get("thinking"),
             disable_tools=bool(request.input_payload.get("disable_tools", False)),
@@ -499,29 +500,45 @@ def build_default_execution_bus(
             delegation_id = _get_required(request.input_payload, "delegation_id")
             objective = _get_required(request.input_payload, "objective")
             visibility = _get_required(request.input_payload, "visibility")
-            if visibility not in {"leader_only", "group_visible"}:
-                return make_execution_result(
-                    request_id=request.request_id,
-                    status="blocked",
-                    output_payload={
-                        "task_type": task_type,
-                        "delegation_id": delegation_id,
-                        "success": False,
-                        "error": f"Unsupported visibility: {visibility}",
-                        "task_boundary": True,
-                    },
-                )
             skill_name = request.input_payload.get("skill_name")
-            if not isinstance(skill_name, str) or not skill_name.strip():
+            common_event_detail = {
+                "delegation_id": delegation_id,
+                "group_id": request.input_payload.get("group_id"),
+                "parent_agent_id": request.input_payload.get("parent_agent_id"),
+                "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
+                "visibility": visibility,
+                "skill_name": skill_name,
+                "scoped_context_ref": request.input_payload.get("scoped_context_ref"),
+            }
+
+            def _delegation_failure_result(
+                *,
+                error_code: str,
+                summary: str,
+                blockers: Optional[list[str]] = None,
+                status: str = "blocked",
+            ) -> ExecutionResult:
                 delegation_result = make_delegation_result(
                     delegation_id=delegation_id,
                     assignee_agent_id=request.input_payload.get("assignee_agent_id"),
-                    status="blocked",
-                    blockers=["missing_skill_name"],
-                    summary="Delegation blocked: skill_name is required for delegation_task",
-                    raw_result={"error": "missing_skill_name"},
+                    status=status,
+                    blockers=list(blockers or [error_code]),
+                    summary=summary,
+                    raw_result={"error": error_code},
                     audit_trace={"request_id": request.request_id, "task_id": task_id},
                 )
+                # Runtime contract remains canonical (summary/artifacts). Portal maps these to DB column names.
+                delegation_payload = {
+                    "delegation_id": delegation_result.delegation_id,
+                    "assignee_agent_id": delegation_result.assignee_agent_id,
+                    "status": delegation_result.status,
+                    "summary": delegation_result.summary,
+                    "artifacts": delegation_result.artifacts,
+                    "blockers": delegation_result.blockers,
+                    "next_recommendation": delegation_result.next_recommendation,
+                    "audit_trace": delegation_result.audit_trace,
+                    "raw_result": delegation_result.raw_result,
+                }
                 runtime_events = [
                     build_runtime_event(
                         event_type="task.delegation.failed",
@@ -532,30 +549,41 @@ def build_default_execution_bus(
                         agent_id=request.agent_id,
                         summary=f"delegation task {delegation_id}",
                         task_id=task_id,
-                        detail_payload={
-                            "delegation_id": delegation_id,
-                            "group_id": request.input_payload.get("group_id"),
-                            "parent_agent_id": request.input_payload.get("parent_agent_id"),
-                            "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
-                            "visibility": visibility,
-                            "skill_name": skill_name,
-                            "scoped_context_ref": request.input_payload.get("scoped_context_ref"),
-                        },
+                        detail_payload=dict(common_event_detail),
                         legacy_payload={"legacy_type": "task_delegation"},
                     )
                 ]
                 return make_execution_result(
                     request_id=request.request_id,
-                    status="blocked",
+                    status="blocked" if status == "blocked" else "error",
                     output_payload={
                         "task_type": task_type,
                         "delegation_id": delegation_id,
                         "success": False,
-                        "delegation_result": delegation_result.__dict__,
-                        "error": "missing_skill_name",
+                        "delegation_result": delegation_payload,
+                        "error": error_code,
                         "task_boundary": True,
                     },
                     runtime_events=runtime_events,
+                )
+
+            if visibility not in {"leader_only", "group_visible"}:
+                return _delegation_failure_result(
+                    error_code=f"unsupported_visibility:{visibility}",
+                    summary=f"Delegation blocked: unsupported visibility '{visibility}'",
+                    blockers=["unsupported_visibility"],
+                )
+            if not isinstance(skill_name, str) or not skill_name.strip():
+                return _delegation_failure_result(
+                    error_code="missing_skill_name",
+                    summary="Delegation blocked: skill_name is required for delegation_task",
+                )
+            raw_skill_kwargs = request.input_payload.get("skill_kwargs")
+            if raw_skill_kwargs is not None and not isinstance(raw_skill_kwargs, dict):
+                return _delegation_failure_result(
+                    error_code="invalid_skill_kwargs",
+                    summary="Delegation blocked: skill_kwargs must be an object/dict when provided",
+                    blockers=["invalid_skill_kwargs"],
                 )
 
             pending_record = {
@@ -582,7 +610,22 @@ def build_default_execution_bus(
             skill_error = None
             raw_skill_result: Dict[str, Any] = {}
             try:
-                skill_kwargs = dict(request.input_payload.get("skill_kwargs") or {})
+                skill_kwargs = dict(raw_skill_kwargs or {})
+                delegation_context = {
+                    "delegation_id": delegation_id,
+                    "group_id": request.input_payload.get("group_id"),
+                    "parent_agent_id": request.input_payload.get("parent_agent_id"),
+                    "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
+                    "objective": objective,
+                    "scoped_context_ref": request.input_payload.get("scoped_context_ref"),
+                    "input_artifacts": list(request.input_payload.get("input_artifacts") or []),
+                    "expected_output_schema": dict(request.input_payload.get("expected_output_schema") or {}),
+                    "deadline": request.input_payload.get("deadline"),
+                    "retry_policy": dict(request.input_payload.get("retry_policy") or {}),
+                    "visibility": visibility,
+                    "request_metadata": dict(request.metadata or {}),
+                }
+                skill_kwargs["delegation_context"] = delegation_context
                 skill_kwargs.setdefault("session_id", request.session_id)
                 skill_result = await run_skill_execution(skill_name.strip(), **skill_kwargs)
                 normalized_skill = bus._normalize_result(request, skill_result)
@@ -600,6 +643,18 @@ def build_default_execution_bus(
                     audit_trace={"request_id": request.request_id, "task_id": task_id, "skill_name": skill_name.strip()},
                     raw_result=raw_skill_result,
                 )
+                # Runtime contract remains canonical (summary/artifacts). Portal maps these to DB column names.
+                delegation_payload = {
+                    "delegation_id": delegation_result.delegation_id,
+                    "assignee_agent_id": delegation_result.assignee_agent_id,
+                    "status": delegation_result.status,
+                    "summary": delegation_result.summary,
+                    "artifacts": delegation_result.artifacts,
+                    "blockers": delegation_result.blockers,
+                    "next_recommendation": delegation_result.next_recommendation,
+                    "audit_trace": delegation_result.audit_trace,
+                    "raw_result": delegation_result.raw_result,
+                }
                 runtime_events = list(normalized_skill.runtime_events or [])
                 runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
                 runtime_events.append(
@@ -612,15 +667,7 @@ def build_default_execution_bus(
                         agent_id=request.agent_id,
                         summary=f"delegation task {delegation_id}",
                         task_id=task_id,
-                        detail_payload={
-                            "delegation_id": delegation_id,
-                            "group_id": request.input_payload.get("group_id"),
-                            "parent_agent_id": request.input_payload.get("parent_agent_id"),
-                            "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
-                            "visibility": visibility,
-                            "skill_name": skill_name.strip(),
-                            "scoped_context_ref": request.input_payload.get("scoped_context_ref"),
-                        },
+                        detail_payload={**common_event_detail, "skill_name": skill_name.strip()},
                         legacy_payload={"legacy_type": "task_delegation"},
                     )
                 )
@@ -631,7 +678,7 @@ def build_default_execution_bus(
                         "task_type": task_type,
                         "delegation_id": delegation_id,
                         "success": skill_success,
-                        "delegation_result": delegation_result.__dict__,
+                        "delegation_result": delegation_payload,
                         "error": skill_error,
                         "task_boundary": True,
                     },

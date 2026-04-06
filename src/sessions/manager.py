@@ -444,8 +444,7 @@ class SessionManager:
         metadata = session.setdefault("metadata", {})
         metadata["last_execution_id"] = request_id
         session["updated_at"] = datetime.now().isoformat()
-        # Metadata-only execution id updates are intentionally deferred to the
-        # next normal persistence path (e.g. add_message autosave, save_all, shutdown).
+        self._schedule_metadata_persist(session_id, session)
 
     async def add_pending_delegation(self, session_id: str, delegation_record: Dict[str, Any]) -> None:
         """Add a lightweight pending delegation record to session metadata."""
@@ -461,6 +460,7 @@ class SessionManager:
         pending_list.append(dict(delegation_record))
         metadata["pending_delegations"] = pending_list
         session["updated_at"] = datetime.now().isoformat()
+        self._schedule_metadata_persist(session_id, session)
 
     async def complete_pending_delegation(
         self,
@@ -494,6 +494,20 @@ class SessionManager:
             completed_list.append(matched)
             metadata["completed_delegations"] = completed_list[-50:]
         session["updated_at"] = datetime.now().isoformat()
+        self._schedule_metadata_persist(session_id, session)
+
+    def _schedule_metadata_persist(self, session_id: str, session: Dict[str, Any]) -> None:
+        """Persist metadata-only state transitions without blocking request flow."""
+        if not self.auto_save or not self.persistence_enabled:
+            return
+        asyncio.create_task(
+            session_persistence.save_session(
+                session_id=session_id,
+                channel=session.get("channel", ""),
+                messages=session.get("history", []),
+                metadata=session.get("metadata", {}),
+            )
+        )
 
     async def recover_session_state(self, session_id: str) -> Dict[str, Any]:
         """Recover runtime-facing session state through the runtime recovery pipeline."""

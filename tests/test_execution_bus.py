@@ -871,8 +871,11 @@ async def test_execution_bus_task_handler_adapter_action_github_success(monkeypa
 @pytest.mark.asyncio
 async def test_execution_bus_task_handler_delegation_task_success(monkeypatch):
     events = []
+    captured = {}
 
     async def _fake_run_skill_execution(skill_name, **kwargs):
+        captured["skill_name"] = skill_name
+        captured["kwargs"] = kwargs
         return {"success": True, "output": f"done:{skill_name}", "data": {"kwargs": kwargs}}
 
     class _SessionManager:
@@ -894,6 +897,7 @@ async def test_execution_bus_task_handler_delegation_task_success(monkeypatch):
         source_type="agent",
         execution_type="task",
         session_id="s-del",
+        metadata={"trace_id": "t-1"},
         input_payload={
             "task_id": "task-del-1",
             "task_type": "delegation_task",
@@ -912,6 +916,24 @@ async def test_execution_bus_task_handler_delegation_task_success(monkeypatch):
     assert result.output_payload["success"] is True
     assert result.output_payload["task_boundary"] is True
     assert result.output_payload["delegation_result"]["status"] == "completed"
+    assert set(result.output_payload["delegation_result"].keys()) == {
+        "delegation_id",
+        "assignee_agent_id",
+        "status",
+        "summary",
+        "artifacts",
+        "blockers",
+        "next_recommendation",
+        "audit_trace",
+        "raw_result",
+    }
+    assert "result_summary" not in result.output_payload["delegation_result"]
+    assert "result_artifacts_json" not in result.output_payload["delegation_result"]
+    assert captured["kwargs"]["delegation_context"]["delegation_id"] == "del-1"
+    assert captured["kwargs"]["delegation_context"]["objective"] == "Review"
+    assert captured["kwargs"]["delegation_context"]["visibility"] == "leader_only"
+    assert captured["kwargs"]["delegation_context"]["request_metadata"] == {"trace_id": "t-1"}
+    assert captured["kwargs"]["session_id"] == "s-del"
     assert sm.added and sm.added[0][1]["delegation_id"] == "del-1"
     assert sm.completed == [("s-del", "del-1", "completed")]
     delegation_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.completed")
@@ -941,6 +963,57 @@ async def test_execution_bus_task_handler_delegation_task_missing_skill_name_blo
     assert result.output_payload["delegation_result"]["status"] == "blocked"
     failed_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.failed")
     assert failed_event["task_id"] == "task-del-2"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_delegation_task_invalid_skill_kwargs_type_blocked():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-del",
+        input_payload={
+            "task_id": "task-del-kw",
+            "task_type": "delegation_task",
+            "delegation_id": "del-kw",
+            "objective": "Review",
+            "visibility": "group_visible",
+            "skill_name": "demo_skill",
+            "skill_kwargs": "not-a-dict",
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["success"] is False
+    assert result.output_payload["delegation_result"]["status"] == "blocked"
+    failed_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.failed")
+    assert failed_event["detail_payload"]["delegation_id"] == "del-kw"
+    assert failed_event["task_id"] == "task-del-kw"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_delegation_task_invalid_visibility_emits_failed_event():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-del",
+        input_payload={
+            "task_id": "task-del-vis",
+            "task_type": "delegation_task",
+            "delegation_id": "del-vis",
+            "objective": "Review",
+            "visibility": "public",
+            "skill_name": "demo_skill",
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["success"] is False
+    assert result.output_payload["delegation_result"]["status"] == "blocked"
+    failed_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.failed")
+    assert failed_event["detail_payload"]["visibility"] == "public"
+    assert failed_event["task_id"] == "task-del-vis"
 
 
 @pytest.mark.asyncio
@@ -1589,6 +1662,7 @@ async def test_subagent_handler_preserves_cleanup(monkeypatch):
     result = await bus.execute(req)
     assert result.status == "started"
     assert captured["cleanup"] == "keep"
+    assert captured["parent_session_id"] == "s-sub"
 
 
 def test_execution_bus_copies_handlers_mapping():
