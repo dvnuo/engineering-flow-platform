@@ -146,16 +146,58 @@ async def test_governance_exceptions_are_swallowed_and_logged(caplog):
 
 @pytest.mark.asyncio
 async def test_default_governance_invalid_status_is_coerced_safely():
-    async def _weird(_request):
+    async def _weird_task(_request):
         return {"status": "nonsense", "response": "x"}
 
-    bus = build_default_execution_bus(chat_handler=_weird)
-    req = make_execution_request(source_type="chat", execution_type="chat")
+    bus = ExecutionBus(governance=build_default_governance_bus())
+    bus.register_handler("task", _weird_task)
+    req = make_execution_request(source_type="agent", execution_type="task", input_payload={"task_type": "demo"})
 
     result = await bus.execute(req)
 
     assert result.status == "error"
     assert result.audit_ref is not None
+    assert any(event.get("event_type") == "governance.audit" for event in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_default_governance_task_output_payload_non_dict_is_wrapped():
+    async def _task_handler(_request):
+        from src.runtime.contracts import ExecutionResult
+
+        return ExecutionResult(
+            request_id="task-raw-1",
+            status="success",
+            output_payload="string-result",  # type: ignore[arg-type]
+        )
+
+    bus = ExecutionBus(governance=build_default_governance_bus())
+    bus.register_handler("task", _task_handler)
+    req = make_execution_request(source_type="agent", execution_type="task", input_payload={"task_type": "demo"})
+
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert isinstance(result.output_payload, dict)
+    assert "value" in result.output_payload
+
+
+@pytest.mark.asyncio
+async def test_default_governance_event_result_status_normalization():
+    async def _event_handler(_request):
+        return make_execution_result(
+            request_id="evt-1",
+            status="bad-status",
+            output_payload={"message": "x"},
+        )
+
+    bus = ExecutionBus(governance=build_default_governance_bus())
+    bus.register_handler("event", _event_handler)
+    req = make_execution_request(source_type="system", execution_type="event", input_payload={"target_execution_type": "chat"})
+
+    result = await bus.execute(req)
+
+    assert result.status == "error"
     assert any(event.get("event_type") == "governance.audit" for event in result.runtime_events)
 
 

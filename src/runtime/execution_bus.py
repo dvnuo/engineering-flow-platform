@@ -575,6 +575,91 @@ def build_default_execution_bus(
                 runtime_events=runtime_events,
             )
 
+        if task_type == "github_review_task":
+            owner = _get_required(request.input_payload, "owner")
+            repo = _get_required(request.input_payload, "repo")
+            pull_number = _get_required(request.input_payload, "pull_number")
+            review_comment_input = request.input_payload.get("comment")
+            review_metadata = request.input_payload.get("metadata")
+
+            review_result = await execute_adapter_action(
+                "adapter:github:review_pull_request",
+                {
+                    "owner": owner,
+                    "repo": repo,
+                    "pull_number": pull_number,
+                    "comment": review_comment_input,
+                    "metadata": review_metadata,
+                },
+            )
+
+            runtime_events = list(review_result.get("runtime_events") or [])
+            review_summary = None
+            if isinstance(review_result.get("result"), dict):
+                review_summary = review_result.get("result", {}).get("summary")
+            if review_summary is None:
+                review_summary = review_comment_input
+            comment_written = False
+            error_value = review_result.get("error")
+
+            if review_result.get("success"):
+                comment_body = review_summary if isinstance(review_summary, str) and review_summary.strip() else review_comment_input
+                if isinstance(comment_body, str) and comment_body.strip():
+                    add_comment_result = await execute_adapter_action(
+                        "adapter:github:add_comment",
+                        {
+                            "owner": owner,
+                            "repo": repo,
+                            "pull_number": pull_number,
+                            "comment": comment_body,
+                        },
+                    )
+                    runtime_events.extend(add_comment_result.get("runtime_events") or [])
+                    comment_written = bool(add_comment_result.get("success"))
+                    if not comment_written:
+                        error_value = add_comment_result.get("error") or "Failed to write GitHub review comment"
+                else:
+                    error_value = "Review succeeded but no summary/comment text available for write-back"
+
+            success_value = bool(review_result.get("success")) and comment_written and not error_value
+            runtime_events.append(
+                build_runtime_event(
+                    event_type="task.github_review.completed" if success_value else "task.github_review.failed",
+                    execution_type=request.execution_type,
+                    state="completed" if success_value else "failed",
+                    session_id=request.session_id,
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    summary="github review task",
+                    detail_payload={
+                        "task_type": task_type,
+                        "owner": owner,
+                        "repo": repo,
+                        "pull_number": pull_number,
+                        "comment_written": comment_written,
+                        "success": success_value,
+                        "error": error_value,
+                    },
+                    legacy_payload={"legacy_type": "task_github_review"},
+                )
+            )
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success" if success_value else "error",
+                output_payload={
+                    "task_type": task_type,
+                    "owner": owner,
+                    "repo": repo,
+                    "pull_number": pull_number,
+                    "review_summary": review_summary,
+                    "comment_written": comment_written,
+                    "success": success_value,
+                    "error": error_value,
+                    "task_boundary": True,
+                },
+                runtime_events=runtime_events,
+            )
+
         if task_type != "tool_task":
             return make_execution_result(
                 request_id=request.request_id,

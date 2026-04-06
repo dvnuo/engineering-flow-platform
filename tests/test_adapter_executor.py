@@ -57,3 +57,37 @@ async def test_execute_adapter_action_add_comment(monkeypatch):
 
     assert result["success"] is True
     assert result["action_id"] == "adapter:jira:add_comment"
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_github_review_pull_request(monkeypatch):
+    async def _fake_get_pr(owner, repo, pull_number):
+        return f"PR {owner}/{repo}#{pull_number}"
+
+    async def _fake_get_pr_files(owner, repo, pull_number):
+        return "files changed"
+
+    async def _fake_get_pr_comments(owner, repo, pull_number):
+        return "existing comments"
+
+    monkeypatch.setattr("src.github.github_get_pr", _fake_get_pr)
+    monkeypatch.setattr("src.github.github_get_pr_files", _fake_get_pr_files)
+    monkeypatch.setattr("src.github.github_get_pr_comments", _fake_get_pr_comments)
+
+    result = await execute_adapter_action(
+        "adapter:github:review_pull_request",
+        {"owner": "acme", "repo": "demo", "pull_number": 12},
+    )
+
+    assert result["success"] is True
+    assert result["action_id"] == "adapter:github:review_pull_request"
+    assert result["system"] == "github"
+    assert "Automated review summary" in result["result"]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_github_unsupported_action_failed():
+    result = await execute_adapter_action("adapter:github:not_supported", {"owner": "acme"})
+    assert result["success"] is False
+    assert result["system"] == "github"
+    assert "Unsupported adapter action" in result["error"]

@@ -617,6 +617,59 @@ async def test_api_tasks_execute_jira_workflow_review_task_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    class _FakeBus:
+        async def execute(self, execution_request):
+            captured["request"] = execution_request
+            return type(
+                "R",
+                (),
+                {
+                    "request_id": execution_request.request_id,
+                    "status": "success",
+                    "output_payload": {
+                        "task_type": "github_review_task",
+                        "owner": "acme",
+                        "repo": "demo",
+                        "pull_number": 33,
+                        "review_summary": "LGTM",
+                        "comment_written": True,
+                        "success": True,
+                    },
+                    "artifacts": {},
+                    "runtime_events": [{"event_type": "task.github_review.completed"}],
+                    "next_action_hint": None,
+                    "audit_ref": None,
+                },
+            )()
+
+    monkeypatch.setattr(webchat, "build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+
+    class _Request:
+        async def json(self):
+            return {
+                "task_id": "gh-task-1",
+                "task_type": "github_review_task",
+                "input_payload": {"owner": "acme", "repo": "demo", "pull_number": 33},
+                "metadata": {"trace_id": "t-1"},
+            }
+
+    response = await webchat.api_tasks_execute(_Request())
+    body = json.loads(response.body)
+
+    assert response.status == 200
+    assert body["ok"] is True
+    assert body["task_id"] == "gh-task-1"
+    assert body["execution_type"] == "task"
+    assert body["status"] == "success"
+    assert captured["request"].input_payload["task_type"] == "github_review_task"
+
+
+@pytest.mark.asyncio
 async def test_api_tasks_execute_missing_task_type_returns_400():
     from src.gateway import webchat
 

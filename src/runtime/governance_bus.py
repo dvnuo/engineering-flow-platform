@@ -143,16 +143,55 @@ class DefaultGovernanceBus(GovernanceBus):
         return GovernanceDecision(allowed=True)
 
     async def after_execute(self, request: ExecutionRequest, result: ExecutionResult) -> ExecutionResult:
+        # Phase 2 transition note:
+        # We keep the public after_execute hook stable, and explicitly carry
+        # result validate/enforce semantics through internal helper functions.
+        result, notes = self._normalize_execution_result_for_policy(request, result)
+        result, policy_notes = self._apply_policy_post_validation(request, result)
+        notes.extend(policy_notes)
+
+        if notes:
+            audit = make_governance_audit_record(
+                request=request,
+                stage="after_execute",
+                message="Governance post-processing amended execution result",
+                metadata={"notes": notes},
+            )
+            result.audit_ref = result.audit_ref or audit.audit_ref
+            result.runtime_events.append(
+                governance_audit_runtime_event(
+                    request=request,
+                    status=result.status,
+                    audit_record=audit,
+                    detail_payload={"notes": notes},
+                )
+            )
+        return result
+
+    def _normalize_execution_result_for_policy(
+        self,
+        request: ExecutionRequest,
+        result: ExecutionResult,
+    ) -> tuple[ExecutionResult, list[str]]:
+        """Normalize execution result fields before policy post-processing."""
         notes: list[str] = []
 
-        if result.status not in _ALLOWED_RESULT_STATUSES:
+        if request.execution_type in {"task", "event"} and result.status not in _ALLOWED_RESULT_STATUSES:
             result.status = "error"
             notes.append("invalid_status_coerced")
 
-        if not isinstance(result.output_payload, dict):
+        if request.execution_type in {"task", "event"} and not isinstance(result.output_payload, dict):
             result.output_payload = {"value": safe_preview(result.output_payload, 200)}
             notes.append("output_payload_normalized")
+        return result, notes
 
+    def _apply_policy_post_validation(
+        self,
+        request: ExecutionRequest,
+        result: ExecutionResult,
+    ) -> tuple[ExecutionResult, list[str]]:
+        """Apply non-blocking policy hints after base result normalization."""
+        notes: list[str] = []
         if request.execution_type in {"tool", "task"}:
             metadata = request.metadata if isinstance(request.metadata, dict) else {}
             latest_user_message = str(metadata.get("latest_user_message") or "")
@@ -175,24 +214,7 @@ class DefaultGovernanceBus(GovernanceBus):
                 except Exception:
                     # Policy wiring must stay non-blocking.
                     pass
-
-        if notes:
-            audit = make_governance_audit_record(
-                request=request,
-                stage="after_execute",
-                message="Governance post-processing amended execution result",
-                metadata={"notes": notes},
-            )
-            result.audit_ref = result.audit_ref or audit.audit_ref
-            result.runtime_events.append(
-                governance_audit_runtime_event(
-                    request=request,
-                    status=result.status,
-                    audit_record=audit,
-                    detail_payload={"notes": notes},
-                )
-            )
-        return result
+        return result, notes
 
     async def on_error(self, request: ExecutionRequest, error: Exception) -> Optional[GovernanceAuditRecord]:
         return make_governance_audit_record(
@@ -213,4 +235,3 @@ def build_default_governance_bus() -> GovernanceBus:
 
 class NoopGovernanceBus(GovernanceBus):
     """Explicit no-op governance implementation for compatibility paths."""
-
