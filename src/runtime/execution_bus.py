@@ -447,6 +447,89 @@ def _coerce_task_tool_result(raw_result: Any) -> Dict[str, Any]:
     }
 
 
+def _as_list_of_dicts(value: Any) -> list[dict]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _as_list_of_strings(value: Any) -> list[str]:
+    if isinstance(value, list):
+        normalized: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    normalized.append(text)
+            elif item is not None:
+                text = str(item).strip()
+                if text:
+                    normalized.append(text)
+        return normalized
+    return []
+
+
+def _as_dict(value: Any) -> dict:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _build_structured_delegation_payload_from_skill_output(
+    *,
+    raw_skill_result: Dict[str, Any],
+    success: bool,
+    error: Optional[str],
+    runtime_audit_trace: Dict[str, Any],
+) -> Dict[str, Any]:
+    nested = raw_skill_result.get("delegation_result")
+    source = nested if isinstance(nested, dict) else raw_skill_result
+
+    summary = source.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        for candidate in (
+            raw_skill_result.get("summary"),
+            raw_skill_result.get("output"),
+            raw_skill_result.get("content"),
+        ):
+            if isinstance(candidate, str) and candidate.strip():
+                summary = candidate.strip()
+                break
+        else:
+            summary = None
+
+    artifacts = _as_list_of_dicts(source.get("artifacts"))
+    if not artifacts:
+        artifacts = _as_list_of_dicts(raw_skill_result.get("artifacts"))
+
+    blockers = _as_list_of_strings(source.get("blockers"))
+    if not blockers:
+        blockers = _as_list_of_strings(raw_skill_result.get("blockers"))
+    if not blockers and not success:
+        blockers = [str(error or "skill_execution_failed")]
+
+    next_recommendation = source.get("next_recommendation")
+    if not isinstance(next_recommendation, str) or not next_recommendation.strip():
+        raw_next = raw_skill_result.get("next_recommendation")
+        if isinstance(raw_next, str) and raw_next.strip():
+            next_recommendation = raw_next.strip()
+        elif not success:
+            next_recommendation = "review_blockers"
+        else:
+            next_recommendation = None
+
+    audit_trace = _as_dict(source.get("audit_trace"))
+    if not audit_trace:
+        audit_trace = _as_dict(raw_skill_result.get("audit_trace"))
+    audit_trace = {**audit_trace, **runtime_audit_trace}
+
+    return {
+        "summary": summary,
+        "artifacts": artifacts,
+        "blockers": blockers,
+        "next_recommendation": next_recommendation,
+        "audit_trace": audit_trace,
+    }
+
+
 def build_default_execution_bus(
     *,
     chat_handler: Optional[ExecutionHandler] = None,
@@ -501,9 +584,11 @@ def build_default_execution_bus(
             objective = _get_required(request.input_payload, "objective")
             visibility = _get_required(request.input_payload, "visibility")
             skill_name = request.input_payload.get("skill_name")
+            leader_agent_id = request.input_payload.get("leader_agent_id")
             common_event_detail = {
                 "delegation_id": delegation_id,
                 "group_id": request.input_payload.get("group_id"),
+                "leader_agent_id": leader_agent_id,
                 "parent_agent_id": request.input_payload.get("parent_agent_id"),
                 "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
                 "visibility": visibility,
@@ -525,7 +610,7 @@ def build_default_execution_bus(
                     blockers=list(blockers or [error_code]),
                     summary=summary,
                     raw_result={"error": error_code},
-                    audit_trace={"request_id": request.request_id, "task_id": task_id},
+                    audit_trace={"request_id": request.request_id, "task_id": task_id, "leader_agent_id": leader_agent_id},
                 )
                 # Runtime contract remains canonical (summary/artifacts). Portal maps these to DB column names.
                 delegation_payload = {
@@ -591,6 +676,7 @@ def build_default_execution_bus(
                 "task_id": task_id,
                 "objective": objective,
                 "group_id": request.input_payload.get("group_id"),
+                "leader_agent_id": leader_agent_id,
                 "parent_agent_id": request.input_payload.get("parent_agent_id"),
                 "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
                 "visibility": visibility,
@@ -614,10 +700,14 @@ def build_default_execution_bus(
                 delegation_context = {
                     "delegation_id": delegation_id,
                     "group_id": request.input_payload.get("group_id"),
+                    "leader_agent_id": leader_agent_id,
                     "parent_agent_id": request.input_payload.get("parent_agent_id"),
                     "assignee_agent_id": request.input_payload.get("assignee_agent_id"),
                     "objective": objective,
+                    "shared_context_ref": request.input_payload.get("shared_context_ref"),
                     "scoped_context_ref": request.input_payload.get("scoped_context_ref"),
+                    "context_ref": _as_dict(request.context_ref),
+                    "shared_context_materialized": bool(_as_dict(request.context_ref)),
                     "input_artifacts": list(request.input_payload.get("input_artifacts") or []),
                     "expected_output_schema": dict(request.input_payload.get("expected_output_schema") or {}),
                     "deadline": request.input_payload.get("deadline"),
@@ -632,15 +722,27 @@ def build_default_execution_bus(
                 raw_skill_result = dict(normalized_skill.output_payload or {})
                 skill_success = normalized_skill.status not in {"error", "blocked"}
                 skill_error = raw_skill_result.get("error")
+                runtime_audit_trace = {
+                    "request_id": request.request_id,
+                    "task_id": task_id,
+                    "skill_name": skill_name.strip(),
+                    "leader_agent_id": leader_agent_id,
+                }
+                structured_payload = _build_structured_delegation_payload_from_skill_output(
+                    raw_skill_result=raw_skill_result,
+                    success=skill_success,
+                    error=skill_error,
+                    runtime_audit_trace=runtime_audit_trace,
+                )
                 delegation_result: DelegationResult = make_delegation_result(
                     delegation_id=delegation_id,
                     assignee_agent_id=request.input_payload.get("assignee_agent_id"),
                     status="completed" if skill_success else "failed",
-                    summary=raw_skill_result.get("output") or raw_skill_result.get("content"),
-                    artifacts=[],
-                    blockers=[] if skill_success else [str(skill_error or "skill_execution_failed")],
-                    next_recommendation=None if skill_success else "review_blockers",
-                    audit_trace={"request_id": request.request_id, "task_id": task_id, "skill_name": skill_name.strip()},
+                    summary=structured_payload["summary"],
+                    artifacts=structured_payload["artifacts"],
+                    blockers=structured_payload["blockers"],
+                    next_recommendation=structured_payload["next_recommendation"],
+                    audit_trace=structured_payload["audit_trace"],
                     raw_result=raw_skill_result,
                 )
                 # Runtime contract remains canonical (summary/artifacts). Portal maps these to DB column names.

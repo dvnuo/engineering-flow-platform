@@ -898,12 +898,16 @@ async def test_execution_bus_task_handler_delegation_task_success(monkeypatch):
         execution_type="task",
         session_id="s-del",
         metadata={"trace_id": "t-1"},
+        context_ref={"workspace": "w1"},
         input_payload={
             "task_id": "task-del-1",
             "task_type": "delegation_task",
             "delegation_id": "del-1",
             "objective": "Review",
             "visibility": "leader_only",
+            "leader_agent_id": "leader-1",
+            "shared_context_ref": "shared-ctx-1",
+            "scoped_context_ref": "scope-1",
             "skill_name": "demo_skill",
             "skill_kwargs": {"x": 1},
         },
@@ -932,12 +936,100 @@ async def test_execution_bus_task_handler_delegation_task_success(monkeypatch):
     assert captured["kwargs"]["delegation_context"]["delegation_id"] == "del-1"
     assert captured["kwargs"]["delegation_context"]["objective"] == "Review"
     assert captured["kwargs"]["delegation_context"]["visibility"] == "leader_only"
+    assert captured["kwargs"]["delegation_context"]["leader_agent_id"] == "leader-1"
+    assert captured["kwargs"]["delegation_context"]["shared_context_ref"] == "shared-ctx-1"
+    assert captured["kwargs"]["delegation_context"]["scoped_context_ref"] == "scope-1"
+    assert captured["kwargs"]["delegation_context"]["context_ref"] == {"workspace": "w1"}
+    assert captured["kwargs"]["delegation_context"]["shared_context_materialized"] is True
     assert captured["kwargs"]["delegation_context"]["request_metadata"] == {"trace_id": "t-1"}
     assert captured["kwargs"]["session_id"] == "s-del"
     assert sm.added and sm.added[0][1]["delegation_id"] == "del-1"
+    assert sm.added[0][1]["leader_agent_id"] == "leader-1"
     assert sm.completed == [("s-del", "del-1", "completed")]
     delegation_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.completed")
     assert delegation_event["task_id"] == "task-del-1"
+    assert delegation_event["detail_payload"]["leader_agent_id"] == "leader-1"
+    assert result.output_payload["delegation_result"]["audit_trace"]["leader_agent_id"] == "leader-1"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_delegation_task_uses_nested_structured_result(monkeypatch):
+    async def _fake_run_skill_execution(_skill_name, **_kwargs):
+        return {
+            "success": True,
+            "delegation_result": {
+                "summary": "nested-summary",
+                "artifacts": [{"artifact_id": "a1"}],
+                "blockers": ["none"],
+                "next_recommendation": "continue",
+                "audit_trace": {"from_skill": True},
+            },
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-del",
+        input_payload={
+            "task_type": "delegation_task",
+            "delegation_id": "del-nested",
+            "objective": "Review",
+            "visibility": "leader_only",
+            "leader_agent_id": "leader-nested",
+            "skill_name": "demo_skill",
+        },
+    )
+    result = await bus.execute(req)
+    payload = result.output_payload["delegation_result"]
+    assert payload["summary"] == "nested-summary"
+    assert payload["artifacts"] == [{"artifact_id": "a1"}]
+    assert payload["blockers"] == ["none"]
+    assert payload["next_recommendation"] == "continue"
+    assert payload["audit_trace"]["from_skill"] is True
+    assert payload["audit_trace"]["leader_agent_id"] == "leader-nested"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_delegation_task_top_level_structured_fallback(monkeypatch):
+    captured = {}
+
+    async def _fake_run_skill_execution(_skill_name, **kwargs):
+        captured["kwargs"] = kwargs
+        return {
+            "success": False,
+            "summary": "top-level-summary",
+            "artifacts": [{"artifact_id": "a2"}],
+            "blockers": ["needs_data"],
+            "next_recommendation": "retry_later",
+            "audit_trace": {"top_level": True},
+            "error": "skill failed",
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="s-del",
+        input_payload={
+            "task_type": "delegation_task",
+            "delegation_id": "del-top",
+            "objective": "Review",
+            "visibility": "leader_only",
+            "skill_name": "demo_skill",
+        },
+    )
+    result = await bus.execute(req)
+    payload = result.output_payload["delegation_result"]
+    assert payload["summary"] == "top-level-summary"
+    assert payload["artifacts"] == [{"artifact_id": "a2"}]
+    assert payload["blockers"] == ["needs_data"]
+    assert payload["next_recommendation"] == "retry_later"
+    assert payload["audit_trace"]["top_level"] is True
+    assert captured["kwargs"]["delegation_context"]["shared_context_materialized"] is False
+    assert captured["kwargs"]["delegation_context"]["context_ref"] == {}
 
 
 @pytest.mark.asyncio
@@ -963,6 +1055,7 @@ async def test_execution_bus_task_handler_delegation_task_missing_skill_name_blo
     assert result.output_payload["delegation_result"]["status"] == "blocked"
     failed_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.failed")
     assert failed_event["task_id"] == "task-del-2"
+    assert "leader_agent_id" in failed_event["detail_payload"]
 
 
 @pytest.mark.asyncio
@@ -1004,6 +1097,7 @@ async def test_execution_bus_task_handler_delegation_task_invalid_visibility_emi
             "delegation_id": "del-vis",
             "objective": "Review",
             "visibility": "public",
+            "leader_agent_id": "leader-vis",
             "skill_name": "demo_skill",
         },
     )
@@ -1013,6 +1107,8 @@ async def test_execution_bus_task_handler_delegation_task_invalid_visibility_emi
     assert result.output_payload["delegation_result"]["status"] == "blocked"
     failed_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.failed")
     assert failed_event["detail_payload"]["visibility"] == "public"
+    assert failed_event["detail_payload"]["leader_agent_id"] == "leader-vis"
+    assert result.output_payload["delegation_result"]["audit_trace"]["leader_agent_id"] == "leader-vis"
     assert failed_event["task_id"] == "task-del-vis"
 
 
