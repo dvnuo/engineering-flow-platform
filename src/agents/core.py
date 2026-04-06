@@ -151,6 +151,21 @@ def _is_lookup_only_skill(skill: Any, skill_session: SkillSession, message: str)
     return any(word in tokens for word in lookup_words)
 
 
+def _attach_governance_hint(tool_result: ToolResult, governance_payload: Dict[str, Any]) -> ToolResult:
+    """Attach governance metadata onto ToolResult in one explicit bridge helper."""
+    payload = governance_payload if isinstance(governance_payload, dict) else {}
+    setattr(tool_result, "_governance", dict(payload))
+    return tool_result
+
+
+def _read_governance_hint(tool_result: ToolResult) -> Dict[str, Any]:
+    """Read governance metadata from ToolResult and always return a dict."""
+    payload = getattr(tool_result, "_governance", {})
+    if isinstance(payload, dict):
+        return dict(payload)
+    return {}
+
+
 async def _execute_tool_via_runtime_bus(
     *,
     session_id: str,
@@ -216,8 +231,7 @@ async def _execute_tool_via_runtime_bus(
     )
     governance_artifacts = result.artifacts if isinstance(result.artifacts, dict) else {}
     governance_payload = governance_artifacts.get("governance") if isinstance(governance_artifacts.get("governance"), dict) else {}
-    setattr(tool_result, "_governance", dict(governance_payload))
-    return tool_result
+    return _attach_governance_hint(tool_result, governance_payload)
 
 
 @dataclass
@@ -1555,7 +1569,7 @@ You have access to the following tools. When a user asks you to do something tha
             # Narrow passthrough shortcut for direct Jira detail retrieval requests.
             if len(executed_tool_results) == 1:
                 _single_tool_name, single_tool_result = executed_tool_results[0]
-                governance_hint = getattr(single_tool_result, "_governance", {})
+                governance_hint = _read_governance_hint(single_tool_result)
                 passthrough_recommended = bool(
                     isinstance(governance_hint, dict)
                     and governance_hint.get("tool_result_passthrough_recommended") is True

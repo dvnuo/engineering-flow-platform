@@ -35,3 +35,34 @@ def test_core_no_longer_directly_calls_should_passthrough_tool_result():
 
     source = inspect.getsource(core.Agent.process)
     assert "should_passthrough_tool_result(" not in source
+
+
+def test_read_governance_hint_returns_empty_when_missing():
+    from src.agents import core
+    from src import ToolResult
+
+    tool_result = ToolResult(success=True, content="ok", error=None)
+    assert core._read_governance_hint(tool_result) == {}
+
+
+def test_read_governance_hint_returns_empty_when_non_dict():
+    from src.agents import core
+    from src import ToolResult
+
+    tool_result = ToolResult(success=True, content="ok", error=None)
+    setattr(tool_result, "_governance", "not-a-dict")
+    assert core._read_governance_hint(tool_result) == {}
+
+
+def test_attach_governance_hint_preserves_tool_result_fields():
+    from src.agents import core
+    from src import ToolResult
+
+    tool_result = ToolResult(success=False, content="body", error="err")
+    returned = core._attach_governance_hint(tool_result, {"tool_result_passthrough_recommended": True})
+
+    assert returned is tool_result
+    assert returned.success is False
+    assert returned.content == "body"
+    assert returned.error == "err"
+    assert core._read_governance_hint(returned).get("tool_result_passthrough_recommended") is True
