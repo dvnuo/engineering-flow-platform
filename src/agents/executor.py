@@ -335,13 +335,10 @@ async def execute_skill(skill_name: str, **kwargs) -> SkillResult:
     if use_execution_bus:
         # Important recursion boundary:
         # execute_skill -> ExecutionBus(skill) -> run_skill_execution (direct), never back into execute_skill.
-        from src.runtime import build_default_execution_bus, make_execution_request
+        from src.runtime.chat_orchestration_adapter import execute_skill_orchestration
 
-        bus = build_default_execution_bus()
-        request = make_execution_request(
-            source_type="skill",
+        result = await execute_skill_orchestration(
             source_ref="executor.execute_skill",
-            execution_type="skill",
             session_id=kwargs.get("session_id"),
             input_payload={
                 "skill_name": skill_name,
@@ -349,7 +346,6 @@ async def execute_skill(skill_name: str, **kwargs) -> SkillResult:
             },
             metadata={"entrypoint": "executor.execute_skill"},
         )
-        result = await bus.execute(request)
         payload = result.output_payload
         output_value = payload.get("output")
         return SkillResult(

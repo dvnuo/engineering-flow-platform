@@ -45,7 +45,6 @@ from src.agents.executor import (
     execute_tool_by_name,  # compatibility export for tests and legacy patch points
     ToolResult,
 )
-from src.agents.tool_result_policy import should_passthrough_tool_result
 from src.agents.skill_runtime import (
     apply_skill_hooks,
     build_skill_runtime_event_payload,
@@ -210,11 +209,15 @@ async def _execute_tool_via_runtime_bus(
     error = payload.get("error")
     if error is None and result.status == "blocked":
         error = "Execution blocked"
-    return ToolResult(
+    tool_result = ToolResult(
         success=success,
         content=str(content),
         error=error,
     )
+    governance_artifacts = result.artifacts if isinstance(result.artifacts, dict) else {}
+    governance_payload = governance_artifacts.get("governance") if isinstance(governance_artifacts.get("governance"), dict) else {}
+    setattr(tool_result, "_governance", dict(governance_payload))
+    return tool_result
 
 
 @dataclass
@@ -1551,13 +1554,13 @@ You have access to the following tools. When a user asks you to do something tha
 
             # Narrow passthrough shortcut for direct Jira detail retrieval requests.
             if len(executed_tool_results) == 1:
-                single_tool_name, single_tool_result = executed_tool_results[0]
-                if should_passthrough_tool_result(
-                    latest_user_message=message,
-                    tool_name=single_tool_name,
-                    tool_result=single_tool_result,
-                    tool_calls_count=len(function_calls),
-                ):
+                _single_tool_name, single_tool_result = executed_tool_results[0]
+                governance_hint = getattr(single_tool_result, "_governance", {})
+                passthrough_recommended = bool(
+                    isinstance(governance_hint, dict)
+                    and governance_hint.get("tool_result_passthrough_recommended") is True
+                )
+                if passthrough_recommended:
                     passthrough_content = str(single_tool_result.content)
                     await session_manager.add_message(session_id, "assistant", passthrough_content, extra=self._build_agent_author_extra())
                     send_event("complete", {

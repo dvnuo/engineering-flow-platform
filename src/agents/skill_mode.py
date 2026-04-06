@@ -318,25 +318,22 @@ async def generate_initial_skill_plan(
     """
     # Narrow top-level skill-mode planning entrypoint now routes through ExecutionBus.
     # TODO(phase1): evaluate routing deeper internal skill helper calls through ExecutionBus after compatibility validation.
-    from src.runtime import build_default_execution_bus, make_execution_request
+    from src.runtime.chat_orchestration_adapter import execute_skill_orchestration
 
     async def _skill_plan_handler(_request):
         return await _generate_initial_skill_plan_direct(skill=skill, user_message=user_message, model=model)
 
-    bus = build_default_execution_bus()
-    bus.register_handler("skill", _skill_plan_handler)
-    request = make_execution_request(
-        source_type="skill",
+    execution_result = await execute_skill_orchestration(
         source_ref="skill_mode.generate_initial_skill_plan",
-        execution_type="skill",
+        session_id=None,
         input_payload={
             "skill_name": skill.name,
             "user_message": user_message,
             "model": model,
         },
         metadata={"entrypoint": "skill_mode.generate_initial_skill_plan"},
+        custom_skill_handler=_skill_plan_handler,
     )
-    execution_result = await bus.execute(request)
     default_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     if execution_result.status == "error":
         logger.warning("[SkillMode] Bus planner failed, using direct planner fallback")

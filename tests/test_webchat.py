@@ -516,25 +516,23 @@ async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
     from src.gateway import webchat
 
     captured = {}
+    async def _fake_execute_runtime_task_request(**kwargs):
+        captured.update(kwargs)
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"success": True, "result": {"id": "A-1"}},
+                "artifacts": [],
+                "runtime_events": [{"type": "task.adapter_action.completed", "task_id": kwargs["metadata"]["task_id"]}],
+                "next_action_hint": None,
+                "audit_ref": "audit-1",
+            },
+        )()
 
-    class _FakeBus:
-        async def execute(self, execution_request):
-            captured["request"] = execution_request
-            return type(
-                "R",
-                (),
-                {
-                    "request_id": execution_request.request_id,
-                    "status": "success",
-                    "output_payload": {"success": True, "result": {"id": "A-1"}},
-                    "artifacts": [],
-                    "runtime_events": [{"type": "task.adapter_action.completed"}],
-                    "next_action_hint": None,
-                    "audit_ref": "audit-1",
-                },
-            )()
-
-    monkeypatch.setattr(webchat, "build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+    monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
 
     class _Request:
         async def json(self):
@@ -556,37 +554,37 @@ async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
     assert body["ok"] is True
     assert body["task_id"] == "task-1"
     assert body["status"] == "success"
-    assert captured["request"].execution_type == "task"
-    assert captured["request"].input_payload["task_type"] == "adapter_action_task"
-    assert captured["request"].metadata["portal_task_id"] == "task-1"
-    assert captured["request"].metadata["task_id"] == "task-1"
-    assert captured["request"].metadata["portal_task_source"] == "portal"
-    assert captured["request"].metadata["portal_workflow_rule_id"] == "wf-1"
-    assert captured["request"].metadata["shared_context_ref"] == "ctx://1"
-    assert captured["request"].metadata["custom"] == "value"
+    assert captured["execution_type"] == "task"
+    assert captured["input_payload"]["task_type"] == "adapter_action_task"
+    assert captured["metadata"]["portal_task_id"] == "task-1"
+    assert captured["metadata"]["task_id"] == "task-1"
+    assert captured["metadata"]["portal_task_source"] == "portal"
+    assert captured["metadata"]["portal_workflow_rule_id"] == "wf-1"
+    assert captured["metadata"]["shared_context_ref"] == "ctx://1"
+    assert captured["metadata"]["custom"] == "value"
+    assert captured["request_id"] == "task-task-1"
 
 
 @pytest.mark.asyncio
 async def test_api_tasks_execute_jira_workflow_review_task_success(monkeypatch):
     from src.gateway import webchat
 
-    class _FakeBus:
-        async def execute(self, execution_request):
-            return type(
-                "R",
-                (),
-                {
-                    "request_id": execution_request.request_id,
-                    "status": "success",
-                    "output_payload": {"result": {"issue_key": "ENG-2"}},
-                    "artifacts": {},
-                    "runtime_events": [],
-                    "next_action_hint": "none",
-                    "audit_ref": None,
-                },
-            )()
+    async def _fake_execute_runtime_task_request(**kwargs):
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"result": {"issue_key": "ENG-2"}},
+                "artifacts": {},
+                "runtime_events": [],
+                "next_action_hint": "none",
+                "audit_ref": None,
+            },
+        )()
 
-    monkeypatch.setattr(webchat, "build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+    monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
 
     class _Request:
         async def json(self):
@@ -610,34 +608,32 @@ async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkey
     from src.gateway import webchat
 
     captured = {}
-
-    class _FakeBus:
-        async def execute(self, execution_request):
-            captured["request"] = execution_request
-            task_id = execution_request.metadata.get("task_id")
-            return type(
-                "R",
-                (),
-                {
-                    "request_id": execution_request.request_id,
-                    "status": "success",
-                    "output_payload": {
-                        "task_type": "github_review_task",
-                        "owner": "acme",
-                        "repo": "demo",
-                        "pull_number": 33,
-                        "review_summary": "LGTM",
-                        "comment_written": True,
-                        "success": True,
-                    },
-                    "artifacts": {},
-                    "runtime_events": [{"event_type": "task.github_review.completed", "task_id": task_id}],
-                    "next_action_hint": None,
-                    "audit_ref": None,
+    async def _fake_execute_runtime_task_request(**kwargs):
+        captured.update(kwargs)
+        task_id = kwargs["metadata"]["task_id"]
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {
+                    "task_type": "github_review_task",
+                    "owner": "acme",
+                    "repo": "demo",
+                    "pull_number": 33,
+                    "review_summary": "LGTM",
+                    "comment_written": True,
+                    "success": True,
                 },
-            )()
+                "artifacts": {},
+                "runtime_events": [{"event_type": "task.github_review.completed", "task_id": task_id}],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
 
-    monkeypatch.setattr(webchat, "build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+    monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
 
     class _Request:
         async def json(self):
@@ -656,8 +652,8 @@ async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkey
     assert body["task_id"] == "gh-task-1"
     assert body["execution_type"] == "task"
     assert body["status"] == "success"
-    assert captured["request"].input_payload["task_type"] == "github_review_task"
-    assert captured["request"].metadata["task_id"] == "gh-task-1"
+    assert captured["input_payload"]["task_type"] == "github_review_task"
+    assert captured["metadata"]["task_id"] == "gh-task-1"
     assert body["runtime_events"][0]["task_id"] == "gh-task-1"
 
 
@@ -700,23 +696,22 @@ async def test_api_tasks_execute_non_object_input_payload_returns_400():
 async def test_api_tasks_execute_blocked_result_returns_ok_false(monkeypatch):
     from src.gateway import webchat
 
-    class _FakeBus:
-        async def execute(self, execution_request):
-            return type(
-                "R",
-                (),
-                {
-                    "request_id": execution_request.request_id,
-                    "status": "blocked",
-                    "output_payload": {"error": "blocked by policy"},
-                    "artifacts": {},
-                    "runtime_events": [{"type": "governance.audit"}],
-                    "next_action_hint": "request_approval",
-                    "audit_ref": "audit-2",
-                },
-            )()
+    async def _fake_execute_runtime_task_request(**kwargs):
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "blocked",
+                "output_payload": {"error": "blocked by policy"},
+                "artifacts": {},
+                "runtime_events": [{"type": "governance.audit"}],
+                "next_action_hint": "request_approval",
+                "audit_ref": "audit-2",
+            },
+        )()
 
-    monkeypatch.setattr(webchat, "build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+    monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
 
     class _Request:
         async def json(self):

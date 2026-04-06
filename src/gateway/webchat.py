@@ -39,8 +39,7 @@ from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.config import config as global_config
-from src.runtime.chat_orchestration_adapter import execute_chat_orchestration
-from src.runtime import build_default_execution_bus, make_execution_request
+from src.runtime.chat_orchestration_adapter import execute_chat_orchestration, execute_runtime_task_request
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
 from src.sessions.usage import usage_tracker
@@ -781,8 +780,7 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
         if parsed["shared_context_ref"]:
             metadata["shared_context_ref"] = parsed["shared_context_ref"]
 
-        bus = build_default_execution_bus()
-        execution_request = make_execution_request(
+        execution_result = await execute_runtime_task_request(
             request_id=f"task-{parsed['task_id']}",
             source_type="task",
             source_ref=parsed["source"] or "portal",
@@ -791,7 +789,6 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             input_payload=merged_input_payload,
             metadata=metadata,
         )
-        execution_result = await bus.execute(execution_request)
 
         status = execution_result.status
         is_ok = status == "success"

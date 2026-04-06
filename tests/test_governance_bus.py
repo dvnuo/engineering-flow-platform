@@ -255,6 +255,28 @@ async def test_default_governance_after_execute_order_normalize_then_policy_then
 
 
 @pytest.mark.asyncio
+async def test_default_governance_policy_can_set_passthrough_recommendation():
+    bus = build_default_governance_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={"task_type": "tool_task", "tool_name": "jira_get_issue"},
+        metadata={"latest_user_message": "show issue details", "tool_calls_count": 1, "tool_name": "jira_get_issue"},
+    )
+    result = make_execution_result(
+        request_id=req.request_id,
+        status="success",
+        output_payload={"content": "Issue details"},
+        artifacts={},
+    )
+
+    final_result = await bus.after_execute(req, result)
+
+    governance_artifacts = final_result.artifacts.get("governance", {})
+    assert governance_artifacts.get("tool_result_passthrough_recommended") is True
+
+
+@pytest.mark.asyncio
 async def test_build_default_execution_bus_uses_default_governance_bus():
     bus = build_default_execution_bus()
     assert bus._governance.__class__.__name__ == build_default_governance_bus().__class__.__name__
