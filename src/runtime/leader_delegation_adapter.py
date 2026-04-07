@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from src.runtime.adapter_executor import execute_adapter_action
+from src.runtime.runtime_adapter_execution import execute_adapter_action_via_bus
 
 
 REQUIRED_DELEGATION_FIELDS = ("group_id", "leader_agent_id", "assignee_agent_id", "objective")
@@ -29,6 +29,16 @@ TASK_COORDINATION_FIELDS = (
     "scope_label",
     "name",
 )
+
+
+async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Runtime adapter execution routed through ExecutionBus/GovernanceBus."""
+    return await execute_adapter_action_via_bus(
+        action_id,
+        kwargs,
+        source_type="runtime",
+        source_ref="leader_delegation_adapter",
+    )
 
 
 def normalize_leader_delegation_request(payload: Dict[str, Any]) -> Dict[str, Any]:

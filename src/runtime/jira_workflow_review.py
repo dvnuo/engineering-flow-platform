@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from src.agents.executor import run_skill_execution
+from src.agents.executor import execute_skill
 from src.runtime.adapter_executor import execute_jira_workflow_action
 from src.runtime.jira_workflow_contract import (
     JiraWorkflowReviewOutcome,
@@ -235,7 +235,7 @@ async def _resolve_review_outcome(plan, issue_snapshot: Any) -> JiraWorkflowRevi
         "issue_snapshot": issue_snapshot,
         "workflow_context": dict(plan.workflow_context or {}),
     }
-    skill_result = await run_skill_execution(plan.skill_name, **skill_kwargs)
+    skill_result = await execute_skill(plan.skill_name, _use_execution_bus=True, **skill_kwargs)
     if not getattr(skill_result, "success", False):
         return JiraWorkflowReviewOutcome(
             approved=False,

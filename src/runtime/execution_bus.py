@@ -2185,3 +2185,4 @@ def build_default_execution_bus(
     bus.register_handler("subagent", subagent_handler)
     bus.register_handler("event", event_handler)
     return bus
+

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from src.runtime.adapter_executor import execute_adapter_action
+from src.runtime.runtime_adapter_execution import execute_adapter_action_via_bus
 from src.runtime.leader_delegation_adapter import (
     create_task_agent_for_group,
     create_specialist_delegation,
@@ -14,6 +14,16 @@ from src.runtime.leader_delegation_adapter import (
 )
 
 ACTIVE_TASK_STATUSES = {"queued", "running", "blocked"}
+
+
+async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Runtime adapter execution routed through ExecutionBus/GovernanceBus."""
+    return await execute_adapter_action_via_bus(
+        action_id,
+        kwargs,
+        source_type="runtime",
+        source_ref="leader_orchestration",
+    )
 
 
 def _extract_deleted_task_agent_ids(payload: Any) -> List[str]:

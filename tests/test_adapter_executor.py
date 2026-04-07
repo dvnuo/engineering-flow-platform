@@ -291,3 +291,48 @@ async def test_create_portal_delegation_from_runtime_missing_fields_error():
     assert result["success"] is False
     assert result["delegation_id"] is None
     assert "Missing required fields" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_create_portal_delegation_from_runtime_routes_through_bus_helper(monkeypatch):
+    calls = []
+
+    async def _fake_bus_helper(action_id, kwargs, **_meta):
+        calls.append((action_id, dict(kwargs)))
+        return {"success": True, "result": {"delegation_id": "d-bus"}, "error": None}
+
+    async def _fail_direct(*_args, **_kwargs):
+        raise AssertionError("direct adapter executor path should not be used")
+
+    monkeypatch.setattr("src.runtime.leader_delegation_adapter.execute_adapter_action_via_bus", _fake_bus_helper)
+    monkeypatch.setattr("src.runtime.adapter_executor.execute_adapter_action", _fail_direct)
+    result = await create_portal_delegation_from_runtime(
+        {
+            "group_id": "g-1",
+            "leader_agent_id": "l-1",
+            "assignee_agent_id": "a-1",
+            "objective": "Review",
+        }
+    )
+    assert result["success"] is True
+    assert result["delegation_id"] == "d-bus"
+    assert calls and calls[0][0] == "adapter:portal:create_delegation"
+
+
+@pytest.mark.asyncio
+async def test_create_portal_delegation_from_runtime_preserves_block_reason(monkeypatch):
+    async def _fake_bus_helper(action_id, kwargs, **_meta):
+        return {"success": False, "result": None, "error": "denied_adapter_actions", "reason": "denied_adapter_actions"}
+
+    monkeypatch.setattr("src.runtime.leader_delegation_adapter.execute_adapter_action_via_bus", _fake_bus_helper)
+    result = await create_portal_delegation_from_runtime(
+        {
+            "group_id": "g-1",
+            "leader_agent_id": "l-1",
+            "assignee_agent_id": "a-1",
+            "objective": "Review",
+        }
+    )
+    assert result["success"] is False
+    assert result["delegation_id"] is None
+    assert result["error"] == "denied_adapter_actions"
