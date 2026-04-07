@@ -1580,6 +1580,8 @@ async def test_execution_bus_task_handler_delegation_task_agent_mode_task_requir
     result = await bus.execute(req)
     assert result.status == "error"
     assert result.output_payload["error"] == "invalid_task_agent_context"
+    assert result.output_payload["task_boundary"] is True
+    assert "delegation_result" in result.output_payload
 
 
 @pytest.mark.asyncio
@@ -1607,6 +1609,8 @@ async def test_execution_bus_task_handler_delegation_task_agent_mode_task_requir
     result = await bus.execute(req)
     assert result.status == "error"
     assert result.output_payload["error"] == "invalid_task_agent_context"
+    assert result.output_payload["task_boundary"] is True
+    assert "delegation_result" in result.output_payload
 
 
 @pytest.mark.asyncio
@@ -1634,6 +1638,8 @@ async def test_execution_bus_task_handler_delegation_task_agent_mode_task_requir
     result = await bus.execute(req)
     assert result.status == "error"
     assert result.output_payload["error"] == "invalid_task_agent_context"
+    assert result.output_payload["task_boundary"] is True
+    assert "delegation_result" in result.output_payload
 
 
 @pytest.mark.asyncio
@@ -1662,6 +1668,8 @@ async def test_execution_bus_task_handler_delegation_task_agent_mode_task_requir
     result = await bus.execute(req)
     assert result.status == "error"
     assert result.output_payload["error"] == "invalid_task_agent_context"
+    assert result.output_payload["task_boundary"] is True
+    assert "delegation_result" in result.output_payload
 
 
 @pytest.mark.asyncio
@@ -1719,12 +1727,18 @@ async def test_execution_bus_task_handler_valid_task_agent_context_propagates_me
     assert result.status == "success"
     assert captured["delegation_context"]["agent_mode"] == "task"
     assert captured["delegation_context"]["ephemeral_task_agent_id"] == "task-agent-9"
+    assert captured["delegation_context"]["task_agent_template_id"] == "template-1"
+    assert captured["delegation_context"]["task_agent_scope"] == "repo:acme/demo"
+    assert captured["delegation_context"]["task_agent_cleanup_policy"] == "delete_after_completion"
     assert sm.added[0][1]["agent_mode"] == "task"
     assert sm.added[0][1]["ephemeral_task_agent_id"] == "task-agent-9"
+    assert sm.added[0][1]["task_agent_template_id"] == "template-1"
+    assert sm.added[0][1]["task_agent_scope"] == "repo:acme/demo"
     assert sm.added[0][1]["task_agent_cleanup_policy"] == "delete_after_completion"
     audit_trace = result.output_payload["delegation_result"]["audit_trace"]
     assert audit_trace["agent_mode"] == "task"
     assert audit_trace["ephemeral_task_agent_id"] == "task-agent-9"
+    assert audit_trace["task_agent_template_id"] == "template-1"
     assert audit_trace["task_agent_scope"] == "repo:acme/demo"
     assert audit_trace["task_agent_cleanup_policy"] == "delete_after_completion"
     assert audit_trace["leader_session_id"] == "leader-session-2"
@@ -1732,6 +1746,43 @@ async def test_execution_bus_task_handler_valid_task_agent_context_propagates_me
     delegation_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.completed")
     assert delegation_event["detail_payload"]["agent_mode"] == "task"
     assert delegation_event["detail_payload"]["ephemeral_task_agent_id"] == "task-agent-9"
+    assert delegation_event["detail_payload"]["task_agent_template_id"] == "template-1"
+    assert delegation_event["detail_payload"]["task_agent_scope"] == "repo:acme/demo"
+    assert delegation_event["detail_payload"]["task_agent_cleanup_policy"] == "delete_after_completion"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_handler_specialist_mode_remains_backward_compatible(monkeypatch):
+    async def _fake_run_skill_execution(_skill_name, **kwargs):
+        return {
+            "success": True,
+            "delegation_result": {
+                "summary": "specialist-ok",
+                "artifacts": [],
+                "blockers": [],
+                "audit_trace": {"from_skill": True},
+                "status": "completed",
+            },
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        session_id="leader-session-specialist",
+        input_payload={
+            "task_type": "delegation_task",
+            "delegation_id": "del-specialist-mode",
+            "objective": "Review",
+            "visibility": "leader_only",
+            "skill_name": "demo_skill",
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    delegation_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.completed")
+    assert delegation_event["detail_payload"]["agent_mode"] == "specialist"
 
 
 @pytest.mark.asyncio
