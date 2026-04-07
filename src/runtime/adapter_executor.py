@@ -111,6 +111,36 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
     repo = payload.get("repo")
     pull_number = payload.get("pull_number")
 
+    def _normalize_inline_comments(value: Any) -> list[Dict[str, Any]]:
+        normalized: list[Dict[str, Any]] = []
+        if not isinstance(value, list):
+            return normalized
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            body = item.get("body")
+            if not path or not isinstance(body, str) or not body.strip():
+                continue
+            try:
+                line = int(item.get("line"))
+            except (TypeError, ValueError):
+                continue
+            if line <= 0:
+                continue
+            cleaned: Dict[str, Any] = {
+                "path": path,
+                "line": line,
+                "body": body.strip(),
+            }
+            severity = item.get("severity")
+            if severity is not None:
+                cleaned["severity"] = str(severity)
+            if "has_suggestion" in item:
+                cleaned["has_suggestion"] = bool(item.get("has_suggestion"))
+            normalized.append(cleaned)
+        return normalized
+
     if action == "review_pull_request":
         if not owner or not repo or pull_number is None:
             return {
@@ -120,9 +150,10 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
                 "action_name": action,
             }
         review_comment = payload.get("comment")
+        inline_comments = _normalize_inline_comments(payload.get("inline_comments"))
         if review_comment and isinstance(review_comment, str) and review_comment.strip():
             summary = review_comment.strip()
-            raw = {"summary": summary, "source": "provided_comment"}
+            raw = {"summary": summary, "inline_comments": inline_comments, "source": "provided_comment"}
         else:
             # Reuse existing github module surface instead of introducing a separate HTTP client.
             pr_text = await github_module.github_get_pr(owner, repo, int(pull_number))
@@ -132,7 +163,49 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
                 f"Automated review summary for {owner}/{repo}#{pull_number}\n\n"
                 f"{pr_text}\n\n{files_text}\n\nExisting review comments snapshot:\n{comments_text}"
             )
-            raw = {"summary": summary, "source": "github_api"}
+            raw = {"summary": summary, "inline_comments": [], "source": "github_api"}
+    elif action == "add_pr_review_comment":
+        body = payload.get("body") or payload.get("comment")
+        path = payload.get("path")
+        line_raw = payload.get("line")
+        commit_id = payload.get("commit_id")
+        required_missing = [
+            field
+            for field, value in (
+                ("owner", owner),
+                ("repo", repo),
+                ("pull_number", pull_number),
+                ("body/comment", body),
+                ("path", path),
+                ("line", line_raw),
+            )
+            if value is None or (isinstance(value, str) and not value.strip())
+        ]
+        if required_missing:
+            return {
+                "success": False,
+                "error": f"Missing required fields: {', '.join(required_missing)}. owner, repo, pull_number, body/comment, path, and line are required",
+                "system": "github",
+                "action_name": action,
+            }
+        try:
+            line = int(line_raw)
+        except (TypeError, ValueError):
+            return {
+                "success": False,
+                "error": "line must be an integer",
+                "system": "github",
+                "action_name": action,
+            }
+        raw = await github_module.github_add_pr_review_comment(
+            owner=owner,
+            repo=repo,
+            pull_number=int(pull_number),
+            body=str(body),
+            commit_id=commit_id,
+            path=str(path),
+            line=line,
+        )
     elif action == "add_comment":
         issue_number = payload.get("issue_number", pull_number)
         comment = payload.get("comment") or payload.get("body")
@@ -182,6 +255,7 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
     }
     github_action_map = {
         "adapter:github:review_pull_request": "review_pull_request",
+        "adapter:github:add_pr_review_comment": "add_pr_review_comment",
         "adapter:github:add_comment": "add_comment",
     }
     portal_action_map = {

@@ -1320,35 +1320,76 @@ def build_default_execution_bus(
 
             runtime_events = list(review_result.get("runtime_events") or [])
             runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+            review_payload = review_result.get("result")
             review_summary = None
-            if isinstance(review_result.get("result"), dict):
-                review_summary = review_result.get("result", {}).get("summary")
+            inline_comments: list[dict[str, Any]] = []
+            if isinstance(review_payload, dict):
+                review_summary = review_payload.get("summary")
+                inline_comments_raw = review_payload.get("inline_comments")
+                if isinstance(inline_comments_raw, list):
+                    inline_comments = [item for item in inline_comments_raw if isinstance(item, dict)]
+            else:
+                review_summary = review_comment_input
             if review_summary is None:
                 review_summary = review_comment_input
+
+            inline_comments_attempted = len(inline_comments)
+            inline_comments_written = 0
+            summary_comment_written = False
             comment_written = False
+            inline_comment_failures: list[dict[str, Any]] = []
             error_value = review_result.get("error")
 
             if review_result.get("success"):
-                comment_body = review_summary if isinstance(review_summary, str) and review_summary.strip() else review_comment_input
-                if isinstance(comment_body, str) and comment_body.strip():
+                for inline_item in inline_comments:
+                    add_inline_result = await execute_adapter_action(
+                        "adapter:github:add_pr_review_comment",
+                        {
+                            "owner": owner,
+                            "repo": repo,
+                            "pull_number": pull_number,
+                            "body": inline_item.get("body"),
+                            "path": inline_item.get("path"),
+                            "line": inline_item.get("line"),
+                        },
+                    )
+                    runtime_events.extend(add_inline_result.get("runtime_events") or [])
+                    runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+                    if add_inline_result.get("success"):
+                        inline_comments_written += 1
+                        continue
+                    failure_entry = {
+                        "path": inline_item.get("path"),
+                        "line": inline_item.get("line"),
+                        "error": add_inline_result.get("error") or "Failed to write GitHub inline review comment",
+                    }
+                    inline_comment_failures.append(failure_entry)
+                    error_value = failure_entry["error"]
+                    break
+
+                summary_text = review_summary.strip() if isinstance(review_summary, str) else ""
+                has_summary = bool(summary_text)
+                has_inline = inline_comments_attempted > 0
+                if not error_value and not has_inline and not has_summary:
+                    error_value = "Review succeeded but no inline comments or summary were available for write-back"
+                elif not error_value and has_summary:
                     add_comment_result = await execute_adapter_action(
                         "adapter:github:add_comment",
                         {
                             "owner": owner,
                             "repo": repo,
                             "pull_number": pull_number,
-                            "comment": comment_body,
+                            "comment": summary_text,
                         },
                     )
                     runtime_events.extend(add_comment_result.get("runtime_events") or [])
                     runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
-                    comment_written = bool(add_comment_result.get("success"))
-                    if not comment_written:
+                    summary_comment_written = bool(add_comment_result.get("success"))
+                    comment_written = summary_comment_written
+                    if not summary_comment_written:
                         error_value = add_comment_result.get("error") or "Failed to write GitHub review comment"
-                else:
-                    error_value = "Review succeeded but no summary/comment text available for write-back"
 
-            success_value = bool(review_result.get("success")) and comment_written and not error_value
+            success_value = bool(review_result.get("success")) and not error_value
             runtime_events.append(
                 build_runtime_event(
                     event_type="task.github_review.completed" if success_value else "task.github_review.failed",
@@ -1364,6 +1405,9 @@ def build_default_execution_bus(
                         "owner": owner,
                         "repo": repo,
                         "pull_number": pull_number,
+                        "inline_comments_attempted": inline_comments_attempted,
+                        "inline_comments_written": inline_comments_written,
+                        "summary_comment_written": summary_comment_written,
                         "comment_written": comment_written,
                         "success": success_value,
                         "error": error_value,
@@ -1380,6 +1424,10 @@ def build_default_execution_bus(
                     "repo": repo,
                     "pull_number": pull_number,
                     "review_summary": review_summary,
+                    "inline_comments_attempted": inline_comments_attempted,
+                    "inline_comments_written": inline_comments_written,
+                    "summary_comment_written": summary_comment_written,
+                    "inline_comment_failures": inline_comment_failures,
                     "comment_written": comment_written,
                     "success": success_value,
                     "error": error_value,

@@ -84,6 +84,105 @@ async def test_execute_adapter_action_github_review_pull_request(monkeypatch):
     assert result["action_id"] == "adapter:github:review_pull_request"
     assert result["system"] == "github"
     assert "Automated review summary" in result["result"]["summary"]
+    assert result["result"]["inline_comments"] == []
+    assert result["result"]["source"] == "github_api"
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_github_review_pull_request_with_provided_comment_and_inline_comments():
+    result = await execute_adapter_action(
+        "adapter:github:review_pull_request",
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 12,
+            "comment": "Summary only",
+            "inline_comments": [
+                {
+                    "path": "src/a.py",
+                    "line": 10,
+                    "body": "Please handle None safely",
+                    "severity": "important",
+                    "has_suggestion": False,
+                }
+            ],
+        },
+    )
+
+    assert result["success"] is True
+    assert result["result"]["summary"] == "Summary only"
+    assert len(result["result"]["inline_comments"]) == 1
+    assert result["result"]["inline_comments"][0]["path"] == "src/a.py"
+    assert result["result"]["inline_comments"][0]["line"] == 10
+    assert result["result"]["inline_comments"][0]["body"] == "Please handle None safely"
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_github_review_pull_request_filters_invalid_inline_comments():
+    result = await execute_adapter_action(
+        "adapter:github:review_pull_request",
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 12,
+            "comment": "Summary only",
+            "inline_comments": [
+                {"path": "src/a.py", "line": 10},
+                {"path": "src/b.py", "line": "n/a", "body": "bad line"},
+                {"path": "src/c.py", "line": "11", "body": "valid"},
+            ],
+        },
+    )
+
+    assert result["success"] is True
+    assert result["result"]["inline_comments"] == [{"path": "src/c.py", "line": 11, "body": "valid"}]
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_github_add_pr_review_comment(monkeypatch):
+    async def _fake_add_pr_review_comment(owner, repo, pull_number, body, commit_id=None, path=None, line=None):
+        assert owner == "acme"
+        assert repo == "demo"
+        assert pull_number == 12
+        assert body == "Please fix this"
+        assert path == "src/a.py"
+        assert line == 14
+        assert commit_id == "sha123"
+        return {"status": "ok"}
+
+    monkeypatch.setattr("src.github.github_add_pr_review_comment", _fake_add_pr_review_comment)
+    result = await execute_adapter_action(
+        "adapter:github:add_pr_review_comment",
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 12,
+            "comment": "Please fix this",
+            "path": "src/a.py",
+            "line": "14",
+            "commit_id": "sha123",
+        },
+    )
+
+    assert result["success"] is True
+    assert result["action_id"] == "adapter:github:add_pr_review_comment"
+    assert result["system"] == "github"
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_github_add_pr_review_comment_missing_required_fields():
+    result = await execute_adapter_action(
+        "adapter:github:add_pr_review_comment",
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 12,
+            "body": "Please fix this",
+        },
+    )
+
+    assert result["success"] is False
+    assert "required" in result["error"].lower()
 
 
 @pytest.mark.asyncio
