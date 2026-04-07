@@ -52,6 +52,22 @@ logger = logging.getLogger(__name__)
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_PORTAL_IDENTITY_LENGTH = 256
+_DERIVED_RUNTIME_RULE_KEYS = {
+    "allowed_capability_ids",
+    "allowed_capability_types",
+    "denied_capability_ids",
+    "denied_capability_types",
+    "allowed_external_systems",
+    "allowed_webhook_triggers",
+    "allowed_actions",
+    "allowed_adapter_actions",
+    "denied_actions",
+    "denied_adapter_actions",
+    "governance_require_explicit_allow",
+    "governance_allow_auto_run",
+    "governance_external_allowlist",
+    "governance_external_blocklist",
+}
 
 
 def _sanitize_portal_identity_value(value: Any) -> str:
@@ -78,6 +94,42 @@ def _extract_portal_identity(request: web.Request, data: Dict[str, Any]) -> tupl
         source = "none"
     logger.debug("[portal_identity] resolved_source=%s has_user_id=%s has_user_name=%s", source, bool(resolved_user_id), bool(resolved_user_name))
     return resolved_user_id, resolved_user_name
+
+
+def _is_trusted_portal_request(request: web.Request) -> bool:
+    headers = getattr(request, "headers", {}) or {}
+    portal_source = str(headers.get("X-Portal-Author-Source") or "").strip().lower()
+    if portal_source != "portal":
+        return False
+    expected_internal_key = str(os.getenv("PORTAL_INTERNAL_API_KEY") or "").strip()
+    if not expected_internal_key:
+        return True
+    provided_internal_key = str(headers.get("X-Portal-Internal-Api-Key") or "")
+    return provided_internal_key == expected_internal_key
+
+
+def _parse_optional_execution_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
+    if "metadata" not in data or data.get("metadata") is None:
+        return {}
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be a JSON object")
+    return dict(metadata)
+
+
+def _extract_trusted_control_plane_metadata(request: web.Request, data: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = _parse_optional_execution_metadata(data)
+    if not _is_trusted_portal_request(request):
+        return {}
+    trusted_metadata = dict(metadata)
+    policy_context = trusted_metadata.get("policy_context")
+    if isinstance(policy_context, dict):
+        derived_rules = policy_context.get("derived_runtime_rules")
+        if isinstance(derived_rules, dict):
+            for key, value in derived_rules.items():
+                if key in _DERIVED_RUNTIME_RULE_KEYS:
+                    trusted_metadata[key] = value
+    return trusted_metadata
 
 
 def _require_non_empty_string(data: Dict[str, Any], key: str) -> str:
@@ -153,6 +205,7 @@ async def _run_chat_via_execution_bus(
     reasoning_replay: Optional[bool] = None,
     stream_callback: Optional[Any] = None,
     request_path: str = "/api/chat",
+    execution_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     async def _chat_handler(execution_request):
         payload = execution_request.input_payload
@@ -170,6 +223,8 @@ async def _run_chat_via_execution_bus(
             stream_callback=payload.get("stream_callback"),
         )
 
+    merged_metadata = dict(execution_metadata or {})
+    merged_metadata.pop("path", None)
     execution_result = await execute_chat_orchestration(
         request_id=f"chat-{uuid.uuid4()}",
         session_id=session_id,
@@ -185,7 +240,11 @@ async def _run_chat_via_execution_bus(
             "reasoning_replay": reasoning_replay,
             "stream_callback": stream_callback,
         },
-        metadata={"path": request_path, "persist_last_execution_id": True},
+        metadata={
+            "path": request_path,
+            "persist_last_execution_id": True,
+            **merged_metadata,
+        },
         chat_handler=_chat_handler,
     )
     output_payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
@@ -366,6 +425,7 @@ async def api_chat(request: web.Request) -> web.Response:
         # Get attachments from new field
         attachments = data.get('attachments', [])
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
+        execution_metadata = _extract_trusted_control_plane_metadata(request, data)
         effective_user_name = portal_user_name or "webchat-user"
         logger.debug(
             "[api_chat] Request summary: session_id=%s, has_message=%s, attachment_count=%d, portal_user_id_present=%s",
@@ -517,6 +577,7 @@ async def api_chat(request: web.Request) -> web.Response:
             attached_images=attached_images if attached_images else None,
             attachments=attachments if attachments else None,
             request_path="/api/chat",
+            execution_metadata=execution_metadata,
         )
         
         # Force save session to persistence
@@ -607,6 +668,8 @@ async def api_chat(request: web.Request) -> web.Response:
         
     except json.JSONDecodeError:
         return web.json_response({'error': 'Invalid JSON'}, status=400)
+    except ValueError as e:
+        return web.json_response({'error': str(e)}, status=400)
     except web.HTTPException:
         raise
     except Exception as e:
@@ -659,6 +722,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         message = (data.get('message') or '').strip()
         session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
+        execution_metadata = _extract_trusted_control_plane_metadata(request, data)
         effective_user_name = portal_user_name or "webchat-user"
         
         if not message:
@@ -707,6 +771,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             portal_user_name=portal_user_name,
             stream_callback=event_queue,
             request_path="/api/chat/stream",
+            execution_metadata=execution_metadata,
         )
         
         # Stream events from queue while agent is running
@@ -750,6 +815,9 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         
     except json.JSONDecodeError:
         response = web.json_response({'error': 'Invalid JSON'}, status=400)
+        return response
+    except ValueError as e:
+        response = web.json_response({'error': str(e)}, status=400)
         return response
     except web.HTTPException:
         raise
