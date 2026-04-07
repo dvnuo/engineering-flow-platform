@@ -517,11 +517,17 @@ async def test_api_capabilities_returns_catalog_and_filters(monkeypatch):
     from src.gateway import webchat
 
     class _Registry:
-        def export_catalog(self):
-            return [
+        def export_catalog_snapshot(self):
+            capabilities = [
                 {"capability_id": "tool:read", "type": "tool", "enabled": True},
                 {"capability_id": "adapter:jira:read_issue", "type": "adapter_action", "enabled": False},
             ]
+            return {
+                "capabilities": capabilities,
+                "count": len(capabilities),
+                "catalog_version": "v-snap",
+                "generated_at": "2026-04-07T00:00:00Z",
+            }
 
     monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
 
@@ -533,6 +539,9 @@ async def test_api_capabilities_returns_catalog_and_filters(monkeypatch):
     assert response.status == 200
     assert body["count"] == 1
     assert body["capabilities"][0]["capability_id"] == "tool:read"
+    assert body["catalog_version"] == "v-snap"
+    assert body["generated_at"] == "2026-04-07T00:00:00Z"
+    assert body["supports_snapshot_contract"] is True
 
 
 @pytest.mark.asyncio
@@ -540,8 +549,13 @@ async def test_api_capabilities_capability_id_not_found_returns_empty(monkeypatc
     from src.gateway import webchat
 
     class _Registry:
-        def export_catalog(self):
-            return [{"capability_id": "tool:read", "type": "tool", "enabled": True}]
+        def export_catalog_snapshot(self):
+            return {
+                "capabilities": [{"capability_id": "tool:read", "type": "tool", "enabled": True}],
+                "count": 1,
+                "catalog_version": "v-snap",
+                "generated_at": "2026-04-07T00:00:00Z",
+            }
 
     monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
 
@@ -553,6 +567,7 @@ async def test_api_capabilities_capability_id_not_found_returns_empty(monkeypatc
     assert response.status == 200
     assert body["count"] == 0
     assert body["capabilities"] == []
+    assert body["catalog_version"] == "v-snap"
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,11 @@ import os
 from aiohttp import ClientSession
 
 from src.runtime.events import build_runtime_event
+from src.runtime.capability_adapters import (
+    build_github_adapter_capabilities,
+    build_jira_adapter_capabilities,
+    build_portal_adapter_capabilities,
+)
 
 
 def _event(event_type: str, state: str, detail_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -191,32 +196,8 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
     )
     runtime_events = [_event("task.adapter_action.started", "started", {"action_id": normalized_action_id, "system": system})]
 
-    jira_action_map = {
-        "adapter:jira:read_issue": "read_issue",
-        "adapter:jira:update_issue": "update_issue",
-        "adapter:jira:assign_issue": "assign_issue",
-        "adapter:jira:transition_issue": "transition_issue",
-        "adapter:jira:add_comment": "add_comment",
-    }
-    github_action_map = {
-        "adapter:github:review_pull_request": "review_pull_request",
-        "adapter:github:add_comment": "add_comment",
-    }
-    portal_action_map = {
-        "adapter:portal:create_delegation": "create_delegation",
-        "adapter:portal:list_group_delegations": "list_group_delegations",
-        "adapter:portal:get_group_task_board": "get_group_task_board",
-        "adapter:portal:list_group_coordination_runs": "list_group_coordination_runs",
-        "adapter:portal:get_coordination_run": "get_coordination_run",
-        "adapter:portal:get_specialist_pool": "get_specialist_pool",
-        "adapter:portal:create_task_agent": "create_task_agent",
-        "adapter:portal:delete_task_agent": "delete_task_agent",
-    }
-
-    jira_action = jira_action_map.get(normalized_action_id)
-    github_action = github_action_map.get(normalized_action_id)
-    portal_action = portal_action_map.get(normalized_action_id)
-    if jira_action is None and github_action is None and portal_action is None:
+    executor = ACTION_ID_TO_EXECUTOR.get(normalized_action_id)
+    if executor is None:
         runtime_events.append(
             _event(
                 "task.adapter_action.failed",
@@ -231,12 +212,7 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
             runtime_events=runtime_events,
         )
 
-    if jira_action is not None:
-        outcome = await execute_jira_workflow_action(jira_action, payload)
-    elif portal_action is not None:
-        outcome = await execute_portal_control_plane_action(portal_action, payload)
-    else:
-        outcome = await execute_github_workflow_action(github_action, payload)
+    outcome = await executor(payload)
     runtime_events.append(
         _event(
             "task.adapter_action.completed" if outcome.get("success") else "task.adapter_action.failed",
@@ -255,6 +231,51 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
         action_name=normalized_action_id,
         runtime_events=runtime_events,
     )
+
+
+async def _exec_jira(action_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    return await execute_jira_workflow_action(action_name, payload)
+
+
+async def _exec_github(action_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    return await execute_github_workflow_action(action_name, payload)
+
+
+async def _exec_portal(action_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    return await execute_portal_control_plane_action(action_name, payload)
+
+
+ACTION_ID_TO_EXECUTOR = {
+    "adapter:jira:read_issue": lambda payload: _exec_jira("read_issue", payload),
+    "adapter:jira:update_issue": lambda payload: _exec_jira("update_issue", payload),
+    "adapter:jira:assign_issue": lambda payload: _exec_jira("assign_issue", payload),
+    "adapter:jira:transition_issue": lambda payload: _exec_jira("transition_issue", payload),
+    "adapter:jira:add_comment": lambda payload: _exec_jira("add_comment", payload),
+    "adapter:github:review_pull_request": lambda payload: _exec_github("review_pull_request", payload),
+    "adapter:github:add_comment": lambda payload: _exec_github("add_comment", payload),
+    "adapter:portal:create_delegation": lambda payload: _exec_portal("create_delegation", payload),
+    "adapter:portal:list_group_delegations": lambda payload: _exec_portal("list_group_delegations", payload),
+    "adapter:portal:get_group_task_board": lambda payload: _exec_portal("get_group_task_board", payload),
+    "adapter:portal:list_group_coordination_runs": lambda payload: _exec_portal("list_group_coordination_runs", payload),
+    "adapter:portal:get_coordination_run": lambda payload: _exec_portal("get_coordination_run", payload),
+    "adapter:portal:get_specialist_pool": lambda payload: _exec_portal("get_specialist_pool", payload),
+    "adapter:portal:create_task_agent": lambda payload: _exec_portal("create_task_agent", payload),
+    "adapter:portal:delete_task_agent": lambda payload: _exec_portal("delete_task_agent", payload),
+}
+
+
+def validate_enabled_adapter_actions_have_executors() -> list[str]:
+    descriptor_ids = {
+        descriptor.action_id
+        for descriptor in [
+            *build_github_adapter_capabilities(),
+            *build_jira_adapter_capabilities(),
+            *build_portal_adapter_capabilities(),
+        ]
+        if descriptor.enabled
+    }
+    registered = set(ACTION_ID_TO_EXECUTOR.keys())
+    return sorted(descriptor_ids - registered)
 
 
 def _normalize_json_field(value: Any) -> Any:

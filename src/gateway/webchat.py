@@ -853,7 +853,17 @@ async def api_capabilities(request: web.Request) -> web.Response:
     """
     try:
         registry = get_capability_registry()
-        catalog = registry.export_catalog()
+        snapshot = (
+            registry.export_catalog_snapshot()
+            if hasattr(registry, "export_catalog_snapshot")
+            else {
+                "capabilities": registry.export_catalog(),
+                "count": len(registry.export_catalog()),
+                "catalog_version": "legacy",
+                "generated_at": datetime.utcnow().isoformat() + "Z",
+            }
+        )
+        catalog = list(snapshot.get("capabilities") or [])
 
         capability_id = str(request.query.get("capability_id") or "").strip().lower()
         if capability_id:
@@ -867,7 +877,16 @@ async def api_capabilities(request: web.Request) -> web.Response:
         if enabled_filter is not None:
             catalog = [item for item in catalog if bool(item.get("enabled")) is enabled_filter]
 
-        return web.json_response({"capabilities": catalog, "count": len(catalog)})
+        return web.json_response(
+            {
+                "capabilities": catalog,
+                "count": len(catalog),
+                "catalog_version": snapshot.get("catalog_version"),
+                "generated_at": snapshot.get("generated_at"),
+                "supports_snapshot_contract": True,
+                "runtime_contract_version": "phase4-capability-surface-v1",
+            }
+        )
     except Exception as exc:
         logger.error("Capabilities API error: %s", sanitize_exception_message(exc), exc_info=True)
         return web.json_response({"error": "Internal server error"}, status=500)

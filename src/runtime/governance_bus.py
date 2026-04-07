@@ -338,21 +338,15 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
     capability_id: Optional[str] = None
     action_id: Optional[str] = None
     if request.execution_type == "task":
-        if task_type == "adapter_action_task":
-            action_id = str(payload.get("action_id") or "").strip().lower() or None
-            capability_id = action_id
-        elif task_type == "jira_workflow_review_task":
-            capability_id = "adapter:jira:read_issue"
-            action_id = capability_id
-        elif task_type == "github_review_task":
-            capability_id = "adapter:github:review_pull_request"
-            action_id = capability_id
+        if task_type in {"adapter_action_task", "jira_workflow_review_task", "github_review_task", "delegation_task"}:
+            from src.runtime.execution_bus import resolve_task_capability_plan
+
+            plan = resolve_task_capability_plan(task_type, payload)
+            capability_id = str(plan.get("primary_capability_id") or plan.get("capability_id") or "").strip().lower() or None
+            action_id = str(plan.get("action_id") or capability_id or "").strip().lower() or None
         elif task_type == "tool_task":
             tool_name = str(payload.get("tool_name") or "").strip().lower()
             capability_id = f"tool:{tool_name}" if tool_name else None
-        elif task_type == "delegation_task":
-            skill_name = str(payload.get("skill_name") or "").strip().lower()
-            capability_id = f"skill:{skill_name}" if skill_name else None
     elif request.execution_type == "tool":
         tool_name = str(payload.get("tool_name") or metadata.get("tool_name") or "").strip().lower()
         capability_id = f"tool:{tool_name}" if tool_name else None
@@ -585,7 +579,7 @@ def _evaluate_identity_binding_constraints(
 
 def _is_external_or_task_like_request(request: ExecutionRequest) -> bool:
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
-    if request.execution_type in {"task", "event", "subagent"}:
+    if request.execution_type in {"event", "subagent"}:
         return True
     if request.source_type in {"github", "jira", "portal", "internal"}:
         return True

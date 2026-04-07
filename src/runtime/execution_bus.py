@@ -545,12 +545,14 @@ def _as_list_of_strings(value: Any) -> list[str]:
     return []
 
 
-def _resolve_task_capability(task_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def resolve_task_capability_plan(task_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized_task_type = str(task_type or "").strip().lower()
     registry = get_capability_registry()
     fallback: Dict[str, Any] = {
+        "primary_capability_id": None,
         "capability_id": None,
         "capability_type": None,
+        "involved_capability_ids": [],
         "policy_tags": [],
         "requires_identity_binding": False,
         "capability_resolution": "unresolved",
@@ -559,22 +561,32 @@ def _resolve_task_capability(task_type: str, payload: Dict[str, Any]) -> Dict[st
         action_id = str(payload.get("action_id") or "").strip().lower()
         descriptor = registry.get(action_id) if action_id else None
         if descriptor is None:
-            return {**fallback, "capability_id": action_id or None, "action_id": action_id or None}
-        return {
+            return {**fallback, "primary_capability_id": action_id or None, "capability_id": action_id or None, "action_id": action_id or None}
+        plan = {
+            **fallback,
+            "primary_capability_id": descriptor.capability_id,
             "capability_id": descriptor.capability_id,
             "capability_type": descriptor.type,
+            "involved_capability_ids": [descriptor.capability_id],
             "policy_tags": list(descriptor.policy_tags or []),
             "requires_identity_binding": bool(descriptor.requires_identity_binding),
             "capability_resolution": "resolved",
             "action_id": descriptor.capability_id,
         }
+        return plan
     if normalized_task_type == "jira_workflow_review_task":
         descriptor = registry.get("adapter:jira:read_issue")
         if descriptor is None:
-            return fallback
+            return {
+                **fallback,
+                "involved_capability_ids": _resolve_involved_capability_ids(task_type, payload),
+            }
         return {
+            **fallback,
+            "primary_capability_id": descriptor.capability_id,
             "capability_id": descriptor.capability_id,
             "capability_type": descriptor.type,
+            "involved_capability_ids": _resolve_involved_capability_ids(task_type, payload),
             "policy_tags": list(descriptor.policy_tags or []),
             "requires_identity_binding": bool(descriptor.requires_identity_binding),
             "capability_resolution": "resolved",
@@ -583,10 +595,16 @@ def _resolve_task_capability(task_type: str, payload: Dict[str, Any]) -> Dict[st
     if normalized_task_type == "github_review_task":
         descriptor = registry.get("adapter:github:review_pull_request")
         if descriptor is None:
-            return fallback
+            return {
+                **fallback,
+                "involved_capability_ids": _resolve_involved_capability_ids(task_type, payload),
+            }
         return {
+            **fallback,
+            "primary_capability_id": descriptor.capability_id,
             "capability_id": descriptor.capability_id,
             "capability_type": descriptor.type,
+            "involved_capability_ids": _resolve_involved_capability_ids(task_type, payload),
             "policy_tags": list(descriptor.policy_tags or []),
             "requires_identity_binding": bool(descriptor.requires_identity_binding),
             "capability_resolution": "resolved",
@@ -601,18 +619,27 @@ def _resolve_task_capability(task_type: str, payload: Dict[str, Any]) -> Dict[st
         if descriptor is None:
             return {
                 **fallback,
+                "primary_capability_id": capability_id,
                 "capability_id": capability_id,
                 "capability_type": "skill",
                 "capability_resolution": "unresolved",
+                "involved_capability_ids": [capability_id],
             }
         return {
+            **fallback,
+            "primary_capability_id": descriptor.capability_id,
             "capability_id": descriptor.capability_id,
             "capability_type": descriptor.type,
+            "involved_capability_ids": [descriptor.capability_id],
             "policy_tags": list(descriptor.policy_tags or []),
             "requires_identity_binding": bool(descriptor.requires_identity_binding),
             "capability_resolution": "resolved",
         }
     return fallback
+
+
+def _resolve_task_capability(task_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    return resolve_task_capability_plan(task_type, payload)
 
 
 def _resolve_involved_capability_ids(task_type: str, payload: Dict[str, Any]) -> list[str]:
@@ -1567,8 +1594,8 @@ def build_default_execution_bus(
             )
 
         if task_type == "jira_workflow_review_task":
-            capability = _resolve_task_capability(task_type, request.input_payload)
-            involved_capability_ids = _resolve_involved_capability_ids(task_type, request.input_payload)
+            capability = resolve_task_capability_plan(task_type, request.input_payload)
+            involved_capability_ids = list(capability.get("involved_capability_ids") or [])
             involved_action_ids = list(involved_capability_ids)
             governed_secondary_action_ids = sorted([item for item in involved_action_ids if item != "adapter:jira:read_issue"])
             blocked_secondary_action_ids: list[str] = []
@@ -1741,8 +1768,8 @@ def build_default_execution_bus(
             )
 
         if task_type == "github_review_task":
-            capability = _resolve_task_capability(task_type, request.input_payload)
-            involved_capability_ids = _resolve_involved_capability_ids(task_type, request.input_payload)
+            capability = resolve_task_capability_plan(task_type, request.input_payload)
+            involved_capability_ids = list(capability.get("involved_capability_ids") or [])
             involved_action_ids = list(involved_capability_ids)
             owner = _get_required(request.input_payload, "owner")
             repo = _get_required(request.input_payload, "repo")

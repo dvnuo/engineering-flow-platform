@@ -1,6 +1,11 @@
 import pytest
 
-from src.runtime.adapter_executor import execute_adapter_action, execute_jira_workflow_action
+from src.runtime.adapter_executor import (
+    ACTION_ID_TO_EXECUTOR,
+    execute_adapter_action,
+    execute_jira_workflow_action,
+    validate_enabled_adapter_actions_have_executors,
+)
 from src.runtime.leader_delegation_adapter import create_portal_delegation_from_runtime
 
 
@@ -317,6 +322,17 @@ async def test_create_portal_delegation_from_runtime_routes_through_bus_helper(m
     assert result["success"] is True
     assert result["delegation_id"] == "d-bus"
     assert calls and calls[0][0] == "adapter:portal:create_delegation"
+
+
+def test_enabled_adapter_actions_have_registered_executors():
+    missing = validate_enabled_adapter_actions_have_executors()
+    assert missing == []
+
+
+def test_validate_enabled_adapter_actions_missing_executor(monkeypatch):
+    monkeypatch.delitem(ACTION_ID_TO_EXECUTOR, "adapter:jira:read_issue", raising=False)
+    missing = validate_enabled_adapter_actions_have_executors()
+    assert "adapter:jira:read_issue" in missing
 
 
 @pytest.mark.asyncio

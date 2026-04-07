@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from datetime import datetime
+import hashlib
+import json
 import logging
 
 from src.runtime.capability_adapters import (
@@ -51,6 +54,9 @@ class CapabilityRegistry:
     def export_catalog(self) -> List[Dict[str, Any]]:
         raise NotImplementedError
 
+    def export_catalog_snapshot(self) -> Dict[str, Any]:
+        raise NotImplementedError
+
 
 class DefaultCapabilityRegistry(CapabilityRegistry):
     def __init__(self):
@@ -94,8 +100,19 @@ class DefaultCapabilityRegistry(CapabilityRegistry):
         return _dedupe_capability_id(capability_id) in self._capabilities
 
     def export_catalog(self) -> List[Dict[str, Any]]:
+        return self.export_catalog_snapshot()["capabilities"]
+
+    def export_catalog_snapshot(self) -> Dict[str, Any]:
         items = sorted(self._capabilities.values(), key=lambda item: item.capability_id)
-        return [_descriptor_to_dict(item) for item in items]
+        capabilities = [_descriptor_to_dict(item) for item in items]
+        serialized = json.dumps(capabilities, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        catalog_version = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        return {
+            "capabilities": capabilities,
+            "count": len(capabilities),
+            "catalog_version": catalog_version,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+        }
 
     def register_many(self, descriptors: List[CapabilityDescriptor]) -> None:
         for descriptor in descriptors:
@@ -274,17 +291,23 @@ def _looks_read_only_tool(tool_name: str) -> bool:
 
 
 def _descriptor_to_dict(descriptor: CapabilityDescriptor) -> Dict[str, Any]:
+    metadata = dict(descriptor.metadata or {})
+    adapter_system = metadata.get("adapter_system") or metadata.get("adapter")
+    action_alias = metadata.get("action_alias") or descriptor.name
     return {
         "capability_id": descriptor.capability_id,
         "type": descriptor.type,
         "name": descriptor.name,
+        "logical_name": descriptor.name,
+        "action_alias": action_alias if descriptor.type == "adapter_action" else None,
+        "adapter_system": adapter_system if descriptor.type == "adapter_action" else None,
         "input_schema": dict(descriptor.input_schema or {}),
         "output_schema": dict(descriptor.output_schema or {}),
         "policy_tags": list(descriptor.policy_tags or []),
         "requires_identity_binding": bool(descriptor.requires_identity_binding),
         "enabled": bool(descriptor.enabled),
         "source_ref": descriptor.source_ref,
-        "metadata": dict(descriptor.metadata or {}),
+        "metadata": metadata,
     }
 
 
