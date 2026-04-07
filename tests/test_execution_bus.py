@@ -1254,6 +1254,54 @@ async def test_execution_bus_delegation_execution_type_works_without_task_handle
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_coordination_delegation_batch_calls_helper_and_emits_summary_event(monkeypatch):
+    async def _fake_dispatch(**kwargs):
+        assert kwargs["group_id"] == "group-1"
+        return {
+            "success": False,
+            "created": 1,
+            "failed": 1,
+            "items": [
+                {"result": {"delegation_id": "d-1", "success": True}},
+                {"result": {"delegation_id": None, "success": False}},
+            ],
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.dispatch_task_breakdown_as_delegations", _fake_dispatch)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="coordination",
+        session_id="s-coord",
+        input_payload={
+            "coordination_type": "delegation_batch",
+            "group_id": "group-1",
+            "leader_agent_id": "leader-1",
+            "leader_session_id": "leader-session-1",
+            "tasks": [{"assignee_agent_id": "a-1", "objective": "x"}],
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["coordination_type"] == "delegation_batch"
+    summary_event = next(evt for evt in result.runtime_events if evt.get("event_type").startswith("coordination.delegation_batch"))
+    assert summary_event["detail_payload"]["group_id"] == "group-1"
+    assert summary_event["detail_payload"]["leader_agent_id"] == "leader-1"
+    assert summary_event["detail_payload"]["leader_session_id"] == "leader-session-1"
+    assert summary_event["detail_payload"]["created_count"] == 1
+    assert summary_event["detail_payload"]["failed_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_coordination_missing_fields_returns_error():
+    bus = build_default_execution_bus()
+    req = make_execution_request(source_type="agent", execution_type="coordination", input_payload={"coordination_type": "delegation_batch"})
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["coordination_type"] == "delegation_batch"
+
+
+@pytest.mark.asyncio
 async def test_execution_bus_task_handler_delegation_task_marks_failed_completion(monkeypatch):
     async def _fake_run_skill_execution(skill_name, **kwargs):
         return {"success": False, "error": "skill failed"}

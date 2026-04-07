@@ -29,6 +29,7 @@ from src.runtime.governance_bus import (
     governance_audit_runtime_event,
 )
 from src.runtime.jira_workflow_review import run_jira_workflow_review
+from src.runtime.leader_orchestration import dispatch_task_breakdown_as_delegations
 
 logger = logging.getLogger(__name__)
 
@@ -1455,6 +1456,70 @@ def build_default_execution_bus(
             task_type_override="delegation",
         )
 
+    async def coordination_handler(request: ExecutionRequest) -> ExecutionResult:
+        coordination_type = _non_empty_string(request.input_payload.get("coordination_type"))
+        if coordination_type != "delegation_batch":
+            return make_execution_result(
+                request_id=request.request_id,
+                status="blocked",
+                output_payload={"error": f"Unsupported coordination_type: {coordination_type}", "coordination_type": coordination_type},
+            )
+        try:
+            group_id = _get_required(request.input_payload, "group_id")
+            leader_agent_id = _get_required(request.input_payload, "leader_agent_id")
+            leader_session_id = _get_required(request.input_payload, "leader_session_id")
+            tasks = request.input_payload.get("tasks")
+            batch_result = await dispatch_task_breakdown_as_delegations(
+                group_id=group_id,
+                leader_agent_id=leader_agent_id,
+                leader_session_id=leader_session_id,
+                tasks=tasks if isinstance(tasks, list) else [],
+            )
+        except Exception as exc:
+            return make_execution_result(
+                request_id=request.request_id,
+                status="error",
+                output_payload={"error": str(exc), "coordination_type": coordination_type},
+            )
+
+        delegation_ids = [
+            item.get("result", {}).get("delegation_id")
+            for item in batch_result.get("items", [])
+            if isinstance(item, dict) and isinstance(item.get("result"), dict) and item.get("result", {}).get("delegation_id")
+        ]
+        runtime_events = [
+            build_runtime_event(
+                event_type="coordination.delegation_batch.completed" if batch_result.get("success") else "coordination.delegation_batch.failed",
+                execution_type=request.execution_type,
+                state="completed" if batch_result.get("success") else "failed",
+                session_id=request.session_id,
+                request_id=request.request_id,
+                agent_id=request.agent_id,
+                summary="delegation batch coordination",
+                detail_payload={
+                    "group_id": group_id,
+                    "leader_agent_id": leader_agent_id,
+                    "leader_session_id": leader_session_id,
+                    "created_count": batch_result.get("created", 0),
+                    "failed_count": batch_result.get("failed", 0),
+                    "delegation_ids": delegation_ids,
+                },
+                legacy_payload={"legacy_type": "coordination_delegation_batch"},
+            )
+        ]
+        return make_execution_result(
+            request_id=request.request_id,
+            status="success" if batch_result.get("success") else "error",
+            output_payload={
+                "coordination_type": coordination_type,
+                "success": bool(batch_result.get("success")),
+                "created": batch_result.get("created", 0),
+                "failed": batch_result.get("failed", 0),
+                "items": batch_result.get("items", []),
+            },
+            runtime_events=runtime_events,
+        )
+
     async def event_handler(request: ExecutionRequest) -> ExecutionResult:
         raw_target = request.metadata.get("target_execution_type") or request.input_payload.get("target_execution_type")
         target = raw_target.strip() if isinstance(raw_target, str) and raw_target.strip() else None
@@ -1504,6 +1569,7 @@ def build_default_execution_bus(
     bus.register_handler("tool", tool_handler)
     bus.register_handler("task", task_handler)
     bus.register_handler("delegation", delegation_handler)
+    bus.register_handler("coordination", coordination_handler)
     bus.register_handler("subagent", subagent_handler)
     bus.register_handler("event", event_handler)
     return bus
