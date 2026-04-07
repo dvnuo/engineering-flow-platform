@@ -448,3 +448,24 @@ async def test_default_governance_denied_actions_blocks_jira_transition_action_n
     result = await bus.execute(req)
     assert result.status == "blocked"
     assert result.output_payload["reason"] == "denied_adapter_actions"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_portal_style_metadata_combo_blocks_when_action_not_allowed():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        policy_profile_id="portal-profile-v1",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:transition_issue", "kwargs": {"issue_key": "ENG-1", "transition": "Done"}},
+        metadata={
+            "policy_profile_id": "portal-profile-v1",
+            "allowed_capability_types": ["action"],
+            "allowed_actions": ["add_comment"],
+            "external_triggered": True,
+            "governance_target": "adapter_action_task",
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_adapter_actions"

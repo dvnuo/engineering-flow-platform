@@ -592,7 +592,7 @@ def _append_secondary_action_event(
     event_type: str,
     state: str,
     detail_payload: Dict[str, Any],
-) -> None:
+    ) -> None:
     runtime_events.append(
         build_runtime_event(
             event_type=event_type,
@@ -606,6 +606,59 @@ def _append_secondary_action_event(
             detail_payload=detail_payload,
             legacy_payload={"legacy_type": "task_secondary_action"},
         )
+    )
+
+
+def _append_secondary_governance_audit_event(
+    *,
+    runtime_events: list[Dict[str, Any]],
+    request: ExecutionRequest,
+    task_type: str,
+    action_id: str,
+    deny_reason: Optional[str],
+) -> None:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    policy_profile_id = request.policy_profile_id or metadata.get("policy_profile_id") or "default"
+    audit_record = GovernanceAuditRecord(
+        audit_ref=f"gov-{request.request_id}-secondary-{action_id.split(':')[-1]}",
+        stage="secondary_action",
+        message="Blocked secondary action by capability policy",
+        metadata={
+            "stage": "secondary_action",
+            "status": "blocked",
+            "rule": "capability_policy",
+            "capability_id": action_id,
+            "capability_type": "adapter_action",
+            "action_id": action_id,
+            "deny_reason": deny_reason or "capability_policy_blocked",
+            "task_type": task_type,
+            "policy_profile_id": policy_profile_id,
+        },
+    )
+    runtime_events.append(
+        governance_audit_runtime_event(
+            request=request,
+            status="blocked",
+            audit_record=audit_record,
+        )
+    )
+
+
+def _record_secondary_action_decision(
+    decisions: list[Dict[str, Any]],
+    *,
+    action_id: str,
+    decision: str,
+    reason: Optional[str],
+    success: bool,
+) -> None:
+    decisions.append(
+        {
+            "action_id": action_id,
+            "decision": decision,
+            "reason": reason,
+            "success": bool(success),
+        }
     )
 
 
@@ -1391,6 +1444,8 @@ def build_default_execution_bus(
             governed_secondary_action_ids = sorted([item for item in involved_action_ids if item != "adapter:jira:read_issue"])
             blocked_secondary_action_ids: list[str] = []
             applied_secondary_action_ids: list[str] = []
+            blocked_secondary_action_reasons: Dict[str, str] = {}
+            secondary_action_decisions: list[Dict[str, Any]] = []
             workflow_payload = {
                 "issue_key": _get_required(request.input_payload, "issue_key"),
                 "skill_name": request.input_payload.get("skill_name"),
@@ -1417,6 +1472,7 @@ def build_default_execution_bus(
                 decision = _evaluate_secondary_action_gate(request=request, action_id=action_id)
                 if decision is not None:
                     blocked_secondary_action_ids.append(action_id)
+                    blocked_secondary_action_reasons[action_id] = str(decision.get("reason") or "capability_policy_blocked")
                     return {
                         "blocked": True,
                         "reason": decision.get("reason"),
@@ -1441,6 +1497,57 @@ def build_default_execution_bus(
                         "secondary_action_id": blocked_action_id,
                     },
                 )
+                _append_secondary_governance_audit_event(
+                    runtime_events=runtime_events,
+                    request=request,
+                    task_type=task_type,
+                    action_id=blocked_action_id,
+                    deny_reason=blocked_secondary_action_reasons.get(blocked_action_id),
+                )
+            actions_applied = workflow_result.get("actions_applied") if isinstance(workflow_result.get("actions_applied"), list) else []
+            action_results_by_id: Dict[str, Dict[str, Any]] = {}
+            for action_item in actions_applied:
+                if not isinstance(action_item, dict):
+                    continue
+                action_name = str(action_item.get("action") or "").strip().lower()
+                if not action_name:
+                    continue
+                action_results_by_id[_action_name_to_capability_id("jira", action_name)] = action_item
+
+            for governed_action_id in governed_secondary_action_ids:
+                action_result = action_results_by_id.get(governed_action_id) or {}
+                if governed_action_id in blocked_secondary_action_ids or bool(action_result.get("blocked")):
+                    _record_secondary_action_decision(
+                        secondary_action_decisions,
+                        action_id=governed_action_id,
+                        decision="blocked",
+                        reason=str(action_result.get("error") or blocked_secondary_action_reasons.get(governed_action_id) or "capability_policy_blocked"),
+                        success=False,
+                    )
+                elif action_result.get("success") is True:
+                    _record_secondary_action_decision(
+                        secondary_action_decisions,
+                        action_id=governed_action_id,
+                        decision="applied",
+                        reason=None,
+                        success=True,
+                    )
+                elif action_result:
+                    _record_secondary_action_decision(
+                        secondary_action_decisions,
+                        action_id=governed_action_id,
+                        decision="failed",
+                        reason=str(action_result.get("error") or "action_failed"),
+                        success=False,
+                    )
+                else:
+                    _record_secondary_action_decision(
+                        secondary_action_decisions,
+                        action_id=governed_action_id,
+                        decision="allowed",
+                        reason="not_invoked",
+                        success=False,
+                    )
             runtime_events.append(
                 build_runtime_event(
                     event_type="task.jira_workflow_review.completed" if workflow_result.get("success") else "task.jira_workflow_review.failed",
@@ -1463,6 +1570,7 @@ def build_default_execution_bus(
                         "governed_secondary_action_ids": governed_secondary_action_ids,
                         "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
                         "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
+                        "secondary_action_decisions": secondary_action_decisions,
                         "issue_key": workflow_result.get("issue_key"),
                         "skill_name": workflow_result.get("skill_name") or workflow_payload.get("skill_name"),
                         "workflow_outcome": workflow_result.get("workflow_outcome"),
@@ -1494,6 +1602,7 @@ def build_default_execution_bus(
                     "governed_secondary_action_ids": governed_secondary_action_ids,
                     "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
                     "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
+                    "secondary_action_decisions": secondary_action_decisions,
                     "resolved_skill_capability_id": f"skill:{str(workflow_payload.get('skill_name') or '').strip().lower()}" if workflow_payload.get("skill_name") else None,
                     "workflow_outcome": workflow_result.get("workflow_outcome"),
                     "actions_applied": workflow_result.get("actions_applied") or [],
@@ -1538,6 +1647,7 @@ def build_default_execution_bus(
             governed_secondary_action_ids = [secondary_action_id]
             blocked_secondary_action_ids: list[str] = []
             applied_secondary_action_ids: list[str] = []
+            secondary_action_decisions: list[Dict[str, Any]] = []
 
             if review_result.get("success"):
                 comment_body = review_summary if isinstance(review_summary, str) and review_summary.strip() else review_comment_input
@@ -1559,6 +1669,20 @@ def build_default_execution_bus(
                                 "reason": secondary_gate.get("reason"),
                                 "message": secondary_gate.get("message"),
                             },
+                        )
+                        _append_secondary_governance_audit_event(
+                            runtime_events=runtime_events,
+                            request=request,
+                            task_type=task_type,
+                            action_id=secondary_action_id,
+                            deny_reason=str(secondary_gate.get("reason") or "capability_policy_blocked"),
+                        )
+                        _record_secondary_action_decision(
+                            secondary_action_decisions,
+                            action_id=secondary_action_id,
+                            decision="blocked",
+                            reason=str(secondary_gate.get("reason") or "capability_policy_blocked"),
+                            success=False,
                         )
                     else:
                         applied_secondary_action_ids.append(secondary_action_id)
@@ -1590,8 +1714,38 @@ def build_default_execution_bus(
                         )
                         if not comment_written:
                             error_value = add_comment_result.get("error") or "Failed to write GitHub review comment"
+                            _record_secondary_action_decision(
+                                secondary_action_decisions,
+                                action_id=secondary_action_id,
+                                decision="failed",
+                                reason=str(add_comment_result.get("error") or "action_failed"),
+                                success=False,
+                            )
+                        else:
+                            _record_secondary_action_decision(
+                                secondary_action_decisions,
+                                action_id=secondary_action_id,
+                                decision="applied",
+                                reason=None,
+                                success=True,
+                            )
                 else:
                     error_value = "Review succeeded but no summary/comment text available for write-back"
+                    _record_secondary_action_decision(
+                        secondary_action_decisions,
+                        action_id=secondary_action_id,
+                        decision="failed",
+                        reason="missing_comment_body",
+                        success=False,
+                    )
+            elif not secondary_action_decisions:
+                _record_secondary_action_decision(
+                    secondary_action_decisions,
+                    action_id=secondary_action_id,
+                    decision="allowed",
+                    reason="primary_action_failed",
+                    success=False,
+                )
 
             success_value = bool(review_result.get("success")) and comment_written and not error_value
             runtime_events.append(
@@ -1616,6 +1770,7 @@ def build_default_execution_bus(
                         "governed_secondary_action_ids": governed_secondary_action_ids,
                         "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
                         "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
+                        "secondary_action_decisions": secondary_action_decisions,
                         "owner": owner,
                         "repo": repo,
                         "pull_number": pull_number,
@@ -1652,6 +1807,7 @@ def build_default_execution_bus(
                     "governed_secondary_action_ids": governed_secondary_action_ids,
                     "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
                     "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
+                    "secondary_action_decisions": secondary_action_decisions,
                     "secondary_action_attempted": secondary_action_attempted,
                     "secondary_action_id": secondary_action_id,
                     "secondary_action_success": secondary_action_success,
