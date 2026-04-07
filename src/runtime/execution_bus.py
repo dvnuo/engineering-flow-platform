@@ -640,6 +640,88 @@ def _resolve_involved_capability_ids(task_type: str, payload: Dict[str, Any]) ->
     return []
 
 
+async def _execute_adapter_action_task(
+    *,
+    bus: ExecutionBus,
+    request: ExecutionRequest,
+    task_id: Optional[str],
+    task_type: str,
+    action_id: str,
+    kwargs: Dict[str, Any],
+) -> ExecutionResult:
+    """Standardized adapter-action capability boundary for runtime tasks.
+
+    Notes:
+    - This task boundary is the canonical runtime contract for adapter actions.
+    - `adapter_executor.execute_adapter_action` remains a low-level implementation detail
+      invoked only within this bus-owned path.
+    """
+    capability = _resolve_task_capability(task_type, {"action_id": action_id})
+    descriptor = get_capability_registry().get(action_id)
+    if descriptor is None or descriptor.type != "adapter_action":
+        return make_execution_result(
+            request_id=request.request_id,
+            status="blocked",
+            output_payload={
+                "task_type": task_type,
+                "action_id": action_id,
+                "success": False,
+                "error": f"Unknown or non-adapter action_id: {action_id}",
+                "task_boundary": True,
+                "capability_id": capability.get("capability_id"),
+                "capability_type": capability.get("capability_type"),
+                "requires_identity_binding": bool(capability.get("requires_identity_binding")),
+                "capability_resolution": "unresolved",
+                "result": None,
+            },
+        )
+    adapter_result = await execute_adapter_action(action_id, kwargs)
+    runtime_events = list(adapter_result.get("runtime_events") or [])
+    runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+    requires_identity_binding = bool(descriptor.requires_identity_binding)
+    runtime_events.append(
+        build_runtime_event(
+            event_type="task.adapter_action.completed" if adapter_result.get("success") else "task.adapter_action.failed",
+            execution_type=request.execution_type,
+            state="completed" if adapter_result.get("success") else "failed",
+            session_id=request.session_id,
+            request_id=request.request_id,
+            agent_id=request.agent_id,
+            summary=f"adapter action {action_id}",
+            task_id=task_id,
+            detail_payload={
+                "task_type": task_type,
+                "action_id": action_id,
+                "capability_id": capability.get("capability_id"),
+                "capability_type": capability.get("capability_type"),
+                "policy_tags": capability.get("policy_tags"),
+                "requires_identity_binding": requires_identity_binding,
+                "capability_resolution": capability.get("capability_resolution"),
+                "success": bool(adapter_result.get("success")),
+            },
+            legacy_payload={"legacy_type": "task_adapter_action"},
+        )
+    )
+    return make_execution_result(
+        request_id=request.request_id,
+        status="success" if adapter_result.get("success") else "error",
+        output_payload={
+            "task_type": task_type,
+            "action_id": action_id,
+            "success": bool(adapter_result.get("success")),
+            "error": adapter_result.get("error"),
+            "task_boundary": True,
+            "capability_id": capability.get("capability_id"),
+            "capability_type": capability.get("capability_type"),
+            "policy_tags": capability.get("policy_tags"),
+            "requires_identity_binding": requires_identity_binding,
+            "capability_resolution": capability.get("capability_resolution"),
+            "result": adapter_result.get("result"),
+        },
+        runtime_events=runtime_events,
+    )
+
+
 def _action_name_to_capability_id(system: str, action_name: str) -> str:
     return f"adapter:{system}:{str(action_name or '').strip().lower()}"
 
@@ -1475,67 +1557,13 @@ def build_default_execution_bus(
         if task_type == "adapter_action_task":
             action_id = _get_required(request.input_payload, "action_id")
             kwargs = dict(request.input_payload.get("kwargs") or {})
-            capability = _resolve_task_capability(task_type, {"action_id": action_id})
-            descriptor = get_capability_registry().get(action_id)
-            if descriptor is None or descriptor.type != "adapter_action":
-                return make_execution_result(
-                    request_id=request.request_id,
-                    status="blocked",
-                    output_payload={
-                        "task_type": task_type,
-                        "action_id": action_id,
-                        "success": False,
-                        "error": f"Unknown or non-adapter action_id: {action_id}",
-                        "task_boundary": True,
-                        "capability_id": capability.get("capability_id"),
-                        "capability_type": capability.get("capability_type"),
-                        "capability_resolution": "unresolved",
-                    },
-                )
-            adapter_result = await execute_adapter_action(action_id, kwargs)
-            runtime_events = list(adapter_result.get("runtime_events") or [])
-            runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
-            requires_identity_binding = bool(descriptor.requires_identity_binding)
-            runtime_events.append(
-                build_runtime_event(
-                    event_type="task.adapter_action.completed" if adapter_result.get("success") else "task.adapter_action.failed",
-                    execution_type=request.execution_type,
-                    state="completed" if adapter_result.get("success") else "failed",
-                    session_id=request.session_id,
-                    request_id=request.request_id,
-                    agent_id=request.agent_id,
-                    summary=f"adapter action {action_id}",
-                    task_id=task_id,
-                    detail_payload={
-                        "task_type": task_type,
-                        "action_id": action_id,
-                        "capability_id": capability.get("capability_id"),
-                        "capability_type": capability.get("capability_type"),
-                        "policy_tags": capability.get("policy_tags"),
-                        "requires_identity_binding": requires_identity_binding,
-                        "capability_resolution": capability.get("capability_resolution"),
-                        "success": bool(adapter_result.get("success")),
-                    },
-                    legacy_payload={"legacy_type": "task_adapter_action"},
-                )
-            )
-            return make_execution_result(
-                request_id=request.request_id,
-                status="success" if adapter_result.get("success") else "error",
-                output_payload={
-                    "task_type": task_type,
-                    "action_id": action_id,
-                    "success": bool(adapter_result.get("success")),
-                    "error": adapter_result.get("error"),
-                    "task_boundary": True,
-                    "capability_id": capability.get("capability_id"),
-                    "capability_type": capability.get("capability_type"),
-                    "policy_tags": capability.get("policy_tags"),
-                    "requires_identity_binding": requires_identity_binding,
-                    "capability_resolution": capability.get("capability_resolution"),
-                    "result": adapter_result.get("result"),
-                },
-                runtime_events=runtime_events,
+            return await _execute_adapter_action_task(
+                bus=bus,
+                request=request,
+                task_id=task_id,
+                task_type=task_type,
+                action_id=action_id,
+                kwargs=kwargs,
             )
 
         if task_type == "jira_workflow_review_task":
@@ -2185,4 +2213,3 @@ def build_default_execution_bus(
     bus.register_handler("subagent", subagent_handler)
     bus.register_handler("event", event_handler)
     return bus
-

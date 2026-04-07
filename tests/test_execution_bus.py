@@ -2631,10 +2631,19 @@ async def test_execution_bus_adapter_action_task_includes_capability_metadata(mo
         source_type="task",
         execution_type="task",
         input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:read_issue", "kwargs": {"issue_key": "ENG-1"}},
+        metadata={"identity_binding_system_type": "jira", "identity_binding_external_account_id": "acct-1"},
     )
     result = await bus.execute(req)
     assert result.status == "success"
+    assert result.output_payload["task_type"] == "adapter_action_task"
+    assert result.output_payload["action_id"] == "adapter:jira:read_issue"
+    assert result.output_payload["success"] is True
+    assert result.output_payload["error"] is None
+    assert result.output_payload["result"] == {"ok": True}
     assert result.output_payload["capability_id"] == "adapter:jira:read_issue"
+    assert result.output_payload["capability_type"] == "adapter_action"
+    assert result.output_payload["requires_identity_binding"] is True
+    assert result.output_payload["capability_resolution"] == "resolved"
     assert result.output_payload["policy_tags"] == ["jira", "read"]
 
 

@@ -169,3 +169,16 @@ def test_entrypoints_do_not_reintroduce_direct_bus_construction():
     for name, source in sources.items():
         for token in forbidden:
             assert token not in source, f"{name} unexpectedly contains {token}"
+
+
+def test_runtime_helper_modules_do_not_import_adapter_executor_directly():
+    from src.runtime import jira_workflow_review, leader_delegation_adapter, leader_orchestration
+
+    sources = {
+        "leader_delegation_adapter": inspect.getsource(leader_delegation_adapter),
+        "leader_orchestration": inspect.getsource(leader_orchestration),
+        "jira_workflow_review": inspect.getsource(jira_workflow_review),
+    }
+    forbidden = "from src.runtime.adapter_executor import execute_adapter_action"
+    for name, source in sources.items():
+        assert forbidden not in source, f"{name} unexpectedly imports low-level adapter executor"
