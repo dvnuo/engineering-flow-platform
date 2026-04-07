@@ -88,3 +88,57 @@ def test_descriptor_fields_preserved():
     assert fetched.enabled is False
     assert fetched.policy_tags == ["secure", "write"]
     assert fetched.metadata == {"x": 1}
+
+
+def test_registry_export_catalog_and_filters():
+    registry = build_default_capability_registry()
+
+    catalog = registry.export_catalog()
+    assert isinstance(catalog, list)
+    assert catalog
+    first = catalog[0]
+    assert {
+        "capability_id",
+        "type",
+        "name",
+        "logical_name",
+        "action_alias",
+        "adapter_system",
+        "input_schema",
+        "output_schema",
+        "policy_tags",
+        "requires_identity_binding",
+        "enabled",
+        "source_ref",
+        "metadata",
+    }.issubset(set(first.keys()))
+    assert registry.exists(first["capability_id"]) is True
+    assert registry.list_enabled()
+    assert registry.list_by_type("adapter_action")
+    assert registry.list_by_type("skill")
+    assert registry.list_by_type("tool")
+
+
+def test_registry_collects_adapter_channel_tool_skill_types():
+    registry = build_default_capability_registry()
+    types = {item.type for item in registry.list_all()}
+    assert "adapter_action" in types
+    assert "skill" in types
+    assert "tool" in types
+    assert "channel_action" in types
+
+
+def test_registry_export_catalog_snapshot_has_deterministic_version():
+    registry = build_default_capability_registry()
+    snapshot_a = registry.export_catalog_snapshot()
+    snapshot_b = registry.export_catalog_snapshot()
+    assert snapshot_a["catalog_version"] == snapshot_b["catalog_version"]
+    assert snapshot_a["count"] == len(snapshot_a["capabilities"])
+    assert isinstance(snapshot_a["generated_at"], str) and snapshot_a["generated_at"].endswith("Z")
+
+
+def test_registry_adapter_action_entries_include_alias_and_system():
+    registry = build_default_capability_registry()
+    adapter_entry = next(item for item in registry.export_catalog() if item["type"] == "adapter_action")
+    assert adapter_entry["action_alias"]
+    assert adapter_entry["adapter_system"] in {"github", "jira", "portal"}

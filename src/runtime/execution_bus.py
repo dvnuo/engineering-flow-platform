@@ -19,6 +19,7 @@ from src.runtime.contracts import (
     make_execution_request,
     make_execution_result,
 )
+from src.runtime.task_capability_contracts import resolve_task_capability_contract
 from src.runtime.events import build_runtime_event
 from src.runtime.governance import GovernanceHooks, as_governance_bus
 from src.runtime.governance_bus import (
@@ -26,6 +27,7 @@ from src.runtime.governance_bus import (
     GovernanceBus,
     GovernanceDecision,
     build_default_governance_bus,
+    evaluate_capability_constraint_decision,
     governance_audit_runtime_event,
 )
 from src.runtime.jira_workflow_review import run_jira_workflow_review
@@ -178,6 +180,14 @@ class ExecutionBus:
             request_id=request.request_id,
             status="blocked",
             output_payload=payload,
+            artifacts={
+                "governance": {
+                    "blocked": True,
+                    "deny_reason": reason or "governance_blocked",
+                    "execution_type": request.execution_type,
+                    "capability_id": (request.input_payload or {}).get("action_id"),
+                }
+            },
             runtime_events=runtime_events,
             audit_ref=audit_ref,
         )
@@ -448,6 +458,72 @@ def _coerce_task_tool_result(raw_result: Any) -> Dict[str, Any]:
     }
 
 
+def _normalize_capability_component(value: Any) -> str:
+    return "_".join(str(value or "").strip().lower().split())
+
+
+def _resolve_tool_capability(tool_name: str) -> Dict[str, Any]:
+    normalized_tool_name = _normalize_capability_component(tool_name)
+    capability_id = f"tool:{normalized_tool_name}" if normalized_tool_name else None
+    fallback = {
+        "capability_id": capability_id,
+        "capability_type": "tool",
+        "capability_name": tool_name,
+        "policy_tags": [],
+        "requires_identity_binding": False,
+        "capability_resolution": "unresolved",
+    }
+    if not capability_id:
+        return fallback
+    descriptor = get_capability_registry().get(capability_id)
+    if descriptor is None:
+        return fallback
+    return {
+        "capability_id": descriptor.capability_id,
+        "capability_type": descriptor.type or "tool",
+        "capability_name": tool_name,
+        "policy_tags": list(descriptor.policy_tags or []),
+        "requires_identity_binding": bool(descriptor.requires_identity_binding),
+        "capability_resolution": "resolved",
+    }
+
+
+def _normalize_tool_execution_outcome(
+    *,
+    tool_name: str,
+    raw_result: Any,
+    task_boundary: bool,
+    task_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized = _coerce_task_tool_result(raw_result)
+    capability = _resolve_tool_capability(tool_name)
+    payload: Dict[str, Any] = {
+        "tool_name": tool_name,
+        "success": bool(normalized["success"]),
+        "content": normalized["content"],
+        "error": normalized["error"],
+        "result": normalized["result"],
+        "capability_id": capability.get("capability_id"),
+        "capability_type": capability.get("capability_type"),
+        "capability_name": capability.get("capability_name"),
+        "policy_tags": capability.get("policy_tags"),
+        "requires_identity_binding": capability.get("requires_identity_binding"),
+        "capability_resolution": capability.get("capability_resolution"),
+    }
+    if task_boundary:
+        payload["task_type"] = task_type or "tool_task"
+        payload["task_boundary"] = True
+
+    return {
+        "success": bool(normalized["success"]),
+        "output_payload": payload,
+        "artifacts": normalized["artifacts"],
+        "runtime_events": normalized["runtime_events"],
+        "next_action_hint": normalized["next_action_hint"],
+        "audit_ref": normalized["audit_ref"],
+    }
+
+
 def _as_list_of_dicts(value: Any) -> list[dict]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
@@ -468,6 +544,212 @@ def _as_list_of_strings(value: Any) -> list[str]:
                     normalized.append(text)
         return normalized
     return []
+
+
+def resolve_task_capability_plan(task_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Compatibility shim: delegate task capability planning to the canonical resolver.
+
+    Keep this function name for existing callers, but do not add mapping logic
+    here; `src.runtime.task_capability_contracts` owns the contract mapping.
+    """
+    return resolve_task_capability_contract(task_type, payload)
+
+
+def _resolve_task_capability(task_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    return resolve_task_capability_plan(task_type, payload)
+
+
+async def _execute_adapter_action_task(
+    *,
+    bus: ExecutionBus,
+    request: ExecutionRequest,
+    task_id: Optional[str],
+    task_type: str,
+    action_id: str,
+    kwargs: Dict[str, Any],
+) -> ExecutionResult:
+    """Standardized adapter-action capability boundary for runtime tasks.
+
+    Notes:
+    - This task boundary is the canonical runtime contract for adapter actions.
+    - `adapter_executor.execute_adapter_action` remains a low-level implementation detail
+      invoked only within this bus-owned path.
+    """
+    capability = _resolve_task_capability(task_type, {"action_id": action_id})
+    descriptor = get_capability_registry().get(action_id)
+    if descriptor is None or descriptor.type != "adapter_action":
+        return make_execution_result(
+            request_id=request.request_id,
+            status="blocked",
+            output_payload={
+                "task_type": task_type,
+                "action_id": action_id,
+                "success": False,
+                "error": f"Unknown or non-adapter action_id: {action_id}",
+                "task_boundary": True,
+                "capability_id": capability.get("capability_id"),
+                "capability_type": capability.get("capability_type"),
+                "requires_identity_binding": bool(capability.get("requires_identity_binding")),
+                "capability_resolution": "unresolved",
+                "result": None,
+            },
+        )
+    adapter_result = await execute_adapter_action(action_id, kwargs)
+    runtime_events = list(adapter_result.get("runtime_events") or [])
+    runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+    requires_identity_binding = bool(descriptor.requires_identity_binding)
+    runtime_events.append(
+        build_runtime_event(
+            event_type="task.adapter_action.completed" if adapter_result.get("success") else "task.adapter_action.failed",
+            execution_type=request.execution_type,
+            state="completed" if adapter_result.get("success") else "failed",
+            session_id=request.session_id,
+            request_id=request.request_id,
+            agent_id=request.agent_id,
+            summary=f"adapter action {action_id}",
+            task_id=task_id,
+            detail_payload={
+                "task_type": task_type,
+                "action_id": action_id,
+                "capability_id": capability.get("capability_id"),
+                "capability_type": capability.get("capability_type"),
+                "policy_tags": capability.get("policy_tags"),
+                "requires_identity_binding": requires_identity_binding,
+                "capability_resolution": capability.get("capability_resolution"),
+                "success": bool(adapter_result.get("success")),
+            },
+            legacy_payload={"legacy_type": "task_adapter_action"},
+        )
+    )
+    return make_execution_result(
+        request_id=request.request_id,
+        status="success" if adapter_result.get("success") else "error",
+        output_payload={
+            "task_type": task_type,
+            "action_id": action_id,
+            "success": bool(adapter_result.get("success")),
+            "error": adapter_result.get("error"),
+            "task_boundary": True,
+            "capability_id": capability.get("capability_id"),
+            "capability_type": capability.get("capability_type"),
+            "policy_tags": capability.get("policy_tags"),
+            "requires_identity_binding": requires_identity_binding,
+            "capability_resolution": capability.get("capability_resolution"),
+            "result": adapter_result.get("result"),
+        },
+        runtime_events=runtime_events,
+    )
+
+
+def _action_name_to_capability_id(system: str, action_name: str) -> str:
+    return f"adapter:{system}:{str(action_name or '').strip().lower()}"
+
+
+def _evaluate_secondary_action_gate(
+    *,
+    request: ExecutionRequest,
+    action_id: str,
+) -> Optional[Dict[str, str]]:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    return evaluate_capability_constraint_decision(
+        metadata=metadata,
+        capability_id=action_id,
+        capability_type="adapter_action",
+        action_id=action_id,
+    )
+
+
+def _append_secondary_action_event(
+    *,
+    runtime_events: list[Dict[str, Any]],
+    request: ExecutionRequest,
+    task_id: Optional[str],
+    event_type: str,
+    state: str,
+    detail_payload: Dict[str, Any],
+    ) -> None:
+    runtime_events.append(
+        build_runtime_event(
+            event_type=event_type,
+            execution_type=request.execution_type,
+            state=state,
+            session_id=request.session_id,
+            request_id=request.request_id,
+            agent_id=request.agent_id,
+            summary="secondary action governance",
+            task_id=task_id,
+            detail_payload=detail_payload,
+            legacy_payload={"legacy_type": "task_secondary_action"},
+        )
+    )
+
+
+def _append_secondary_governance_audit_event(
+    *,
+    runtime_events: list[Dict[str, Any]],
+    request: ExecutionRequest,
+    task_type: str,
+    action_id: str,
+    deny_reason: Optional[str],
+) -> None:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    policy_profile_id = request.policy_profile_id or metadata.get("policy_profile_id") or "default"
+    audit_record = GovernanceAuditRecord(
+        audit_ref=f"gov-{request.request_id}-secondary-{action_id.split(':')[-1]}",
+        stage="secondary_action",
+        message="Blocked secondary action by capability policy",
+        metadata={
+            "stage": "secondary_action",
+            "status": "blocked",
+            "rule": "capability_policy",
+            "capability_id": action_id,
+            "capability_type": "adapter_action",
+            "action_id": action_id,
+            "deny_reason": deny_reason or "capability_policy_blocked",
+            "task_type": task_type,
+            "policy_profile_id": policy_profile_id,
+        },
+    )
+    runtime_events.append(
+        governance_audit_runtime_event(
+            request=request,
+            status="blocked",
+            audit_record=audit_record,
+        )
+    )
+
+
+def _record_secondary_action_decision(
+    decisions: list[Dict[str, Any]],
+    *,
+    action_id: str,
+    decision: str,
+    reason: Optional[str],
+    success: bool,
+) -> None:
+    decisions.append(
+        {
+            "action_id": action_id,
+            "decision": decision,
+            "reason": reason,
+            "success": bool(success),
+        }
+    )
+
+
+def _build_secondary_governance_summary(
+    *,
+    governed_secondary_action_ids: list[str],
+    blocked_secondary_action_ids: list[str],
+    applied_secondary_action_ids: list[str],
+    secondary_action_decisions: list[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "governed_secondary_action_ids": sorted(set(governed_secondary_action_ids)),
+        "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
+        "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
+        "secondary_action_decisions": list(secondary_action_decisions),
+    }
 
 
 def _as_dict(value: Any) -> dict:
@@ -676,14 +958,26 @@ def build_default_execution_bus(
         skill_name = _get_required(request.input_payload, "skill_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
         kwargs.setdefault("session_id", request.session_id)
-        return await run_skill_execution(skill_name, **kwargs)
+        return await run_skill_execution(skill_name, _via_execution_bus=True, **kwargs)
 
-    async def tool_handler(request: ExecutionRequest) -> ToolResult:
-        # TODO(phase1): unify broader tool call sites through ExecutionBus when policy/hook coverage is verified.
-        # For now this adapter intentionally reuses the existing execution stack.
+    async def tool_handler(request: ExecutionRequest) -> ExecutionResult:
         tool_name = _get_required(request.input_payload, "tool_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
-        return await execute_tool_callable(tool_name, **kwargs)
+        raw_tool_result = await execute_tool_callable(tool_name, **kwargs)
+        normalized = _normalize_tool_execution_outcome(
+            tool_name=tool_name,
+            raw_result=raw_tool_result,
+            task_boundary=False,
+        )
+        return make_execution_result(
+            request_id=request.request_id,
+            status="success" if normalized["success"] else "error",
+            output_payload=normalized["output_payload"],
+            artifacts=normalized["artifacts"],
+            runtime_events=normalized["runtime_events"],
+            next_action_hint=normalized["next_action_hint"],
+            audit_ref=normalized["audit_ref"],
+        )
 
     async def subagent_handler(request: ExecutionRequest) -> Dict[str, Any]:
         return await run_subagent_execution(
@@ -1001,7 +1295,7 @@ def build_default_execution_bus(
                 }
                 skill_kwargs["delegation_context"] = delegation_context
                 skill_kwargs.setdefault("session_id", request.session_id)
-                skill_result = await run_skill_execution(skill_name.strip(), **skill_kwargs)
+                skill_result = await run_skill_execution(skill_name.strip(), _via_execution_bus=True, **skill_kwargs)
                 normalized_skill = bus._normalize_result(request, skill_result)
                 raw_skill_result = dict(normalized_skill.output_payload or {})
                 skill_success = normalized_skill.status not in {"error", "blocked"}
@@ -1182,60 +1476,24 @@ def build_default_execution_bus(
         if task_type == "adapter_action_task":
             action_id = _get_required(request.input_payload, "action_id")
             kwargs = dict(request.input_payload.get("kwargs") or {})
-            registry = get_capability_registry()
-            descriptor = registry.get(action_id)
-            if descriptor is None or descriptor.type != "adapter_action":
-                return make_execution_result(
-                    request_id=request.request_id,
-                    status="blocked",
-                    output_payload={
-                        "task_type": task_type,
-                        "action_id": action_id,
-                        "success": False,
-                        "error": f"Unknown or non-adapter action_id: {action_id}",
-                        "task_boundary": True,
-                    },
-                )
-            adapter_result = await execute_adapter_action(action_id, kwargs)
-            runtime_events = list(adapter_result.get("runtime_events") or [])
-            runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
-            requires_identity_binding = bool(descriptor.requires_identity_binding)
-            runtime_events.append(
-                build_runtime_event(
-                    event_type="task.adapter_action.completed" if adapter_result.get("success") else "task.adapter_action.failed",
-                    execution_type=request.execution_type,
-                    state="completed" if adapter_result.get("success") else "failed",
-                    session_id=request.session_id,
-                    request_id=request.request_id,
-                    agent_id=request.agent_id,
-                    summary=f"adapter action {action_id}",
-                    task_id=task_id,
-                    detail_payload={
-                        "task_type": task_type,
-                        "action_id": action_id,
-                        "requires_identity_binding": requires_identity_binding,
-                        "capability_policy_tags": descriptor.policy_tags,
-                        "success": bool(adapter_result.get("success")),
-                    },
-                    legacy_payload={"legacy_type": "task_adapter_action"},
-                )
-            )
-            return make_execution_result(
-                request_id=request.request_id,
-                status="success" if adapter_result.get("success") else "error",
-                output_payload={
-                    "task_type": task_type,
-                    "action_id": action_id,
-                    "success": bool(adapter_result.get("success")),
-                    "error": adapter_result.get("error"),
-                    "task_boundary": True,
-                    "requires_identity_binding": requires_identity_binding,
-                    "result": adapter_result.get("result"),
-                },
-                runtime_events=runtime_events,
+            return await _execute_adapter_action_task(
+                bus=bus,
+                request=request,
+                task_id=task_id,
+                task_type=task_type,
+                action_id=action_id,
+                kwargs=kwargs,
             )
 
         if task_type == "jira_workflow_review_task":
+            capability = resolve_task_capability_plan(task_type, request.input_payload)
+            involved_capability_ids = list(capability.get("involved_capability_ids") or [])
+            involved_action_ids = list(involved_capability_ids)
+            governed_secondary_action_ids = sorted([item for item in involved_action_ids if item != "adapter:jira:read_issue"])
+            blocked_secondary_action_ids: list[str] = []
+            applied_secondary_action_ids: list[str] = []
+            blocked_secondary_action_reasons: Dict[str, str] = {}
+            secondary_action_decisions: list[Dict[str, Any]] = []
             workflow_payload = {
                 "issue_key": _get_required(request.input_payload, "issue_key"),
                 "skill_name": request.input_payload.get("skill_name"),
@@ -1257,9 +1515,93 @@ def build_default_execution_bus(
                 "fields": request.input_payload.get("fields"),
                 "transition_comment": request.input_payload.get("transition_comment"),
             }
+            def _jira_action_gate(action_name: str, _kwargs: Dict[str, Any]) -> Dict[str, Any]:
+                action_id = _action_name_to_capability_id("jira", action_name)
+                decision = _evaluate_secondary_action_gate(request=request, action_id=action_id)
+                if decision is not None:
+                    blocked_secondary_action_ids.append(action_id)
+                    blocked_secondary_action_reasons[action_id] = str(decision.get("reason") or "capability_policy_blocked")
+                    return {
+                        "blocked": True,
+                        "reason": decision.get("reason"),
+                        "error": f"capability policy blocked for secondary action: {action_id}",
+                    }
+                applied_secondary_action_ids.append(action_id)
+                return {"blocked": False}
+
+            workflow_payload["_action_gate"] = _jira_action_gate
             workflow_result = await run_jira_workflow_review(workflow_payload)
             runtime_events = list(workflow_result.get("runtime_events") or [])
             runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+            for blocked_action_id in blocked_secondary_action_ids:
+                _append_secondary_action_event(
+                    runtime_events=runtime_events,
+                    request=request,
+                    task_id=task_id,
+                    event_type="task.jira_workflow_review.secondary_action.blocked",
+                    state="blocked",
+                    detail_payload={
+                        "task_type": task_type,
+                        "secondary_action_id": blocked_action_id,
+                    },
+                )
+                _append_secondary_governance_audit_event(
+                    runtime_events=runtime_events,
+                    request=request,
+                    task_type=task_type,
+                    action_id=blocked_action_id,
+                    deny_reason=blocked_secondary_action_reasons.get(blocked_action_id),
+                )
+            actions_applied = workflow_result.get("actions_applied") if isinstance(workflow_result.get("actions_applied"), list) else []
+            action_results_by_id: Dict[str, Dict[str, Any]] = {}
+            for action_item in actions_applied:
+                if not isinstance(action_item, dict):
+                    continue
+                action_name = str(action_item.get("action") or "").strip().lower()
+                if not action_name:
+                    continue
+                action_results_by_id[_action_name_to_capability_id("jira", action_name)] = action_item
+
+            for governed_action_id in governed_secondary_action_ids:
+                action_result = action_results_by_id.get(governed_action_id) or {}
+                if governed_action_id in blocked_secondary_action_ids or bool(action_result.get("blocked")):
+                    _record_secondary_action_decision(
+                        secondary_action_decisions,
+                        action_id=governed_action_id,
+                        decision="blocked",
+                        reason=str(action_result.get("error") or blocked_secondary_action_reasons.get(governed_action_id) or "capability_policy_blocked"),
+                        success=False,
+                    )
+                elif action_result.get("success") is True:
+                    _record_secondary_action_decision(
+                        secondary_action_decisions,
+                        action_id=governed_action_id,
+                        decision="applied",
+                        reason=None,
+                        success=True,
+                    )
+                elif action_result:
+                    _record_secondary_action_decision(
+                        secondary_action_decisions,
+                        action_id=governed_action_id,
+                        decision="failed",
+                        reason=str(action_result.get("error") or "action_failed"),
+                        success=False,
+                    )
+                else:
+                    _record_secondary_action_decision(
+                        secondary_action_decisions,
+                        action_id=governed_action_id,
+                        decision="allowed",
+                        reason="not_invoked",
+                        success=False,
+                    )
+            secondary_summary = _build_secondary_governance_summary(
+                governed_secondary_action_ids=governed_secondary_action_ids,
+                blocked_secondary_action_ids=blocked_secondary_action_ids,
+                applied_secondary_action_ids=applied_secondary_action_ids,
+                secondary_action_decisions=secondary_action_decisions,
+            )
             runtime_events.append(
                 build_runtime_event(
                     event_type="task.jira_workflow_review.completed" if workflow_result.get("success") else "task.jira_workflow_review.failed",
@@ -1272,6 +1614,14 @@ def build_default_execution_bus(
                     task_id=task_id,
                     detail_payload={
                         "task_type": task_type,
+                        "capability_id": capability.get("capability_id"),
+                        "capability_type": capability.get("capability_type"),
+                        "policy_tags": capability.get("policy_tags"),
+                        "requires_identity_binding": capability.get("requires_identity_binding"),
+                        "capability_resolution": capability.get("capability_resolution"),
+                        "involved_capability_ids": involved_capability_ids,
+                        "involved_action_ids": involved_action_ids,
+                        **secondary_summary,
                         "issue_key": workflow_result.get("issue_key"),
                         "skill_name": workflow_result.get("skill_name") or workflow_payload.get("skill_name"),
                         "workflow_outcome": workflow_result.get("workflow_outcome"),
@@ -1293,6 +1643,15 @@ def build_default_execution_bus(
                     "success": bool(workflow_result.get("success")),
                     "error": workflow_result.get("error"),
                     "task_boundary": True,
+                    "capability_id": capability.get("capability_id"),
+                    "capability_type": capability.get("capability_type"),
+                    "policy_tags": capability.get("policy_tags"),
+                    "requires_identity_binding": capability.get("requires_identity_binding"),
+                    "capability_resolution": capability.get("capability_resolution"),
+                    "involved_capability_ids": involved_capability_ids,
+                    "involved_action_ids": involved_action_ids,
+                    **secondary_summary,
+                    "resolved_skill_capability_id": f"skill:{str(workflow_payload.get('skill_name') or '').strip().lower()}" if workflow_payload.get("skill_name") else None,
                     "workflow_outcome": workflow_result.get("workflow_outcome"),
                     "actions_applied": workflow_result.get("actions_applied") or [],
                     "result": workflow_result,
@@ -1301,6 +1660,9 @@ def build_default_execution_bus(
             )
 
         if task_type == "github_review_task":
+            capability = resolve_task_capability_plan(task_type, request.input_payload)
+            involved_capability_ids = list(capability.get("involved_capability_ids") or [])
+            involved_action_ids = list(involved_capability_ids)
             owner = _get_required(request.input_payload, "owner")
             repo = _get_required(request.input_payload, "repo")
             pull_number = _get_required(request.input_payload, "pull_number")
@@ -1327,26 +1689,117 @@ def build_default_execution_bus(
                 review_summary = review_comment_input
             comment_written = False
             error_value = review_result.get("error")
+            secondary_action_id = "adapter:github:add_comment"
+            secondary_action_attempted = False
+            secondary_action_success = False
+            governed_secondary_action_ids = [secondary_action_id]
+            blocked_secondary_action_ids: list[str] = []
+            applied_secondary_action_ids: list[str] = []
+            secondary_action_decisions: list[Dict[str, Any]] = []
 
             if review_result.get("success"):
                 comment_body = review_summary if isinstance(review_summary, str) and review_summary.strip() else review_comment_input
                 if isinstance(comment_body, str) and comment_body.strip():
-                    add_comment_result = await execute_adapter_action(
-                        "adapter:github:add_comment",
-                        {
-                            "owner": owner,
-                            "repo": repo,
-                            "pull_number": pull_number,
-                            "comment": comment_body,
-                        },
-                    )
-                    runtime_events.extend(add_comment_result.get("runtime_events") or [])
-                    runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
-                    comment_written = bool(add_comment_result.get("success"))
-                    if not comment_written:
-                        error_value = add_comment_result.get("error") or "Failed to write GitHub review comment"
+                    secondary_action_attempted = True
+                    secondary_gate = _evaluate_secondary_action_gate(request=request, action_id=secondary_action_id)
+                    if secondary_gate is not None:
+                        blocked_secondary_action_ids.append(secondary_action_id)
+                        error_value = "capability policy blocked for secondary action"
+                        _append_secondary_action_event(
+                            runtime_events=runtime_events,
+                            request=request,
+                            task_id=task_id,
+                            event_type="task.github_review.secondary_action.blocked",
+                            state="blocked",
+                            detail_payload={
+                                "task_type": task_type,
+                                "secondary_action_id": secondary_action_id,
+                                "reason": secondary_gate.get("reason"),
+                                "message": secondary_gate.get("message"),
+                            },
+                        )
+                        _append_secondary_governance_audit_event(
+                            runtime_events=runtime_events,
+                            request=request,
+                            task_type=task_type,
+                            action_id=secondary_action_id,
+                            deny_reason=str(secondary_gate.get("reason") or "capability_policy_blocked"),
+                        )
+                        _record_secondary_action_decision(
+                            secondary_action_decisions,
+                            action_id=secondary_action_id,
+                            decision="blocked",
+                            reason=str(secondary_gate.get("reason") or "capability_policy_blocked"),
+                            success=False,
+                        )
+                    else:
+                        applied_secondary_action_ids.append(secondary_action_id)
+                        add_comment_result = await execute_adapter_action(
+                            secondary_action_id,
+                            {
+                                "owner": owner,
+                                "repo": repo,
+                                "pull_number": pull_number,
+                                "comment": comment_body,
+                            },
+                        )
+                        runtime_events.extend(add_comment_result.get("runtime_events") or [])
+                        runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+                        comment_written = bool(add_comment_result.get("success"))
+                        secondary_action_success = comment_written
+                        _append_secondary_action_event(
+                            runtime_events=runtime_events,
+                            request=request,
+                            task_id=task_id,
+                            event_type="task.github_review.secondary_action.completed" if comment_written else "task.github_review.secondary_action.failed",
+                            state="completed" if comment_written else "failed",
+                            detail_payload={
+                                "task_type": task_type,
+                                "secondary_action_id": secondary_action_id,
+                                "success": comment_written,
+                                "error": add_comment_result.get("error"),
+                            },
+                        )
+                        if not comment_written:
+                            error_value = add_comment_result.get("error") or "Failed to write GitHub review comment"
+                            _record_secondary_action_decision(
+                                secondary_action_decisions,
+                                action_id=secondary_action_id,
+                                decision="failed",
+                                reason=str(add_comment_result.get("error") or "action_failed"),
+                                success=False,
+                            )
+                        else:
+                            _record_secondary_action_decision(
+                                secondary_action_decisions,
+                                action_id=secondary_action_id,
+                                decision="applied",
+                                reason=None,
+                                success=True,
+                            )
                 else:
                     error_value = "Review succeeded but no summary/comment text available for write-back"
+                    _record_secondary_action_decision(
+                        secondary_action_decisions,
+                        action_id=secondary_action_id,
+                        decision="failed",
+                        reason="missing_comment_body",
+                        success=False,
+                    )
+            elif not secondary_action_decisions:
+                _record_secondary_action_decision(
+                    secondary_action_decisions,
+                    action_id=secondary_action_id,
+                    decision="allowed",
+                    reason="primary_action_failed",
+                    success=False,
+                )
+            secondary_summary = _build_secondary_governance_summary(
+                governed_secondary_action_ids=governed_secondary_action_ids,
+                blocked_secondary_action_ids=blocked_secondary_action_ids,
+                applied_secondary_action_ids=applied_secondary_action_ids,
+                secondary_action_decisions=secondary_action_decisions,
+            )
 
             success_value = bool(review_result.get("success")) and comment_written and not error_value
             runtime_events.append(
@@ -1361,10 +1814,21 @@ def build_default_execution_bus(
                     task_id=task_id,
                     detail_payload={
                         "task_type": task_type,
+                        "capability_id": capability.get("capability_id"),
+                        "capability_type": capability.get("capability_type"),
+                        "policy_tags": capability.get("policy_tags"),
+                        "requires_identity_binding": capability.get("requires_identity_binding"),
+                        "capability_resolution": capability.get("capability_resolution"),
+                        "involved_capability_ids": involved_capability_ids,
+                        "involved_action_ids": involved_action_ids,
+                        **secondary_summary,
                         "owner": owner,
                         "repo": repo,
                         "pull_number": pull_number,
                         "comment_written": comment_written,
+                        "secondary_action_attempted": secondary_action_attempted,
+                        "secondary_action_id": secondary_action_id,
+                        "secondary_action_success": secondary_action_success,
                         "success": success_value,
                         "error": error_value,
                     },
@@ -1384,6 +1848,17 @@ def build_default_execution_bus(
                     "success": success_value,
                     "error": error_value,
                     "task_boundary": True,
+                    "capability_id": capability.get("capability_id"),
+                    "capability_type": capability.get("capability_type"),
+                    "policy_tags": capability.get("policy_tags"),
+                    "requires_identity_binding": capability.get("requires_identity_binding"),
+                    "capability_resolution": capability.get("capability_resolution"),
+                    "involved_capability_ids": involved_capability_ids,
+                    "involved_action_ids": involved_action_ids,
+                    **secondary_summary,
+                    "secondary_action_attempted": secondary_action_attempted,
+                    "secondary_action_id": secondary_action_id,
+                    "secondary_action_success": secondary_action_success,
                 },
                 runtime_events=runtime_events,
             )
@@ -1408,7 +1883,12 @@ def build_default_execution_bus(
             coro_factory=lambda: execute_tool_callable(tool_name, **kwargs),
             event_callback=event_callback if callable(event_callback) else None,
         )
-        normalized = _coerce_task_tool_result(raw_task_result)
+        normalized = _normalize_tool_execution_outcome(
+            tool_name=tool_name,
+            raw_result=raw_task_result,
+            task_boundary=True,
+            task_type="tool_task",
+        )
         runtime_events = list(normalized["runtime_events"]) if isinstance(normalized["runtime_events"], list) else []
         runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
         runtime_events.append(
@@ -1425,7 +1905,9 @@ def build_default_execution_bus(
                     "task_type": "tool_task",
                     "tool_name": tool_name,
                     "success": bool(normalized["success"]),
-                    "error": normalized["error"],
+                    "error": normalized["output_payload"].get("error"),
+                    "capability_id": normalized["output_payload"].get("capability_id"),
+                    "capability_type": normalized["output_payload"].get("capability_type"),
                 },
                 legacy_payload={"legacy_type": "task_tool"},
             )
@@ -1433,15 +1915,7 @@ def build_default_execution_bus(
         return make_execution_result(
             request_id=request.request_id,
             status="success" if normalized["success"] else "error",
-            output_payload={
-                "task_type": "tool_task",
-                "tool_name": tool_name,
-                "success": bool(normalized["success"]),
-                "content": normalized["content"],
-                "error": normalized["error"],
-                "task_boundary": True,
-                "result": normalized["result"],
-            },
+            output_payload=normalized["output_payload"],
             artifacts=normalized["artifacts"],
             runtime_events=runtime_events,
             next_action_hint=normalized["next_action_hint"],

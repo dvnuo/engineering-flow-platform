@@ -18,7 +18,7 @@ async def test_jira_workflow_review_skill_success_applies_transition_and_reassig
             }
         return {"success": True, "result": f"{action_name}:ok", "error": None}
 
-    async def _fake_run_skill_execution(skill_name, **kwargs):
+    async def _fake_execute_skill(skill_name, **kwargs):
         assert skill_name == "review_skill"
         return SkillResult(
             success=True,
@@ -34,7 +34,7 @@ async def test_jira_workflow_review_skill_success_applies_transition_and_reassig
         )
 
     monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
-    monkeypatch.setattr("src.runtime.jira_workflow_review.run_skill_execution", _fake_run_skill_execution)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
 
     result = await run_jira_workflow_review(
         {
@@ -65,7 +65,7 @@ async def test_jira_workflow_review_failure_path_reassigns_without_success_trans
             return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
         return {"success": True, "result": f"{action_name}:ok", "error": None}
 
-    async def _fake_run_skill_execution(skill_name, **kwargs):
+    async def _fake_execute_skill(skill_name, **kwargs):
         return SkillResult(
             success=True,
             output="needs changes",
@@ -73,7 +73,7 @@ async def test_jira_workflow_review_failure_path_reassigns_without_success_trans
         )
 
     monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
-    monkeypatch.setattr("src.runtime.jira_workflow_review.run_skill_execution", _fake_run_skill_execution)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
 
     result = await run_jira_workflow_review(
         {
@@ -105,11 +105,11 @@ async def test_requester_resolution_from_issue_snapshot(monkeypatch):
             }
         return {"success": True, "result": "ok", "error": None}
 
-    async def _fake_run_skill_execution(skill_name, **kwargs):
+    async def _fake_execute_skill(skill_name, **kwargs):
         return SkillResult(success=True, output="ok", data={"approved": True})
 
     monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
-    monkeypatch.setattr("src.runtime.jira_workflow_review.run_skill_execution", _fake_run_skill_execution)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
 
     result = await run_jira_workflow_review(
         {
@@ -130,16 +130,58 @@ async def test_missing_structured_outcome_from_skill_fails(monkeypatch):
             return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
         return {"success": True, "result": "ok", "error": None}
 
-    async def _fake_run_skill_execution(skill_name, **kwargs):
+    async def _fake_execute_skill(skill_name, **kwargs):
         return SkillResult(success=True, output="ok", data={"unrelated": True})
 
     monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
-    monkeypatch.setattr("src.runtime.jira_workflow_review.run_skill_execution", _fake_run_skill_execution)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
 
     result = await run_jira_workflow_review({"issue_key": "PROJ-12", "skill_name": "review_skill"})
 
     assert result["success"] is False
     assert "structured workflow outcome" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_jira_workflow_review_skill_path_uses_bus_execute_skill(monkeypatch):
+    async def _fake_execute_jira_workflow_action(action_name, kwargs):
+        if action_name == "read_issue":
+            return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
+        return {"success": True, "result": "ok", "error": None}
+
+    async def _fake_execute_skill(skill_name, **kwargs):
+        return SkillResult(success=True, output="ok", data={"approved": True, "comment": "ok"})
+
+    async def _fail_direct(*_args, **_kwargs):
+        raise AssertionError("direct run_skill_execution bypass should not be used")
+
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.agents.executor.run_skill_execution", _fail_direct)
+
+    result = await run_jira_workflow_review({"issue_key": "PROJ-12", "skill_name": "review_skill"})
+    assert result["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_jira_workflow_review_routes_jira_actions_via_bus_helper(monkeypatch):
+    calls = []
+
+    async def _fake_bus_helper(action_id, kwargs, **_meta):
+        calls.append(action_id)
+        if action_id == "adapter:jira:read_issue":
+            return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
+        return {"success": True, "result": "ok", "error": None}
+
+    async def _fake_execute_skill(skill_name, **kwargs):
+        return SkillResult(success=True, output="ok", data={"approved": True})
+
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_adapter_action_via_bus", _fake_bus_helper)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
+
+    result = await run_jira_workflow_review({"issue_key": "PROJ-16", "skill_name": "review_skill"})
+    assert result["success"] is True
+    assert "adapter:jira:read_issue" in calls
 
 
 @pytest.mark.asyncio
@@ -176,12 +218,12 @@ async def test_workflow_context_json_object_string_is_accepted(monkeypatch):
             return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
         return {"success": True, "result": "ok", "error": None}
 
-    async def _fake_run_skill_execution(skill_name, **kwargs):
+    async def _fake_execute_skill(skill_name, **kwargs):
         captured["workflow_context"] = kwargs.get("workflow_context")
         return SkillResult(success=True, output="ok", data={"approved": True, "comment": "c"})
 
     monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
-    monkeypatch.setattr("src.runtime.jira_workflow_review.run_skill_execution", _fake_run_skill_execution)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
 
     result = await run_jira_workflow_review(
         {
@@ -204,12 +246,12 @@ async def test_malformed_workflow_fields_emit_warning_and_continue(monkeypatch):
             return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
         return {"success": True, "result": "ok", "error": None}
 
-    async def _fake_run_skill_execution(skill_name, **kwargs):
+    async def _fake_execute_skill(skill_name, **kwargs):
         captured["skill_kwargs"] = kwargs
         return SkillResult(success=True, output="ok", data={"approved": True})
 
     monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
-    monkeypatch.setattr("src.runtime.jira_workflow_review.run_skill_execution", _fake_run_skill_execution)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
 
     result = await run_jira_workflow_review(
         {
@@ -241,11 +283,11 @@ async def test_mapping_fields_json_object_strings_are_accepted(monkeypatch):
             return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
         return {"success": True, "result": "ok", "error": None}
 
-    async def _fake_run_skill_execution(skill_name, **kwargs):
+    async def _fake_execute_skill(skill_name, **kwargs):
         return SkillResult(success=True, output="ok", data={"decision": "approved"})
 
     monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
-    monkeypatch.setattr("src.runtime.jira_workflow_review.run_skill_execution", _fake_run_skill_execution)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
 
     result = await run_jira_workflow_review(
         {
@@ -272,12 +314,12 @@ async def test_workflow_context_non_object_json_is_ignored(monkeypatch):
             return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
         return {"success": True, "result": "ok", "error": None}
 
-    async def _fake_run_skill_execution(skill_name, **kwargs):
+    async def _fake_execute_skill(skill_name, **kwargs):
         captured["workflow_context"] = kwargs.get("workflow_context")
         return SkillResult(success=True, output="ok", data={"approved": True})
 
     monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
-    monkeypatch.setattr("src.runtime.jira_workflow_review.run_skill_execution", _fake_run_skill_execution)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
 
     result = await run_jira_workflow_review(
         {

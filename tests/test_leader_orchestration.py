@@ -392,6 +392,26 @@ async def test_load_coordination_run_state_falls_back_to_delegations(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_leader_orchestration_routes_adapter_actions_via_bus_helper(monkeypatch):
+    calls = []
+
+    async def _fake_bus_helper(action_id, kwargs, **_meta):
+        calls.append(action_id)
+        if action_id == "adapter:portal:get_coordination_run":
+            return {"success": True, "result": {"coordination_run_id": "coord-1", "status": "running", "rounds": []}, "error": None}
+        return {"success": True, "result": {"delegations": []}, "error": None}
+
+    async def _fail_direct(*_args, **_kwargs):
+        raise AssertionError("direct adapter executor path should not be used")
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.execute_adapter_action_via_bus", _fake_bus_helper)
+    monkeypatch.setattr("src.runtime.adapter_executor.execute_adapter_action", _fail_direct)
+    state = await load_coordination_run_state(group_id="g-1", coordination_run_id="coord-1")
+    assert state["coordination_run_id"] == "coord-1"
+    assert "adapter:portal:get_coordination_run" in calls
+
+
+@pytest.mark.asyncio
 async def test_run_delegation_cycle_evaluation_mode_loads_run_state(monkeypatch):
     async def _fake_load(*, group_id, coordination_run_id):
         assert group_id == "g-1"

@@ -8,7 +8,9 @@ from src.runtime.governance_bus import (
     GovernanceBus,
     GovernanceDecision,
     build_default_governance_bus,
+    _resolve_capability_context,
 )
+from src.runtime.task_capability_contracts import resolve_task_capability_contract
 
 
 @pytest.mark.asyncio
@@ -321,3 +323,242 @@ async def test_default_governance_external_trigger_allowlist_blocks_non_member()
 
     assert result.status == "blocked"
     assert result.output_payload["reason"] == "external_allowlist"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_denied_capability_ids_blocks_adapter_action():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:read_issue", "kwargs": {"issue_key": "ENG-1"}},
+        metadata={"denied_capability_ids": ["adapter:jira:read_issue"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "denied_capability_ids"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allowed_capability_types_missing_match_blocks():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:read_issue", "kwargs": {"issue_key": "ENG-1"}},
+        metadata={"allowed_capability_types": ["tool"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_capability_types"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_malformed_capability_lists_do_not_crash():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "tool_task", "tool_name": "read", "kwargs": {"file_path": "README.md"}},
+        metadata={
+            "allowed_capability_ids": "not-a-list",
+            "denied_capability_ids": {"x": 1},
+            "allowed_capability_types": None,
+            "denied_adapter_actions": 7,
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status in {"success", "error", "blocked"}
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_bare_tool_capability_name():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "tool_task", "tool_name": "shell", "kwargs": {"cmd": "echo hi"}},
+        metadata={"allowed_capability_ids": ["shell"]},
+    )
+    result = await bus.execute(req)
+    assert result.status in {"success", "error"}
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_capability_type_alias_action():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:read_issue", "kwargs": {"issue_key": "ENG-1"}},
+        metadata={"allowed_capability_types": ["action"]},
+    )
+    result = await bus.execute(req)
+    assert result.status in {"success", "error"}
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_capability_type_alias_channel():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:read_issue", "kwargs": {"issue_key": "ENG-1"}},
+        metadata={"allowed_capability_types": ["channel"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_capability_types"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allowed_actions_alias_supports_action_name():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:github:add_comment", "kwargs": {"owner": "acme", "repo": "demo", "pull_number": 1, "comment": "ok"}},
+        metadata={"allowed_actions": ["add_comment"]},
+    )
+    result = await bus.execute(req)
+    assert result.status in {"success", "error"}
+
+
+@pytest.mark.asyncio
+async def test_default_governance_denied_actions_alias_blocks_by_action_name():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:github:add_comment", "kwargs": {"owner": "acme", "repo": "demo", "pull_number": 1, "comment": "ok"}},
+        metadata={"denied_actions": ["add_comment"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "denied_adapter_actions"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_denied_actions_blocks_jira_transition_action_name():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:transition_issue", "kwargs": {"issue_key": "ENG-1", "transition": "Done"}},
+        metadata={"denied_actions": ["transition_issue"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "denied_adapter_actions"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_portal_style_metadata_combo_blocks_when_action_not_allowed():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        policy_profile_id="portal-profile-v1",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:transition_issue", "kwargs": {"issue_key": "ENG-1", "transition": "Done"}},
+        metadata={
+            "policy_profile_id": "portal-profile-v1",
+            "allowed_capability_types": ["action"],
+            "allowed_actions": ["add_comment"],
+            "external_triggered": True,
+            "governance_target": "adapter_action_task",
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_adapter_actions"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_portal_style_metadata_ignores_explainability_fields():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:github:add_comment", "kwargs": {"owner": "acme", "repo": "demo", "pull_number": 1, "comment": "ok"}},
+        metadata={
+            "capability_profile_id": "cap-2",
+            "policy_profile_id": "policy-2",
+            "allowed_capability_types": ["action"],
+            "allowed_actions": ["add_comment"],
+            "unresolved_actions": ["legacy_comment_action"],
+            "resolved_action_mappings": {"legacy_comment_action": "adapter:github:add_comment"},
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status in {"success", "error"}
+
+
+@pytest.mark.asyncio
+async def test_default_governance_requires_identity_binding_for_external_adapter_action():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:github:add_comment", "kwargs": {"owner": "acme"}},
+        metadata={"external_triggered": True},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "missing_identity_binding"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_blocks_identity_binding_system_mismatch():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:github:add_comment", "kwargs": {"owner": "acme"}},
+        metadata={
+            "external_triggered": True,
+            "identity_binding_system_type": "jira",
+            "identity_binding_external_account_id": "acct-1",
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "identity_binding_system_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_matching_identity_binding_for_external_adapter_action():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:github:add_comment", "kwargs": {"owner": "acme"}},
+        metadata={
+            "external_triggered": True,
+            "identity_binding_system_type": "github",
+            "identity_binding_external_account_id": "acct-1",
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status in {"success", "error"}
+
+
+def test_governance_context_matches_canonical_contract_for_github_review_task():
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 1},
+    )
+    gov_context = _resolve_capability_context(req)
+    plan = resolve_task_capability_contract("github_review_task", req.input_payload)
+    assert gov_context["capability_id"] == plan["primary_capability_id"]
+
+
+def test_governance_context_matches_canonical_contract_for_jira_review_task():
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "jira_workflow_review_task", "issue_key": "ENG-1"},
+    )
+    gov_context = _resolve_capability_context(req)
+    plan = resolve_task_capability_contract("jira_workflow_review_task", req.input_payload)
+    assert gov_context["capability_id"] == plan["primary_capability_id"]

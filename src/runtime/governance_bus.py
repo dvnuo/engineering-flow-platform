@@ -7,8 +7,10 @@ from typing import Any, Dict, Optional
 import uuid
 
 from src.agents.tool_result_policy import should_passthrough_tool_result
+from src.runtime.capability_registry import get_capability_registry
 from src.runtime.contracts import ExecutionRequest, ExecutionResult, make_execution_result
 from src.runtime.events import build_runtime_event
+from src.runtime.task_capability_contracts import resolve_task_capability_contract
 from src.utils.redaction import safe_preview
 
 _ALLOWED_RESULT_STATUSES = {"success", "error", "blocked", "queued", "started"}
@@ -105,6 +107,56 @@ class DefaultGovernanceBus(GovernanceBus):
     async def before_execute(self, request: ExecutionRequest) -> GovernanceDecision:
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
         policy_profile = request.policy_profile_id or metadata.get("policy_profile_id") or "default"
+        capability_context = _resolve_capability_context(request)
+
+        capability_decision = _evaluate_capability_constraints(
+            metadata=metadata,
+            capability_id=capability_context.get("capability_id"),
+            capability_type=capability_context.get("capability_type"),
+            action_id=capability_context.get("action_id"),
+        )
+        if capability_decision is not None:
+            deny_reason = capability_decision.get("reason") or "capability_policy_blocked"
+            audit = make_governance_audit_record(
+                request=request,
+                stage="before_execute",
+                message=capability_decision.get("message") or "Blocked by capability allow/deny policy",
+                metadata={
+                    "policy_profile_id": policy_profile,
+                    "rule": "capability_policy",
+                    "execution_type": request.execution_type,
+                    "capability_id": capability_context.get("capability_id"),
+                    "capability_type": capability_context.get("capability_type"),
+                    "action_id": capability_context.get("action_id"),
+                    "deny_reason": deny_reason,
+                },
+            )
+            return GovernanceDecision(allowed=False, reason=deny_reason, audit_record=audit)
+
+        identity_decision = _evaluate_identity_binding_constraints(
+            request=request,
+            metadata=metadata,
+            capability_id=capability_context.get("capability_id"),
+            capability_type=capability_context.get("capability_type"),
+            requires_identity_binding=bool(capability_context.get("requires_identity_binding")),
+        )
+        if identity_decision is not None:
+            deny_reason = identity_decision.get("reason") or "missing_identity_binding"
+            audit = make_governance_audit_record(
+                request=request,
+                stage="before_execute",
+                message=identity_decision.get("message") or "Blocked by identity binding policy",
+                metadata={
+                    "policy_profile_id": policy_profile,
+                    "rule": "identity_binding",
+                    "execution_type": request.execution_type,
+                    "capability_id": capability_context.get("capability_id"),
+                    "capability_type": capability_context.get("capability_type"),
+                    "deny_reason": deny_reason,
+                    **(identity_decision.get("metadata") or {}),
+                },
+            )
+            return GovernanceDecision(allowed=False, reason=deny_reason, audit_record=audit)
 
         if metadata.get("auto_run") is True and metadata.get("governance_require_explicit_allow") is True:
             if metadata.get("governance_allow_auto_run") is not True:
@@ -264,3 +316,312 @@ def build_default_governance_bus() -> GovernanceBus:
 
 class NoopGovernanceBus(GovernanceBus):
     """Explicit no-op governance implementation for compatibility paths."""
+
+
+def _as_lower_str_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    for item in value:
+        if item is None:
+            continue
+        text = str(item).strip().lower()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional[str]]:
+    payload = request.input_payload if isinstance(request.input_payload, dict) else {}
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    task_type = str(payload.get("task_type") or "").strip().lower()
+
+    capability_id: Optional[str] = None
+    action_id: Optional[str] = None
+    if request.execution_type == "task":
+        if task_type in {"adapter_action_task", "jira_workflow_review_task", "github_review_task", "delegation_task"}:
+            # Governance intentionally follows the same canonical wrapper-task
+            # contract used by execution to avoid split sources of truth.
+            plan = resolve_task_capability_contract(task_type, payload)
+            capability_id = str(plan.get("primary_capability_id") or plan.get("capability_id") or "").strip().lower() or None
+            action_id = str(plan.get("action_id") or capability_id or "").strip().lower() or None
+        elif task_type == "tool_task":
+            tool_name = str(payload.get("tool_name") or "").strip().lower()
+            capability_id = f"tool:{tool_name}" if tool_name else None
+    elif request.execution_type == "tool":
+        tool_name = str(payload.get("tool_name") or metadata.get("tool_name") or "").strip().lower()
+        capability_id = f"tool:{tool_name}" if tool_name else None
+    elif request.execution_type == "skill":
+        skill_name = str(payload.get("skill_name") or "").strip().lower()
+        capability_id = f"skill:{skill_name}" if skill_name else None
+
+    descriptor = get_capability_registry().get(capability_id) if capability_id else None
+    capability_type = descriptor.type if descriptor is not None else _infer_capability_type_from_id(capability_id)
+    return {
+        "capability_id": capability_id,
+        "capability_type": capability_type,
+        "action_id": action_id,
+        "requires_identity_binding": bool(descriptor.requires_identity_binding) if descriptor is not None else False,
+    }
+
+
+def _infer_capability_type_from_id(capability_id: Optional[str]) -> Optional[str]:
+    text = str(capability_id or "").strip().lower()
+    if text.startswith("adapter:"):
+        return "adapter_action"
+    if text.startswith("tool:"):
+        return "tool"
+    if text.startswith("skill:"):
+        return "skill"
+    if text.startswith("channel_action:"):
+        return "channel_action"
+    return None
+
+
+def _evaluate_capability_constraints(
+    *,
+    metadata: Dict[str, Any],
+    capability_id: Optional[str],
+    capability_type: Optional[str],
+    action_id: Optional[str],
+) -> Optional[Dict[str, str]]:
+    denied_capability_ids = _normalize_constraint_capability_ids(
+        metadata.get("denied_capability_ids"),
+        capability_type=capability_type,
+        action_id=action_id,
+    )
+    allowed_capability_ids = _normalize_constraint_capability_ids(
+        metadata.get("allowed_capability_ids"),
+        capability_type=capability_type,
+        action_id=action_id,
+    )
+    denied_capability_types = _normalize_constraint_capability_types(metadata.get("denied_capability_types"))
+    allowed_capability_types = _normalize_constraint_capability_types(metadata.get("allowed_capability_types"))
+    denied_adapter_actions = _normalize_action_constraints(
+        metadata.get("denied_adapter_actions"),
+        metadata.get("denied_actions"),
+    )
+    allowed_adapter_actions = _normalize_action_constraints(
+        metadata.get("allowed_adapter_actions"),
+        metadata.get("allowed_actions"),
+    )
+
+    normalized_capability_id = str(capability_id or "").strip().lower()
+    normalized_capability_type = str(capability_type or "").strip().lower()
+    normalized_action_id = str(action_id or "").strip().lower()
+    normalized_action_name = normalized_action_id.split(":")[-1] if normalized_action_id else ""
+
+    if _matches_capability_constraint(
+        constraints=denied_capability_ids,
+        capability_id=normalized_capability_id,
+        capability_type=normalized_capability_type,
+        action_name=normalized_action_name,
+    ):
+        return {"reason": "denied_capability_ids", "message": f"Capability blocked: {normalized_capability_id}"}
+    if denied_capability_types and normalized_capability_type and normalized_capability_type in denied_capability_types:
+        return {"reason": "denied_capability_types", "message": f"Capability type blocked: {normalized_capability_type}"}
+    if _matches_action_constraint(
+        constraints=denied_adapter_actions,
+        action_id=normalized_action_id,
+        action_name=normalized_action_name,
+    ):
+        return {"reason": "denied_adapter_actions", "message": f"Adapter action blocked: {normalized_action_id}"}
+
+    if allowed_capability_ids and not _matches_capability_constraint(
+        constraints=allowed_capability_ids,
+        capability_id=normalized_capability_id,
+        capability_type=normalized_capability_type,
+        action_name=normalized_action_name,
+    ):
+        return {"reason": "allowed_capability_ids", "message": "Capability not in allowlist"}
+    if allowed_capability_types and (not normalized_capability_type or normalized_capability_type not in allowed_capability_types):
+        return {"reason": "allowed_capability_types", "message": "Capability type not in allowlist"}
+    if allowed_adapter_actions and not _matches_action_constraint(
+        constraints=allowed_adapter_actions,
+        action_id=normalized_action_id,
+        action_name=normalized_action_name,
+    ):
+        return {"reason": "allowed_adapter_actions", "message": "Adapter action not in allowlist"}
+
+    return None
+
+
+def evaluate_capability_constraint_decision(
+    *,
+    metadata: Dict[str, Any],
+    capability_id: Optional[str],
+    capability_type: Optional[str],
+    action_id: Optional[str],
+) -> Optional[Dict[str, str]]:
+    return _evaluate_capability_constraints(
+        metadata=metadata,
+        capability_id=capability_id,
+        capability_type=capability_type,
+        action_id=action_id,
+    )
+
+
+def _normalize_constraint_capability_ids(value: Any, *, capability_type: Optional[str], action_id: Optional[str]) -> list[str]:
+    entries = _as_lower_str_list(value)
+    normalized: list[str] = []
+    for entry in entries:
+        if ":" in entry:
+            normalized.append(entry)
+            continue
+        expanded = _expand_capability_name_candidates(
+            entry,
+            capability_type=capability_type,
+            action_id=action_id,
+        )
+        normalized.extend(expanded)
+    return sorted(set(normalized))
+
+
+def _normalize_constraint_capability_types(value: Any) -> list[str]:
+    alias_map = {
+        "action": "adapter_action",
+        "adapter": "adapter_action",
+        "channel": "channel_action",
+        "tool": "tool",
+        "skill": "skill",
+        "adapter_action": "adapter_action",
+        "channel_action": "channel_action",
+    }
+    normalized: list[str] = []
+    for item in _as_lower_str_list(value):
+        mapped = alias_map.get(item)
+        if mapped:
+            normalized.append(mapped)
+    return sorted(set(normalized))
+
+
+def _expand_capability_name_candidates(
+    name: str,
+    *,
+    capability_type: Optional[str],
+    action_id: Optional[str],
+) -> list[str]:
+    normalized_name = str(name or "").strip().lower()
+    normalized_type = str(capability_type or "").strip().lower()
+    if not normalized_name:
+        return []
+    if normalized_type == "tool":
+        return [f"tool:{normalized_name}"]
+    if normalized_type == "skill":
+        return [f"skill:{normalized_name}"]
+    if normalized_type == "channel_action":
+        return [f"channel_action:{normalized_name}"]
+    if normalized_type == "adapter_action":
+        return [f"adapter_action_name:{normalized_name}"]
+    if str(action_id or "").strip().lower():
+        return [f"adapter_action_name:{normalized_name}"]
+    return [normalized_name]
+
+
+def _normalize_action_constraints(*values: Any) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        normalized.extend(_as_lower_str_list(value))
+    return sorted(set(normalized))
+
+
+def _matches_capability_constraint(
+    *,
+    constraints: list[str],
+    capability_id: str,
+    capability_type: str,
+    action_name: str,
+) -> bool:
+    if not constraints:
+        return False
+    for constraint in constraints:
+        if constraint == capability_id:
+            return True
+        if constraint.startswith("adapter_action_name:") and capability_type == "adapter_action":
+            if constraint.split(":", 1)[1] == action_name:
+                return True
+    return False
+
+
+def _matches_action_constraint(*, constraints: list[str], action_id: str, action_name: str) -> bool:
+    if not constraints:
+        return False
+    return action_id in constraints or action_name in constraints
+
+
+def _evaluate_identity_binding_constraints(
+    *,
+    request: ExecutionRequest,
+    metadata: Dict[str, Any],
+    capability_id: Optional[str],
+    capability_type: Optional[str],
+    requires_identity_binding: bool,
+) -> Optional[Dict[str, Any]]:
+    normalized_type = str(capability_type or "").strip().lower()
+    if not requires_identity_binding or normalized_type not in {"adapter_action", "channel_action"}:
+        return None
+    if not _is_external_or_task_like_request(request):
+        return None
+
+    binding = _extract_identity_binding(metadata)
+    if not binding:
+        return {"reason": "missing_identity_binding", "message": "Missing required identity binding metadata"}
+
+    expected_systems = _expected_identity_binding_systems(capability_id=capability_id, capability_type=normalized_type)
+    binding_system = str(binding.get("system_type") or "").strip().lower()
+    if expected_systems and binding_system and binding_system not in expected_systems:
+        return {
+            "reason": "identity_binding_system_mismatch",
+            "message": "Identity binding system does not match capability target",
+            "metadata": {"expected_system_type": sorted(expected_systems), "provided_system_type": binding_system},
+        }
+    return None
+
+
+def _is_external_or_task_like_request(request: ExecutionRequest) -> bool:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    if request.execution_type in {"event", "subagent"}:
+        return True
+    if request.source_type in {"github", "jira", "portal", "internal"}:
+        return True
+    return metadata.get("external_triggered") is True
+
+
+def _extract_identity_binding(metadata: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    nested = metadata.get("identity_binding")
+    if isinstance(nested, dict):
+        system_type = str(nested.get("system_type") or "").strip().lower()
+        binding_id = str(nested.get("id") or nested.get("identity_binding_id") or "").strip()
+        external_account_id = str(nested.get("external_account_id") or "").strip()
+        if system_type and (binding_id or external_account_id):
+            return {
+                "id": binding_id,
+                "system_type": system_type,
+                "external_account_id": external_account_id,
+            }
+
+    system_type = str(metadata.get("identity_binding_system_type") or "").strip().lower()
+    binding_id = str(metadata.get("identity_binding_id") or "").strip()
+    external_account_id = str(metadata.get("identity_binding_external_account_id") or "").strip()
+    if system_type and (binding_id or external_account_id):
+        return {
+            "id": binding_id,
+            "system_type": system_type,
+            "external_account_id": external_account_id,
+        }
+    return None
+
+
+def _expected_identity_binding_systems(*, capability_id: Optional[str], capability_type: str) -> set[str]:
+    normalized_id = str(capability_id or "").strip().lower()
+    if capability_type == "adapter_action" and normalized_id.startswith("adapter:"):
+        parts = normalized_id.split(":")
+        if len(parts) > 1 and parts[1]:
+            return {parts[1]}
+    if capability_type == "channel_action" and normalized_id.startswith("channel_action:"):
+        name = normalized_id.split(":", 1)[1]
+        if name.startswith("jira_"):
+            return {"jira"}
+        if name.startswith("confluence_"):
+            return {"confluence"}
+    return set()

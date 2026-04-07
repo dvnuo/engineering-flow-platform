@@ -21,7 +21,7 @@ class AdapterActionDescriptor:
 
 
 def build_github_adapter_capabilities() -> List[AdapterActionDescriptor]:
-    return [
+    return _with_adapter_metadata([
         AdapterActionDescriptor(
             action_id="adapter:github:review_pull_request",
             adapter="github",
@@ -50,11 +50,11 @@ def build_github_adapter_capabilities() -> List[AdapterActionDescriptor]:
             requires_identity_binding=True,
             source_ref="src.github",
         ),
-    ]
+    ])
 
 
 def build_jira_adapter_capabilities() -> List[AdapterActionDescriptor]:
-    return [
+    return _with_adapter_metadata([
         AdapterActionDescriptor(
             action_id="adapter:jira:read_issue",
             adapter="jira",
@@ -112,11 +112,11 @@ def build_jira_adapter_capabilities() -> List[AdapterActionDescriptor]:
             requires_identity_binding=True,
             source_ref="src.jira",
         ),
-    ]
+    ])
 
 
 def build_portal_adapter_capabilities() -> List[AdapterActionDescriptor]:
-    return [
+    return _with_adapter_metadata([
         AdapterActionDescriptor(
             action_id="adapter:portal:create_delegation",
             adapter="portal",
@@ -235,4 +235,14 @@ def build_portal_adapter_capabilities() -> List[AdapterActionDescriptor]:
             source_ref="src.runtime",
             metadata={"internal_portal_api": True},
         ),
-    ]
+    ])
+
+
+def _with_adapter_metadata(descriptors: List[AdapterActionDescriptor]) -> List[AdapterActionDescriptor]:
+    for descriptor in descriptors:
+        descriptor.metadata = {
+            "action_alias": descriptor.name,
+            "adapter_system": descriptor.adapter,
+            **dict(descriptor.metadata or {}),
+        }
+    return descriptors

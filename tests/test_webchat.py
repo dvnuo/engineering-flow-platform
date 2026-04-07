@@ -508,7 +508,105 @@ def test_routes_include_tasks_execute_and_existing_chat_route():
 
     routes = [r.resource.canonical for r in app.router.routes() if r.resource]
     assert "/api/tasks/execute" in routes
+    assert "/api/capabilities" in routes
     assert "/api/chat" in routes
+
+
+@pytest.mark.asyncio
+async def test_api_capabilities_returns_catalog_and_filters(monkeypatch):
+    from src.gateway import webchat
+
+    class _Registry:
+        def export_catalog_snapshot(self):
+            capabilities = [
+                {"capability_id": "tool:read", "type": "tool", "enabled": True},
+                {"capability_id": "adapter:jira:read_issue", "type": "adapter_action", "enabled": False},
+            ]
+            return {
+                "capabilities": capabilities,
+                "count": len(capabilities),
+                "catalog_version": "v-snap",
+                "generated_at": "2026-04-07T00:00:00Z",
+            }
+
+    monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
+
+    class _Request:
+        query = {"type": "tool", "enabled": "true"}
+
+    response = await webchat.api_capabilities(_Request())
+    body = json.loads(response.body)
+    assert response.status == 200
+    assert body["count"] == 1
+    assert body["capabilities"][0]["capability_id"] == "tool:read"
+    assert body["catalog_version"] == "v-snap"
+    assert body["generated_at"] == "2026-04-07T00:00:00Z"
+    assert body["supports_snapshot_contract"] is True
+
+
+@pytest.mark.asyncio
+async def test_api_capabilities_capability_id_not_found_returns_empty(monkeypatch):
+    from src.gateway import webchat
+
+    class _Registry:
+        def export_catalog_snapshot(self):
+            return {
+                "capabilities": [{"capability_id": "tool:read", "type": "tool", "enabled": True}],
+                "count": 1,
+                "catalog_version": "v-snap",
+                "generated_at": "2026-04-07T00:00:00Z",
+            }
+
+    monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
+
+    class _Request:
+        query = {"capability_id": "adapter:jira:missing"}
+
+    response = await webchat.api_capabilities(_Request())
+    body = json.loads(response.body)
+    assert response.status == 200
+    assert body["count"] == 0
+    assert body["capabilities"] == []
+    assert body["catalog_version"] == "v-snap"
+
+
+@pytest.mark.asyncio
+async def test_api_capabilities_filters_by_capability_id_and_type(monkeypatch):
+    from src.gateway import webchat
+
+    class _Registry:
+        def export_catalog_snapshot(self):
+            capabilities = [
+                {"capability_id": "tool:read", "type": "tool", "enabled": True},
+                {"capability_id": "tool:write", "type": "tool", "enabled": True},
+                {"capability_id": "adapter:jira:read_issue", "type": "adapter_action", "enabled": True},
+            ]
+            return {
+                "capabilities": capabilities,
+                "count": len(capabilities),
+                "catalog_version": "v-snap",
+                "generated_at": "2026-04-07T00:00:00Z",
+            }
+
+    monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
+
+    class _ByCapabilityIdRequest:
+        query = {"capability_id": "tool:write"}
+
+    by_id_response = await webchat.api_capabilities(_ByCapabilityIdRequest())
+    by_id_body = json.loads(by_id_response.body)
+    assert by_id_response.status == 200
+    assert by_id_body["count"] == 1
+    assert by_id_body["capabilities"] == [{"capability_id": "tool:write", "type": "tool", "enabled": True}]
+
+    class _ByTypeRequest:
+        query = {"type": "adapter_action"}
+
+    by_type_response = await webchat.api_capabilities(_ByTypeRequest())
+    by_type_body = json.loads(by_type_response.body)
+    assert by_type_response.status == 200
+    assert by_type_body["count"] == 1
+    assert by_type_body["capabilities"][0]["type"] == "adapter_action"
 
 
 @pytest.mark.asyncio

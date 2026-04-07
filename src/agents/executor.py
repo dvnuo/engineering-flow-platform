@@ -6,6 +6,7 @@ This module provides the ability to execute skills and tools based on user reque
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -358,8 +359,18 @@ async def execute_skill(skill_name: str, **kwargs) -> SkillResult:
 
 
 async def run_skill_execution(skill_name: str, **kwargs) -> SkillResult:
-    """Direct skill execution helper used by ExecutionBus adapters."""
-    # TODO(phase1): route deeper internal skill helper calls through ExecutionBus after compatibility validation.
+    """Skill execution helper with ExecutionBus-first routing.
+
+    Compatibility mode:
+    - Set EFP_ALLOW_LEGACY_DIRECT_EXECUTION=true to bypass bus routing.
+    - ExecutionBus internals set `_via_execution_bus=True` to avoid recursion.
+    """
+    via_execution_bus = bool(kwargs.pop("_via_execution_bus", False))
+    allow_legacy_direct = os.getenv("EFP_ALLOW_LEGACY_DIRECT_EXECUTION", "").strip().lower() == "true"
+
+    if not via_execution_bus and not allow_legacy_direct:
+        return await execute_skill(skill_name, _use_execution_bus=True, **kwargs)
+
     # Filter runtime control/internal kwargs before forwarding to concrete skill implementations.
     filtered_kwargs = {
         k: v
