@@ -670,6 +670,17 @@ async def test_api_chat_untrusted_portal_identity_is_ignored_and_trusted_header_
     assert captured["portal_user_name"] is None
     assert captured["user_name"] == "cli-user"
 
+    class _TrustedBodyOnlyRequest:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s3b", "portal_user_id": "body-only-id", "portal_user_name": "body-only-name"}
+
+    await webchat.api_chat(_TrustedBodyOnlyRequest())
+    assert captured["portal_user_id"] is None
+    assert captured["portal_user_name"] is None
+
     class _TrustedConflictRequest:
         app = {}
         headers = {"X-Portal-Author-Source": "portal", "X-Portal-User-Id": "header-id", "X-Portal-User-Name": "header-name"}
@@ -765,6 +776,50 @@ async def test_portal_trust_uses_config_fallback_internal_key(monkeypatch):
     assert captured["portal_user_id"] == "portal-u"
     assert captured["portal_user_name"] == "portal-name"
     assert captured["execution_metadata"]["allowed_actions"] == ["adapter:portal:get_group_task_board"]
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_trusted_request_does_not_accept_body_portal_identity(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data)
+
+    monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {
+                "message": "hello",
+                "session_id": "s-stream-identity",
+                "portal_user_id": "body-id",
+                "portal_user_name": "body-name",
+            }
+
+    resp = await webchat.api_chat_stream(_Request())
+    assert resp.status == 200
+    assert captured["portal_user_id"] is None
+    assert captured["portal_user_name"] is None
 
 
 def test_sanitize_portal_identity_value_none_returns_empty():

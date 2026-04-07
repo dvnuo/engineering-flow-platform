@@ -81,20 +81,16 @@ def _extract_portal_identity(request: web.Request, data: Dict[str, Any]) -> tupl
     headers = getattr(request, "headers", {}) or {}
     header_user_id = _sanitize_portal_identity_value(headers.get("X-Portal-User-Id"))
     header_user_name = _sanitize_portal_identity_value(headers.get("X-Portal-User-Name"))
-    body_user_id = _sanitize_portal_identity_value(data.get("portal_user_id"))
-    body_user_name = _sanitize_portal_identity_value(data.get("portal_user_name"))
 
     if not _is_trusted_portal_request(request):
         logger.debug("[portal_identity] resolved_source=untrusted has_user_id=False has_user_name=False")
         return None, None
 
-    resolved_user_id = header_user_id or body_user_id or None
-    resolved_user_name = header_user_name or body_user_name or None
+    resolved_user_id = header_user_id or None
+    resolved_user_name = header_user_name or None
 
     if header_user_id or header_user_name:
         source = "trusted_headers"
-    elif body_user_id or body_user_name:
-        source = "trusted_body"
     else:
         source = "trusted_none"
     logger.debug("[portal_identity] resolved_source=%s has_user_id=%s has_user_name=%s", source, bool(resolved_user_id), bool(resolved_user_name))
@@ -117,8 +113,8 @@ def _is_trusted_portal_request(request: web.Request) -> bool:
     expected_internal_key = _get_portal_internal_api_key()
     if not expected_internal_key:
         return True
-    provided_internal_key = str(headers.get("X-Portal-Internal-Api-Key") or "")
-    return provided_internal_key == expected_internal_key
+    provided_internal_key = str(headers.get("X-Portal-Internal-Api-Key") or "").strip()
+    return hmac.compare_digest(provided_internal_key, expected_internal_key)
 
 
 def _resolve_chat_display_user_name(data: Dict[str, Any], portal_user_name: Optional[str]) -> str:
