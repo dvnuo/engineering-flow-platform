@@ -6,8 +6,11 @@ from src.runtime.leader_delegation_adapter import (
     normalize_leader_delegation_request,
 )
 from src.runtime.leader_orchestration import (
+    aggregate_delegation_results,
     build_delegation_requests_from_task_breakdown,
     dispatch_task_breakdown_as_delegations,
+    evaluate_completion_criteria,
+    run_delegation_cycle,
 )
 
 
@@ -22,6 +25,21 @@ def test_normalize_leader_delegation_request_defaults():
     )
     assert payload["visibility"] == "leader_only"
     assert payload["parent_agent_id"] == "leader-1"
+
+
+def test_normalize_leader_delegation_request_preserves_run_metadata():
+    payload = normalize_leader_delegation_request(
+        {
+            "group_id": "g-1",
+            "leader_agent_id": "leader-1",
+            "assignee_agent_id": "a-1",
+            "objective": "Review",
+            "coordination_run_id": "coord-1",
+            "round_index": 2,
+        }
+    )
+    assert payload["coordination_run_id"] == "coord-1"
+    assert payload["round_index"] == 2
 
 
 @pytest.mark.asyncio
@@ -106,3 +124,61 @@ async def test_dispatch_task_breakdown_as_delegations_returns_batch_result(monke
     assert result["failed"] == 1
     assert len(result["items"]) == 2
 
+
+def test_aggregate_delegation_results_done_and_blockers():
+    aggregate_done = aggregate_delegation_results(
+        [
+            {"result": {"assignee_agent_id": "a-1", "status": "done"}},
+            {"result": {"assignee_agent_id": "a-2", "status": "done"}},
+        ]
+    )
+    assert aggregate_done["all_done"] is True
+    aggregate_blocked = aggregate_delegation_results(
+        [
+            {"result": {"assignee_agent_id": "a-1", "status": "done", "blockers": ["missing_data"]}},
+        ]
+    )
+    assert aggregate_blocked["has_blockers"] is True
+    assert "missing_data" in aggregate_blocked["blockers"]
+
+
+def test_evaluate_completion_criteria_default_and_blocked():
+    incomplete = evaluate_completion_criteria(None, {"all_done": False, "has_blockers": False})
+    assert incomplete["is_complete"] is False
+    blocked = evaluate_completion_criteria({"mode": "all_done"}, {"all_done": True, "has_blockers": True})
+    assert blocked["is_complete"] is False
+    assert blocked["reason"] == "blockers_present"
+
+
+@pytest.mark.asyncio
+async def test_run_delegation_cycle_next_action_continue_complete_blocked(monkeypatch):
+    async def _fake_dispatch(**_kwargs):
+        return {"success": True, "created": 1, "failed": 0, "items": [{"result": {"assignee_agent_id": "a-1", "status": "in_progress"}}]}
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.dispatch_task_breakdown_as_delegations", _fake_dispatch)
+    result_continue = await run_delegation_cycle(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        leader_session_id="s-1",
+        tasks=[{"assignee_agent_id": "a-1", "objective": "Task"}],
+    )
+    assert result_continue["coordination_run_id"].startswith("coord-")
+    assert result_continue["next_action"] == "continue"
+
+    result_complete = await run_delegation_cycle(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        leader_session_id="s-1",
+        tasks=[],
+        prior_results=[{"result": {"assignee_agent_id": "a-1", "status": "done"}}],
+    )
+    assert result_complete["next_action"] == "complete"
+
+    result_blocked = await run_delegation_cycle(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        leader_session_id="s-1",
+        tasks=[],
+        prior_results=[{"result": {"assignee_agent_id": "a-1", "status": "done", "blockers": ["blocked"]}}],
+    )
+    assert result_blocked["next_action"] == "blocked"

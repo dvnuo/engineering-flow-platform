@@ -15,6 +15,7 @@ STRUCTURED_FIELDS = (
     "retry_policy",
     "skill_kwargs",
 )
+PASSTHROUGH_FIELDS = ("coordination_run_id", "round_index", "leader_session_id")
 
 
 def normalize_leader_delegation_request(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -33,6 +34,9 @@ def normalize_leader_delegation_request(payload: Dict[str, Any]) -> Dict[str, An
     ).strip()
     for key in STRUCTURED_FIELDS:
         if key in request_payload:
+            normalized[key] = request_payload.get(key)
+    for key in PASSTHROUGH_FIELDS:
+        if key in request_payload and request_payload.get(key) is not None:
             normalized[key] = request_payload.get(key)
     return normalized
 

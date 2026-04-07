@@ -29,7 +29,7 @@ from src.runtime.governance_bus import (
     governance_audit_runtime_event,
 )
 from src.runtime.jira_workflow_review import run_jira_workflow_review
-from src.runtime.leader_orchestration import dispatch_task_breakdown_as_delegations
+from src.runtime.leader_orchestration import dispatch_task_breakdown_as_delegations, run_delegation_cycle
 
 logger = logging.getLogger(__name__)
 
@@ -1458,11 +1458,83 @@ def build_default_execution_bus(
 
     async def coordination_handler(request: ExecutionRequest) -> ExecutionResult:
         coordination_type = _non_empty_string(request.input_payload.get("coordination_type"))
-        if coordination_type != "delegation_batch":
+        if coordination_type not in {"delegation_batch", "delegation_cycle"}:
             return make_execution_result(
                 request_id=request.request_id,
                 status="blocked",
                 output_payload={"error": f"Unsupported coordination_type: {coordination_type}", "coordination_type": coordination_type},
+            )
+        if coordination_type == "delegation_cycle":
+            try:
+                group_id = _get_required(request.input_payload, "group_id")
+                leader_agent_id = _get_required(request.input_payload, "leader_agent_id")
+                leader_session_id = _get_required(request.input_payload, "leader_session_id")
+                cycle_result = await run_delegation_cycle(
+                    group_id=group_id,
+                    leader_agent_id=leader_agent_id,
+                    leader_session_id=leader_session_id,
+                    coordination_run_id=request.input_payload.get("coordination_run_id"),
+                    round_index=request.input_payload.get("round_index") if isinstance(request.input_payload.get("round_index"), int) else 0,
+                    tasks=request.input_payload.get("tasks") if isinstance(request.input_payload.get("tasks"), list) else [],
+                    prior_results=request.input_payload.get("prior_results") if isinstance(request.input_payload.get("prior_results"), list) else [],
+                    completion_criteria=request.input_payload.get("completion_criteria")
+                    if isinstance(request.input_payload.get("completion_criteria"), dict)
+                    else None,
+                    request_id=request.request_id,
+                )
+            except Exception as exc:
+                return make_execution_result(
+                    request_id=request.request_id,
+                    status="error",
+                    output_payload={"error": str(exc), "coordination_type": coordination_type},
+                )
+            delegation_ids = [
+                item.get("result", {}).get("delegation_id")
+                for item in cycle_result.get("items", [])
+                if isinstance(item, dict) and isinstance(item.get("result"), dict) and item.get("result", {}).get("delegation_id")
+            ]
+            runtime_events = [
+                build_runtime_event(
+                    event_type="coordination.delegation_cycle.completed"
+                    if cycle_result.get("success")
+                    else "coordination.delegation_cycle.failed",
+                    execution_type=request.execution_type,
+                    state="completed" if cycle_result.get("success") else "failed",
+                    session_id=request.session_id,
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    summary="delegation cycle coordination",
+                    detail_payload={
+                        "coordination_run_id": cycle_result.get("coordination_run_id"),
+                        "round_index": cycle_result.get("round_index"),
+                        "group_id": group_id,
+                        "leader_agent_id": leader_agent_id,
+                        "leader_session_id": leader_session_id,
+                        "created_count": cycle_result.get("created", 0),
+                        "failed_count": cycle_result.get("failed", 0),
+                        "delegation_ids": delegation_ids,
+                        "is_complete": bool(cycle_result.get("is_complete")),
+                        "next_action": cycle_result.get("next_action"),
+                    },
+                    legacy_payload={"legacy_type": "coordination_delegation_cycle"},
+                )
+            ]
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success" if cycle_result.get("success") else "error",
+                output_payload={
+                    "coordination_type": coordination_type,
+                    "success": bool(cycle_result.get("success")),
+                    "coordination_run_id": cycle_result.get("coordination_run_id"),
+                    "round_index": cycle_result.get("round_index"),
+                    "created": cycle_result.get("created", 0),
+                    "failed": cycle_result.get("failed", 0),
+                    "items": cycle_result.get("items", []),
+                    "aggregate": cycle_result.get("aggregate", {}),
+                    "is_complete": bool(cycle_result.get("is_complete")),
+                    "next_action": cycle_result.get("next_action"),
+                },
+                runtime_events=runtime_events,
             )
         try:
             group_id = _get_required(request.input_payload, "group_id")

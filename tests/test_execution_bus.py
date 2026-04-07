@@ -1302,6 +1302,46 @@ async def test_execution_bus_coordination_missing_fields_returns_error():
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_coordination_delegation_cycle_emits_cycle_event(monkeypatch):
+    async def _fake_run_cycle(**kwargs):
+        assert kwargs["group_id"] == "group-1"
+        return {
+            "success": True,
+            "coordination_run_id": "coord-run-1",
+            "round_index": 1,
+            "created": 2,
+            "failed": 0,
+            "items": [{"result": {"delegation_id": "d-1"}}, {"result": {"delegation_id": "d-2"}}],
+            "aggregate": {"all_done": False},
+            "is_complete": False,
+            "next_action": "continue",
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_delegation_cycle", _fake_run_cycle)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="coordination",
+        session_id="s-cycle",
+        input_payload={
+            "coordination_type": "delegation_cycle",
+            "group_id": "group-1",
+            "leader_agent_id": "leader-1",
+            "leader_session_id": "leader-session-1",
+            "round_index": 1,
+            "tasks": [{"assignee_agent_id": "a-1", "objective": "Task"}],
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert result.output_payload["coordination_run_id"] == "coord-run-1"
+    event = next(evt for evt in result.runtime_events if evt.get("event_type").startswith("coordination.delegation_cycle"))
+    assert event["detail_payload"]["coordination_run_id"] == "coord-run-1"
+    assert event["detail_payload"]["round_index"] == 1
+    assert event["detail_payload"]["next_action"] == "continue"
+
+
+@pytest.mark.asyncio
 async def test_execution_bus_task_handler_delegation_task_marks_failed_completion(monkeypatch):
     async def _fake_run_skill_execution(skill_name, **kwargs):
         return {"success": False, "error": "skill failed"}
