@@ -481,6 +481,13 @@ def _non_empty_string(value: Any) -> Optional[str]:
     return None
 
 
+def _normalize_agent_mode(value: Any) -> Optional[str]:
+    normalized = _non_empty_string(value)
+    if normalized in {"specialist", "task"}:
+        return normalized
+    return None
+
+
 def _build_structured_delegation_payload_from_skill_output(
     *,
     raw_skill_result: Dict[str, Any],
@@ -707,6 +714,13 @@ def build_default_execution_bus(
                 or metadata.get("strict_delegation_result") is True
             )
             leader_session_id = _non_empty_string(metadata.get("portal_leader_session_id")) or request.session_id
+            ephemeral_task_agent_id = _non_empty_string(request.input_payload.get("ephemeral_task_agent_id"))
+            task_agent_template_id = _non_empty_string(request.input_payload.get("task_agent_template_id"))
+            task_agent_scope = _non_empty_string(request.input_payload.get("task_agent_scope"))
+            task_agent_cleanup_policy = _non_empty_string(request.input_payload.get("task_agent_cleanup_policy"))
+            agent_mode = _normalize_agent_mode(request.input_payload.get("agent_mode"))
+            if not agent_mode:
+                agent_mode = "task" if ephemeral_task_agent_id else "specialist"
             resolved_shared_context_ref = _non_empty_string(request.input_payload.get("shared_context_ref")) or _non_empty_string(
                 metadata.get("shared_context_ref")
             )
@@ -723,6 +737,11 @@ def build_default_execution_bus(
                 "shared_context_materialized": shared_context_materialized,
                 "leader_session_id": leader_session_id,
                 "strict_delegation_result": strict_delegation_result,
+                "agent_mode": agent_mode,
+                "ephemeral_task_agent_id": ephemeral_task_agent_id,
+                "task_agent_template_id": task_agent_template_id,
+                "task_agent_scope": task_agent_scope,
+                "task_agent_cleanup_policy": task_agent_cleanup_policy,
             }
 
             def _delegation_failure_result(
@@ -805,6 +824,78 @@ def build_default_execution_bus(
                     summary="Delegation blocked: skill_kwargs must be an object/dict when provided",
                     blockers=["invalid_skill_kwargs"],
                 )
+            task_agent_context_errors: list[str] = []
+            if _non_empty_string(request.input_payload.get("agent_mode")) and agent_mode is None:
+                task_agent_context_errors.append("agent_mode must be one of: specialist, task")
+            if agent_mode == "task":
+                if not strict_delegation_result:
+                    task_agent_context_errors.append("strict_delegation_result must be true for task agent mode")
+                if not leader_session_id:
+                    task_agent_context_errors.append("leader_session_id is required for task agent mode")
+                if not ephemeral_task_agent_id:
+                    task_agent_context_errors.append("ephemeral_task_agent_id is required for task agent mode")
+                if not task_agent_scope:
+                    task_agent_context_errors.append("task_agent_scope is required for task agent mode")
+            if task_agent_context_errors:
+                audit_trace = {
+                    "request_id": request.request_id,
+                    "task_id": task_id,
+                    "leader_agent_id": leader_agent_id,
+                    "leader_session_id": leader_session_id,
+                    "strict_delegation_result": strict_delegation_result,
+                    "agent_mode": agent_mode,
+                    "ephemeral_task_agent_id": ephemeral_task_agent_id,
+                    "task_agent_template_id": task_agent_template_id,
+                    "task_agent_scope": task_agent_scope,
+                    "task_agent_cleanup_policy": task_agent_cleanup_policy,
+                }
+                delegation_result = make_delegation_result(
+                    delegation_id=delegation_id,
+                    assignee_agent_id=request.input_payload.get("assignee_agent_id"),
+                    status="failed",
+                    blockers=["invalid_task_agent_context"],
+                    summary="Delegation failed: invalid task agent execution context",
+                    raw_result={"error": "invalid_task_agent_context"},
+                    audit_trace=audit_trace,
+                )
+                delegation_payload = {
+                    "delegation_id": delegation_result.delegation_id,
+                    "assignee_agent_id": delegation_result.assignee_agent_id,
+                    "status": delegation_result.status,
+                    "summary": delegation_result.summary,
+                    "artifacts": delegation_result.artifacts,
+                    "blockers": delegation_result.blockers,
+                    "next_recommendation": delegation_result.next_recommendation,
+                    "audit_trace": delegation_result.audit_trace,
+                    "raw_result": delegation_result.raw_result,
+                }
+                runtime_events = [
+                    build_runtime_event(
+                        event_type="task.delegation.failed",
+                        execution_type=request.execution_type,
+                        state="failed",
+                        session_id=request.session_id,
+                        request_id=request.request_id,
+                        agent_id=request.agent_id,
+                        summary=f"delegation task {delegation_id}",
+                        task_id=task_id,
+                        detail_payload={**common_event_detail, "task_agent_context_errors": task_agent_context_errors},
+                        legacy_payload={"legacy_type": "task_delegation"},
+                    )
+                ]
+                return make_execution_result(
+                    request_id=request.request_id,
+                    status="error",
+                    output_payload={
+                        "task_type": task_type,
+                        "delegation_id": delegation_id,
+                        "success": False,
+                        "delegation_result": delegation_payload,
+                        "error": "invalid_task_agent_context",
+                        "task_boundary": True,
+                    },
+                    runtime_events=runtime_events,
+                )
 
             pending_record = {
                 "delegation_id": delegation_id,
@@ -819,6 +910,11 @@ def build_default_execution_bus(
                 "shared_context_materialized": shared_context_materialized,
                 "skill_name": skill_name.strip(),
                 "leader_session_id": leader_session_id,
+                "agent_mode": agent_mode,
+                "ephemeral_task_agent_id": ephemeral_task_agent_id,
+                "task_agent_template_id": task_agent_template_id,
+                "task_agent_scope": task_agent_scope,
+                "task_agent_cleanup_policy": task_agent_cleanup_policy,
                 "status": "pending",
                 "created_at": datetime.utcnow().isoformat() + "Z",
             }
@@ -855,6 +951,11 @@ def build_default_execution_bus(
                     "request_metadata": dict(request.metadata or {}),
                     "leader_session_id": leader_session_id,
                     "strict_delegation_result": strict_delegation_result,
+                    "agent_mode": agent_mode,
+                    "ephemeral_task_agent_id": ephemeral_task_agent_id,
+                    "task_agent_template_id": task_agent_template_id,
+                    "task_agent_scope": task_agent_scope,
+                    "task_agent_cleanup_policy": task_agent_cleanup_policy,
                 }
                 skill_kwargs["delegation_context"] = delegation_context
                 skill_kwargs.setdefault("session_id", request.session_id)
@@ -870,6 +971,11 @@ def build_default_execution_bus(
                     "leader_agent_id": leader_agent_id,
                     "leader_session_id": leader_session_id,
                     "strict_delegation_result": strict_delegation_result,
+                    "agent_mode": agent_mode,
+                    "ephemeral_task_agent_id": ephemeral_task_agent_id,
+                    "task_agent_template_id": task_agent_template_id,
+                    "task_agent_scope": task_agent_scope,
+                    "task_agent_cleanup_policy": task_agent_cleanup_policy,
                 }
                 strict_extraction_errors: list[str] = []
                 if strict_delegation_result:
