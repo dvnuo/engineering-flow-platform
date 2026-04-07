@@ -214,6 +214,21 @@ engineering-flow-platform/
 
 For complete control-plane contract details, see `docs/control_plane_contract.md`.
 
+### Portal Control-Plane Integration (Operator Minimum)
+
+1. **Portal -> EFP trusted chat**  
+   Headers: `X-Portal-Author-Source: portal` and (when configured) `X-Portal-Internal-Api-Key`  
+   Key source on EFP: `PORTAL_INTERNAL_API_KEY` (env) or `server.portal_internal_api_key`.
+
+2. **Portal -> EFP internal runtime endpoints** (`/api/tasks/execute`, `/api/capabilities`)  
+   Header: `X-Internal-Api-Key`  
+   Key source on EFP: `RUNTIME_INTERNAL_API_KEY` (env) or `server.runtime_internal_api_key`.
+
+3. **EFP adapter -> Portal internal APIs** (`adapter:portal:*`)  
+   Requires `PORTAL_INTERNAL_BASE_URL` (env) or `server.portal_internal_base_url`.  
+   Uses `X-Internal-Api-Key` from `PORTAL_INTERNAL_API_KEY` (env) or `server.portal_internal_api_key`.  
+   Optional legacy token: `PORTAL_INTERNAL_AUTH_TOKEN` (env) or `server.portal_internal_auth_token`.
+
 ### Sessions
 
 | Endpoint | Method | Description |

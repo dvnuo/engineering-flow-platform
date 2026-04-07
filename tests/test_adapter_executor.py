@@ -8,6 +8,7 @@ from src.runtime.adapter_executor import (
     validate_enabled_adapter_actions_have_executors,
 )
 from src.runtime.leader_delegation_adapter import create_portal_delegation_from_runtime
+from src.utils.internal_api_keys import build_portal_internal_api_headers
 
 
 @pytest.mark.asyncio
@@ -297,6 +298,84 @@ def test_build_portal_headers_keeps_auth_token_and_config_fallback_api_key(monke
 
     assert headers["Authorization"] == "Bearer legacy-token"
     assert headers["X-Internal-Api-Key"] == "cfg-key-2"
+
+
+@pytest.mark.asyncio
+async def test_execute_portal_action_uses_config_fallback_base_url(monkeypatch):
+    captured = {}
+
+    async def _fake_get(url, headers):
+        captured["url"] = url
+        captured["headers"] = headers
+        return {"success": True, "error": None, "result": {"items": []}}
+
+    monkeypatch.delenv("PORTAL_INTERNAL_BASE_URL", raising=False)
+    monkeypatch.setattr(
+        "src.utils.internal_api_keys.global_config.get",
+        lambda key, default=None: (
+            "https://portal.cfg"
+            if key == "server.portal_internal_base_url"
+            else "cfg-key"
+            if key == "server.portal_internal_api_key"
+            else default
+        ),
+    )
+    monkeypatch.setattr("src.runtime.adapter_executor._get_portal_json", _fake_get)
+
+    result = await execute_adapter_action("adapter:portal:list_group_delegations", {"group_id": "group-1"})
+    assert result["success"] is True
+    assert captured["url"].startswith("https://portal.cfg/")
+
+
+@pytest.mark.asyncio
+async def test_execute_portal_action_base_url_env_precedence_over_config(monkeypatch):
+    captured = {}
+
+    async def _fake_get(url, headers):
+        captured["url"] = url
+        captured["headers"] = headers
+        return {"success": True, "error": None, "result": {"items": []}}
+
+    monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.env")
+    monkeypatch.setattr(
+        "src.utils.internal_api_keys.global_config.get",
+        lambda key, default=None: (
+            "https://portal.cfg"
+            if key == "server.portal_internal_base_url"
+            else "cfg-key"
+            if key == "server.portal_internal_api_key"
+            else default
+        ),
+    )
+    monkeypatch.setattr("src.runtime.adapter_executor._get_portal_json", _fake_get)
+
+    result = await execute_adapter_action("adapter:portal:get_group_task_board", {"group_id": "group-1"})
+    assert result["success"] is True
+    assert captured["url"].startswith("https://portal.env/")
+
+
+def test_build_portal_internal_api_headers_auth_token_config_fallback(monkeypatch):
+    monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "src.utils.internal_api_keys.global_config.get",
+        lambda key, default=None: "tok-cfg" if key == "server.portal_internal_auth_token" else default,
+    )
+
+    headers = build_portal_internal_api_headers()
+
+    assert headers["Authorization"] == "Bearer tok-cfg"
+
+
+def test_build_portal_internal_api_headers_auth_token_env_precedence(monkeypatch):
+    monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "tok-env")
+    monkeypatch.setattr(
+        "src.utils.internal_api_keys.global_config.get",
+        lambda key, default=None: "tok-cfg" if key == "server.portal_internal_auth_token" else default,
+    )
+
+    headers = build_portal_internal_api_headers()
+
+    assert headers["Authorization"] == "Bearer tok-env"
 
 
 @pytest.mark.asyncio

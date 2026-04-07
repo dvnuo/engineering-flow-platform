@@ -25,8 +25,9 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 ## 3) Runtime Adapter → Portal Internal API Contract
 
 - `adapter:portal:*` actions call Portal internal APIs with:
+  - base URL from `PORTAL_INTERNAL_BASE_URL` env, fallback `server.portal_internal_base_url`
   - `X-Internal-Api-Key` (from `PORTAL_INTERNAL_API_KEY` env, fallback `server.portal_internal_api_key`)
-  - optional `Authorization: Bearer <PORTAL_INTERNAL_AUTH_TOKEN>` (legacy compatibility)
+  - optional `Authorization: Bearer <PORTAL_INTERNAL_AUTH_TOKEN>` (legacy compatibility; env first, fallback `server.portal_internal_auth_token`)
 - This is Runtime → Portal API auth and is distinct from chat trust header `X-Portal-Internal-Api-Key`.
 
 ## 4) Key Pairing Matrix
@@ -35,4 +36,4 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 |---|---|---|
 | Portal → EFP `/api/tasks/execute`, `/api/capabilities` | `server.runtime_internal_api_key` or `RUNTIME_INTERNAL_API_KEY` | `X-Internal-Api-Key` |
 | Portal → EFP trusted chat metadata/identity | `server.portal_internal_api_key` or `PORTAL_INTERNAL_API_KEY` | `X-Portal-Internal-Api-Key` |
-| Runtime adapter (`adapter:portal:*`) → Portal internal API | `server.portal_internal_api_key` or `PORTAL_INTERNAL_API_KEY` | `X-Internal-Api-Key` |
+| Runtime adapter (`adapter:portal:*`) → Portal internal API | `server.portal_internal_base_url` / `PORTAL_INTERNAL_BASE_URL`; `server.portal_internal_api_key` / `PORTAL_INTERNAL_API_KEY`; optional `server.portal_internal_auth_token` / `PORTAL_INTERNAL_AUTH_TOKEN` | `X-Internal-Api-Key` (+ optional `Authorization`) |

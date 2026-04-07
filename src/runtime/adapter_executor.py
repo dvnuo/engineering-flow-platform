@@ -13,7 +13,7 @@ from src.runtime.capability_adapters import (
     build_jira_adapter_capabilities,
     build_portal_adapter_capabilities,
 )
-from src.utils.internal_api_keys import build_portal_internal_api_headers
+from src.utils.internal_api_keys import build_portal_internal_api_headers, get_portal_internal_base_url
 
 
 def _event(event_type: str, state: str, detail_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -332,7 +332,7 @@ async def _delete_portal_json(url: str, headers: Dict[str, str]) -> Dict[str, An
 async def execute_portal_control_plane_action(action_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     action = str(action_name or "").strip()
     payload = dict(kwargs or {})
-    base_url = os.getenv("PORTAL_INTERNAL_BASE_URL", "").strip().rstrip("/")
+    base_url = get_portal_internal_base_url()
     if not base_url:
         return {"success": False, "error": "PORTAL_INTERNAL_BASE_URL is not configured", "system": "portal", "action_name": action, "result": None}
 

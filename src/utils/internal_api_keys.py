@@ -16,6 +16,22 @@ def get_portal_internal_api_key() -> str:
     return str(config_key or "").strip()
 
 
+def get_portal_internal_base_url() -> str:
+    env_value = str(os.getenv("PORTAL_INTERNAL_BASE_URL") or "").strip()
+    if env_value:
+        return env_value.rstrip("/")
+    config_value = global_config.get("server.portal_internal_base_url", "")
+    return str(config_value or "").strip().rstrip("/")
+
+
+def get_portal_internal_auth_token() -> str:
+    env_value = str(os.getenv("PORTAL_INTERNAL_AUTH_TOKEN") or "").strip()
+    if env_value:
+        return env_value
+    config_value = global_config.get("server.portal_internal_auth_token", "")
+    return str(config_value or "").strip()
+
+
 def get_runtime_internal_api_key() -> str:
     env_key = str(os.getenv("RUNTIME_INTERNAL_API_KEY") or "").strip()
     if env_key:
@@ -28,7 +44,7 @@ def build_portal_internal_api_headers(include_content_type: bool = True) -> Dict
     headers: Dict[str, str] = {}
     if include_content_type:
         headers["Content-Type"] = "application/json"
-    token = str(os.getenv("PORTAL_INTERNAL_AUTH_TOKEN") or "").strip()
+    token = get_portal_internal_auth_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
     api_key = get_portal_internal_api_key()
