@@ -136,6 +136,7 @@ def build_portal_adapter_capabilities() -> List[AdapterActionDescriptor]:
             policy_tags=["portal", "control_plane", "delegation", "write"],
             requires_identity_binding=False,
             source_ref="src.runtime",
+            metadata={"internal_portal_api": True},
         ),
         AdapterActionDescriptor(
             action_id="adapter:portal:list_group_delegations",
@@ -146,6 +147,7 @@ def build_portal_adapter_capabilities() -> List[AdapterActionDescriptor]:
             policy_tags=["portal", "control_plane", "delegation", "read"],
             requires_identity_binding=False,
             source_ref="src.runtime",
+            metadata={"internal_portal_api": True},
         ),
         AdapterActionDescriptor(
             action_id="adapter:portal:get_group_task_board",
@@ -156,5 +158,6 @@ def build_portal_adapter_capabilities() -> List[AdapterActionDescriptor]:
             policy_tags=["portal", "control_plane", "delegation", "read"],
             requires_identity_binding=False,
             source_ref="src.runtime",
+            metadata={"internal_portal_api": True},
         ),
     ]

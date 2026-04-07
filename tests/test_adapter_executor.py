@@ -1,6 +1,7 @@
 import pytest
 
 from src.runtime.adapter_executor import execute_adapter_action, execute_jira_workflow_action
+from src.runtime.leader_delegation_adapter import create_portal_delegation_from_runtime
 
 
 @pytest.mark.asyncio
@@ -113,7 +114,7 @@ async def test_execute_adapter_action_portal_create_delegation_normalizes_struct
         return {"success": True, "error": None, "result": {"delegation_id": "d-1"}}
 
     monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.internal")
-    monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "tok-1")
+    monkeypatch.setenv("PORTAL_INTERNAL_API_KEY", "tok-1")
     monkeypatch.setattr("src.runtime.adapter_executor._post_portal_json", _fake_post)
 
     result = await execute_adapter_action(
@@ -133,9 +134,62 @@ async def test_execute_adapter_action_portal_create_delegation_normalizes_struct
     )
     assert result["success"] is True
     assert result["system"] == "portal"
-    assert captured["url"] == "https://portal.internal/internal/api/delegations"
+    assert captured["url"] == "https://portal.internal/api/internal/agent-delegations"
+    assert captured["headers"]["X-Internal-Api-Key"] == "tok-1"
+    assert "X-Portal-Internal-Api-Key" not in captured["headers"]
     assert isinstance(captured["payload"]["scoped_context_payload_json"], str)
     assert isinstance(captured["payload"]["input_artifacts_json"], str)
     assert isinstance(captured["payload"]["expected_output_schema_json"], str)
     assert isinstance(captured["payload"]["retry_policy_json"], str)
     assert isinstance(captured["payload"]["skill_kwargs_json"], str)
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_portal_read_actions_use_get(monkeypatch):
+    captured = []
+
+    async def _fake_get(url, headers):
+        captured.append((url, headers))
+        return {"success": True, "error": None, "result": {"items": []}}
+
+    monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.internal")
+    monkeypatch.setenv("PORTAL_INTERNAL_API_KEY", "k-1")
+    monkeypatch.setattr("src.runtime.adapter_executor._get_portal_json", _fake_get)
+
+    result_a = await execute_adapter_action("adapter:portal:list_group_delegations", {"group_id": "group-1"})
+    result_b = await execute_adapter_action("adapter:portal:get_group_task_board", {"group_id": "group-1"})
+
+    assert result_a["success"] is True
+    assert result_b["success"] is True
+    assert captured[0][0] == "https://portal.internal/api/internal/agent-groups/group-1/delegations"
+    assert captured[1][0] == "https://portal.internal/api/internal/agent-groups/group-1/task-board"
+    assert captured[0][1]["X-Internal-Api-Key"] == "k-1"
+
+
+@pytest.mark.asyncio
+async def test_create_portal_delegation_from_runtime_normalizes_result(monkeypatch):
+    async def _fake_execute_adapter_action(action_id, kwargs):
+        assert action_id == "adapter:portal:create_delegation"
+        return {"success": True, "result": {"delegation_id": "d-100"}, "error": None}
+
+    monkeypatch.setattr("src.runtime.leader_delegation_adapter.execute_adapter_action", _fake_execute_adapter_action)
+    result = await create_portal_delegation_from_runtime(
+        {
+            "group_id": "g-1",
+            "leader_agent_id": "l-1",
+            "assignee_agent_id": "a-1",
+            "objective": "Review",
+            "visibility": "leader_only",
+        }
+    )
+    assert result["success"] is True
+    assert result["delegation_id"] == "d-100"
+    assert result["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_portal_delegation_from_runtime_missing_fields_error():
+    result = await create_portal_delegation_from_runtime({"group_id": "g-1"})
+    assert result["success"] is False
+    assert result["delegation_id"] is None
+    assert "Missing required fields" in result["error"]

@@ -1211,14 +1211,46 @@ async def test_execution_bus_delegation_execution_type_works_without_task_handle
             "visibility": "leader_only",
             "leader_agent_id": "leader-1",
             "group_id": "group-1",
+            "parent_agent_id": "parent-1",
+            "assignee_agent_id": "assignee-1",
             "skill_name": "demo_skill",
             "strict_delegation_result": True,
+            "shared_context_ref": "ctx://1",
+            "scoped_context_ref": "scope://1",
+            "agent_mode": "task",
+            "ephemeral_task_agent_id": "task-agent-1",
+            "task_agent_template_id": "tmpl-1",
+            "task_agent_scope": "repo:acme/demo",
+            "task_agent_cleanup_policy": "delete_after_completion",
         },
     )
     result = await bus.execute(req)
     assert result.status == "success"
     assert result.output_payload["task_type"] == "delegation"
     assert result.output_payload["delegation_id"] == "del-direct-1"
+    delegation_event = next(evt for evt in result.runtime_events if evt.get("event_type") == "task.delegation.completed")
+    assert delegation_event["execution_type"] == "delegation"
+    detail = delegation_event["detail_payload"]
+    for key in [
+        "delegation_id",
+        "group_id",
+        "leader_agent_id",
+        "parent_agent_id",
+        "assignee_agent_id",
+        "visibility",
+        "skill_name",
+        "shared_context_ref",
+        "scoped_context_ref",
+        "shared_context_materialized",
+        "leader_session_id",
+        "strict_delegation_result",
+        "agent_mode",
+        "ephemeral_task_agent_id",
+        "task_agent_template_id",
+        "task_agent_scope",
+        "task_agent_cleanup_policy",
+    ]:
+        assert key in detail
 
 
 @pytest.mark.asyncio

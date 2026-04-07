@@ -57,6 +57,9 @@ def test_default_registry_includes_skill_and_adapter_capabilities():
     assert any(item.capability_id.startswith("adapter:jira:") for item in adapters)
     assert any(item.capability_id.startswith("adapter:portal:") for item in adapters)
     assert any(item.capability_id == "adapter:portal:create_delegation" for item in adapters)
+    portal_actions = [item for item in adapters if item.capability_id.startswith("adapter:portal:")]
+    assert portal_actions
+    assert all(item.metadata.get("internal_portal_api") is True for item in portal_actions)
     assert any(item.capability_id == "adapter:jira:add_comment" for item in adapters)
 
 

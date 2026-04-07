@@ -254,13 +254,25 @@ def _build_portal_headers() -> Dict[str, str]:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     if api_key:
-        headers["X-Portal-Internal-Api-Key"] = api_key
+        headers["X-Internal-Api-Key"] = api_key
     return headers
 
 
 async def _post_portal_json(url: str, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
     async with ClientSession(headers=headers) as session:
         async with session.post(url, json=payload) as response:
+            try:
+                data = await response.json()
+            except Exception:
+                data = {"raw": await response.text()}
+            if response.status >= 400:
+                return {"success": False, "error": f"Portal request failed: HTTP {response.status}", "result": data}
+            return {"success": True, "error": None, "result": data}
+
+
+async def _get_portal_json(url: str, headers: Dict[str, str]) -> Dict[str, Any]:
+    async with ClientSession(headers=headers) as session:
+        async with session.get(url) as response:
             try:
                 data = await response.json()
             except Exception:
@@ -277,13 +289,7 @@ async def execute_portal_control_plane_action(action_name: str, kwargs: Dict[str
     if not base_url:
         return {"success": False, "error": "PORTAL_INTERNAL_BASE_URL is not configured", "system": "portal", "action_name": action, "result": None}
 
-    endpoints = {
-        "create_delegation": "/internal/api/delegations",
-        "list_group_delegations": "/internal/api/delegations",
-        "get_group_task_board": "/internal/api/task-board",
-    }
-    endpoint = endpoints.get(action)
-    if endpoint is None:
+    if action not in {"create_delegation", "list_group_delegations", "get_group_task_board"}:
         return {"success": False, "error": f"Unsupported portal action: {action}", "system": "portal", "action_name": action, "result": None}
 
     if action == "create_delegation":
@@ -307,17 +313,23 @@ async def execute_portal_control_plane_action(action_name: str, kwargs: Dict[str
         payload.pop("expected_output_schema", None)
         payload.pop("retry_policy", None)
         payload.pop("skill_kwargs", None)
-        outcome = await _post_portal_json(f"{base_url}{endpoint}", payload, _build_portal_headers())
+        outcome = await _post_portal_json(f"{base_url}/api/internal/agent-delegations", payload, _build_portal_headers())
     elif action == "list_group_delegations":
         group_id = str(payload.get("group_id") or "").strip()
         if not group_id:
             return {"success": False, "error": "group_id is required", "system": "portal", "action_name": action, "result": None}
-        outcome = await _post_portal_json(f"{base_url}{endpoint}", {"group_id": group_id}, _build_portal_headers())
+        outcome = await _get_portal_json(
+            f"{base_url}/api/internal/agent-groups/{group_id}/delegations",
+            _build_portal_headers(),
+        )
     else:
         group_id = str(payload.get("group_id") or "").strip()
         if not group_id:
             return {"success": False, "error": "group_id is required", "system": "portal", "action_name": action, "result": None}
-        outcome = await _post_portal_json(f"{base_url}{endpoint}", {"group_id": group_id}, _build_portal_headers())
+        outcome = await _get_portal_json(
+            f"{base_url}/api/internal/agent-groups/{group_id}/task-board",
+            _build_portal_headers(),
+        )
 
     return {
         "success": bool(outcome.get("success")),

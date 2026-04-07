@@ -697,10 +697,47 @@ def build_default_execution_bus(
             wait_for_completion=bool(request.input_payload.get("wait_for_completion", False)),
         )
 
+    async def _execute_delegation_request(
+        request: ExecutionRequest,
+        *,
+        task_id: Optional[str],
+        task_type_override: Optional[str] = None,
+    ) -> ExecutionResult:
+        adapted_payload = dict(request.input_payload or {})
+        adapted_payload["task_type"] = "delegation_task"
+        adapted_request = make_execution_request(
+            request_id=request.request_id,
+            source_type=request.source_type,
+            source_ref=request.source_ref,
+            agent_id=request.agent_id,
+            session_id=request.session_id,
+            execution_type=request.execution_type,
+            input_payload=adapted_payload,
+            context_ref=request.context_ref,
+            policy_profile_id=request.policy_profile_id,
+            metadata={
+                **(request.metadata or {}),
+                "_delegation_helper_invoked": True,
+                "_delegation_task_id": task_id,
+            },
+        )
+        result = await task_handler(adapted_request)
+        if isinstance(result.output_payload, dict) and task_type_override:
+            result.output_payload["task_type"] = task_type_override
+        return result
+
     async def task_handler(request: ExecutionRequest) -> ExecutionResult:
         task_id = bus._resolve_task_id(request)
         task_type = request.input_payload.get("task_type")
         if task_type == "delegation_task":
+            metadata = request.metadata if isinstance(request.metadata, dict) else {}
+            if metadata.get("_delegation_helper_invoked") is not True:
+                return await _execute_delegation_request(
+                    request,
+                    task_id=task_id,
+                    task_type_override="delegation_task",
+                )
+            task_id = metadata.get("_delegation_task_id") or task_id
             delegation_id = _get_required(request.input_payload, "delegation_id")
             objective = _get_required(request.input_payload, "objective")
             visibility = _get_required(request.input_payload, "visibility")
@@ -948,7 +985,11 @@ def build_default_execution_bus(
                     "deadline": request.input_payload.get("deadline"),
                     "retry_policy": dict(request.input_payload.get("retry_policy") or {}),
                     "visibility": visibility,
-                    "request_metadata": dict(request.metadata or {}),
+                    "request_metadata": {
+                        key: value
+                        for key, value in dict(request.metadata or {}).items()
+                        if not str(key).startswith("_delegation_")
+                    },
                     "leader_session_id": leader_session_id,
                     "strict_delegation_result": strict_delegation_result,
                     "agent_mode": agent_mode,
@@ -1407,24 +1448,12 @@ def build_default_execution_bus(
         )
 
     async def delegation_handler(request: ExecutionRequest) -> ExecutionResult:
-        adapted_payload = dict(request.input_payload or {})
-        adapted_payload["task_type"] = "delegation_task"
-        adapted_request = make_execution_request(
-            request_id=request.request_id,
-            source_type=request.source_type,
-            source_ref=request.source_ref,
-            agent_id=request.agent_id,
-            session_id=request.session_id,
-            execution_type="task",
-            input_payload=adapted_payload,
-            context_ref=request.context_ref,
-            policy_profile_id=request.policy_profile_id,
-            metadata=request.metadata,
+        task_id = bus._resolve_task_id(request)
+        return await _execute_delegation_request(
+            request,
+            task_id=task_id,
+            task_type_override="delegation",
         )
-        result = await task_handler(adapted_request)
-        if isinstance(result.output_payload, dict):
-            result.output_payload["task_type"] = "delegation"
-        return result
 
     async def event_handler(request: ExecutionRequest) -> ExecutionResult:
         raw_target = request.metadata.get("target_execution_type") or request.input_payload.get("target_execution_type")
