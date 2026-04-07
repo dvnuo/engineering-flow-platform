@@ -56,7 +56,11 @@ async def test_execution_bus_tool_handler_preserves_tool_result_shape(monkeypatc
 
     result = await bus.execute(req)
     assert result.status in {"success", "error"}
-    assert set(result.output_payload.keys()) == {"success", "content", "error"}
+    assert result.output_payload["success"] is True
+    assert result.output_payload["content"] == "ok"
+    assert result.output_payload["capability_id"] == "tool:run_command"
+    assert result.output_payload["capability_type"] == "tool"
+    assert result.output_payload["tool_name"] == "run_command"
 
 
 @pytest.mark.asyncio
@@ -521,7 +525,29 @@ async def test_execution_bus_task_handler_tool_task(monkeypatch):
     assert result.output_payload["tool_name"] == "demo_tool"
     assert result.output_payload["task_boundary"] is True
     assert result.output_payload["success"] is True
+    assert result.output_payload["capability_id"] == "tool:demo_tool"
+    assert result.output_payload["capability_type"] == "tool"
     assert captured["session_id"] == "s-task"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_tool_handler_failure_preserves_normalized_capability_metadata(monkeypatch):
+    async def _fake_execute_tool_by_name(_name, **_kwargs):
+        return ToolResult(success=False, content=None, error="tool failed")
+
+    monkeypatch.setattr("src.runtime.execution_bus.execute_tool_by_name", _fake_execute_tool_by_name)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="system",
+        execution_type="tool",
+        input_payload={"tool_name": "run_command", "kwargs": {"cmd": "false"}},
+    )
+
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["error"] == "tool failed"
+    assert result.output_payload["capability_id"] == "tool:run_command"
+    assert result.output_payload["capability_type"] == "tool"
 
 
 @pytest.mark.asyncio
@@ -587,6 +613,8 @@ async def test_execution_bus_task_handler_dict_status_error_maps_to_failure(monk
     assert result.status == "error"
     assert result.output_payload["success"] is False
     assert result.output_payload["error"] is not None
+    assert result.output_payload["capability_id"] == "tool:demo_tool"
+    assert result.output_payload["capability_type"] == "tool"
 
 
 @pytest.mark.asyncio

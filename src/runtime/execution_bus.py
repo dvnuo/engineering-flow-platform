@@ -457,6 +457,72 @@ def _coerce_task_tool_result(raw_result: Any) -> Dict[str, Any]:
     }
 
 
+def _normalize_capability_component(value: Any) -> str:
+    return "_".join(str(value or "").strip().lower().split())
+
+
+def _resolve_tool_capability(tool_name: str) -> Dict[str, Any]:
+    normalized_tool_name = _normalize_capability_component(tool_name)
+    capability_id = f"tool:{normalized_tool_name}" if normalized_tool_name else None
+    fallback = {
+        "capability_id": capability_id,
+        "capability_type": "tool",
+        "capability_name": tool_name,
+        "policy_tags": [],
+        "requires_identity_binding": False,
+        "capability_resolution": "unresolved",
+    }
+    if not capability_id:
+        return fallback
+    descriptor = get_capability_registry().get(capability_id)
+    if descriptor is None:
+        return fallback
+    return {
+        "capability_id": descriptor.capability_id,
+        "capability_type": descriptor.type or "tool",
+        "capability_name": tool_name,
+        "policy_tags": list(descriptor.policy_tags or []),
+        "requires_identity_binding": bool(descriptor.requires_identity_binding),
+        "capability_resolution": "resolved",
+    }
+
+
+def _normalize_tool_execution_outcome(
+    *,
+    tool_name: str,
+    raw_result: Any,
+    task_boundary: bool,
+    task_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized = _coerce_task_tool_result(raw_result)
+    capability = _resolve_tool_capability(tool_name)
+    payload: Dict[str, Any] = {
+        "tool_name": tool_name,
+        "success": bool(normalized["success"]),
+        "content": normalized["content"],
+        "error": normalized["error"],
+        "result": normalized["result"],
+        "capability_id": capability.get("capability_id"),
+        "capability_type": capability.get("capability_type"),
+        "capability_name": capability.get("capability_name"),
+        "policy_tags": capability.get("policy_tags"),
+        "requires_identity_binding": capability.get("requires_identity_binding"),
+        "capability_resolution": capability.get("capability_resolution"),
+    }
+    if task_boundary:
+        payload["task_type"] = task_type or "tool_task"
+        payload["task_boundary"] = True
+
+    return {
+        "success": bool(normalized["success"]),
+        "output_payload": payload,
+        "artifacts": normalized["artifacts"],
+        "runtime_events": normalized["runtime_events"],
+        "next_action_hint": normalized["next_action_hint"],
+        "audit_ref": normalized["audit_ref"],
+    }
+
+
 def _as_list_of_dicts(value: Any) -> list[dict]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
@@ -893,12 +959,24 @@ def build_default_execution_bus(
         kwargs.setdefault("session_id", request.session_id)
         return await run_skill_execution(skill_name, _via_execution_bus=True, **kwargs)
 
-    async def tool_handler(request: ExecutionRequest) -> ToolResult:
-        # TODO(phase1): unify broader tool call sites through ExecutionBus when policy/hook coverage is verified.
-        # For now this adapter intentionally reuses the existing execution stack.
+    async def tool_handler(request: ExecutionRequest) -> ExecutionResult:
         tool_name = _get_required(request.input_payload, "tool_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
-        return await execute_tool_callable(tool_name, **kwargs)
+        raw_tool_result = await execute_tool_callable(tool_name, **kwargs)
+        normalized = _normalize_tool_execution_outcome(
+            tool_name=tool_name,
+            raw_result=raw_tool_result,
+            task_boundary=False,
+        )
+        return make_execution_result(
+            request_id=request.request_id,
+            status="success" if normalized["success"] else "error",
+            output_payload=normalized["output_payload"],
+            artifacts=normalized["artifacts"],
+            runtime_events=normalized["runtime_events"],
+            next_action_hint=normalized["next_action_hint"],
+            audit_ref=normalized["audit_ref"],
+        )
 
     async def subagent_handler(request: ExecutionRequest) -> Dict[str, Any]:
         return await run_subagent_execution(
@@ -1858,7 +1936,12 @@ def build_default_execution_bus(
             coro_factory=lambda: execute_tool_callable(tool_name, **kwargs),
             event_callback=event_callback if callable(event_callback) else None,
         )
-        normalized = _coerce_task_tool_result(raw_task_result)
+        normalized = _normalize_tool_execution_outcome(
+            tool_name=tool_name,
+            raw_result=raw_task_result,
+            task_boundary=True,
+            task_type="tool_task",
+        )
         runtime_events = list(normalized["runtime_events"]) if isinstance(normalized["runtime_events"], list) else []
         runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
         runtime_events.append(
@@ -1875,7 +1958,9 @@ def build_default_execution_bus(
                     "task_type": "tool_task",
                     "tool_name": tool_name,
                     "success": bool(normalized["success"]),
-                    "error": normalized["error"],
+                    "error": normalized["output_payload"].get("error"),
+                    "capability_id": normalized["output_payload"].get("capability_id"),
+                    "capability_type": normalized["output_payload"].get("capability_type"),
                 },
                 legacy_payload={"legacy_type": "task_tool"},
             )
@@ -1883,15 +1968,7 @@ def build_default_execution_bus(
         return make_execution_result(
             request_id=request.request_id,
             status="success" if normalized["success"] else "error",
-            output_payload={
-                "task_type": "tool_task",
-                "tool_name": tool_name,
-                "success": bool(normalized["success"]),
-                "content": normalized["content"],
-                "error": normalized["error"],
-                "task_boundary": True,
-                "result": normalized["result"],
-            },
+            output_payload=normalized["output_payload"],
             artifacts=normalized["artifacts"],
             runtime_events=runtime_events,
             next_action_hint=normalized["next_action_hint"],
