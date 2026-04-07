@@ -1,4 +1,14 @@
-"""Canonical task-wrapper capability contract resolution."""
+"""Canonical wrapper-task capability contract resolution.
+
+This module is the single source of truth for wrapper-task -> capability
+mapping in the runtime capability surface. Execution and governance must both
+consume this resolver instead of maintaining parallel task-branch mapping
+logic in their own modules.
+
+The returned adapter action ids and involved capability ids are part of the
+runtime capability-surface contract and are intentionally centralized here so
+policy, auditing, and capability metadata remain consistent across call paths.
+"""
 
 from __future__ import annotations
 

@@ -547,6 +547,11 @@ def _as_list_of_strings(value: Any) -> list[str]:
 
 
 def resolve_task_capability_plan(task_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Compatibility shim: delegate task capability planning to the canonical resolver.
+
+    Keep this function name for existing callers, but do not add mapping logic
+    here; `src.runtime.task_capability_contracts` owns the contract mapping.
+    """
     return resolve_task_capability_contract(task_type, payload)
 
 
