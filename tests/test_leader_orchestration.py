@@ -489,6 +489,7 @@ async def test_dispatch_task_breakdown_as_delegations_task_agent_auto_create_inj
     async def _fake_create_task_agent(payload):
         assert payload["group_id"] == "g-1"
         assert payload["template_agent_id"] == "tmpl-1"
+        assert payload["task_agent_cleanup_policy"] == "delete_on_terminal"
         return {"success": True, "result": {"agent_id": "ta-1"}}
 
     async def _fake_task_delegate(payload):
@@ -524,4 +525,60 @@ async def test_dispatch_task_breakdown_as_delegations_task_agent_auto_create_inj
     )
     assert result["success"] is True
     assert result["created_task_agent_ids"] == ["ta-1"]
-    assert result["auto_selected_assignee_ids"] == ["a-1"]
+    assert result["auto_selected_assignee_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_breakdown_task_mode_template_auto_create_without_assignee_or_selection(monkeypatch):
+    async def _raise_if_called(*_args, **_kwargs):
+        raise AssertionError("select_assignee_for_task should not be called for task auto-create path")
+
+    async def _fake_create_task_agent(payload):
+        assert payload["template_agent_id"] == "tmpl-1"
+        assert payload["task_agent_cleanup_policy"] == "retain"
+        return {"success": True, "result": {"agent_id": "ta-created"}}
+
+    async def _fake_task_delegate(payload):
+        assert payload["assignee_agent_id"] == "ta-created"
+        assert payload["ephemeral_task_agent_id"] == "ta-created"
+        assert payload["task_agent_cleanup_policy"] == "retain"
+        assert payload["skill_kwargs"]["cleanup_policy"] == "retain"
+        return {"success": True, "delegation_id": "d-created", "result": {"delegation_id": "d-created"}, "error": None}
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.select_assignee_for_task", _raise_if_called)
+    monkeypatch.setattr("src.runtime.leader_orchestration.create_task_agent_for_group", _fake_create_task_agent)
+    monkeypatch.setattr("src.runtime.leader_orchestration.create_task_agent_delegation", _fake_task_delegate)
+
+    result = await dispatch_task_breakdown_as_delegations(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        leader_session_id="s-1",
+        tasks=[{"agent_mode": "task", "template_agent_id": "tmpl-1", "objective": "Task", "task_agent_cleanup_policy": "retain"}],
+    )
+    assert result["success"] is True
+    assert result["created_task_agent_ids"] == ["ta-created"]
+    assert result["auto_selected_assignee_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_breakdown_task_mode_existing_ephemeral_bypasses_selection(monkeypatch):
+    async def _raise_if_called(*_args, **_kwargs):
+        raise AssertionError("select_assignee_for_task should not be called for existing ephemeral task agent")
+
+    async def _fake_task_delegate(payload):
+        assert payload["assignee_agent_id"] == "ta-existing"
+        assert payload["ephemeral_task_agent_id"] == "ta-existing"
+        return {"success": True, "delegation_id": "d-ephemeral", "result": {"delegation_id": "d-ephemeral"}, "error": None}
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.select_assignee_for_task", _raise_if_called)
+    monkeypatch.setattr("src.runtime.leader_orchestration.create_task_agent_delegation", _fake_task_delegate)
+
+    result = await dispatch_task_breakdown_as_delegations(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        leader_session_id="s-1",
+        tasks=[{"agent_mode": "task", "objective": "Task", "ephemeral_task_agent_id": "ta-existing"}],
+    )
+    assert result["success"] is True
+    assert result["created_task_agent_ids"] == []
+    assert result["auto_selected_assignee_ids"] == []
