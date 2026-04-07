@@ -15,6 +15,7 @@ async def _execute_with_bus(
     source_ref: str,
     execution_type: str,
     session_id: Optional[str],
+    context_ref: Optional[Dict[str, Any]],
     input_payload: Dict[str, Any],
     metadata: Optional[Dict[str, Any]],
     register_handler_type: Optional[str] = None,
@@ -30,6 +31,7 @@ async def _execute_with_bus(
         source_ref=source_ref,
         execution_type=execution_type,
         session_id=session_id,
+        context_ref=dict(context_ref or {}) if context_ref is not None else None,
         input_payload=dict(input_payload or {}),
         metadata=dict(metadata or {}),
     )
@@ -52,6 +54,7 @@ async def execute_chat_orchestration(
         source_ref=source_ref,
         execution_type="chat",
         session_id=session_id,
+        context_ref=None,
         metadata=dict(metadata or {}),
         input_payload=dict(input_payload or {}),
         register_handler_type="chat",
@@ -76,6 +79,7 @@ async def execute_tool_or_task_orchestration(
         source_ref=source_ref,
         execution_type=execution_type,
         session_id=session_id,
+        context_ref=None,
         input_payload=dict(input_payload or {}),
         metadata=dict(metadata or {}),
         execute_tool_func=execute_tool_func,
@@ -97,6 +101,7 @@ async def execute_skill_orchestration(
         source_ref=source_ref,
         execution_type="skill",
         session_id=session_id,
+        context_ref=None,
         input_payload=input_payload,
         metadata=metadata,
         register_handler_type="skill" if custom_skill_handler is not None else None,
@@ -118,6 +123,7 @@ async def execute_subagent_orchestration(
         source_ref=source_ref,
         execution_type="subagent",
         session_id=session_id,
+        context_ref=None,
         input_payload=input_payload,
         metadata=metadata,
     )
@@ -130,6 +136,7 @@ async def execute_runtime_task_request(
     source_ref: str,
     execution_type: str,
     session_id: Optional[str],
+    context_ref: Optional[Dict[str, Any]] = None,
     input_payload: Dict[str, Any],
     metadata: Optional[Dict[str, Any]] = None,
 ) -> ExecutionResult:
@@ -140,6 +147,7 @@ async def execute_runtime_task_request(
         source_ref=source_ref,
         execution_type=execution_type,
         session_id=session_id,
+        context_ref=context_ref,
         input_payload=input_payload,
         metadata=metadata,
     )

@@ -33,6 +33,24 @@ class TaskManager:
     def get_task(self, task_id: str) -> Optional[TaskRecord]:
         return self._tasks.get(task_id)
 
+    def list_task_summaries(self, *, session_id: Optional[str] = None) -> list[Dict[str, Any]]:
+        summaries: list[Dict[str, Any]] = []
+        for task in self._tasks.values():
+            if session_id and task.session_id != session_id:
+                continue
+            summaries.append(
+                {
+                    "task_id": task.task_id,
+                    "session_id": task.session_id,
+                    "tool_name": task.tool_name,
+                    "status": task.status,
+                    "created_at": task.created_at,
+                    "finished_at": task.finished_at or None,
+                }
+            )
+        summaries.sort(key=lambda item: (item.get("created_at") or "", item.get("task_id") or ""))
+        return summaries
+
     def _prune_completed_tasks(self) -> None:
         completed_ids = [
             task_id

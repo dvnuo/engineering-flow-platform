@@ -104,6 +104,7 @@ def _register_subagent_session(
     thinking: Optional[str],
     cleanup: str,
     disable_tools: bool,
+    parent_session_id: Optional[str],
 ) -> SubAgent:
     existing = _subagent_sessions.get(session_key)
     if existing and isinstance(existing.get("agent"), SubAgent):
@@ -122,11 +123,39 @@ def _register_subagent_session(
         "model": model,
         "thinking": thinking,
         "cleanup": cleanup,
+        "parent_session_id": parent_session_id,
         "created_at": subagent.created_at,
         "status": "started",
         "agent": subagent,
     }
     return subagent
+
+
+def list_active_subagent_summaries(
+    *,
+    session_key_prefix: Optional[str] = None,
+    parent_session_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return serializable summaries for active sub-agent sessions."""
+    summaries: List[Dict[str, Any]] = []
+    for session_key, state in _subagent_sessions.items():
+        if session_key_prefix and not session_key.startswith(session_key_prefix):
+            continue
+        if parent_session_id is not None and state.get("parent_session_id") != parent_session_id:
+            continue
+        summaries.append(
+            {
+                "session_key": session_key,
+                "task": state.get("task"),
+                "status": state.get("status"),
+                "model": state.get("model"),
+                "thinking": state.get("thinking"),
+                "created_at": state.get("created_at"),
+                "parent_session_id": state.get("parent_session_id"),
+            }
+        )
+    summaries.sort(key=lambda item: (item.get("created_at") or "", item.get("session_key") or ""))
+    return summaries
 
 
 def _log_background_task_exception(task: asyncio.Task, session_key: str) -> None:
@@ -149,6 +178,7 @@ async def run_subagent_execution(
     thinking: Optional[str] = None,
     disable_tools: bool = False,
     cleanup: str = "delete",
+    parent_session_id: Optional[str] = None,
     start_immediately: bool = False,
     wait_for_completion: bool = False,
 ) -> Dict[str, Any]:
@@ -160,6 +190,7 @@ async def run_subagent_execution(
         thinking=thinking,
         cleanup=cleanup,
         disable_tools=disable_tools,
+        parent_session_id=parent_session_id,
     )
 
     if start_immediately:

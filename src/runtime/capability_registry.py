@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 import logging
 
-from src.runtime.capability_adapters import build_github_adapter_capabilities, build_jira_adapter_capabilities
+from src.runtime.capability_adapters import (
+    build_github_adapter_capabilities,
+    build_jira_adapter_capabilities,
+    build_portal_adapter_capabilities,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +137,7 @@ class _CapabilityBuilder:
         adapter_descriptors = [
             *build_github_adapter_capabilities(),
             *build_jira_adapter_capabilities(),
+            *build_portal_adapter_capabilities(),
         ]
         for adapter_descriptor in adapter_descriptors:
             self.registry.register(

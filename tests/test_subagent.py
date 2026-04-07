@@ -306,6 +306,35 @@ class TestSubAgentIntegration:
         from src.agents.subagent import _subagent_sessions
         
         assert isinstance(_subagent_sessions, dict)
+
+    def test_list_active_subagent_summaries_filters_parent_session(self):
+        from src.agents.subagent import _subagent_sessions, list_active_subagent_summaries
+
+        _subagent_sessions.clear()
+        _subagent_sessions["sa-1"] = {
+            "session_key": "sa-1",
+            "task": "t1",
+            "status": "started",
+            "model": "gpt-4",
+            "thinking": "low",
+            "created_at": "2026-01-01T00:00:00Z",
+            "parent_session_id": "s-a",
+        }
+        _subagent_sessions["sa-2"] = {
+            "session_key": "sa-2",
+            "task": "t2",
+            "status": "started",
+            "model": "gpt-4",
+            "thinking": "low",
+            "created_at": "2026-01-01T00:00:01Z",
+            "parent_session_id": "s-b",
+        }
+
+        filtered = list_active_subagent_summaries(parent_session_id="s-a")
+        assert len(filtered) == 1
+        assert filtered[0]["session_key"] == "sa-1"
+        assert filtered[0]["parent_session_id"] == "s-a"
+        _subagent_sessions.clear()
     
     def test_spawn_and_cleanup(self):
         """Test spawning and cleaning up a session."""

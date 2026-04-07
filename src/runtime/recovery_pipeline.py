@@ -5,13 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from src.runtime.contracts import SessionSnapshot, make_session_snapshot
 from src.runtime.events import build_runtime_event
 
 
 @dataclass
 class RecoverySnapshot:
+    snapshot_version: str
     session_id: str
-    message_count: int
+    persisted_session: Dict[str, Any] = field(default_factory=dict)
+    runtime_state: Dict[str, Any] = field(default_factory=dict)
+    reconstructed_state: Dict[str, Any] = field(default_factory=dict)
+    # compatibility fields retained for existing callers/tests
+    message_count: int = 0
     metadata: Dict[str, Any] = field(default_factory=dict)
     active_skill_session: Optional[Dict[str, Any]] = None
     last_execution_id: Optional[str] = None
@@ -26,8 +32,11 @@ class RecoverySnapshot:
 class RecoveryHydrationResult:
     session_id: str
     recovered: bool
+    snapshot_version: Optional[str] = None
     active_skill_session: Optional[Dict[str, Any]] = None
     last_execution_id: Optional[str] = None
+    runtime_state: Dict[str, Any] = field(default_factory=dict)
+    reconstructed_state: Dict[str, Any] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     runtime_events: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -56,41 +65,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             return None
         session = session_info["session"]
         source = session_info["source"]
-        metadata = _metadata_from_session(session)
-        active_skill_session = _extract_active_skill_session(session)
-        last_execution_id = _extract_last_execution_id(session)
-        message_count = len(session.get("history") or [])
-
-        snapshot = RecoverySnapshot(
-            session_id=session_id,
-            message_count=message_count,
-            metadata=metadata,
-            active_skill_session=active_skill_session,
-            last_execution_id=last_execution_id,
-            created_at=_safe_string(session.get("created_at")),
-            updated_at=_safe_string(session.get("updated_at")),
-            summary_flags={
-                "has_history": bool(session.get("history")),
-                "has_active_skill_session": active_skill_session is not None,
-                "has_last_execution_id": bool(last_execution_id),
-                "source": source,
-            },
-            runtime_events=[
-                self._event(
-                    session_id,
-                    "recovery.snapshot_built",
-                    "snapshot_built",
-                    {
-                        "source": source,
-                        "message_count": message_count,
-                        "has_active_skill_session": active_skill_session is not None,
-                        "has_last_execution_id": bool(last_execution_id),
-                        "warning_count": 0,
-                    },
-                )
-            ],
-        )
-        return snapshot
+        return await self._build_snapshot_from_session(session_id=session_id, session=session, source=source)
 
     async def hydrate_session_state(self, session_id: str) -> RecoveryHydrationResult:
         if not session_id:
@@ -130,15 +105,16 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             )
 
         session_record = session_info["session"]
-        source = session_info["source"]
-
-        metadata = _metadata_from_session(session_record)
-        active_skill_session = _extract_active_skill_session(session_record)
-        if session_record.get("active_skill_session") is None and metadata.get("active_skill_session") is not None:
-            warnings.append("active_skill_session_restored_from_metadata")
-
-        last_execution_id = _extract_last_execution_id(session_record)
-        message_count = len(session_record.get("history") or [])
+        snapshot = await self._build_snapshot_from_session(
+            session_id=session_id,
+            session=session_record,
+            source=session_info["source"],
+            warnings=warnings,
+        )
+        metadata = dict(snapshot.metadata)
+        active_skill_session = snapshot.active_skill_session
+        last_execution_id = snapshot.last_execution_id
+        message_count = snapshot.message_count
 
         runtime_events.append(
             self._event(
@@ -146,10 +122,13 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                 "recovery.hydrated",
                 "hydrated",
                 {
-                    "source": source,
+                    "source": snapshot.reconstructed_state.get("recovery_source"),
                     "message_count": message_count,
                     "has_active_skill_session": active_skill_session is not None,
                     "has_last_execution_id": bool(last_execution_id),
+                    "has_compaction_summary": bool(snapshot.reconstructed_state.get("has_compaction_summary")),
+                    "has_session_memory_summary": bool(snapshot.reconstructed_state.get("has_session_memory_summary")),
+                    "needs_recovery_reconcile": bool(snapshot.reconstructed_state.get("needs_recovery_reconcile")),
                     "warning_count": len(warnings),
                 },
             )
@@ -158,8 +137,11 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
         return RecoveryHydrationResult(
             session_id=session_id,
             recovered=True,
+            snapshot_version=snapshot.snapshot_version,
             active_skill_session=active_skill_session,
             last_execution_id=last_execution_id,
+            runtime_state=dict(snapshot.runtime_state),
+            reconstructed_state=dict(snapshot.reconstructed_state),
             warnings=warnings,
             runtime_events=runtime_events,
             metadata=metadata,
@@ -170,6 +152,9 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
         reconciliation_hint = {
             "has_active_skill_session": hydration.active_skill_session is not None,
             "has_last_execution_id": bool(hydration.last_execution_id),
+            "has_compaction_summary": bool(hydration.reconstructed_state.get("has_compaction_summary")),
+            "has_session_memory_summary": bool(hydration.reconstructed_state.get("has_session_memory_summary")),
+            "needs_recovery_reconcile": bool(hydration.reconstructed_state.get("needs_recovery_reconcile")),
             "warning_count": len(hydration.warnings),
         }
         hydration.runtime_events.append(
@@ -220,6 +205,137 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             legacy_payload={"legacy_type": event_type.replace(".", "_")},
         )
 
+    async def _build_snapshot_from_session(
+        self,
+        *,
+        session_id: str,
+        session: Dict[str, Any],
+        source: str,
+        warnings: Optional[List[str]] = None,
+    ) -> RecoverySnapshot:
+        runtime_warnings = warnings if warnings is not None else []
+        metadata = _metadata_from_session(session)
+        active_skill_session = _extract_active_skill_session(session)
+        if session.get("active_skill_session") is None and metadata.get("active_skill_session") is not None:
+            runtime_warnings.append("active_skill_session_restored_from_metadata")
+        last_execution_id = _extract_last_execution_id(session)
+        message_count = len(session.get("history") or [])
+        pending_tool_tasks = await self._safe_pending_tool_tasks(session_id, runtime_warnings)
+        active_subagents = await self._safe_active_subagents(session_id, runtime_warnings)
+        pending_delegations = metadata.get("pending_delegations") if isinstance(metadata.get("pending_delegations"), list) else []
+        compaction_summary = _find_compaction_summary(session.get("history") or [])
+        session_memory_summary = _find_session_memory_summary(metadata, session.get("history") or [])
+        runtime_state = {
+            "active_skill_session": active_skill_session,
+            "last_execution_id": last_execution_id,
+            "pending_tool_tasks": pending_tool_tasks,
+            "active_subagents": active_subagents,
+            "pending_delegations": list(pending_delegations),
+        }
+        has_pending_tool_tasks = bool(pending_tool_tasks)
+        has_active_subagents = bool(active_subagents)
+        has_pending_delegations = bool(pending_delegations)
+        has_compaction_summary = compaction_summary is not None
+        has_session_memory_summary = session_memory_summary is not None
+        # runtime_state = active recoverable execution state
+        # reconstructed_state = lightweight derived restore/reconcile hints, including compaction/memory
+        reconstructed_state = {
+            "has_history": bool(session.get("history")),
+            "has_active_skill_session": active_skill_session is not None,
+            "has_last_execution_id": bool(last_execution_id),
+            "has_pending_tool_tasks": has_pending_tool_tasks,
+            "has_active_subagents": has_active_subagents,
+            "has_pending_delegations": has_pending_delegations,
+            "has_compaction_summary": has_compaction_summary,
+            "has_session_memory_summary": has_session_memory_summary,
+            "needs_recovery_reconcile": any(
+                (
+                    has_pending_delegations,
+                    has_pending_tool_tasks,
+                    has_active_subagents,
+                    has_compaction_summary,
+                    has_session_memory_summary,
+                )
+            ),
+            "has_shared_context_ref": _has_shared_context_ref(metadata),
+            "has_materialized_context_ref": _has_materialized_context_ref(metadata),
+            "recovery_source": source,
+        }
+        persisted_session = {
+            "history": list(session.get("history") or []),
+            "messages": list(session.get("history") or []),
+            "metadata": metadata,
+            "created_at": _safe_string(session.get("created_at")),
+            "updated_at": _safe_string(session.get("updated_at")),
+        }
+        contract_snapshot: SessionSnapshot = make_session_snapshot(
+            snapshot_version="phase3.v1",
+            session_id=session_id,
+            persisted_session=persisted_session,
+            runtime_state=runtime_state,
+            reconstructed_state=reconstructed_state,
+            created_at=persisted_session.get("created_at"),
+            updated_at=persisted_session.get("updated_at"),
+        )
+        return RecoverySnapshot(
+            snapshot_version=contract_snapshot.snapshot_version,
+            session_id=contract_snapshot.session_id,
+            persisted_session=contract_snapshot.persisted_session,
+            runtime_state=contract_snapshot.runtime_state,
+            reconstructed_state=contract_snapshot.reconstructed_state,
+            message_count=message_count,
+            metadata=metadata,
+            active_skill_session=active_skill_session,
+            last_execution_id=last_execution_id,
+            created_at=contract_snapshot.created_at,
+            updated_at=contract_snapshot.updated_at,
+            summary_flags={
+                "has_history": reconstructed_state["has_history"],
+                "has_active_skill_session": reconstructed_state["has_active_skill_session"],
+                "has_last_execution_id": reconstructed_state["has_last_execution_id"],
+                "source": source,
+            },
+            warnings=list(runtime_warnings),
+            runtime_events=[
+                self._event(
+                    session_id,
+                    "recovery.snapshot_built",
+                    "snapshot_built",
+                    {
+                        "source": source,
+                        "message_count": message_count,
+                        "has_active_skill_session": active_skill_session is not None,
+                        "has_last_execution_id": bool(last_execution_id),
+                        "has_pending_tool_tasks": bool(pending_tool_tasks),
+                        "has_active_subagents": bool(active_subagents),
+                        "has_pending_delegations": bool(pending_delegations),
+                        "has_compaction_summary": has_compaction_summary,
+                        "has_session_memory_summary": has_session_memory_summary,
+                        "needs_recovery_reconcile": reconstructed_state["needs_recovery_reconcile"],
+                        "warning_count": len(runtime_warnings),
+                    },
+                )
+            ],
+        )
+
+    async def _safe_pending_tool_tasks(self, session_id: str, warnings: List[str]) -> List[Dict[str, Any]]:
+        try:
+            from src.agents.tasks import task_manager
+
+            return task_manager.list_task_summaries(session_id=session_id)
+        except Exception:
+            warnings.append("pending_tool_tasks_unavailable")
+            return []
+
+    async def _safe_active_subagents(self, session_id: str, warnings: List[str]) -> List[Dict[str, Any]]:
+        try:
+            from src.agents.subagent import list_active_subagent_summaries
+
+            return list_active_subagent_summaries(parent_session_id=session_id)
+        except Exception:
+            warnings.append("active_subagents_unavailable")
+            return []
+
 
 def _metadata_from_session(session: Dict[str, Any]) -> Dict[str, Any]:
     metadata = session.get("metadata")
@@ -243,6 +359,73 @@ def _extract_last_execution_id(session: Dict[str, Any]) -> Optional[str]:
     last_execution_id = metadata.get("last_execution_id")
     if isinstance(last_execution_id, str) and last_execution_id.strip():
         return last_execution_id.strip()
+    return None
+
+
+def _has_shared_context_ref(metadata: Dict[str, Any]) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    value = metadata.get("shared_context_ref")
+    if isinstance(value, str) and value.strip():
+        return True
+    pending = metadata.get("pending_delegations")
+    if isinstance(pending, list):
+        for item in pending:
+            if isinstance(item, dict):
+                ref = item.get("shared_context_ref")
+                if isinstance(ref, str) and ref.strip():
+                    return True
+    return False
+
+
+def _has_materialized_context_ref(metadata: Dict[str, Any]) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    if metadata.get("shared_context_materialized") is True:
+        return True
+    pending = metadata.get("pending_delegations")
+    if isinstance(pending, list):
+        for item in pending:
+            if not isinstance(item, dict):
+                continue
+            if item.get("shared_context_materialized") is True:
+                return True
+            context_ref = item.get("context_ref")
+            if isinstance(context_ref, dict) and bool(context_ref):
+                return True
+    return False
+
+
+def _find_compaction_summary(history: list[dict]) -> Optional[dict]:
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "compaction_summary":
+            return dict(item)
+        item_metadata = item.get("metadata")
+        if isinstance(item_metadata, dict) and item_metadata.get("type") == "compaction_summary":
+            return dict(item)
+    return None
+
+
+def _find_session_memory_summary(metadata: dict, history: list[dict]) -> Optional[dict]:
+    if isinstance(metadata, dict):
+        for key in ("session_memory_summary", "session_memory_file", "session_memory_saved_at"):
+            value = metadata.get(key)
+            if value:
+                return {"source": "metadata", "key": key}
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "session_memory_summary":
+            return dict(item)
+        item_metadata = item.get("metadata")
+        if isinstance(item_metadata, dict) and item_metadata.get("type") == "session_memory_summary":
+            return dict(item)
+        if item.get("role") == "system":
+            marker = item.get("session_memory_summary")
+            if marker:
+                return dict(item)
     return None
 
 
