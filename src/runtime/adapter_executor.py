@@ -190,6 +190,9 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
         "adapter:portal:get_group_task_board": "get_group_task_board",
         "adapter:portal:list_group_coordination_runs": "list_group_coordination_runs",
         "adapter:portal:get_coordination_run": "get_coordination_run",
+        "adapter:portal:get_specialist_pool": "get_specialist_pool",
+        "adapter:portal:create_task_agent": "create_task_agent",
+        "adapter:portal:delete_task_agent": "delete_task_agent",
     }
 
     jira_action = jira_action_map.get(normalized_action_id)
@@ -284,6 +287,18 @@ async def _get_portal_json(url: str, headers: Dict[str, str]) -> Dict[str, Any]:
             return {"success": True, "error": None, "result": data}
 
 
+async def _delete_portal_json(url: str, headers: Dict[str, str]) -> Dict[str, Any]:
+    async with ClientSession(headers=headers) as session:
+        async with session.delete(url) as response:
+            try:
+                data = await response.json()
+            except Exception:
+                data = {"raw": await response.text()}
+            if response.status >= 400:
+                return {"success": False, "error": f"Portal request failed: HTTP {response.status}", "result": data}
+            return {"success": True, "error": None, "result": data}
+
+
 async def execute_portal_control_plane_action(action_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     action = str(action_name or "").strip()
     payload = dict(kwargs or {})
@@ -297,6 +312,9 @@ async def execute_portal_control_plane_action(action_name: str, kwargs: Dict[str
         "get_group_task_board",
         "list_group_coordination_runs",
         "get_coordination_run",
+        "get_specialist_pool",
+        "create_task_agent",
+        "delete_task_agent",
     }:
         return {"success": False, "error": f"Unsupported portal action: {action}", "system": "portal", "action_name": action, "result": None}
 
@@ -344,6 +362,42 @@ async def execute_portal_control_plane_action(action_name: str, kwargs: Dict[str
             return {"success": False, "error": "group_id is required", "system": "portal", "action_name": action, "result": None}
         outcome = await _get_portal_json(
             f"{base_url}/api/internal/agent-groups/{group_id}/coordination-runs",
+            _build_portal_headers(),
+        )
+    elif action == "get_specialist_pool":
+        group_id = str(payload.get("group_id") or "").strip()
+        if not group_id:
+            return {"success": False, "error": "group_id is required", "system": "portal", "action_name": action, "result": None}
+        outcome = await _get_portal_json(
+            f"{base_url}/api/internal/agent-groups/{group_id}/specialist-pool",
+            _build_portal_headers(),
+        )
+    elif action == "create_task_agent":
+        group_id = str(payload.get("group_id") or "").strip()
+        if not group_id:
+            return {"success": False, "error": "group_id is required", "system": "portal", "action_name": action, "result": None}
+        normalized_payload = dict(payload)
+        for key in ("capabilities", "constraints", "metadata", "tags", "runtime_config"):
+            if key in normalized_payload:
+                normalized_payload[key] = _normalize_json_field(normalized_payload.get(key))
+        outcome = await _post_portal_json(
+            f"{base_url}/api/internal/agent-groups/{group_id}/task-agents",
+            normalized_payload,
+            _build_portal_headers(),
+        )
+    elif action == "delete_task_agent":
+        group_id = str(payload.get("group_id") or "").strip()
+        agent_id = str(payload.get("agent_id") or "").strip()
+        if not group_id or not agent_id:
+            return {
+                "success": False,
+                "error": "group_id and agent_id are required",
+                "system": "portal",
+                "action_name": action,
+                "result": None,
+            }
+        outcome = await _delete_portal_json(
+            f"{base_url}/api/internal/agent-groups/{group_id}/task-agents/{agent_id}",
             _build_portal_headers(),
         )
     else:

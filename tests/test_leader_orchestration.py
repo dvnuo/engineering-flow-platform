@@ -12,6 +12,7 @@ from src.runtime.leader_orchestration import (
     evaluate_completion_criteria,
     load_coordination_run_state,
     run_delegation_cycle,
+    select_assignee_for_task,
 )
 
 
@@ -94,7 +95,13 @@ def test_build_delegation_requests_from_task_breakdown():
         leader_session_id="s-1",
         tasks=[
             {"assignee_agent_id": "a-1", "objective": "Task 1"},
-            {"assignee_agent_id": "a-2", "objective": "Task 2", "agent_mode": "task"},
+            {
+                "assignee_agent_id": "a-2",
+                "objective": "Task 2",
+                "agent_mode": "task",
+                "ephemeral_task_agent_id": "ta-existing",
+                "task_agent_scope": "scope:existing",
+            },
         ],
     )
     assert len(requests) == 2
@@ -118,7 +125,13 @@ async def test_dispatch_task_breakdown_as_delegations_returns_batch_result(monke
         leader_session_id="s-1",
         tasks=[
             {"assignee_agent_id": "a-1", "objective": "Task 1"},
-            {"assignee_agent_id": "a-2", "objective": "Task 2", "agent_mode": "task"},
+            {
+                "assignee_agent_id": "a-2",
+                "objective": "Task 2",
+                "agent_mode": "task",
+                "ephemeral_task_agent_id": "ta-existing",
+                "task_agent_scope": "scope:existing",
+            },
         ],
     )
     assert result["created"] == 1
@@ -345,3 +358,106 @@ async def test_run_delegation_cycle_evaluation_mode_loads_run_state(monkeypatch)
     assert result["run_state"]["latest_round_index"] == 2
     assert result["next_action"] == "continue"
     assert result["leader_summary"]["run_status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_select_assignee_for_task_least_loaded(monkeypatch):
+    async def _fake_pool(group_id):
+        assert group_id == "g-1"
+        return {"success": True, "result": {"items": [{"agent_id": "a-2"}, {"agent_id": "a-1"}, {"agent_id": "leader-1"}]}}
+
+    async def _fake_execute(action_id, kwargs):
+        assert action_id == "adapter:portal:list_group_delegations"
+        assert kwargs["group_id"] == "g-1"
+        return {
+            "success": True,
+            "result": {
+                "delegations": [
+                    {"assignee_agent_id": "a-1", "status": "queued"},
+                    {"assignee_agent_id": "a-1", "status": "running"},
+                ]
+            },
+        }
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.get_group_specialist_pool", _fake_pool)
+    monkeypatch.setattr("src.runtime.leader_orchestration.execute_adapter_action", _fake_execute)
+    result = await select_assignee_for_task(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        task={"objective": "x", "selection_strategy": "least_loaded"},
+    )
+    assert result["success"] is True
+    assert result["assignee_agent_id"] == "a-2"
+
+
+@pytest.mark.asyncio
+async def test_select_assignee_for_task_tie_break_lexical(monkeypatch):
+    async def _fake_pool(group_id):
+        return {"success": True, "result": {"items": [{"agent_id": "b-agent"}, {"agent_id": "a-agent"}]}}
+
+    async def _fake_execute(_action_id, _kwargs):
+        return {"success": True, "result": {"delegations": []}}
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.get_group_specialist_pool", _fake_pool)
+    monkeypatch.setattr("src.runtime.leader_orchestration.execute_adapter_action", _fake_execute)
+    result = await select_assignee_for_task(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        task={"objective": "x", "selection_strategy": "least_loaded"},
+    )
+    assert result["assignee_agent_id"] == "a-agent"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_breakdown_as_delegations_task_agent_auto_create_missing_template_errors():
+    with pytest.raises(ValueError, match="template_agent_id is required"):
+        await dispatch_task_breakdown_as_delegations(
+            group_id="g-1",
+            leader_agent_id="leader-1",
+            leader_session_id="s-1",
+            tasks=[{"agent_mode": "task", "objective": "Task"}],
+        )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_breakdown_as_delegations_task_agent_auto_create_injects_assignee(monkeypatch):
+    async def _fake_pool(_group_id):
+        return {"success": True, "result": {"items": [{"agent_id": "a-1"}]}}
+
+    async def _fake_list(action_id, kwargs):
+        assert action_id == "adapter:portal:list_group_delegations"
+        return {"success": True, "result": {"delegations": []}}
+
+    async def _fake_create_task_agent(payload):
+        assert payload["group_id"] == "g-1"
+        assert payload["template_agent_id"] == "tmpl-1"
+        return {"success": True, "result": {"agent_id": "ta-1"}}
+
+    async def _fake_task_delegate(payload):
+        assert payload["assignee_agent_id"] == "ta-1"
+        assert payload["ephemeral_task_agent_id"] == "ta-1"
+        assert payload["task_agent_scope_label"] == "scope-a"
+        return {"success": True, "delegation_id": "d-1", "result": {"delegation_id": "d-1"}, "error": None}
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.get_group_specialist_pool", _fake_pool)
+    monkeypatch.setattr("src.runtime.leader_orchestration.execute_adapter_action", _fake_list)
+    monkeypatch.setattr("src.runtime.leader_orchestration.create_task_agent_for_group", _fake_create_task_agent)
+    monkeypatch.setattr("src.runtime.leader_orchestration.create_task_agent_delegation", _fake_task_delegate)
+
+    result = await dispatch_task_breakdown_as_delegations(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        leader_session_id="s-1",
+        tasks=[
+            {
+                "agent_mode": "task",
+                "selection_strategy": "least_loaded",
+                "objective": "Task",
+                "template_agent_id": "tmpl-1",
+                "scope_label": "scope-a",
+            }
+        ],
+    )
+    assert result["success"] is True
+    assert result["created_task_agent_ids"] == ["ta-1"]
+    assert result["auto_selected_assignee_ids"] == ["a-1"]

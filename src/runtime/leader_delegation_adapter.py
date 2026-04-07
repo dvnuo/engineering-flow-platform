@@ -88,3 +88,32 @@ async def create_task_agent_delegation(payload: Dict[str, Any]) -> Dict[str, Any
         normalized["task_agent_cleanup_policy"] = str(normalized.get("task_agent_cleanup_policy")).strip() or None
     outcome = await execute_adapter_action("adapter:portal:create_delegation", normalized)
     return _normalize_create_result(outcome)
+
+
+async def get_group_specialist_pool(group_id: str) -> Dict[str, Any]:
+    normalized_group_id = str(group_id or "").strip()
+    if not normalized_group_id:
+        return {"success": False, "error": "group_id is required", "result": None}
+    outcome = await execute_adapter_action("adapter:portal:get_specialist_pool", {"group_id": normalized_group_id})
+    return {"success": bool(outcome.get("success")), "error": outcome.get("error"), "result": outcome.get("result")}
+
+
+async def create_task_agent_for_group(payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(payload or {})
+    normalized["group_id"] = str(normalized.get("group_id") or "").strip()
+    if not normalized["group_id"]:
+        return {"success": False, "error": "group_id is required", "result": None}
+    outcome = await execute_adapter_action("adapter:portal:create_task_agent", normalized)
+    return {"success": bool(outcome.get("success")), "error": outcome.get("error"), "result": outcome.get("result")}
+
+
+async def delete_task_agent_for_group(group_id: str, agent_id: str) -> Dict[str, Any]:
+    normalized_group_id = str(group_id or "").strip()
+    normalized_agent_id = str(agent_id or "").strip()
+    if not normalized_group_id or not normalized_agent_id:
+        return {"success": False, "error": "group_id and agent_id are required", "result": None}
+    outcome = await execute_adapter_action(
+        "adapter:portal:delete_task_agent",
+        {"group_id": normalized_group_id, "agent_id": normalized_agent_id},
+    )
+    return {"success": bool(outcome.get("success")), "error": outcome.get("error"), "result": outcome.get("result")}

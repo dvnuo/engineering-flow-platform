@@ -160,16 +160,68 @@ async def test_execute_adapter_action_portal_read_actions_use_get(monkeypatch):
     result_b = await execute_adapter_action("adapter:portal:get_group_task_board", {"group_id": "group-1"})
     result_c = await execute_adapter_action("adapter:portal:list_group_coordination_runs", {"group_id": "group-1"})
     result_d = await execute_adapter_action("adapter:portal:get_coordination_run", {"coordination_run_id": "coord-1"})
+    result_e = await execute_adapter_action("adapter:portal:get_specialist_pool", {"group_id": "group-1"})
 
     assert result_a["success"] is True
     assert result_b["success"] is True
     assert result_c["success"] is True
     assert result_d["success"] is True
+    assert result_e["success"] is True
     assert captured[0][0] == "https://portal.internal/api/internal/agent-groups/group-1/delegations"
     assert captured[1][0] == "https://portal.internal/api/internal/agent-groups/group-1/task-board"
     assert captured[2][0] == "https://portal.internal/api/internal/agent-groups/group-1/coordination-runs"
     assert captured[3][0] == "https://portal.internal/api/internal/coordination-runs/coord-1"
+    assert captured[4][0] == "https://portal.internal/api/internal/agent-groups/group-1/specialist-pool"
     assert captured[0][1]["X-Internal-Api-Key"] == "k-1"
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_portal_create_task_agent_uses_post_and_normalizes_json(monkeypatch):
+    captured = {}
+
+    async def _fake_post(url, payload, headers):
+        captured["url"] = url
+        captured["payload"] = payload
+        captured["headers"] = headers
+        return {"success": True, "error": None, "result": {"agent_id": "ta-1"}}
+
+    monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.internal")
+    monkeypatch.setenv("PORTAL_INTERNAL_API_KEY", "k-1")
+    monkeypatch.setattr("src.runtime.adapter_executor._post_portal_json", _fake_post)
+
+    result = await execute_adapter_action(
+        "adapter:portal:create_task_agent",
+        {"group_id": "group-1", "template_agent_id": "tmpl-1", "metadata": {"scope": "x"}, "tags": ["runtime"]},
+    )
+
+    assert result["success"] is True
+    assert captured["url"] == "https://portal.internal/api/internal/agent-groups/group-1/task-agents"
+    assert isinstance(captured["payload"]["metadata"], str)
+    assert isinstance(captured["payload"]["tags"], str)
+    assert captured["headers"]["X-Internal-Api-Key"] == "k-1"
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_portal_delete_task_agent_uses_delete(monkeypatch):
+    captured = {}
+
+    async def _fake_delete(url, headers):
+        captured["url"] = url
+        captured["headers"] = headers
+        return {"success": True, "error": None, "result": {"deleted": True}}
+
+    monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.internal")
+    monkeypatch.setenv("PORTAL_INTERNAL_API_KEY", "k-1")
+    monkeypatch.setattr("src.runtime.adapter_executor._delete_portal_json", _fake_delete)
+
+    result = await execute_adapter_action(
+        "adapter:portal:delete_task_agent",
+        {"group_id": "group-1", "agent_id": "ta-1"},
+    )
+
+    assert result["success"] is True
+    assert captured["url"] == "https://portal.internal/api/internal/agent-groups/group-1/task-agents/ta-1"
+    assert captured["headers"]["X-Internal-Api-Key"] == "k-1"
 
 
 @pytest.mark.asyncio

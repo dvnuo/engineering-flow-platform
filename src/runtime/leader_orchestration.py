@@ -6,8 +6,10 @@ from typing import Any, Dict, List
 
 from src.runtime.adapter_executor import execute_adapter_action
 from src.runtime.leader_delegation_adapter import (
+    create_task_agent_for_group,
     create_specialist_delegation,
     create_task_agent_delegation,
+    get_group_specialist_pool,
     normalize_leader_delegation_request,
 )
 
@@ -44,11 +46,35 @@ async def dispatch_task_breakdown_as_delegations(
     leader_session_id: str,
     tasks: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
+    if not isinstance(tasks, list) or not tasks:
+        raise ValueError("tasks must be a non-empty list")
+    prepared_tasks: List[Dict[str, Any]] = []
+    auto_selected_assignee_ids: List[str] = []
+    created_task_agent_ids: List[str] = []
+    deleted_task_agent_ids: List[str] = []
+    selection_strategy_used = False
+
+    for task in tasks:
+        if not isinstance(task, dict):
+            raise ValueError("each task breakdown item must be an object")
+        prepared = await _prepare_task_for_delegation(
+            group_id=group_id,
+            leader_agent_id=leader_agent_id,
+            leader_session_id=leader_session_id,
+            task=task,
+        )
+        prepared_tasks.append(prepared["task"])
+        if prepared.get("auto_selected_assignee_id"):
+            auto_selected_assignee_ids.append(str(prepared["auto_selected_assignee_id"]))
+        if prepared.get("created_task_agent_id"):
+            created_task_agent_ids.append(str(prepared["created_task_agent_id"]))
+        selection_strategy_used = selection_strategy_used or bool(prepared.get("selection_strategy_used"))
+
     requests = build_delegation_requests_from_task_breakdown(
         group_id=group_id,
         leader_agent_id=leader_agent_id,
         leader_session_id=leader_session_id,
-        tasks=tasks,
+        tasks=prepared_tasks,
     )
     items: List[Dict[str, Any]] = []
     created = 0
@@ -69,6 +95,152 @@ async def dispatch_task_breakdown_as_delegations(
         "created": created,
         "failed": failed,
         "items": items,
+        "auto_selected_assignee_ids": auto_selected_assignee_ids,
+        "created_task_agent_ids": created_task_agent_ids,
+        "deleted_task_agent_ids": deleted_task_agent_ids,
+        "selection_strategy_used": selection_strategy_used,
+    }
+
+
+async def select_assignee_for_task(
+    *,
+    group_id: str,
+    leader_agent_id: str,
+    task: Dict[str, Any],
+) -> Dict[str, Any]:
+    existing = str(task.get("assignee_agent_id") or "").strip()
+    if existing:
+        return {"success": True, "assignee_agent_id": existing, "auto_selected": False, "selection_strategy_used": False}
+
+    strategy = str(task.get("selection_strategy") or "").strip()
+    if strategy != "least_loaded":
+        return {
+            "success": False,
+            "error": "assignee_agent_id is required unless selection_strategy == 'least_loaded'",
+            "assignee_agent_id": None,
+        }
+
+    pool_outcome = await get_group_specialist_pool(group_id)
+    if not pool_outcome.get("success"):
+        return {"success": False, "error": pool_outcome.get("error") or "failed to load specialist pool", "assignee_agent_id": None}
+
+    delegations_outcome = await execute_adapter_action("adapter:portal:list_group_delegations", {"group_id": group_id})
+    if not delegations_outcome.get("success"):
+        return {
+            "success": False,
+            "error": delegations_outcome.get("error") or "failed to load group delegations",
+            "assignee_agent_id": None,
+        }
+
+    pool_payload = pool_outcome.get("result")
+    if isinstance(pool_payload, dict):
+        pool_items = pool_payload.get("items") or pool_payload.get("agents") or pool_payload.get("specialists") or []
+    elif isinstance(pool_payload, list):
+        pool_items = pool_payload
+    else:
+        pool_items = []
+
+    task_agent_mode = str(task.get("agent_mode") or "specialist").strip() or "specialist"
+    candidate_ids: List[str] = []
+    for item in pool_items:
+        if not isinstance(item, dict):
+            continue
+        agent_id = str(item.get("agent_id") or item.get("id") or "").strip()
+        if not agent_id or agent_id == leader_agent_id:
+            continue
+        candidate_type = str(item.get("agent_type") or item.get("type") or "specialist").strip().lower()
+        if task_agent_mode == "specialist" and candidate_type not in {"specialist", "task", "task_agent"}:
+            continue
+        candidate_ids.append(agent_id)
+    candidate_ids = sorted(set(candidate_ids))
+
+    result_payload = delegations_outcome.get("result")
+    if isinstance(result_payload, dict):
+        current_delegations = result_payload.get("delegations") or result_payload.get("items") or []
+    elif isinstance(result_payload, list):
+        current_delegations = result_payload
+    else:
+        current_delegations = []
+
+    active_statuses = {"queued", "running", "blocked"}
+    load_counts: Dict[str, int] = {candidate_id: 0 for candidate_id in candidate_ids}
+    for item in current_delegations:
+        if not isinstance(item, dict):
+            continue
+        assignee = str(item.get("assignee_agent_id") or "").strip()
+        status = str(item.get("status") or "").strip().lower()
+        if assignee in load_counts and status in active_statuses:
+            load_counts[assignee] += 1
+    if not load_counts:
+        return {"success": False, "error": "no eligible assignee found in specialist pool", "assignee_agent_id": None}
+    selected = sorted(load_counts.items(), key=lambda pair: (pair[1], pair[0]))[0][0]
+    return {
+        "success": True,
+        "assignee_agent_id": selected,
+        "auto_selected": True,
+        "selection_strategy_used": True,
+    }
+
+
+async def _prepare_task_for_delegation(
+    *,
+    group_id: str,
+    leader_agent_id: str,
+    leader_session_id: str,
+    task: Dict[str, Any],
+) -> Dict[str, Any]:
+    normalized_task = dict(task or {})
+    agent_mode = str(normalized_task.get("agent_mode") or "specialist").strip() or "specialist"
+    if agent_mode == "task":
+        existing_task_agent_id = str(normalized_task.get("ephemeral_task_agent_id") or "").strip()
+        template_agent_id = str(normalized_task.get("template_agent_id") or "").strip()
+        if not existing_task_agent_id and not template_agent_id:
+            raise ValueError("template_agent_id is required when agent_mode == 'task' and ephemeral_task_agent_id is missing")
+
+    selection = await select_assignee_for_task(group_id=group_id, leader_agent_id=leader_agent_id, task=normalized_task)
+    if not selection.get("success"):
+        raise ValueError(str(selection.get("error") or "failed to resolve assignee_agent_id"))
+    assignee_agent_id = str(selection.get("assignee_agent_id") or "").strip()
+    normalized_task["assignee_agent_id"] = assignee_agent_id
+    normalized_task.setdefault("leader_session_id", leader_session_id)
+
+    created_task_agent_id = None
+    if agent_mode == "task":
+        existing_task_agent_id = str(normalized_task.get("ephemeral_task_agent_id") or "").strip()
+        if existing_task_agent_id:
+            normalized_task["assignee_agent_id"] = existing_task_agent_id
+        else:
+            template_agent_id = str(normalized_task.get("template_agent_id") or "").strip()
+            if not template_agent_id:
+                raise ValueError("template_agent_id is required when agent_mode == 'task' and ephemeral_task_agent_id is missing")
+            create_payload = {
+                "group_id": group_id,
+                "template_agent_id": template_agent_id,
+                "name": normalized_task.get("name") or f"task-agent-{leader_session_id}",
+                "scope_label": normalized_task.get("scope_label") or normalized_task.get("task_agent_scope_label") or f"session:{leader_session_id}",
+            }
+            if normalized_task.get("visibility") is not None:
+                create_payload["visibility"] = normalized_task.get("visibility")
+            create_outcome = await create_task_agent_for_group(create_payload)
+            if not create_outcome.get("success"):
+                raise ValueError(str(create_outcome.get("error") or "failed to create task agent"))
+            created_result = create_outcome.get("result")
+            if isinstance(created_result, dict):
+                created_task_agent_id = str(created_result.get("agent_id") or created_result.get("id") or "").strip()
+            if not created_task_agent_id:
+                raise ValueError("failed to resolve created task agent id")
+            normalized_task["ephemeral_task_agent_id"] = created_task_agent_id
+            normalized_task["assignee_agent_id"] = created_task_agent_id
+        normalized_task["task_agent_cleanup_policy"] = str(normalized_task.get("task_agent_cleanup_policy") or "delete_on_terminal").strip()
+        normalized_task["task_agent_scope_label"] = str(
+            normalized_task.get("task_agent_scope_label") or normalized_task.get("scope_label") or f"session:{leader_session_id}"
+        ).strip()
+
+    return {
+        "task": normalized_task,
+        "auto_selected_assignee_id": assignee_agent_id if selection.get("auto_selected") else None,
+        "created_task_agent_id": created_task_agent_id,
+        "selection_strategy_used": bool(selection.get("selection_strategy_used")),
     }
 
 
@@ -318,6 +490,10 @@ async def run_delegation_cycle(
         "created": int(dispatch_result.get("created", 0)),
         "failed": int(dispatch_result.get("failed", 0)),
         "items": list(dispatch_result.get("items", [])),
+        "auto_selected_assignee_ids": list(dispatch_result.get("auto_selected_assignee_ids", [])),
+        "created_task_agent_ids": list(dispatch_result.get("created_task_agent_ids", [])),
+        "deleted_task_agent_ids": list(dispatch_result.get("deleted_task_agent_ids", [])),
+        "selection_strategy_used": bool(dispatch_result.get("selection_strategy_used", False)),
         "aggregate": aggregate,
         "run_state": run_state,
         "is_complete": bool(completion_eval.get("is_complete")),
