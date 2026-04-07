@@ -78,6 +78,18 @@ llm:
   model: "gpt-4o"
 ```
 
+### Control-Plane Internal Keys
+
+```yaml
+server:
+  runtime_internal_api_key: "change-me"  # Portal -> EFP (/api/tasks/execute, /api/capabilities)
+  portal_internal_api_key: "change-me"   # Portal -> EFP trusted chat metadata/identity
+```
+
+Environment variables override config values:
+- `RUNTIME_INTERNAL_API_KEY`
+- `PORTAL_INTERNAL_API_KEY`
+
 ### Integrations
 
 #### Jira (Multiple Instances)
@@ -182,6 +194,25 @@ engineering-flow-platform/
   "attachments": ["file_id1", "file_id2"]
 }
 ```
+
+### Control-Plane Runtime Endpoints (Internal)
+
+| Endpoint | Method | Description | Required Header |
+|----------|--------|-------------|-----------------|
+| `/api/tasks/execute` | POST | Runtime task execution bridge | `X-Internal-Api-Key` |
+| `/api/capabilities` | GET | Runtime capability snapshot/filter API | `X-Internal-Api-Key` |
+
+### Phase 5 Trust Contract (Portal ↔ Runtime)
+
+- `/api/chat` and `/api/chat/stream` remain usable for direct runtime chat.
+- Governance/capability metadata is only applied for **trusted Portal requests**.
+- Trusted chat request requires:
+  - `X-Portal-Author-Source: portal`
+  - and, when `PORTAL_INTERNAL_API_KEY` (or `server.portal_internal_api_key`) is configured,
+    `X-Portal-Internal-Api-Key`.
+- `portal_user_id` / `portal_user_name` are trusted identity headers only (`X-Portal-User-Id`, `X-Portal-User-Name`).
+
+For complete control-plane contract details, see `docs/control_plane_contract.md`.
 
 ### Sessions
 

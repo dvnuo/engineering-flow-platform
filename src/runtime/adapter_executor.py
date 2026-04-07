@@ -13,6 +13,7 @@ from src.runtime.capability_adapters import (
     build_jira_adapter_capabilities,
     build_portal_adapter_capabilities,
 )
+from src.utils.internal_api_keys import build_portal_internal_api_headers
 
 
 def _event(event_type: str, state: str, detail_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -289,14 +290,7 @@ def _normalize_json_field(value: Any) -> Any:
 
 
 def _build_portal_headers() -> Dict[str, str]:
-    headers = {"Content-Type": "application/json"}
-    token = os.getenv("PORTAL_INTERNAL_AUTH_TOKEN", "").strip()
-    api_key = os.getenv("PORTAL_INTERNAL_API_KEY", "").strip()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    if api_key:
-        headers["X-Internal-Api-Key"] = api_key
-    return headers
+    return build_portal_internal_api_headers(include_content_type=True)
 
 
 async def _post_portal_json(url: str, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:

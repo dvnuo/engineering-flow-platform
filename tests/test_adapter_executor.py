@@ -2,6 +2,7 @@ import pytest
 
 from src.runtime.adapter_executor import (
     ACTION_ID_TO_EXECUTOR,
+    _build_portal_headers,
     execute_adapter_action,
     execute_jira_workflow_action,
     validate_enabled_adapter_actions_have_executors,
@@ -267,6 +268,35 @@ async def test_execute_adapter_action_portal_delete_task_agent_uses_delete(monke
     assert result["success"] is True
     assert captured["url"] == "https://portal.internal/api/internal/agent-groups/group-1/task-agents/ta-1"
     assert captured["headers"]["X-Internal-Api-Key"] == "k-1"
+
+
+def test_build_portal_headers_uses_config_fallback_api_key(monkeypatch):
+    monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
+    monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "src.utils.internal_api_keys.global_config.get",
+        lambda key, default=None: "cfg-key" if key == "server.portal_internal_api_key" else default,
+    )
+
+    headers = _build_portal_headers()
+
+    assert headers["Content-Type"] == "application/json"
+    assert headers["X-Internal-Api-Key"] == "cfg-key"
+    assert "Authorization" not in headers
+
+
+def test_build_portal_headers_keeps_auth_token_and_config_fallback_api_key(monkeypatch):
+    monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
+    monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "legacy-token")
+    monkeypatch.setattr(
+        "src.utils.internal_api_keys.global_config.get",
+        lambda key, default=None: "cfg-key-2" if key == "server.portal_internal_api_key" else default,
+    )
+
+    headers = _build_portal_headers()
+
+    assert headers["Authorization"] == "Bearer legacy-token"
+    assert headers["X-Internal-Api-Key"] == "cfg-key-2"
 
 
 @pytest.mark.asyncio

@@ -23,6 +23,7 @@ init_storage()
 from src.utils.file_parser import parse_file
 from src.utils.truncate import truncate
 from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception_message
+from src.utils.internal_api_keys import get_portal_internal_api_key, get_runtime_internal_api_key
 
 
 from ruamel.yaml import YAML
@@ -97,20 +98,12 @@ def _extract_portal_identity(request: web.Request, data: Dict[str, Any]) -> tupl
     return resolved_user_id, resolved_user_name
 
 
-def _get_portal_internal_api_key() -> str:
-    env_key = str(os.getenv("PORTAL_INTERNAL_API_KEY") or "").strip()
-    if env_key:
-        return env_key
-    config_key = global_config.get("server.portal_internal_api_key", "")
-    return str(config_key or "").strip()
-
-
 def _is_trusted_portal_request(request: web.Request) -> bool:
     headers = getattr(request, "headers", {}) or {}
     portal_source = str(headers.get("X-Portal-Author-Source") or "").strip().lower()
     if portal_source != "portal":
         return False
-    expected_internal_key = _get_portal_internal_api_key()
+    expected_internal_key = get_portal_internal_api_key()
     if not expected_internal_key:
         return True
     provided_internal_key = str(headers.get("X-Portal-Internal-Api-Key") or "").strip()
@@ -198,20 +191,12 @@ def _parse_task_execute_request(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _get_runtime_internal_api_key() -> str:
-    env_key = str(os.getenv("RUNTIME_INTERNAL_API_KEY") or "").strip()
-    if env_key:
-        return env_key
-    config_key = global_config.get("server.runtime_internal_api_key", "")
-    return str(config_key or "").strip()
-
-
 def _build_internal_auth_error_response(status_code: int, message: str) -> web.Response:
     return web.json_response({"error": message}, status=status_code)
 
 
 def _authorize_internal_runtime_request(request: web.Request) -> Optional[web.Response]:
-    expected_key = _get_runtime_internal_api_key()
+    expected_key = get_runtime_internal_api_key()
     if not expected_key:
         return _build_internal_auth_error_response(503, "Runtime internal api key is not configured")
     headers = getattr(request, "headers", {}) or {}
