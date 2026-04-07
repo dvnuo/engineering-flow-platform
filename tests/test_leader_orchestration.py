@@ -153,6 +153,12 @@ def test_evaluate_completion_criteria_default_and_blocked():
     assert in_progress["reason"] == "work_in_progress"
     failed = evaluate_completion_criteria({"mode": "all_done"}, {"all_done": False, "has_blockers": False, "status_by_assignee": {"a1": "failed"}})
     assert failed["reason"] == "failed_terminal"
+    run_blocked = evaluate_completion_criteria({"mode": "all_done"}, {"all_done": False, "has_blockers": False, "run_status": "blocked"})
+    assert run_blocked["reason"] == "run_blocked"
+    run_done = evaluate_completion_criteria({"mode": "all_done"}, {"run_status": "done", "all_terminal": True, "all_done": True})
+    assert run_done["is_complete"] is True
+    run_failed = evaluate_completion_criteria({"mode": "all_done"}, {"run_status": "failed", "all_terminal": True, "all_done": False})
+    assert run_failed["reason"] == "failed_terminal"
 
 
 @pytest.mark.asyncio
@@ -160,7 +166,23 @@ async def test_run_delegation_cycle_next_action_continue_complete_blocked(monkey
     async def _fake_dispatch(**_kwargs):
         return {"success": True, "created": 1, "failed": 0, "items": [{"result": {"assignee_agent_id": "a-1", "status": "in_progress"}}]}
 
+    async def _fake_load(**_kwargs):
+        return {
+            "coordination_run_id": "coord-1",
+            "status": "running",
+            "summary": {"status_counts": {"queued": 0, "running": 1, "done": 0, "failed": 0, "other": 0}},
+            "rounds": [1],
+            "delegations": [{"result": {"assignee_agent_id": "a-1", "status": "in_progress"}}],
+            "status_counts": {"queued": 0, "running": 1, "done": 0, "failed": 0, "other": 0},
+            "latest_round_index": 1,
+            "all_terminal": False,
+            "all_done": False,
+            "has_blockers": False,
+            "completed_at": None,
+        }
+
     monkeypatch.setattr("src.runtime.leader_orchestration.dispatch_task_breakdown_as_delegations", _fake_dispatch)
+    monkeypatch.setattr("src.runtime.leader_orchestration.load_coordination_run_state", _fake_load)
     result_continue = await run_delegation_cycle(
         group_id="g-1",
         leader_agent_id="leader-1",
@@ -171,7 +193,24 @@ async def test_run_delegation_cycle_next_action_continue_complete_blocked(monkey
     assert result_continue["round_index"] == 1
     assert result_continue["next_action"] == "continue"
     assert "leader_summary" in result_continue
+    assert result_continue["leader_summary"]["run_status"] == "running"
 
+    async def _fake_load_done(**_kwargs):
+        return {
+            "coordination_run_id": "coord-1",
+            "status": "done",
+            "summary": {"status_counts": {"queued": 0, "running": 0, "done": 1, "failed": 0, "other": 0}},
+            "rounds": [1],
+            "delegations": [{"result": {"assignee_agent_id": "a-1", "status": "done"}}],
+            "status_counts": {"queued": 0, "running": 0, "done": 1, "failed": 0, "other": 0},
+            "latest_round_index": 1,
+            "all_terminal": True,
+            "all_done": True,
+            "has_blockers": False,
+            "completed_at": "2026-04-07T00:00:00Z",
+        }
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.load_coordination_run_state", _fake_load_done)
     result_complete = await run_delegation_cycle(
         group_id="g-1",
         leader_agent_id="leader-1",
@@ -180,7 +219,24 @@ async def test_run_delegation_cycle_next_action_continue_complete_blocked(monkey
         prior_results=[{"result": {"assignee_agent_id": "a-1", "status": "done"}}],
     )
     assert result_complete["next_action"] == "complete"
+    assert result_complete["leader_summary"]["completed_at"] == "2026-04-07T00:00:00Z"
 
+    async def _fake_load_blocked(**_kwargs):
+        return {
+            "coordination_run_id": "coord-1",
+            "status": "blocked",
+            "summary": {},
+            "rounds": [1],
+            "delegations": [{"result": {"assignee_agent_id": "a-1", "status": "done", "blockers": ["blocked"]}}],
+            "status_counts": {"queued": 0, "running": 0, "done": 1, "failed": 0, "other": 0},
+            "latest_round_index": 1,
+            "all_terminal": False,
+            "all_done": False,
+            "has_blockers": True,
+            "completed_at": None,
+        }
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.load_coordination_run_state", _fake_load_blocked)
     result_blocked = await run_delegation_cycle(
         group_id="g-1",
         leader_agent_id="leader-1",
@@ -210,6 +266,34 @@ async def test_run_delegation_cycle_invalid_round_index_normalizes_to_one(monkey
 @pytest.mark.asyncio
 async def test_load_coordination_run_state_filters_and_counts(monkeypatch):
     async def _fake_execute(action_id, kwargs):
+        if action_id == "adapter:portal:get_coordination_run":
+            return {
+                "success": True,
+                "result": {
+                    "coordination_run_id": kwargs["coordination_run_id"],
+                    "status": "done",
+                    "summary": {"status_counts": {"queued": 0, "running": 0, "done": 2, "failed": 0, "other": 0}},
+                    "rounds": [1, 2],
+                    "completed_at": "2026-04-07T00:00:00Z",
+                },
+                "error": None,
+            }
+        raise AssertionError("fallback call should not be required")
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.execute_adapter_action", _fake_execute)
+    state = await load_coordination_run_state(group_id="g-1", coordination_run_id="coord-1")
+    assert state["latest_round_index"] == 2
+    assert state["status_counts"]["done"] == 2
+    assert state["status"] == "done"
+    assert state["all_terminal"] is True
+    assert state["all_done"] is True
+
+
+@pytest.mark.asyncio
+async def test_load_coordination_run_state_falls_back_to_delegations(monkeypatch):
+    async def _fake_execute(action_id, kwargs):
+        if action_id == "adapter:portal:get_coordination_run":
+            return {"success": False, "result": None, "error": "not found"}
         assert action_id == "adapter:portal:list_group_delegations"
         assert kwargs["group_id"] == "g-1"
         return {
@@ -227,7 +311,6 @@ async def test_load_coordination_run_state_filters_and_counts(monkeypatch):
 
     monkeypatch.setattr("src.runtime.leader_orchestration.execute_adapter_action", _fake_execute)
     state = await load_coordination_run_state(group_id="g-1", coordination_run_id="coord-1")
-    assert state["latest_round_index"] == 2
     assert state["status_counts"]["queued"] == 1
     assert state["status_counts"]["done"] == 1
     assert state["status_counts"]["failed"] == 1
@@ -239,6 +322,8 @@ async def test_run_delegation_cycle_evaluation_mode_loads_run_state(monkeypatch)
         assert group_id == "g-1"
         return {
             "coordination_run_id": coordination_run_id,
+            "status": "running",
+            "summary": {},
             "rounds": [1, 2],
             "delegations": [{"assignee_agent_id": "a-1", "status": "running"}],
             "status_counts": {"queued": 0, "running": 1, "done": 0, "failed": 0, "other": 0},
@@ -246,6 +331,7 @@ async def test_run_delegation_cycle_evaluation_mode_loads_run_state(monkeypatch)
             "all_terminal": False,
             "all_done": False,
             "has_blockers": False,
+            "completed_at": None,
         }
 
     monkeypatch.setattr("src.runtime.leader_orchestration.load_coordination_run_state", _fake_load)
@@ -258,3 +344,4 @@ async def test_run_delegation_cycle_evaluation_mode_loads_run_state(monkeypatch)
     )
     assert result["run_state"]["latest_round_index"] == 2
     assert result["next_action"] == "continue"
+    assert result["leader_summary"]["run_status"] == "running"

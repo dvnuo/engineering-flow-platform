@@ -188,6 +188,8 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
         "adapter:portal:create_delegation": "create_delegation",
         "adapter:portal:list_group_delegations": "list_group_delegations",
         "adapter:portal:get_group_task_board": "get_group_task_board",
+        "adapter:portal:list_group_coordination_runs": "list_group_coordination_runs",
+        "adapter:portal:get_coordination_run": "get_coordination_run",
     }
 
     jira_action = jira_action_map.get(normalized_action_id)
@@ -289,7 +291,13 @@ async def execute_portal_control_plane_action(action_name: str, kwargs: Dict[str
     if not base_url:
         return {"success": False, "error": "PORTAL_INTERNAL_BASE_URL is not configured", "system": "portal", "action_name": action, "result": None}
 
-    if action not in {"create_delegation", "list_group_delegations", "get_group_task_board"}:
+    if action not in {
+        "create_delegation",
+        "list_group_delegations",
+        "get_group_task_board",
+        "list_group_coordination_runs",
+        "get_coordination_run",
+    }:
         return {"success": False, "error": f"Unsupported portal action: {action}", "system": "portal", "action_name": action, "result": None}
 
     if action == "create_delegation":
@@ -322,12 +330,34 @@ async def execute_portal_control_plane_action(action_name: str, kwargs: Dict[str
             f"{base_url}/api/internal/agent-groups/{group_id}/delegations",
             _build_portal_headers(),
         )
-    else:
+    elif action == "get_group_task_board":
         group_id = str(payload.get("group_id") or "").strip()
         if not group_id:
             return {"success": False, "error": "group_id is required", "system": "portal", "action_name": action, "result": None}
         outcome = await _get_portal_json(
             f"{base_url}/api/internal/agent-groups/{group_id}/task-board",
+            _build_portal_headers(),
+        )
+    elif action == "list_group_coordination_runs":
+        group_id = str(payload.get("group_id") or "").strip()
+        if not group_id:
+            return {"success": False, "error": "group_id is required", "system": "portal", "action_name": action, "result": None}
+        outcome = await _get_portal_json(
+            f"{base_url}/api/internal/agent-groups/{group_id}/coordination-runs",
+            _build_portal_headers(),
+        )
+    else:
+        coordination_run_id = str(payload.get("coordination_run_id") or "").strip()
+        if not coordination_run_id:
+            return {
+                "success": False,
+                "error": "coordination_run_id is required",
+                "system": "portal",
+                "action_name": action,
+                "result": None,
+            }
+        outcome = await _get_portal_json(
+            f"{base_url}/api/internal/coordination-runs/{coordination_run_id}",
             _build_portal_headers(),
         )
 

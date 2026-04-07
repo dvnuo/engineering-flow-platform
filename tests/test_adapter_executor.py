@@ -158,11 +158,17 @@ async def test_execute_adapter_action_portal_read_actions_use_get(monkeypatch):
 
     result_a = await execute_adapter_action("adapter:portal:list_group_delegations", {"group_id": "group-1"})
     result_b = await execute_adapter_action("adapter:portal:get_group_task_board", {"group_id": "group-1"})
+    result_c = await execute_adapter_action("adapter:portal:list_group_coordination_runs", {"group_id": "group-1"})
+    result_d = await execute_adapter_action("adapter:portal:get_coordination_run", {"coordination_run_id": "coord-1"})
 
     assert result_a["success"] is True
     assert result_b["success"] is True
+    assert result_c["success"] is True
+    assert result_d["success"] is True
     assert captured[0][0] == "https://portal.internal/api/internal/agent-groups/group-1/delegations"
     assert captured[1][0] == "https://portal.internal/api/internal/agent-groups/group-1/task-board"
+    assert captured[2][0] == "https://portal.internal/api/internal/agent-groups/group-1/coordination-runs"
+    assert captured[3][0] == "https://portal.internal/api/internal/coordination-runs/coord-1"
     assert captured[0][1]["X-Internal-Api-Key"] == "k-1"
 
 

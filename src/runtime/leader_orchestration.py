@@ -130,6 +130,22 @@ def evaluate_completion_criteria(completion_criteria: Dict[str, Any] | None, agg
     mode = str(criteria.get("mode") or "all_done").strip() or "all_done"
     if aggregate.get("has_blockers"):
         return {"is_complete": False, "reason": "blockers_present", "mode": mode}
+    run_status = str(aggregate.get("run_status") or "").strip().lower()
+    if run_status == "blocked":
+        return {"is_complete": False, "reason": "run_blocked", "mode": mode}
+    if run_status in {"queued", "running"}:
+        return {"is_complete": False, "reason": "work_in_progress", "mode": mode}
+    if run_status == "done":
+        return {"is_complete": True, "reason": "run_done", "mode": mode}
+    if run_status == "failed":
+        return {"is_complete": False, "reason": "failed_terminal", "mode": mode}
+    status_counts = aggregate.get("status_counts") if isinstance(aggregate.get("status_counts"), dict) else {}
+    if int(status_counts.get("queued", 0)) > 0 or int(status_counts.get("running", 0)) > 0:
+        return {"is_complete": False, "reason": "work_in_progress", "mode": mode}
+    if bool(aggregate.get("all_terminal")) and bool(aggregate.get("all_done")):
+        return {"is_complete": True, "reason": "run_terminal_done", "mode": mode}
+    if bool(aggregate.get("all_terminal")) and not bool(aggregate.get("all_done")):
+        return {"is_complete": False, "reason": "failed_terminal", "mode": mode}
     status_values = list((aggregate.get("status_by_assignee") or {}).values())
     if any(status in {"queued", "running", "in_progress"} for status in status_values):
         return {"is_complete": False, "reason": "work_in_progress", "mode": mode}
@@ -141,8 +157,21 @@ def evaluate_completion_criteria(completion_criteria: Dict[str, Any] | None, agg
 
 
 async def load_coordination_run_state(*, group_id: str, coordination_run_id: str) -> Dict[str, Any]:
-    outcome = await execute_adapter_action("adapter:portal:list_group_delegations", {"group_id": group_id})
-    result_payload = outcome.get("result")
+    normalized_run_id = str(coordination_run_id or "").strip()
+    run_outcome = await execute_adapter_action(
+        "adapter:portal:get_coordination_run",
+        {"coordination_run_id": normalized_run_id},
+    )
+    run_result_payload = run_outcome.get("result")
+    run_record = run_result_payload if isinstance(run_result_payload, dict) else {}
+
+    run_summary = run_record.get("summary") if isinstance(run_record.get("summary"), dict) else {}
+    delegation_outcome = {"success": False, "result": None}
+    result_payload = None
+    if not run_record or not run_summary:
+        delegation_outcome = await execute_adapter_action("adapter:portal:list_group_delegations", {"group_id": group_id})
+        result_payload = delegation_outcome.get("result")
+
     if isinstance(result_payload, dict):
         delegations = result_payload.get("delegations") or result_payload.get("items") or []
     elif isinstance(result_payload, list):
@@ -156,7 +185,7 @@ async def load_coordination_run_state(*, group_id: str, coordination_run_id: str
     for item in delegations:
         if not isinstance(item, dict):
             continue
-        if str(item.get("coordination_run_id") or "").strip() != str(coordination_run_id or "").strip():
+        if str(item.get("coordination_run_id") or "").strip() != normalized_run_id:
             continue
         matched.append(item)
         round_index_raw = item.get("round_index")
@@ -176,8 +205,38 @@ async def load_coordination_run_state(*, group_id: str, coordination_run_id: str
     total = len(matched)
     all_terminal = status_counts["queued"] == 0 and status_counts["running"] == 0
     all_done = total > 0 and status_counts["done"] == total and status_counts["failed"] == 0 and status_counts["other"] == 0
+
+    run_status = str(run_record.get("status") or "").strip().lower()
+    completed_at = run_record.get("completed_at")
+    run_rounds = run_record.get("rounds") if isinstance(run_record.get("rounds"), list) else []
+    if run_rounds:
+        for round_value in run_rounds:
+            if isinstance(round_value, int) and round_value > 0:
+                rounds.append(round_value)
+    run_delegations = run_record.get("delegations") if isinstance(run_record.get("delegations"), list) else []
+    if run_delegations:
+        matched = [item for item in run_delegations if isinstance(item, dict)]
+    if run_summary:
+        summary_counts = run_summary.get("status_counts") if isinstance(run_summary.get("status_counts"), dict) else None
+        if summary_counts:
+            for key in ("queued", "running", "done", "failed", "other"):
+                status_counts[key] = int(summary_counts.get(key, status_counts.get(key, 0)))
+
+    if run_status == "done":
+        all_terminal = True
+        all_done = True
+    elif run_status == "failed":
+        all_terminal = True
+        all_done = False
+    elif run_status in {"running", "queued"}:
+        all_terminal = False
+    if run_status == "blocked":
+        has_blockers = True
+
     return {
-        "coordination_run_id": coordination_run_id,
+        "coordination_run_id": normalized_run_id,
+        "status": run_status or ("done" if all_done else "running" if not all_terminal else "failed"),
+        "summary": run_summary,
         "rounds": sorted(set(rounds)),
         "delegations": matched,
         "status_counts": status_counts,
@@ -185,6 +244,7 @@ async def load_coordination_run_state(*, group_id: str, coordination_run_id: str
         "all_terminal": all_terminal,
         "all_done": all_done,
         "has_blockers": has_blockers,
+        "completed_at": completed_at,
     }
 
 
@@ -227,18 +287,29 @@ async def run_delegation_cycle(
         "all_done": False,
         "has_blockers": False,
     }
-    if not enriched_tasks and coordination_run_id:
-        run_state = await load_coordination_run_state(group_id=group_id, coordination_run_id=run_id)
+    run_state = await load_coordination_run_state(group_id=group_id, coordination_run_id=run_id)
 
     combined_results = list(prior_results or []) + list(dispatch_result.get("items") or []) + list(run_state.get("delegations") or [])
     aggregate = aggregate_delegation_results(combined_results)
+    aggregate = {
+        **aggregate,
+        "run_status": run_state.get("status"),
+        "status_counts": run_state.get("status_counts", {}),
+        "all_terminal": bool(run_state.get("all_terminal")),
+        "all_done": bool(run_state.get("all_done")),
+        "has_blockers": bool(aggregate.get("has_blockers")) or bool(run_state.get("has_blockers")),
+    }
     completion_eval = evaluate_completion_criteria(completion_criteria, aggregate)
-    if aggregate.get("has_blockers"):
+    run_status = str(run_state.get("status") or "").strip().lower()
+    run_active = run_status in {"queued", "running"} or not bool(run_state.get("all_terminal"))
+    if aggregate.get("has_blockers") or run_status == "blocked":
         next_action = "blocked"
     elif completion_eval.get("is_complete"):
         next_action = "complete"
-    else:
+    elif run_active:
         next_action = "continue"
+    else:
+        next_action = "review"
     leader_summary_status = "blocked" if aggregate.get("has_blockers") else "complete" if completion_eval.get("is_complete") else "in_progress"
     return {
         "success": bool(dispatch_result.get("success", True)),
@@ -256,8 +327,11 @@ async def run_delegation_cycle(
         "leader_summary": {
             "status": leader_summary_status,
             "latest_round_index": run_state.get("latest_round_index", normalized_round),
+            "run_status": run_state.get("status"),
             "status_counts": run_state.get("status_counts", {}),
+            "completed_at": run_state.get("completed_at"),
             "blockers": aggregate.get("blockers", []),
             "next_recommendations": aggregate.get("next_recommendations", []),
+            "summary": run_state.get("summary", {}),
         },
     }
