@@ -404,7 +404,7 @@ async def test_api_chat_resolves_portal_identity_from_headers(monkeypatch):
 
     class _Request:
         app = {}
-        headers = {"X-Portal-User-Id": " hdr-user \r\n", "X-Portal-User-Name": " hdr-name\t"}
+        headers = {"X-Portal-Author-Source": "portal", "X-Portal-User-Id": " hdr-user \r\n", "X-Portal-User-Name": " hdr-name\t"}
 
         async def json(self):
             return {"message": "hello", "session_id": "s1"}
@@ -443,7 +443,7 @@ async def test_api_chat_stream_resolves_portal_identity_from_headers(monkeypatch
 
     class _Request:
         app = {}
-        headers = {"X-Portal-User-Id": "stream-user", "X-Portal-User-Name": "stream-name"}
+        headers = {"X-Portal-Author-Source": "portal", "X-Portal-User-Id": "stream-user", "X-Portal-User-Name": "stream-name"}
 
         async def json(self):
             return {"message": "hello", "session_id": "s2"}
@@ -597,12 +597,13 @@ async def test_api_chat_stream_trusted_portal_metadata_passed_to_execution_bus(m
             self.writes.append(data)
 
     monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
+    monkeypatch.setenv("PORTAL_INTERNAL_API_KEY", "portal-secret-stream")
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
 
     class _Request:
         app = {}
-        headers = {"X-Portal-Author-Source": "portal"}
+        headers = {"X-Portal-Author-Source": "portal", "X-Portal-Internal-Api-Key": "portal-secret-stream"}
 
         async def json(self):
             return {
@@ -634,7 +635,7 @@ async def test_api_chat_rejects_non_object_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_chat_body_identity_fallback_and_header_precedence(monkeypatch):
+async def test_api_chat_untrusted_portal_identity_is_ignored_and_trusted_header_precedence(monkeypatch):
     from src.gateway import webchat
 
     captured = {}
@@ -657,27 +658,113 @@ async def test_api_chat_body_identity_fallback_and_header_precedence(monkeypatch
     monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
     monkeypatch.setattr(webchat.session_persistence, "save_session", _fake_save_session)
 
-    class _BodyOnlyRequest:
+    class _UntrustedBodyIdentityRequest:
         app = {}
         headers = {}
 
         async def json(self):
-            return {"message": "hello", "session_id": "s3", "portal_user_id": "body-id", "portal_user_name": "body-name"}
+            return {"message": "hello", "session_id": "s3", "portal_user_id": "body-id", "portal_user_name": "body-name", "user_name": "cli-user"}
 
-    await webchat.api_chat(_BodyOnlyRequest())
-    assert captured["portal_user_id"] == "body-id"
-    assert captured["portal_user_name"] == "body-name"
+    await webchat.api_chat(_UntrustedBodyIdentityRequest())
+    assert captured["portal_user_id"] is None
+    assert captured["portal_user_name"] is None
+    assert captured["user_name"] == "cli-user"
 
-    class _ConflictRequest:
+    class _TrustedConflictRequest:
         app = {}
-        headers = {"X-Portal-User-Id": "header-id", "X-Portal-User-Name": "header-name"}
+        headers = {"X-Portal-Author-Source": "portal", "X-Portal-User-Id": "header-id", "X-Portal-User-Name": "header-name"}
 
         async def json(self):
             return {"message": "hello", "session_id": "s4", "portal_user_id": "body-id", "portal_user_name": "body-name"}
 
-    await webchat.api_chat(_ConflictRequest())
+    await webchat.api_chat(_TrustedConflictRequest())
     assert captured["portal_user_id"] == "header-id"
     assert captured["portal_user_name"] == "header-name"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_direct_runtime_user_name_does_not_become_portal_identity(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+
+    async def _fake_get_session(_session_id):
+        return {"history": [{}], "channel": "", "metadata": {}}
+
+    async def _fake_save_session(**kwargs):
+        return True
+
+    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+    monkeypatch.setattr(webchat.session_persistence, "save_session", _fake_save_session)
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {
+                "message": "hello",
+                "session_id": "s-direct-identity",
+                "user_name": "cli-user",
+                "portal_user_name": "fake-portal",
+            }
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
+    assert captured["portal_user_id"] is None
+    assert captured["portal_user_name"] is None
+    assert captured["user_name"] == "cli-user"
+
+
+@pytest.mark.asyncio
+async def test_portal_trust_uses_config_fallback_internal_key(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
+    monkeypatch.setattr(
+        webchat.global_config,
+        "get",
+        lambda key, default=None: "portal-cfg-key" if key == "server.portal_internal_api_key" else default,
+    )
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {
+            "X-Portal-Author-Source": "portal",
+            "X-Portal-Internal-Api-Key": "portal-cfg-key",
+            "X-Portal-User-Id": "portal-u",
+            "X-Portal-User-Name": "portal-name",
+        }
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-portal-cfg", "metadata": {"allowed_actions": ["adapter:portal:get_group_task_board"]}}
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
+    assert captured["portal_user_id"] == "portal-u"
+    assert captured["portal_user_name"] == "portal-name"
+    assert captured["execution_metadata"]["allowed_actions"] == ["adapter:portal:get_group_task_board"]
 
 
 def test_sanitize_portal_identity_value_none_returns_empty():

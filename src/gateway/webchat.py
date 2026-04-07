@@ -84,17 +84,29 @@ def _extract_portal_identity(request: web.Request, data: Dict[str, Any]) -> tupl
     body_user_id = _sanitize_portal_identity_value(data.get("portal_user_id"))
     body_user_name = _sanitize_portal_identity_value(data.get("portal_user_name"))
 
+    if not _is_trusted_portal_request(request):
+        logger.debug("[portal_identity] resolved_source=untrusted has_user_id=False has_user_name=False")
+        return None, None
+
     resolved_user_id = header_user_id or body_user_id or None
     resolved_user_name = header_user_name or body_user_name or None
 
     if header_user_id or header_user_name:
-        source = "headers"
+        source = "trusted_headers"
     elif body_user_id or body_user_name:
-        source = "body"
+        source = "trusted_body"
     else:
-        source = "none"
+        source = "trusted_none"
     logger.debug("[portal_identity] resolved_source=%s has_user_id=%s has_user_name=%s", source, bool(resolved_user_id), bool(resolved_user_name))
     return resolved_user_id, resolved_user_name
+
+
+def _get_portal_internal_api_key() -> str:
+    env_key = str(os.getenv("PORTAL_INTERNAL_API_KEY") or "").strip()
+    if env_key:
+        return env_key
+    config_key = global_config.get("server.portal_internal_api_key", "")
+    return str(config_key or "").strip()
 
 
 def _is_trusted_portal_request(request: web.Request) -> bool:
@@ -102,11 +114,16 @@ def _is_trusted_portal_request(request: web.Request) -> bool:
     portal_source = str(headers.get("X-Portal-Author-Source") or "").strip().lower()
     if portal_source != "portal":
         return False
-    expected_internal_key = str(os.getenv("PORTAL_INTERNAL_API_KEY") or "").strip()
+    expected_internal_key = _get_portal_internal_api_key()
     if not expected_internal_key:
         return True
     provided_internal_key = str(headers.get("X-Portal-Internal-Api-Key") or "")
     return provided_internal_key == expected_internal_key
+
+
+def _resolve_chat_display_user_name(data: Dict[str, Any], portal_user_name: Optional[str]) -> str:
+    direct_user_name = _sanitize_portal_identity_value(data.get("user_name")) or None
+    return portal_user_name or direct_user_name or "webchat-user"
 
 
 def _parse_optional_execution_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -450,7 +467,7 @@ async def api_chat(request: web.Request) -> web.Response:
         attachments = data.get('attachments', [])
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
-        effective_user_name = portal_user_name or "webchat-user"
+        effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
         logger.debug(
             "[api_chat] Request summary: session_id=%s, has_message=%s, attachment_count=%d, portal_user_id_present=%s",
             session_id,
@@ -747,7 +764,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
-        effective_user_name = portal_user_name or "webchat-user"
+        effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
         
         if not message:
             response = web.json_response({'error': 'Empty message'}, status=400)
