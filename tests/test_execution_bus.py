@@ -2577,3 +2577,56 @@ def test_execution_bus_copies_handlers_mapping():
     bus = ExecutionBus(handlers=provided)
     provided.clear()
     assert "chat" in bus._handlers
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_adapter_action_task_includes_capability_metadata(monkeypatch):
+    class _Registry:
+        def get(self, action_id):
+            return CapabilityDescriptor(
+                capability_id=action_id,
+                type="adapter_action",
+                name="read_issue",
+                policy_tags=["jira", "read"],
+                requires_identity_binding=True,
+            )
+
+    async def _fake_execute_adapter_action(_action_id, _kwargs):
+        return {"success": True, "error": None, "result": {"ok": True}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.execution_bus.get_capability_registry", lambda: _Registry())
+    monkeypatch.setattr("src.runtime.execution_bus.execute_adapter_action", _fake_execute_adapter_action)
+
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:read_issue", "kwargs": {"issue_key": "ENG-1"}},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert result.output_payload["capability_id"] == "adapter:jira:read_issue"
+    assert result.output_payload["policy_tags"] == ["jira", "read"]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_task_capability_unresolved_fallback_for_non_adapter_task(monkeypatch):
+    async def _fake_review(_payload):
+        return {"success": True, "runtime_events": [], "workflow_outcome": "approved", "actions_applied": []}
+
+    class _Registry:
+        def get(self, _capability_id):
+            return None
+
+    monkeypatch.setattr("src.runtime.execution_bus.get_capability_registry", lambda: _Registry())
+    monkeypatch.setattr("src.runtime.execution_bus.run_jira_workflow_review", _fake_review)
+
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "jira_workflow_review_task", "issue_key": "ENG-9"},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert result.output_payload["capability_resolution"] == "unresolved"

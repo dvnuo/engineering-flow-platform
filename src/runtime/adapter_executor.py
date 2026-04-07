@@ -37,6 +37,24 @@ def _result_success(value: Any) -> bool:
     )
 
 
+def _normalize_adapter_contract(
+    *,
+    outcome: Dict[str, Any],
+    system: str,
+    action_name: str,
+    runtime_events: list[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "success": bool(outcome.get("success")),
+        "error": outcome.get("error"),
+        "result": outcome.get("result"),
+        "system": outcome.get("system", system),
+        "action_name": outcome.get("action_name", action_name),
+        "action_id": outcome.get("action_id", action_name),
+        "runtime_events": list(runtime_events),
+    }
+
+
 async def execute_jira_workflow_action(action_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     from src import jira as jira_module
 
@@ -206,13 +224,12 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
                 {"action_id": normalized_action_id, "system": system, "error": "unsupported_adapter_action"},
             )
         )
-        return {
-            "success": False,
-            "error": f"Unsupported adapter action: {action_id}",
-            "action_id": normalized_action_id,
-            "system": system,
-            "runtime_events": runtime_events,
-        }
+        return _normalize_adapter_contract(
+            outcome={"success": False, "error": f"Unsupported adapter action: {action_id}", "result": None},
+            system=system,
+            action_name=normalized_action_id,
+            runtime_events=runtime_events,
+        )
 
     if jira_action is not None:
         outcome = await execute_jira_workflow_action(jira_action, payload)
@@ -232,14 +249,12 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
             },
         )
     )
-    return {
-        "action_id": normalized_action_id,
-        "system": outcome.get("system", system),
-        "success": bool(outcome.get("success")),
-        "error": outcome.get("error"),
-        "result": outcome.get("result"),
-        "runtime_events": runtime_events,
-    }
+    return _normalize_adapter_contract(
+        outcome=outcome,
+        system=outcome.get("system", system),
+        action_name=normalized_action_id,
+        runtime_events=runtime_events,
+    )
 
 
 def _normalize_json_field(value: Any) -> Any:

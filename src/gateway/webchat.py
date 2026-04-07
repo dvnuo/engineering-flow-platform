@@ -40,6 +40,7 @@ from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.config import config as global_config
 from src.runtime.chat_orchestration_adapter import execute_chat_orchestration, execute_runtime_task_request
+from src.runtime.capability_registry import get_capability_registry
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
 from src.sessions.usage import usage_tracker
@@ -831,6 +832,44 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
         return web.json_response({"error": str(exc)}, status=400)
     except Exception as exc:
         logger.error("Task execution API error: %s", sanitize_exception_message(exc), exc_info=True)
+        return web.json_response({"error": "Internal server error"}, status=500)
+
+
+def _parse_bool_query(value: Optional[str]) -> Optional[bool]:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes"}:
+        return True
+    if normalized in {"0", "false", "no"}:
+        return False
+    return None
+
+
+async def api_capabilities(request: web.Request) -> web.Response:
+    """List runtime capability catalog.
+
+    GET /api/capabilities?type=...&enabled=true|false&capability_id=...
+    """
+    try:
+        registry = get_capability_registry()
+        catalog = registry.export_catalog()
+
+        capability_id = str(request.query.get("capability_id") or "").strip().lower()
+        if capability_id:
+            catalog = [item for item in catalog if str(item.get("capability_id") or "").lower() == capability_id]
+
+        capability_type = str(request.query.get("type") or "").strip().lower()
+        if capability_type:
+            catalog = [item for item in catalog if str(item.get("type") or "").lower() == capability_type]
+
+        enabled_filter = _parse_bool_query(request.query.get("enabled"))
+        if enabled_filter is not None:
+            catalog = [item for item in catalog if bool(item.get("enabled")) is enabled_filter]
+
+        return web.json_response({"capabilities": catalog, "count": len(catalog)})
+    except Exception as exc:
+        logger.error("Capabilities API error: %s", sanitize_exception_message(exc), exc_info=True)
         return web.json_response({"error": "Internal server error"}, status=500)
 
 
@@ -2523,6 +2562,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)
     app.router.add_post('/api/tasks/execute', api_tasks_execute)
+    app.router.add_get('/api/capabilities', api_capabilities)
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/sessions/{session_id}', api_load_session)
     app.router.add_get('/api/sessions/{session_id}/chatlog', api_session_chatlog)

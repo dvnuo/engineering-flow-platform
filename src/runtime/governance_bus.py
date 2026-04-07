@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 import uuid
 
 from src.agents.tool_result_policy import should_passthrough_tool_result
+from src.runtime.capability_registry import get_capability_registry
 from src.runtime.contracts import ExecutionRequest, ExecutionResult, make_execution_result
 from src.runtime.events import build_runtime_event
 from src.utils.redaction import safe_preview
@@ -105,6 +106,31 @@ class DefaultGovernanceBus(GovernanceBus):
     async def before_execute(self, request: ExecutionRequest) -> GovernanceDecision:
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
         policy_profile = request.policy_profile_id or metadata.get("policy_profile_id") or "default"
+        capability_context = _resolve_capability_context(request)
+
+        capability_decision = _evaluate_capability_constraints(
+            metadata=metadata,
+            capability_id=capability_context.get("capability_id"),
+            capability_type=capability_context.get("capability_type"),
+            action_id=capability_context.get("action_id"),
+        )
+        if capability_decision is not None:
+            deny_reason = capability_decision.get("reason") or "capability_policy_blocked"
+            audit = make_governance_audit_record(
+                request=request,
+                stage="before_execute",
+                message=capability_decision.get("message") or "Blocked by capability allow/deny policy",
+                metadata={
+                    "policy_profile_id": policy_profile,
+                    "rule": "capability_policy",
+                    "execution_type": request.execution_type,
+                    "capability_id": capability_context.get("capability_id"),
+                    "capability_type": capability_context.get("capability_type"),
+                    "action_id": capability_context.get("action_id"),
+                    "deny_reason": deny_reason,
+                },
+            )
+            return GovernanceDecision(allowed=False, reason=deny_reason, audit_record=audit)
 
         if metadata.get("auto_run") is True and metadata.get("governance_require_explicit_allow") is True:
             if metadata.get("governance_allow_auto_run") is not True:
@@ -264,3 +290,103 @@ def build_default_governance_bus() -> GovernanceBus:
 
 class NoopGovernanceBus(GovernanceBus):
     """Explicit no-op governance implementation for compatibility paths."""
+
+
+def _as_lower_str_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    for item in value:
+        if item is None:
+            continue
+        text = str(item).strip().lower()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional[str]]:
+    payload = request.input_payload if isinstance(request.input_payload, dict) else {}
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    task_type = str(payload.get("task_type") or "").strip().lower()
+
+    capability_id: Optional[str] = None
+    action_id: Optional[str] = None
+    if request.execution_type == "task":
+        if task_type == "adapter_action_task":
+            action_id = str(payload.get("action_id") or "").strip().lower() or None
+            capability_id = action_id
+        elif task_type == "jira_workflow_review_task":
+            capability_id = "adapter:jira:read_issue"
+            action_id = capability_id
+        elif task_type == "github_review_task":
+            capability_id = "adapter:github:review_pull_request"
+            action_id = capability_id
+        elif task_type == "tool_task":
+            tool_name = str(payload.get("tool_name") or "").strip().lower()
+            capability_id = f"tool:{tool_name}" if tool_name else None
+        elif task_type == "delegation_task":
+            skill_name = str(payload.get("skill_name") or "").strip().lower()
+            capability_id = f"skill:{skill_name}" if skill_name else None
+    elif request.execution_type == "tool":
+        tool_name = str(payload.get("tool_name") or metadata.get("tool_name") or "").strip().lower()
+        capability_id = f"tool:{tool_name}" if tool_name else None
+    elif request.execution_type == "skill":
+        skill_name = str(payload.get("skill_name") or "").strip().lower()
+        capability_id = f"skill:{skill_name}" if skill_name else None
+
+    descriptor = get_capability_registry().get(capability_id) if capability_id else None
+    capability_type = descriptor.type if descriptor is not None else _infer_capability_type_from_id(capability_id)
+    return {
+        "capability_id": capability_id,
+        "capability_type": capability_type,
+        "action_id": action_id,
+    }
+
+
+def _infer_capability_type_from_id(capability_id: Optional[str]) -> Optional[str]:
+    text = str(capability_id or "").strip().lower()
+    if text.startswith("adapter:"):
+        return "adapter_action"
+    if text.startswith("tool:"):
+        return "tool"
+    if text.startswith("skill:"):
+        return "skill"
+    if text.startswith("channel_action:"):
+        return "channel_action"
+    return None
+
+
+def _evaluate_capability_constraints(
+    *,
+    metadata: Dict[str, Any],
+    capability_id: Optional[str],
+    capability_type: Optional[str],
+    action_id: Optional[str],
+) -> Optional[Dict[str, str]]:
+    denied_capability_ids = _as_lower_str_list(metadata.get("denied_capability_ids"))
+    allowed_capability_ids = _as_lower_str_list(metadata.get("allowed_capability_ids"))
+    denied_capability_types = _as_lower_str_list(metadata.get("denied_capability_types"))
+    allowed_capability_types = _as_lower_str_list(metadata.get("allowed_capability_types"))
+    denied_adapter_actions = _as_lower_str_list(metadata.get("denied_adapter_actions"))
+    allowed_adapter_actions = _as_lower_str_list(metadata.get("allowed_adapter_actions"))
+
+    normalized_capability_id = str(capability_id or "").strip().lower()
+    normalized_capability_type = str(capability_type or "").strip().lower()
+    normalized_action_id = str(action_id or "").strip().lower()
+
+    if denied_capability_ids and normalized_capability_id and normalized_capability_id in denied_capability_ids:
+        return {"reason": "denied_capability_ids", "message": f"Capability blocked: {normalized_capability_id}"}
+    if denied_capability_types and normalized_capability_type and normalized_capability_type in denied_capability_types:
+        return {"reason": "denied_capability_types", "message": f"Capability type blocked: {normalized_capability_type}"}
+    if denied_adapter_actions and normalized_action_id and normalized_action_id in denied_adapter_actions:
+        return {"reason": "denied_adapter_actions", "message": f"Adapter action blocked: {normalized_action_id}"}
+
+    if allowed_capability_ids and (not normalized_capability_id or normalized_capability_id not in allowed_capability_ids):
+        return {"reason": "allowed_capability_ids", "message": "Capability not in allowlist"}
+    if allowed_capability_types and (not normalized_capability_type or normalized_capability_type not in allowed_capability_types):
+        return {"reason": "allowed_capability_types", "message": "Capability type not in allowlist"}
+    if allowed_adapter_actions and (not normalized_action_id or normalized_action_id not in allowed_adapter_actions):
+        return {"reason": "allowed_adapter_actions", "message": "Adapter action not in allowlist"}
+
+    return None

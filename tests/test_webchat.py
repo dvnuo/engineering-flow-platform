@@ -508,7 +508,51 @@ def test_routes_include_tasks_execute_and_existing_chat_route():
 
     routes = [r.resource.canonical for r in app.router.routes() if r.resource]
     assert "/api/tasks/execute" in routes
+    assert "/api/capabilities" in routes
     assert "/api/chat" in routes
+
+
+@pytest.mark.asyncio
+async def test_api_capabilities_returns_catalog_and_filters(monkeypatch):
+    from src.gateway import webchat
+
+    class _Registry:
+        def export_catalog(self):
+            return [
+                {"capability_id": "tool:read", "type": "tool", "enabled": True},
+                {"capability_id": "adapter:jira:read_issue", "type": "adapter_action", "enabled": False},
+            ]
+
+    monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
+
+    class _Request:
+        query = {"type": "tool", "enabled": "true"}
+
+    response = await webchat.api_capabilities(_Request())
+    body = json.loads(response.body)
+    assert response.status == 200
+    assert body["count"] == 1
+    assert body["capabilities"][0]["capability_id"] == "tool:read"
+
+
+@pytest.mark.asyncio
+async def test_api_capabilities_capability_id_not_found_returns_empty(monkeypatch):
+    from src.gateway import webchat
+
+    class _Registry:
+        def export_catalog(self):
+            return [{"capability_id": "tool:read", "type": "tool", "enabled": True}]
+
+    monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
+
+    class _Request:
+        query = {"capability_id": "adapter:jira:missing"}
+
+    response = await webchat.api_capabilities(_Request())
+    body = json.loads(response.body)
+    assert response.status == 200
+    assert body["count"] == 0
+    assert body["capabilities"] == []
 
 
 @pytest.mark.asyncio

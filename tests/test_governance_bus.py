@@ -321,3 +321,49 @@ async def test_default_governance_external_trigger_allowlist_blocks_non_member()
 
     assert result.status == "blocked"
     assert result.output_payload["reason"] == "external_allowlist"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_denied_capability_ids_blocks_adapter_action():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:read_issue", "kwargs": {"issue_key": "ENG-1"}},
+        metadata={"denied_capability_ids": ["adapter:jira:read_issue"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "denied_capability_ids"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allowed_capability_types_missing_match_blocks():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:read_issue", "kwargs": {"issue_key": "ENG-1"}},
+        metadata={"allowed_capability_types": ["tool"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_capability_types"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_malformed_capability_lists_do_not_crash():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "tool_task", "tool_name": "read", "kwargs": {"file_path": "README.md"}},
+        metadata={
+            "allowed_capability_ids": "not-a-list",
+            "denied_capability_ids": {"x": 1},
+            "allowed_capability_types": None,
+            "denied_adapter_actions": 7,
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status in {"success", "error", "blocked"}

@@ -470,6 +470,76 @@ def _as_list_of_strings(value: Any) -> list[str]:
     return []
 
 
+def _resolve_task_capability(task_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_task_type = str(task_type or "").strip().lower()
+    registry = get_capability_registry()
+    fallback: Dict[str, Any] = {
+        "capability_id": None,
+        "capability_type": None,
+        "policy_tags": [],
+        "requires_identity_binding": False,
+        "capability_resolution": "unresolved",
+    }
+    if normalized_task_type == "adapter_action_task":
+        action_id = str(payload.get("action_id") or "").strip().lower()
+        descriptor = registry.get(action_id) if action_id else None
+        if descriptor is None:
+            return {**fallback, "capability_id": action_id or None, "action_id": action_id or None}
+        return {
+            "capability_id": descriptor.capability_id,
+            "capability_type": descriptor.type,
+            "policy_tags": list(descriptor.policy_tags or []),
+            "requires_identity_binding": bool(descriptor.requires_identity_binding),
+            "capability_resolution": "resolved",
+            "action_id": descriptor.capability_id,
+        }
+    if normalized_task_type == "jira_workflow_review_task":
+        descriptor = registry.get("adapter:jira:read_issue")
+        if descriptor is None:
+            return fallback
+        return {
+            "capability_id": descriptor.capability_id,
+            "capability_type": descriptor.type,
+            "policy_tags": list(descriptor.policy_tags or []),
+            "requires_identity_binding": bool(descriptor.requires_identity_binding),
+            "capability_resolution": "resolved",
+            "action_id": descriptor.capability_id,
+        }
+    if normalized_task_type == "github_review_task":
+        descriptor = registry.get("adapter:github:review_pull_request")
+        if descriptor is None:
+            return fallback
+        return {
+            "capability_id": descriptor.capability_id,
+            "capability_type": descriptor.type,
+            "policy_tags": list(descriptor.policy_tags or []),
+            "requires_identity_binding": bool(descriptor.requires_identity_binding),
+            "capability_resolution": "resolved",
+            "action_id": descriptor.capability_id,
+        }
+    if normalized_task_type == "delegation_task":
+        skill_name = _non_empty_string(payload.get("skill_name"))
+        if not skill_name:
+            return fallback
+        capability_id = f"skill:{skill_name.lower()}"
+        descriptor = registry.get(capability_id)
+        if descriptor is None:
+            return {
+                **fallback,
+                "capability_id": capability_id,
+                "capability_type": "skill",
+                "capability_resolution": "unresolved",
+            }
+        return {
+            "capability_id": descriptor.capability_id,
+            "capability_type": descriptor.type,
+            "policy_tags": list(descriptor.policy_tags or []),
+            "requires_identity_binding": bool(descriptor.requires_identity_binding),
+            "capability_resolution": "resolved",
+        }
+    return fallback
+
+
 def _as_dict(value: Any) -> dict:
     return dict(value) if isinstance(value, dict) else {}
 
@@ -1182,8 +1252,8 @@ def build_default_execution_bus(
         if task_type == "adapter_action_task":
             action_id = _get_required(request.input_payload, "action_id")
             kwargs = dict(request.input_payload.get("kwargs") or {})
-            registry = get_capability_registry()
-            descriptor = registry.get(action_id)
+            capability = _resolve_task_capability(task_type, {"action_id": action_id})
+            descriptor = get_capability_registry().get(action_id)
             if descriptor is None or descriptor.type != "adapter_action":
                 return make_execution_result(
                     request_id=request.request_id,
@@ -1194,6 +1264,9 @@ def build_default_execution_bus(
                         "success": False,
                         "error": f"Unknown or non-adapter action_id: {action_id}",
                         "task_boundary": True,
+                        "capability_id": capability.get("capability_id"),
+                        "capability_type": capability.get("capability_type"),
+                        "capability_resolution": "unresolved",
                     },
                 )
             adapter_result = await execute_adapter_action(action_id, kwargs)
@@ -1213,8 +1286,11 @@ def build_default_execution_bus(
                     detail_payload={
                         "task_type": task_type,
                         "action_id": action_id,
+                        "capability_id": capability.get("capability_id"),
+                        "capability_type": capability.get("capability_type"),
+                        "policy_tags": capability.get("policy_tags"),
                         "requires_identity_binding": requires_identity_binding,
-                        "capability_policy_tags": descriptor.policy_tags,
+                        "capability_resolution": capability.get("capability_resolution"),
                         "success": bool(adapter_result.get("success")),
                     },
                     legacy_payload={"legacy_type": "task_adapter_action"},
@@ -1229,13 +1305,18 @@ def build_default_execution_bus(
                     "success": bool(adapter_result.get("success")),
                     "error": adapter_result.get("error"),
                     "task_boundary": True,
+                    "capability_id": capability.get("capability_id"),
+                    "capability_type": capability.get("capability_type"),
+                    "policy_tags": capability.get("policy_tags"),
                     "requires_identity_binding": requires_identity_binding,
+                    "capability_resolution": capability.get("capability_resolution"),
                     "result": adapter_result.get("result"),
                 },
                 runtime_events=runtime_events,
             )
 
         if task_type == "jira_workflow_review_task":
+            capability = _resolve_task_capability(task_type, request.input_payload)
             workflow_payload = {
                 "issue_key": _get_required(request.input_payload, "issue_key"),
                 "skill_name": request.input_payload.get("skill_name"),
@@ -1272,6 +1353,11 @@ def build_default_execution_bus(
                     task_id=task_id,
                     detail_payload={
                         "task_type": task_type,
+                        "capability_id": capability.get("capability_id"),
+                        "capability_type": capability.get("capability_type"),
+                        "policy_tags": capability.get("policy_tags"),
+                        "requires_identity_binding": capability.get("requires_identity_binding"),
+                        "capability_resolution": capability.get("capability_resolution"),
                         "issue_key": workflow_result.get("issue_key"),
                         "skill_name": workflow_result.get("skill_name") or workflow_payload.get("skill_name"),
                         "workflow_outcome": workflow_result.get("workflow_outcome"),
@@ -1293,6 +1379,12 @@ def build_default_execution_bus(
                     "success": bool(workflow_result.get("success")),
                     "error": workflow_result.get("error"),
                     "task_boundary": True,
+                    "capability_id": capability.get("capability_id"),
+                    "capability_type": capability.get("capability_type"),
+                    "policy_tags": capability.get("policy_tags"),
+                    "requires_identity_binding": capability.get("requires_identity_binding"),
+                    "capability_resolution": capability.get("capability_resolution"),
+                    "resolved_skill_capability_id": f"skill:{str(workflow_payload.get('skill_name') or '').strip().lower()}" if workflow_payload.get("skill_name") else None,
                     "workflow_outcome": workflow_result.get("workflow_outcome"),
                     "actions_applied": workflow_result.get("actions_applied") or [],
                     "result": workflow_result,
@@ -1301,6 +1393,7 @@ def build_default_execution_bus(
             )
 
         if task_type == "github_review_task":
+            capability = _resolve_task_capability(task_type, request.input_payload)
             owner = _get_required(request.input_payload, "owner")
             repo = _get_required(request.input_payload, "repo")
             pull_number = _get_required(request.input_payload, "pull_number")
@@ -1361,6 +1454,11 @@ def build_default_execution_bus(
                     task_id=task_id,
                     detail_payload={
                         "task_type": task_type,
+                        "capability_id": capability.get("capability_id"),
+                        "capability_type": capability.get("capability_type"),
+                        "policy_tags": capability.get("policy_tags"),
+                        "requires_identity_binding": capability.get("requires_identity_binding"),
+                        "capability_resolution": capability.get("capability_resolution"),
                         "owner": owner,
                         "repo": repo,
                         "pull_number": pull_number,
@@ -1384,6 +1482,11 @@ def build_default_execution_bus(
                     "success": success_value,
                     "error": error_value,
                     "task_boundary": True,
+                    "capability_id": capability.get("capability_id"),
+                    "capability_type": capability.get("capability_type"),
+                    "policy_tags": capability.get("policy_tags"),
+                    "requires_identity_binding": capability.get("requires_identity_binding"),
+                    "capability_resolution": capability.get("capability_resolution"),
                 },
                 runtime_events=runtime_events,
             )

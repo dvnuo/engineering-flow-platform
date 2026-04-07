@@ -88,3 +88,38 @@ def test_descriptor_fields_preserved():
     assert fetched.enabled is False
     assert fetched.policy_tags == ["secure", "write"]
     assert fetched.metadata == {"x": 1}
+
+
+def test_registry_export_catalog_and_filters():
+    registry = build_default_capability_registry()
+
+    catalog = registry.export_catalog()
+    assert isinstance(catalog, list)
+    assert catalog
+    first = catalog[0]
+    assert set(first.keys()) == {
+        "capability_id",
+        "type",
+        "name",
+        "input_schema",
+        "output_schema",
+        "policy_tags",
+        "requires_identity_binding",
+        "enabled",
+        "source_ref",
+        "metadata",
+    }
+    assert registry.exists(first["capability_id"]) is True
+    assert registry.list_enabled()
+    assert registry.list_by_type("adapter_action")
+    assert registry.list_by_type("skill")
+    assert registry.list_by_type("tool")
+
+
+def test_registry_collects_adapter_channel_tool_skill_types():
+    registry = build_default_capability_registry()
+    types = {item.type for item in registry.list_all()}
+    assert "adapter_action" in types
+    assert "skill" in types
+    assert "tool" in types
+    assert "channel_action" in types
