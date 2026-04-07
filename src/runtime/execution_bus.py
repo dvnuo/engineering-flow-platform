@@ -179,6 +179,14 @@ class ExecutionBus:
             request_id=request.request_id,
             status="blocked",
             output_payload=payload,
+            artifacts={
+                "governance": {
+                    "blocked": True,
+                    "deny_reason": reason or "governance_blocked",
+                    "execution_type": request.execution_type,
+                    "capability_id": (request.input_payload or {}).get("action_id"),
+                }
+            },
             runtime_events=runtime_events,
             audit_ref=audit_ref,
         )
@@ -883,7 +891,7 @@ def build_default_execution_bus(
         skill_name = _get_required(request.input_payload, "skill_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
         kwargs.setdefault("session_id", request.session_id)
-        return await run_skill_execution(skill_name, **kwargs)
+        return await run_skill_execution(skill_name, _via_execution_bus=True, **kwargs)
 
     async def tool_handler(request: ExecutionRequest) -> ToolResult:
         # TODO(phase1): unify broader tool call sites through ExecutionBus when policy/hook coverage is verified.
@@ -1208,7 +1216,7 @@ def build_default_execution_bus(
                 }
                 skill_kwargs["delegation_context"] = delegation_context
                 skill_kwargs.setdefault("session_id", request.session_id)
-                skill_result = await run_skill_execution(skill_name.strip(), **skill_kwargs)
+                skill_result = await run_skill_execution(skill_name.strip(), _via_execution_bus=True, **skill_kwargs)
                 normalized_skill = bus._normalize_result(request, skill_result)
                 raw_skill_result = dict(normalized_skill.output_payload or {})
                 skill_success = normalized_skill.status not in {"error", "blocked"}

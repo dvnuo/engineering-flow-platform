@@ -1,6 +1,7 @@
 import pytest
 
 from src import ToolResult
+from src.agents.executor import SkillResult, run_skill_execution
 from src.agents.errors import LLMError
 from src.runtime.contracts import ExecutionResult, make_execution_request, make_execution_result
 from src.runtime.execution_bus import ExecutionBus, build_default_execution_bus
@@ -2925,3 +2926,42 @@ async def test_jira_workflow_review_task_portal_style_metadata_deny_transition(m
     assert "adapter:jira:transition_issue" in result.output_payload["blocked_secondary_action_ids"]
     assert any(item.get("decision") == "blocked" for item in result.output_payload["secondary_action_decisions"])
     assert any(evt.get("event_type") == "governance.audit" for evt in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_run_skill_execution_routes_through_execution_bus_by_default(monkeypatch):
+    async def _fake_orchestration(**_kwargs):
+        return make_execution_result(
+            request_id="req-bus",
+            status="success",
+            output_payload={"output": "bus-path", "data": {"source": "bus"}},
+        )
+
+    async def _should_not_be_called(*_args, **_kwargs):
+        raise AssertionError("legacy direct execution should not be used by default")
+
+    monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_skill_orchestration", _fake_orchestration)
+    monkeypatch.setattr("src.agents.executor.skills_executor.execute_skill", _should_not_be_called)
+    monkeypatch.delenv("EFP_ALLOW_LEGACY_DIRECT_EXECUTION", raising=False)
+
+    result = await run_skill_execution("demo_skill", input="hello")
+    assert result.success is True
+    assert result.output == "bus-path"
+    assert result.data.get("source") == "bus"
+
+
+@pytest.mark.asyncio
+async def test_run_skill_execution_legacy_direct_opt_in(monkeypatch):
+    async def _fake_direct(skill_name, **_kwargs):
+        return SkillResult(success=True, output=f"legacy:{skill_name}")
+
+    async def _should_not_be_called(**_kwargs):
+        raise AssertionError("execution bus path should not be used in legacy direct opt-in mode")
+
+    monkeypatch.setattr("src.agents.executor.skills_executor.execute_skill", _fake_direct)
+    monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_skill_orchestration", _should_not_be_called)
+    monkeypatch.setenv("EFP_ALLOW_LEGACY_DIRECT_EXECUTION", "true")
+
+    result = await run_skill_execution("demo_skill", input="hello")
+    assert result.success is True
+    assert result.output == "legacy:demo_skill"

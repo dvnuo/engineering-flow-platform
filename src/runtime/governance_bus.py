@@ -132,6 +132,31 @@ class DefaultGovernanceBus(GovernanceBus):
             )
             return GovernanceDecision(allowed=False, reason=deny_reason, audit_record=audit)
 
+        identity_decision = _evaluate_identity_binding_constraints(
+            request=request,
+            metadata=metadata,
+            capability_id=capability_context.get("capability_id"),
+            capability_type=capability_context.get("capability_type"),
+            requires_identity_binding=bool(capability_context.get("requires_identity_binding")),
+        )
+        if identity_decision is not None:
+            deny_reason = identity_decision.get("reason") or "missing_identity_binding"
+            audit = make_governance_audit_record(
+                request=request,
+                stage="before_execute",
+                message=identity_decision.get("message") or "Blocked by identity binding policy",
+                metadata={
+                    "policy_profile_id": policy_profile,
+                    "rule": "identity_binding",
+                    "execution_type": request.execution_type,
+                    "capability_id": capability_context.get("capability_id"),
+                    "capability_type": capability_context.get("capability_type"),
+                    "deny_reason": deny_reason,
+                    **(identity_decision.get("metadata") or {}),
+                },
+            )
+            return GovernanceDecision(allowed=False, reason=deny_reason, audit_record=audit)
+
         if metadata.get("auto_run") is True and metadata.get("governance_require_explicit_allow") is True:
             if metadata.get("governance_allow_auto_run") is not True:
                 audit = make_governance_audit_record(
@@ -341,6 +366,7 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
         "capability_id": capability_id,
         "capability_type": capability_type,
         "action_id": action_id,
+        "requires_identity_binding": bool(descriptor.requires_identity_binding) if descriptor is not None else False,
     }
 
 
@@ -526,3 +552,81 @@ def _matches_action_constraint(*, constraints: list[str], action_id: str, action
     if not constraints:
         return False
     return action_id in constraints or action_name in constraints
+
+
+def _evaluate_identity_binding_constraints(
+    *,
+    request: ExecutionRequest,
+    metadata: Dict[str, Any],
+    capability_id: Optional[str],
+    capability_type: Optional[str],
+    requires_identity_binding: bool,
+) -> Optional[Dict[str, Any]]:
+    normalized_type = str(capability_type or "").strip().lower()
+    if not requires_identity_binding or normalized_type not in {"adapter_action", "channel_action"}:
+        return None
+    if not _is_external_or_task_like_request(request):
+        return None
+
+    binding = _extract_identity_binding(metadata)
+    if not binding:
+        return {"reason": "missing_identity_binding", "message": "Missing required identity binding metadata"}
+
+    expected_systems = _expected_identity_binding_systems(capability_id=capability_id, capability_type=normalized_type)
+    binding_system = str(binding.get("system_type") or "").strip().lower()
+    if expected_systems and binding_system and binding_system not in expected_systems:
+        return {
+            "reason": "identity_binding_system_mismatch",
+            "message": "Identity binding system does not match capability target",
+            "metadata": {"expected_system_type": sorted(expected_systems), "provided_system_type": binding_system},
+        }
+    return None
+
+
+def _is_external_or_task_like_request(request: ExecutionRequest) -> bool:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    if request.execution_type in {"task", "event", "subagent"}:
+        return True
+    if request.source_type in {"github", "jira", "portal", "internal"}:
+        return True
+    return metadata.get("external_triggered") is True
+
+
+def _extract_identity_binding(metadata: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    nested = metadata.get("identity_binding")
+    if isinstance(nested, dict):
+        system_type = str(nested.get("system_type") or "").strip().lower()
+        binding_id = str(nested.get("id") or nested.get("identity_binding_id") or "").strip()
+        external_account_id = str(nested.get("external_account_id") or "").strip()
+        if system_type and (binding_id or external_account_id):
+            return {
+                "id": binding_id,
+                "system_type": system_type,
+                "external_account_id": external_account_id,
+            }
+
+    system_type = str(metadata.get("identity_binding_system_type") or "").strip().lower()
+    binding_id = str(metadata.get("identity_binding_id") or "").strip()
+    external_account_id = str(metadata.get("identity_binding_external_account_id") or "").strip()
+    if system_type and (binding_id or external_account_id):
+        return {
+            "id": binding_id,
+            "system_type": system_type,
+            "external_account_id": external_account_id,
+        }
+    return None
+
+
+def _expected_identity_binding_systems(*, capability_id: Optional[str], capability_type: str) -> set[str]:
+    normalized_id = str(capability_id or "").strip().lower()
+    if capability_type == "adapter_action" and normalized_id.startswith("adapter:"):
+        parts = normalized_id.split(":")
+        if len(parts) > 1 and parts[1]:
+            return {parts[1]}
+    if capability_type == "channel_action" and normalized_id.startswith("channel_action:"):
+        name = normalized_id.split(":", 1)[1]
+        if name.startswith("jira_"):
+            return {"jira"}
+        if name.startswith("confluence_"):
+            return {"confluence"}
+    return set()

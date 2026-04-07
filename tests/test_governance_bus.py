@@ -489,3 +489,52 @@ async def test_default_governance_portal_style_metadata_ignores_explainability_f
     )
     result = await bus.execute(req)
     assert result.status in {"success", "error"}
+
+
+@pytest.mark.asyncio
+async def test_default_governance_requires_identity_binding_for_external_adapter_action():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:github:add_comment", "kwargs": {"owner": "acme"}},
+        metadata={"external_triggered": True},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "missing_identity_binding"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_blocks_identity_binding_system_mismatch():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:github:add_comment", "kwargs": {"owner": "acme"}},
+        metadata={
+            "external_triggered": True,
+            "identity_binding_system_type": "jira",
+            "identity_binding_external_account_id": "acct-1",
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "identity_binding_system_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_matching_identity_binding_for_external_adapter_action():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:github:add_comment", "kwargs": {"owner": "acme"}},
+        metadata={
+            "external_triggered": True,
+            "identity_binding_system_type": "github",
+            "identity_binding_external_account_id": "acct-1",
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status in {"success", "error"}
