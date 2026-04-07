@@ -67,16 +67,19 @@ async def _load_group_parallelism_budget(group_id: str) -> Dict[str, Any]:
         effective_limit = None
     active_count = 0
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    if summary:
+    items = payload.get("items") if isinstance(payload.get("items"), list) else payload.get("tasks") if isinstance(payload.get("tasks"), list) else []
+    summary_has_all_active_keys = bool(summary) and all(status in summary for status in ACTIVE_TASK_STATUSES)
+    if summary_has_all_active_keys:
         active_count = sum(int(summary.get(status, 0) or 0) for status in ACTIVE_TASK_STATUSES)
-    else:
-        items = payload.get("items") if isinstance(payload.get("items"), list) else payload.get("tasks") if isinstance(payload.get("tasks"), list) else []
+    elif isinstance(items, list) and items:
         for item in items:
             if not isinstance(item, dict):
                 continue
             status = str(item.get("status") or "").strip().lower()
             if status in ACTIVE_TASK_STATUSES:
                 active_count += 1
+    elif summary:
+        active_count = sum(int(summary.get(status, 0) or 0) for status in ACTIVE_TASK_STATUSES)
     return {"effective_max_parallel_tasks": effective_limit, "active_parallel_tasks": active_count}
 
 

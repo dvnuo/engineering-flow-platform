@@ -14,6 +14,7 @@ from src.runtime.leader_orchestration import (
     load_coordination_run_state,
     run_delegation_cycle,
     select_assignee_for_task,
+    _load_group_parallelism_budget,
 )
 
 
@@ -577,6 +578,62 @@ async def test_run_delegation_cycle_without_parallel_policy_keeps_behavior(monke
     )
     assert len(captured["tasks"]) == 2
     assert result["deferred_tasks"] == []
+
+
+@pytest.mark.asyncio
+async def test_load_group_parallelism_budget_counts_blocked_from_items_when_summary_partial(monkeypatch):
+    async def _fake_execute(action_id, kwargs):
+        assert action_id == "adapter:portal:get_group_task_board"
+        assert kwargs["group_id"] == "g-1"
+        return {
+            "success": True,
+            "result": {
+                "effective_max_parallel_tasks": 4,
+                "summary": {"queued": 1, "running": 1},  # blocked omitted
+                "items": [
+                    {"status": "queued"},
+                    {"status": "blocked"},
+                    {"status": "done"},
+                ],
+            },
+        }
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.execute_adapter_action", _fake_execute)
+    budget = await _load_group_parallelism_budget("g-1")
+    assert budget["active_parallel_tasks"] == 2
+
+
+@pytest.mark.asyncio
+async def test_load_group_parallelism_budget_uses_summary_when_complete(monkeypatch):
+    async def _fake_execute(action_id, kwargs):
+        return {
+            "success": True,
+            "result": {
+                "effective_max_parallel_tasks": 5,
+                "summary": {"queued": 1, "running": 2, "blocked": 3},
+                "items": [{"status": "done"}],
+            },
+        }
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.execute_adapter_action", _fake_execute)
+    budget = await _load_group_parallelism_budget("g-1")
+    assert budget["active_parallel_tasks"] == 6
+
+
+@pytest.mark.asyncio
+async def test_load_group_parallelism_budget_falls_back_to_summary_when_no_items(monkeypatch):
+    async def _fake_execute(action_id, kwargs):
+        return {
+            "success": True,
+            "result": {
+                "effective_max_parallel_tasks": 3,
+                "summary": {"queued": 1, "running": 1},  # blocked omitted
+            },
+        }
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.execute_adapter_action", _fake_execute)
+    budget = await _load_group_parallelism_budget("g-1")
+    assert budget["active_parallel_tasks"] == 2
 
 
 @pytest.mark.asyncio
