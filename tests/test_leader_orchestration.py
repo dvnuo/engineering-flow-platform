@@ -488,6 +488,7 @@ async def test_dispatch_task_breakdown_as_delegations_task_agent_auto_create_inj
 
     async def _fake_create_task_agent(payload):
         assert payload["group_id"] == "g-1"
+        assert payload["leader_agent_id"] == "leader-1"
         assert payload["template_agent_id"] == "tmpl-1"
         assert payload["task_agent_cleanup_policy"] == "delete_on_terminal"
         return {"success": True, "result": {"agent_id": "ta-1"}}
@@ -534,6 +535,7 @@ async def test_dispatch_task_breakdown_task_mode_template_auto_create_without_as
         raise AssertionError("select_assignee_for_task should not be called for task auto-create path")
 
     async def _fake_create_task_agent(payload):
+        assert payload["leader_agent_id"] == "leader-1"
         assert payload["template_agent_id"] == "tmpl-1"
         assert payload["task_agent_cleanup_policy"] == "retain"
         return {"success": True, "result": {"agent_id": "ta-created"}}

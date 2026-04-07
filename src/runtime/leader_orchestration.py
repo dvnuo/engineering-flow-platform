@@ -219,6 +219,7 @@ async def _prepare_task_for_delegation(
             ).strip()
             create_payload = {
                 "group_id": group_id,
+                "leader_agent_id": leader_agent_id,
                 "template_agent_id": template_agent_id,
                 "name": normalized_task.get("name") or f"task-agent-{leader_session_id}",
                 "scope_label": resolved_scope_for_create,
