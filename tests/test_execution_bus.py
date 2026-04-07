@@ -1313,8 +1313,10 @@ async def test_execution_bus_coordination_delegation_cycle_emits_cycle_event(mon
             "failed": 0,
             "items": [{"result": {"delegation_id": "d-1"}}, {"result": {"delegation_id": "d-2"}}],
             "aggregate": {"all_done": False},
+            "run_state": {"latest_round_index": 3, "status_counts": {"queued": 0, "running": 1, "done": 1, "failed": 0}, "all_terminal": False},
             "is_complete": False,
             "next_action": "continue",
+            "leader_summary": {"status": "in_progress"},
         }
 
     monkeypatch.setattr("src.runtime.execution_bus.run_delegation_cycle", _fake_run_cycle)
@@ -1339,6 +1341,8 @@ async def test_execution_bus_coordination_delegation_cycle_emits_cycle_event(mon
     assert event["detail_payload"]["coordination_run_id"] == "coord-run-1"
     assert event["detail_payload"]["round_index"] == 1
     assert event["detail_payload"]["next_action"] == "continue"
+    assert event["detail_payload"]["latest_round_index"] == 3
+    assert event["detail_payload"]["status_counts"]["running"] == 1
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from src.runtime.adapter_executor import execute_adapter_action
 from src.runtime.leader_delegation_adapter import (
     create_specialist_delegation,
     create_task_agent_delegation,
@@ -129,9 +130,62 @@ def evaluate_completion_criteria(completion_criteria: Dict[str, Any] | None, agg
     mode = str(criteria.get("mode") or "all_done").strip() or "all_done"
     if aggregate.get("has_blockers"):
         return {"is_complete": False, "reason": "blockers_present", "mode": mode}
+    status_values = list((aggregate.get("status_by_assignee") or {}).values())
+    if any(status in {"queued", "running", "in_progress"} for status in status_values):
+        return {"is_complete": False, "reason": "work_in_progress", "mode": mode}
+    if any(status in {"failed", "error", "blocked"} for status in status_values):
+        return {"is_complete": False, "reason": "failed_terminal", "mode": mode}
     if mode == "all_done":
         return {"is_complete": bool(aggregate.get("all_done")), "reason": "all_done_check", "mode": mode}
     return {"is_complete": bool(aggregate.get("all_done")), "reason": "unsupported_mode_fallback_all_done", "mode": mode}
+
+
+async def load_coordination_run_state(*, group_id: str, coordination_run_id: str) -> Dict[str, Any]:
+    outcome = await execute_adapter_action("adapter:portal:list_group_delegations", {"group_id": group_id})
+    result_payload = outcome.get("result")
+    if isinstance(result_payload, dict):
+        delegations = result_payload.get("delegations") or result_payload.get("items") or []
+    elif isinstance(result_payload, list):
+        delegations = result_payload
+    else:
+        delegations = []
+    matched: List[Dict[str, Any]] = []
+    rounds: List[int] = []
+    status_counts: Dict[str, int] = {"queued": 0, "running": 0, "done": 0, "failed": 0, "other": 0}
+    has_blockers = False
+    for item in delegations:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("coordination_run_id") or "").strip() != str(coordination_run_id or "").strip():
+            continue
+        matched.append(item)
+        round_index_raw = item.get("round_index")
+        round_index = round_index_raw if isinstance(round_index_raw, int) and round_index_raw > 0 else 1
+        rounds.append(round_index)
+        raw_status = str(item.get("status") or "").strip().lower()
+        normalized_status = "done" if raw_status in {"done", "completed", "success"} else raw_status
+        if normalized_status in status_counts:
+            status_counts[normalized_status] += 1
+        elif normalized_status in {"in_progress"}:
+            status_counts["running"] += 1
+        else:
+            status_counts["other"] += 1
+        blockers = item.get("blockers") or item.get("result", {}).get("blockers") if isinstance(item.get("result"), dict) else item.get("blockers")
+        if isinstance(blockers, list) and blockers:
+            has_blockers = True
+    total = len(matched)
+    all_terminal = status_counts["queued"] == 0 and status_counts["running"] == 0
+    all_done = total > 0 and status_counts["done"] == total and status_counts["failed"] == 0 and status_counts["other"] == 0
+    return {
+        "coordination_run_id": coordination_run_id,
+        "rounds": sorted(set(rounds)),
+        "delegations": matched,
+        "status_counts": status_counts,
+        "latest_round_index": max(rounds) if rounds else 1,
+        "all_terminal": all_terminal,
+        "all_done": all_done,
+        "has_blockers": has_blockers,
+    }
 
 
 async def run_delegation_cycle(
@@ -146,7 +200,9 @@ async def run_delegation_cycle(
     completion_criteria: Dict[str, Any] | None = None,
     request_id: str | None = None,
 ) -> Dict[str, Any]:
-    normalized_round = int(round_index if isinstance(round_index, int) else 0)
+    normalized_round = int(round_index if isinstance(round_index, int) else 1)
+    if normalized_round < 1:
+        normalized_round = 1
     run_id = str(coordination_run_id or f"coord-{request_id or leader_session_id}-{normalized_round}").strip()
     normalized_tasks = list(tasks or [])
     enriched_tasks = []
@@ -161,7 +217,20 @@ async def run_delegation_cycle(
             leader_session_id=leader_session_id,
             tasks=enriched_tasks,
         )
-    combined_results = list(prior_results or []) + list(dispatch_result.get("items") or [])
+    run_state: Dict[str, Any] = {
+        "coordination_run_id": run_id,
+        "rounds": [normalized_round],
+        "delegations": [],
+        "status_counts": {},
+        "latest_round_index": normalized_round,
+        "all_terminal": True,
+        "all_done": False,
+        "has_blockers": False,
+    }
+    if not enriched_tasks and coordination_run_id:
+        run_state = await load_coordination_run_state(group_id=group_id, coordination_run_id=run_id)
+
+    combined_results = list(prior_results or []) + list(dispatch_result.get("items") or []) + list(run_state.get("delegations") or [])
     aggregate = aggregate_delegation_results(combined_results)
     completion_eval = evaluate_completion_criteria(completion_criteria, aggregate)
     if aggregate.get("has_blockers"):
@@ -170,6 +239,7 @@ async def run_delegation_cycle(
         next_action = "complete"
     else:
         next_action = "continue"
+    leader_summary_status = "blocked" if aggregate.get("has_blockers") else "complete" if completion_eval.get("is_complete") else "in_progress"
     return {
         "success": bool(dispatch_result.get("success", True)),
         "coordination_run_id": run_id,
@@ -178,8 +248,16 @@ async def run_delegation_cycle(
         "failed": int(dispatch_result.get("failed", 0)),
         "items": list(dispatch_result.get("items", [])),
         "aggregate": aggregate,
+        "run_state": run_state,
         "is_complete": bool(completion_eval.get("is_complete")),
         "completion_criteria": completion_criteria or {"mode": "all_done"},
         "prior_results": list(prior_results or []),
         "next_action": next_action,
+        "leader_summary": {
+            "status": leader_summary_status,
+            "latest_round_index": run_state.get("latest_round_index", normalized_round),
+            "status_counts": run_state.get("status_counts", {}),
+            "blockers": aggregate.get("blockers", []),
+            "next_recommendations": aggregate.get("next_recommendations", []),
+        },
     }

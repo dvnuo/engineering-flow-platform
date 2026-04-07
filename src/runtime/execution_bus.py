@@ -1474,7 +1474,7 @@ def build_default_execution_bus(
                     leader_agent_id=leader_agent_id,
                     leader_session_id=leader_session_id,
                     coordination_run_id=request.input_payload.get("coordination_run_id"),
-                    round_index=request.input_payload.get("round_index") if isinstance(request.input_payload.get("round_index"), int) else 0,
+                    round_index=request.input_payload.get("round_index") if isinstance(request.input_payload.get("round_index"), int) else 1,
                     tasks=request.input_payload.get("tasks") if isinstance(request.input_payload.get("tasks"), list) else [],
                     prior_results=request.input_payload.get("prior_results") if isinstance(request.input_payload.get("prior_results"), list) else [],
                     completion_criteria=request.input_payload.get("completion_criteria")
@@ -1515,6 +1515,10 @@ def build_default_execution_bus(
                         "delegation_ids": delegation_ids,
                         "is_complete": bool(cycle_result.get("is_complete")),
                         "next_action": cycle_result.get("next_action"),
+                        "latest_round_index": cycle_result.get("run_state", {}).get("latest_round_index", cycle_result.get("round_index")),
+                        "status_counts": cycle_result.get("run_state", {}).get("status_counts", {}),
+                        "all_terminal": cycle_result.get("run_state", {}).get("all_terminal"),
+                        "leader_summary_status": cycle_result.get("leader_summary", {}).get("status"),
                     },
                     legacy_payload={"legacy_type": "coordination_delegation_cycle"},
                 )
