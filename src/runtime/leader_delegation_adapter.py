@@ -16,6 +16,19 @@ STRUCTURED_FIELDS = (
     "skill_kwargs",
 )
 PASSTHROUGH_FIELDS = ("coordination_run_id", "round_index", "leader_session_id")
+TASK_COORDINATION_FIELDS = (
+    "agent_mode",
+    "skill_name",
+    "selection_strategy",
+    "template_agent_id",
+    "task_agent_template_id",
+    "ephemeral_task_agent_id",
+    "task_agent_scope",
+    "task_agent_scope_label",
+    "task_agent_cleanup_policy",
+    "scope_label",
+    "name",
+)
 
 
 def normalize_leader_delegation_request(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -29,6 +42,7 @@ def normalize_leader_delegation_request(payload: Dict[str, Any]) -> Dict[str, An
     normalized["assignee_agent_id"] = str(request_payload["assignee_agent_id"]).strip()
     normalized["objective"] = str(request_payload["objective"]).strip()
     normalized["visibility"] = str(request_payload.get("visibility") or "leader_only").strip() or "leader_only"
+    normalized["skill_name"] = str(request_payload.get("skill_name") or "delegation").strip() or "delegation"
     normalized["parent_agent_id"] = str(
         request_payload.get("parent_agent_id") or request_payload["leader_agent_id"]
     ).strip()
@@ -36,6 +50,9 @@ def normalize_leader_delegation_request(payload: Dict[str, Any]) -> Dict[str, An
         if key in request_payload:
             normalized[key] = request_payload.get(key)
     for key in PASSTHROUGH_FIELDS:
+        if key in request_payload and request_payload.get(key) is not None:
+            normalized[key] = request_payload.get(key)
+    for key in TASK_COORDINATION_FIELDS:
         if key in request_payload and request_payload.get(key) is not None:
             normalized[key] = request_payload.get(key)
     return normalized
@@ -64,6 +81,7 @@ async def create_portal_delegation_from_runtime(payload: Dict[str, Any]) -> Dict
 async def create_specialist_delegation(payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized = normalize_leader_delegation_request(payload)
     normalized["agent_mode"] = str(normalized.get("agent_mode") or "specialist").strip() or "specialist"
+    normalized["skill_name"] = str(normalized.get("skill_name") or "delegation").strip() or "delegation"
     outcome = await execute_adapter_action("adapter:portal:create_delegation", normalized)
     return _normalize_create_result(outcome)
 
@@ -80,6 +98,7 @@ async def create_task_agent_delegation(payload: Dict[str, Any]) -> Dict[str, Any
             "result": None,
         }
     normalized["agent_mode"] = "task"
+    normalized["skill_name"] = str(normalized.get("skill_name") or "delegation").strip() or "delegation"
     normalized["ephemeral_task_agent_id"] = ephemeral_task_agent_id
     normalized["task_agent_scope"] = task_agent_scope
     if normalized.get("task_agent_template_id") is not None:

@@ -104,6 +104,23 @@ async def test_execute_adapter_action_portal_create_delegation_missing_required_
 
 
 @pytest.mark.asyncio
+async def test_execute_adapter_action_portal_create_delegation_missing_skill_name_fails(monkeypatch):
+    monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.internal")
+    result = await execute_adapter_action(
+        "adapter:portal:create_delegation",
+        {
+            "group_id": "g-1",
+            "leader_agent_id": "leader-1",
+            "assignee_agent_id": "a-1",
+            "objective": "x",
+            "visibility": "leader_only",
+        },
+    )
+    assert result["success"] is False
+    assert "skill_name" in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_execute_adapter_action_portal_create_delegation_normalizes_structured_payload(monkeypatch):
     captured = {}
 
@@ -125,6 +142,7 @@ async def test_execute_adapter_action_portal_create_delegation_normalizes_struct
             "assignee_agent_id": "agent-2",
             "objective": "Review",
             "visibility": "leader_only",
+            "skill_name": "delegation",
             "scoped_context_payload": {"k": "v"},
             "input_artifacts": [{"artifact_id": "a1"}],
             "expected_output_schema": {"required": ["summary"]},

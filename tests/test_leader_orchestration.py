@@ -44,6 +44,32 @@ def test_normalize_leader_delegation_request_preserves_run_metadata():
     assert payload["round_index"] == 2
 
 
+def test_normalize_leader_delegation_request_preserves_task_mode_fields():
+    payload = normalize_leader_delegation_request(
+        {
+            "group_id": "g-1",
+            "leader_agent_id": "leader-1",
+            "assignee_agent_id": "a-1",
+            "objective": "Review",
+            "agent_mode": "task",
+            "skill_name": "custom_skill",
+            "selection_strategy": "least_loaded",
+            "template_agent_id": "tmpl-1",
+            "task_agent_template_id": "tmpl-1",
+            "ephemeral_task_agent_id": "ta-1",
+            "task_agent_scope": "scope-a",
+            "task_agent_scope_label": "scope-a",
+            "task_agent_cleanup_policy": "delete_on_terminal",
+            "scope_label": "scope-a",
+            "name": "Task Agent A",
+        }
+    )
+    assert payload["agent_mode"] == "task"
+    assert payload["skill_name"] == "custom_skill"
+    assert payload["task_agent_scope"] == "scope-a"
+    assert payload["task_agent_cleanup_policy"] == "delete_on_terminal"
+
+
 @pytest.mark.asyncio
 async def test_create_specialist_delegation_sets_agent_mode(monkeypatch):
     async def _fake_execute(_action_id, kwargs):
@@ -67,6 +93,7 @@ async def test_create_specialist_delegation_sets_agent_mode(monkeypatch):
 async def test_create_task_agent_delegation_sets_mode_and_preserves_fields(monkeypatch):
     async def _fake_execute(_action_id, kwargs):
         assert kwargs["agent_mode"] == "task"
+        assert kwargs["skill_name"] == "delegation"
         assert kwargs["task_agent_template_id"] == "tmpl-1"
         assert kwargs["task_agent_cleanup_policy"] == "cleanup"
         return {"success": True, "result": {"delegation_id": "d-2"}, "error": None}
@@ -82,6 +109,7 @@ async def test_create_task_agent_delegation_sets_mode_and_preserves_fields(monke
             "task_agent_scope": "repo:acme/demo",
             "task_agent_template_id": "tmpl-1",
             "task_agent_cleanup_policy": "cleanup",
+            "skill_name": "delegation",
         }
     )
     assert result["success"] is True
@@ -107,14 +135,24 @@ def test_build_delegation_requests_from_task_breakdown():
     assert len(requests) == 2
     assert requests[0]["group_id"] == "g-1"
     assert requests[0]["leader_session_id"] == "s-1"
+    assert requests[1]["agent_mode"] == "task"
+    assert requests[1]["ephemeral_task_agent_id"] == "ta-existing"
+    assert requests[1]["task_agent_scope"] == "scope:existing"
+    assert requests[1]["skill_name"] == "delegation"
 
 
 @pytest.mark.asyncio
 async def test_dispatch_task_breakdown_as_delegations_returns_batch_result(monkeypatch):
+    calls = {"specialist": 0, "task": 0}
+
     async def _fake_specialist(payload):
+        calls["specialist"] += 1
         return {"success": True, "delegation_id": f"d-{payload['assignee_agent_id']}", "result": {}, "error": None}
 
     async def _fake_task(payload):
+        calls["task"] += 1
+        assert payload["agent_mode"] == "task"
+        assert payload["skill_name"] == "delegation"
         return {"success": False, "delegation_id": None, "result": None, "error": "failed"}
 
     monkeypatch.setattr("src.runtime.leader_orchestration.create_specialist_delegation", _fake_specialist)
@@ -137,6 +175,8 @@ async def test_dispatch_task_breakdown_as_delegations_returns_batch_result(monke
     assert result["created"] == 1
     assert result["failed"] == 1
     assert len(result["items"]) == 2
+    assert calls["specialist"] == 1
+    assert calls["task"] == 1
 
 
 def test_aggregate_delegation_results_done_and_blockers():
@@ -391,6 +431,24 @@ async def test_select_assignee_for_task_least_loaded(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_select_assignee_for_task_supports_specialist_agent_ids_shape(monkeypatch):
+    async def _fake_pool(group_id):
+        return {"success": True, "result": {"group_id": group_id, "specialist_agent_ids": ["a-2", "a-1", "leader-1"]}}
+
+    async def _fake_execute(_action_id, _kwargs):
+        return {"success": True, "result": {"delegations": [{"assignee_agent_id": "a-1", "status": "running"}]}}
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.get_group_specialist_pool", _fake_pool)
+    monkeypatch.setattr("src.runtime.leader_orchestration.execute_adapter_action", _fake_execute)
+    result = await select_assignee_for_task(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        task={"objective": "x", "selection_strategy": "least_loaded"},
+    )
+    assert result["assignee_agent_id"] == "a-2"
+
+
+@pytest.mark.asyncio
 async def test_select_assignee_for_task_tie_break_lexical(monkeypatch):
     async def _fake_pool(group_id):
         return {"success": True, "result": {"items": [{"agent_id": "b-agent"}, {"agent_id": "a-agent"}]}}
@@ -436,7 +494,13 @@ async def test_dispatch_task_breakdown_as_delegations_task_agent_auto_create_inj
     async def _fake_task_delegate(payload):
         assert payload["assignee_agent_id"] == "ta-1"
         assert payload["ephemeral_task_agent_id"] == "ta-1"
+        assert payload["task_agent_scope"] == "scope-a"
         assert payload["task_agent_scope_label"] == "scope-a"
+        assert payload["task_agent_cleanup_policy"] == "delete_on_terminal"
+        assert payload["skill_kwargs"]["agent_mode"] == "task"
+        assert payload["skill_kwargs"]["scope_label"] == "scope-a"
+        assert payload["skill_kwargs"]["cleanup_policy"] == "delete_on_terminal"
+        assert payload["skill_kwargs"]["task_agent_template_id"] == "tmpl-1"
         return {"success": True, "delegation_id": "d-1", "result": {"delegation_id": "d-1"}, "error": None}
 
     monkeypatch.setattr("src.runtime.leader_orchestration.get_group_specialist_pool", _fake_pool)

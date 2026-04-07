@@ -134,10 +134,13 @@ async def select_assignee_for_task(
 
     pool_payload = pool_outcome.get("result")
     if isinstance(pool_payload, dict):
+        specialist_ids = pool_payload.get("specialist_agent_ids") if isinstance(pool_payload.get("specialist_agent_ids"), list) else []
         pool_items = pool_payload.get("items") or pool_payload.get("agents") or pool_payload.get("specialists") or []
     elif isinstance(pool_payload, list):
+        specialist_ids = []
         pool_items = pool_payload
     else:
+        specialist_ids = []
         pool_items = []
 
     task_agent_mode = str(task.get("agent_mode") or "specialist").strip() or "specialist"
@@ -152,6 +155,11 @@ async def select_assignee_for_task(
         if task_agent_mode == "specialist" and candidate_type not in {"specialist", "task", "task_agent"}:
             continue
         candidate_ids.append(agent_id)
+    for specialist_id in specialist_ids:
+        if isinstance(specialist_id, str):
+            normalized_id = specialist_id.strip()
+            if normalized_id and normalized_id != leader_agent_id:
+                candidate_ids.append(normalized_id)
     candidate_ids = sorted(set(candidate_ids))
 
     result_payload = delegations_outcome.get("result")
@@ -203,12 +211,14 @@ async def _prepare_task_for_delegation(
     assignee_agent_id = str(selection.get("assignee_agent_id") or "").strip()
     normalized_task["assignee_agent_id"] = assignee_agent_id
     normalized_task.setdefault("leader_session_id", leader_session_id)
+    normalized_task["skill_name"] = str(normalized_task.get("skill_name") or "delegation").strip() or "delegation"
 
     created_task_agent_id = None
     if agent_mode == "task":
         existing_task_agent_id = str(normalized_task.get("ephemeral_task_agent_id") or "").strip()
         if existing_task_agent_id:
             normalized_task["assignee_agent_id"] = existing_task_agent_id
+            normalized_task["ephemeral_task_agent_id"] = existing_task_agent_id
         else:
             template_agent_id = str(normalized_task.get("template_agent_id") or "").strip()
             if not template_agent_id:
@@ -231,10 +241,23 @@ async def _prepare_task_for_delegation(
                 raise ValueError("failed to resolve created task agent id")
             normalized_task["ephemeral_task_agent_id"] = created_task_agent_id
             normalized_task["assignee_agent_id"] = created_task_agent_id
-        normalized_task["task_agent_cleanup_policy"] = str(normalized_task.get("task_agent_cleanup_policy") or "delete_on_terminal").strip()
-        normalized_task["task_agent_scope_label"] = str(
+        resolved_scope = str(
             normalized_task.get("task_agent_scope_label") or normalized_task.get("scope_label") or f"session:{leader_session_id}"
         ).strip()
+        cleanup_policy = str(normalized_task.get("task_agent_cleanup_policy") or "delete_on_terminal").strip() or "delete_on_terminal"
+        normalized_task["task_agent_scope_label"] = resolved_scope
+        normalized_task["task_agent_scope"] = str(normalized_task.get("task_agent_scope") or resolved_scope).strip() or resolved_scope
+        normalized_task["task_agent_cleanup_policy"] = cleanup_policy
+        skill_kwargs = normalized_task.get("skill_kwargs") if isinstance(normalized_task.get("skill_kwargs"), dict) else {}
+        merged_kwargs = dict(skill_kwargs)
+        merged_kwargs["agent_mode"] = "task"
+        merged_kwargs["scope_label"] = resolved_scope
+        merged_kwargs["cleanup_policy"] = cleanup_policy
+        template_agent_id = str(normalized_task.get("template_agent_id") or normalized_task.get("task_agent_template_id") or "").strip()
+        if template_agent_id:
+            normalized_task["task_agent_template_id"] = template_agent_id
+            merged_kwargs["task_agent_template_id"] = template_agent_id
+        normalized_task["skill_kwargs"] = merged_kwargs
 
     return {
         "task": normalized_task,

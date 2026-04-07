@@ -319,7 +319,7 @@ async def execute_portal_control_plane_action(action_name: str, kwargs: Dict[str
         return {"success": False, "error": f"Unsupported portal action: {action}", "system": "portal", "action_name": action, "result": None}
 
     if action == "create_delegation":
-        required_fields = ["group_id", "leader_agent_id", "assignee_agent_id", "objective", "visibility"]
+        required_fields = ["group_id", "leader_agent_id", "assignee_agent_id", "objective", "visibility", "skill_name"]
         missing = [key for key in required_fields if not str(payload.get(key) or "").strip()]
         if missing:
             return {
