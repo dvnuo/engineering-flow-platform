@@ -31,6 +31,7 @@ def _event(event_type: str, state: str, issue_key: str, detail_payload: Dict[str
 
 async def run_jira_workflow_review(payload: Dict[str, Any]) -> Dict[str, Any]:
     plan = normalize_workflow_review_payload(payload)
+    action_gate = payload.get("_action_gate") if callable(payload.get("_action_gate")) else None
     if not plan.issue_key:
         return _build_failure(
             issue_key=None,
@@ -85,8 +86,13 @@ async def run_jira_workflow_review(payload: Dict[str, Any]) -> Dict[str, Any]:
             actions_applied,
             "add_comment",
             {"issue_key": plan.issue_key, "comment": action_plan.get("comment")},
+            action_gate=action_gate,
         )
-        if not comment_outcome.get("success"):
+        if comment_outcome.get("blocked"):
+            runtime_events.append(
+                _event("task.jira_workflow_review.action.blocked", "blocked", plan.issue_key, {"action": "add_comment", "error": comment_outcome.get("error")})
+            )
+        elif not comment_outcome.get("success"):
             return _build_failure(
                 issue_key=plan.issue_key,
                 error=comment_outcome.get("error") or "comment_failed",
@@ -104,8 +110,13 @@ async def run_jira_workflow_review(payload: Dict[str, Any]) -> Dict[str, Any]:
             actions_applied,
             "update_issue",
             {"issue_key": plan.issue_key, "fields": action_plan.get("fields")},
+            action_gate=action_gate,
         )
-        if not update_outcome.get("success"):
+        if update_outcome.get("blocked"):
+            runtime_events.append(
+                _event("task.jira_workflow_review.action.blocked", "blocked", plan.issue_key, {"action": "update_issue", "error": update_outcome.get("error")})
+            )
+        elif not update_outcome.get("success"):
             return _build_failure(
                 issue_key=plan.issue_key,
                 error=update_outcome.get("error") or "update_failed",
@@ -127,6 +138,7 @@ async def run_jira_workflow_review(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "transition": action_plan.get("transition"),
                 "comment": action_plan.get("transition_comment"),
             },
+            action_gate=action_gate,
         )
         if not transition_outcome.get("success"):
             return _build_failure(
@@ -146,6 +158,7 @@ async def run_jira_workflow_review(payload: Dict[str, Any]) -> Dict[str, Any]:
             actions_applied,
             "assign_issue",
             {"issue_key": plan.issue_key, "assignee": action_plan.get("assignee")},
+            action_gate=action_gate,
         )
         if not assign_outcome.get("success"):
             return _build_failure(
@@ -234,13 +247,38 @@ async def _resolve_review_outcome(plan, issue_snapshot: Any) -> JiraWorkflowRevi
     return normalize_skill_review_outcome(skill_result)
 
 
-async def _apply_action(actions_applied: List[Dict[str, Any]], action_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+async def _apply_action(
+    actions_applied: List[Dict[str, Any]],
+    action_name: str,
+    kwargs: Dict[str, Any],
+    *,
+    action_gate: Any = None,
+) -> Dict[str, Any]:
+    if callable(action_gate):
+        gate_outcome = action_gate(action_name, kwargs)
+        if isinstance(gate_outcome, dict) and gate_outcome.get("blocked"):
+            outcome = {
+                "success": False,
+                "error": gate_outcome.get("error") or f"action_blocked:{action_name}",
+                "blocked": True,
+                "blocked_reason": gate_outcome.get("reason"),
+            }
+            actions_applied.append(
+                {
+                    "action": action_name,
+                    "success": False,
+                    "error": outcome.get("error"),
+                    "blocked": True,
+                }
+            )
+            return outcome
     outcome = await execute_jira_workflow_action(action_name, kwargs)
     actions_applied.append(
         {
             "action": action_name,
             "success": bool(outcome.get("success")),
             "error": outcome.get("error"),
+            "blocked": bool(outcome.get("blocked")),
         }
     )
     return outcome

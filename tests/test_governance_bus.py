@@ -434,3 +434,17 @@ async def test_default_governance_denied_actions_alias_blocks_by_action_name():
     result = await bus.execute(req)
     assert result.status == "blocked"
     assert result.output_payload["reason"] == "denied_adapter_actions"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_denied_actions_blocks_jira_transition_action_name():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:transition_issue", "kwargs": {"issue_key": "ENG-1", "transition": "Done"}},
+        metadata={"denied_actions": ["transition_issue"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "denied_adapter_actions"

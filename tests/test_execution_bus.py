@@ -2650,6 +2650,9 @@ async def test_github_review_task_includes_involved_capability_ids(monkeypatch):
     assert result.status == "success"
     assert "adapter:github:review_pull_request" in result.output_payload["involved_capability_ids"]
     assert "adapter:github:add_comment" in result.output_payload["involved_capability_ids"]
+    assert result.output_payload["governed_secondary_action_ids"] == ["adapter:github:add_comment"]
+    assert result.output_payload["blocked_secondary_action_ids"] == []
+    assert result.output_payload["applied_secondary_action_ids"] == ["adapter:github:add_comment"]
 
 
 @pytest.mark.asyncio
@@ -2701,5 +2704,80 @@ async def test_github_review_task_secondary_action_denied_by_capability_policy(m
     assert result.output_payload["secondary_action_success"] is False
     assert result.output_payload["secondary_action_id"] == "adapter:github:add_comment"
     assert "capability policy blocked for secondary action" in str(result.output_payload["error"])
+    assert result.output_payload["governed_secondary_action_ids"] == ["adapter:github:add_comment"]
+    assert result.output_payload["blocked_secondary_action_ids"] == ["adapter:github:add_comment"]
+    assert result.output_payload["applied_secondary_action_ids"] == []
     assert any(evt.get("event_type") == "task.github_review.secondary_action.blocked" for evt in result.runtime_events)
     assert calls == ["adapter:github:review_pull_request"]
+
+
+@pytest.mark.asyncio
+async def test_jira_workflow_review_task_transition_denied_adds_blocked_secondary_fields(monkeypatch):
+    async def _fake_run_review(payload):
+        gate = payload["_action_gate"]
+        gate_result = gate("transition_issue", {"issue_key": payload["issue_key"], "transition": "Done"})
+        return {
+            "success": True,
+            "issue_key": payload["issue_key"],
+            "workflow_outcome": "approved",
+            "approved": True,
+            "reassignment_target": None,
+            "actions_applied": [
+                {"action": "transition_issue", "success": False, "blocked": True, "error": gate_result.get("error")},
+            ],
+            "runtime_events": [],
+            "error": None,
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_jira_workflow_review", _fake_run_review)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "jira_workflow_review_task", "issue_key": "ENG-50", "success_transition": "Done"},
+        metadata={"denied_actions": ["transition_issue"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert "adapter:jira:transition_issue" in result.output_payload["blocked_secondary_action_ids"]
+    assert result.output_payload["applied_secondary_action_ids"] == []
+    assert any(evt.get("event_type") == "task.jira_workflow_review.secondary_action.blocked" for evt in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_jira_workflow_review_task_comment_and_assign_denied(monkeypatch):
+    async def _fake_run_review(payload):
+        gate = payload["_action_gate"]
+        comment_gate = gate("add_comment", {"issue_key": payload["issue_key"], "comment": "hi"})
+        assign_gate = gate("assign_issue", {"issue_key": payload["issue_key"], "assignee": "u1"})
+        return {
+            "success": False,
+            "issue_key": payload["issue_key"],
+            "workflow_outcome": "rejected",
+            "approved": False,
+            "reassignment_target": "u1",
+            "actions_applied": [
+                {"action": "add_comment", "success": False, "blocked": True, "error": comment_gate.get("error")},
+                {"action": "assign_issue", "success": False, "blocked": True, "error": assign_gate.get("error")},
+            ],
+            "runtime_events": [],
+            "error": "assignment_failed",
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_jira_workflow_review", _fake_run_review)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={
+            "task_type": "jira_workflow_review_task",
+            "issue_key": "ENG-51",
+            "review_comment": "need change",
+            "explicit_success_assignee": "u1",
+        },
+        metadata={"denied_actions": ["add_comment", "assign_issue"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    blocked = set(result.output_payload["blocked_secondary_action_ids"])
+    assert {"adapter:jira:add_comment", "adapter:jira:assign_issue"}.issubset(blocked)

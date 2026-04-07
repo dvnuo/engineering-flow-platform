@@ -566,6 +566,49 @@ def _resolve_involved_capability_ids(task_type: str, payload: Dict[str, Any]) ->
     return []
 
 
+def _action_name_to_capability_id(system: str, action_name: str) -> str:
+    return f"adapter:{system}:{str(action_name or '').strip().lower()}"
+
+
+def _evaluate_secondary_action_gate(
+    *,
+    request: ExecutionRequest,
+    action_id: str,
+) -> Optional[Dict[str, str]]:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    return evaluate_capability_constraint_decision(
+        metadata=metadata,
+        capability_id=action_id,
+        capability_type="adapter_action",
+        action_id=action_id,
+    )
+
+
+def _append_secondary_action_event(
+    *,
+    runtime_events: list[Dict[str, Any]],
+    request: ExecutionRequest,
+    task_id: Optional[str],
+    event_type: str,
+    state: str,
+    detail_payload: Dict[str, Any],
+) -> None:
+    runtime_events.append(
+        build_runtime_event(
+            event_type=event_type,
+            execution_type=request.execution_type,
+            state=state,
+            session_id=request.session_id,
+            request_id=request.request_id,
+            agent_id=request.agent_id,
+            summary="secondary action governance",
+            task_id=task_id,
+            detail_payload=detail_payload,
+            legacy_payload={"legacy_type": "task_secondary_action"},
+        )
+    )
+
+
 def _as_dict(value: Any) -> dict:
     return dict(value) if isinstance(value, dict) else {}
 
@@ -1345,6 +1388,9 @@ def build_default_execution_bus(
             capability = _resolve_task_capability(task_type, request.input_payload)
             involved_capability_ids = _resolve_involved_capability_ids(task_type, request.input_payload)
             involved_action_ids = list(involved_capability_ids)
+            governed_secondary_action_ids = sorted([item for item in involved_action_ids if item != "adapter:jira:read_issue"])
+            blocked_secondary_action_ids: list[str] = []
+            applied_secondary_action_ids: list[str] = []
             workflow_payload = {
                 "issue_key": _get_required(request.input_payload, "issue_key"),
                 "skill_name": request.input_payload.get("skill_name"),
@@ -1366,9 +1412,35 @@ def build_default_execution_bus(
                 "fields": request.input_payload.get("fields"),
                 "transition_comment": request.input_payload.get("transition_comment"),
             }
+            def _jira_action_gate(action_name: str, _kwargs: Dict[str, Any]) -> Dict[str, Any]:
+                action_id = _action_name_to_capability_id("jira", action_name)
+                decision = _evaluate_secondary_action_gate(request=request, action_id=action_id)
+                if decision is not None:
+                    blocked_secondary_action_ids.append(action_id)
+                    return {
+                        "blocked": True,
+                        "reason": decision.get("reason"),
+                        "error": f"capability policy blocked for secondary action: {action_id}",
+                    }
+                applied_secondary_action_ids.append(action_id)
+                return {"blocked": False}
+
+            workflow_payload["_action_gate"] = _jira_action_gate
             workflow_result = await run_jira_workflow_review(workflow_payload)
             runtime_events = list(workflow_result.get("runtime_events") or [])
             runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+            for blocked_action_id in blocked_secondary_action_ids:
+                _append_secondary_action_event(
+                    runtime_events=runtime_events,
+                    request=request,
+                    task_id=task_id,
+                    event_type="task.jira_workflow_review.secondary_action.blocked",
+                    state="blocked",
+                    detail_payload={
+                        "task_type": task_type,
+                        "secondary_action_id": blocked_action_id,
+                    },
+                )
             runtime_events.append(
                 build_runtime_event(
                     event_type="task.jira_workflow_review.completed" if workflow_result.get("success") else "task.jira_workflow_review.failed",
@@ -1388,6 +1460,9 @@ def build_default_execution_bus(
                         "capability_resolution": capability.get("capability_resolution"),
                         "involved_capability_ids": involved_capability_ids,
                         "involved_action_ids": involved_action_ids,
+                        "governed_secondary_action_ids": governed_secondary_action_ids,
+                        "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
+                        "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
                         "issue_key": workflow_result.get("issue_key"),
                         "skill_name": workflow_result.get("skill_name") or workflow_payload.get("skill_name"),
                         "workflow_outcome": workflow_result.get("workflow_outcome"),
@@ -1416,6 +1491,9 @@ def build_default_execution_bus(
                     "capability_resolution": capability.get("capability_resolution"),
                     "involved_capability_ids": involved_capability_ids,
                     "involved_action_ids": involved_action_ids,
+                    "governed_secondary_action_ids": governed_secondary_action_ids,
+                    "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
+                    "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
                     "resolved_skill_capability_id": f"skill:{str(workflow_payload.get('skill_name') or '').strip().lower()}" if workflow_payload.get("skill_name") else None,
                     "workflow_outcome": workflow_result.get("workflow_outcome"),
                     "actions_applied": workflow_result.get("actions_applied") or [],
@@ -1457,39 +1535,33 @@ def build_default_execution_bus(
             secondary_action_id = "adapter:github:add_comment"
             secondary_action_attempted = False
             secondary_action_success = False
+            governed_secondary_action_ids = [secondary_action_id]
+            blocked_secondary_action_ids: list[str] = []
+            applied_secondary_action_ids: list[str] = []
 
             if review_result.get("success"):
                 comment_body = review_summary if isinstance(review_summary, str) and review_summary.strip() else review_comment_input
                 if isinstance(comment_body, str) and comment_body.strip():
                     secondary_action_attempted = True
-                    secondary_gate = evaluate_capability_constraint_decision(
-                        metadata=request.metadata if isinstance(request.metadata, dict) else {},
-                        capability_id=secondary_action_id,
-                        capability_type="adapter_action",
-                        action_id=secondary_action_id,
-                    )
+                    secondary_gate = _evaluate_secondary_action_gate(request=request, action_id=secondary_action_id)
                     if secondary_gate is not None:
+                        blocked_secondary_action_ids.append(secondary_action_id)
                         error_value = "capability policy blocked for secondary action"
-                        runtime_events.append(
-                            build_runtime_event(
-                                event_type="task.github_review.secondary_action.blocked",
-                                execution_type=request.execution_type,
-                                state="blocked",
-                                session_id=request.session_id,
-                                request_id=request.request_id,
-                                agent_id=request.agent_id,
-                                summary="github review secondary action blocked",
-                                task_id=task_id,
-                                detail_payload={
-                                    "task_type": task_type,
-                                    "secondary_action_id": secondary_action_id,
-                                    "reason": secondary_gate.get("reason"),
-                                    "message": secondary_gate.get("message"),
-                                },
-                                legacy_payload={"legacy_type": "task_github_review_secondary_action"},
-                            )
+                        _append_secondary_action_event(
+                            runtime_events=runtime_events,
+                            request=request,
+                            task_id=task_id,
+                            event_type="task.github_review.secondary_action.blocked",
+                            state="blocked",
+                            detail_payload={
+                                "task_type": task_type,
+                                "secondary_action_id": secondary_action_id,
+                                "reason": secondary_gate.get("reason"),
+                                "message": secondary_gate.get("message"),
+                            },
                         )
                     else:
+                        applied_secondary_action_ids.append(secondary_action_id)
                         add_comment_result = await execute_adapter_action(
                             secondary_action_id,
                             {
@@ -1503,24 +1575,18 @@ def build_default_execution_bus(
                         runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
                         comment_written = bool(add_comment_result.get("success"))
                         secondary_action_success = comment_written
-                        runtime_events.append(
-                            build_runtime_event(
-                                event_type="task.github_review.secondary_action.completed" if comment_written else "task.github_review.secondary_action.failed",
-                                execution_type=request.execution_type,
-                                state="completed" if comment_written else "failed",
-                                session_id=request.session_id,
-                                request_id=request.request_id,
-                                agent_id=request.agent_id,
-                                summary="github review secondary action",
-                                task_id=task_id,
-                                detail_payload={
-                                    "task_type": task_type,
-                                    "secondary_action_id": secondary_action_id,
-                                    "success": comment_written,
-                                    "error": add_comment_result.get("error"),
-                                },
-                                legacy_payload={"legacy_type": "task_github_review_secondary_action"},
-                            )
+                        _append_secondary_action_event(
+                            runtime_events=runtime_events,
+                            request=request,
+                            task_id=task_id,
+                            event_type="task.github_review.secondary_action.completed" if comment_written else "task.github_review.secondary_action.failed",
+                            state="completed" if comment_written else "failed",
+                            detail_payload={
+                                "task_type": task_type,
+                                "secondary_action_id": secondary_action_id,
+                                "success": comment_written,
+                                "error": add_comment_result.get("error"),
+                            },
                         )
                         if not comment_written:
                             error_value = add_comment_result.get("error") or "Failed to write GitHub review comment"
@@ -1547,6 +1613,9 @@ def build_default_execution_bus(
                         "capability_resolution": capability.get("capability_resolution"),
                         "involved_capability_ids": involved_capability_ids,
                         "involved_action_ids": involved_action_ids,
+                        "governed_secondary_action_ids": governed_secondary_action_ids,
+                        "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
+                        "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
                         "owner": owner,
                         "repo": repo,
                         "pull_number": pull_number,
@@ -1580,6 +1649,9 @@ def build_default_execution_bus(
                     "capability_resolution": capability.get("capability_resolution"),
                     "involved_capability_ids": involved_capability_ids,
                     "involved_action_ids": involved_action_ids,
+                    "governed_secondary_action_ids": governed_secondary_action_ids,
+                    "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
+                    "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
                     "secondary_action_attempted": secondary_action_attempted,
                     "secondary_action_id": secondary_action_id,
                     "secondary_action_success": secondary_action_success,
