@@ -19,6 +19,7 @@ from src.runtime.contracts import (
     make_execution_request,
     make_execution_result,
 )
+from src.runtime.task_capability_contracts import resolve_task_capability_contract
 from src.runtime.events import build_runtime_event
 from src.runtime.governance import GovernanceHooks, as_governance_bus
 from src.runtime.governance_bus import (
@@ -546,125 +547,11 @@ def _as_list_of_strings(value: Any) -> list[str]:
 
 
 def resolve_task_capability_plan(task_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    normalized_task_type = str(task_type or "").strip().lower()
-    registry = get_capability_registry()
-    fallback: Dict[str, Any] = {
-        "primary_capability_id": None,
-        "capability_id": None,
-        "capability_type": None,
-        "involved_capability_ids": [],
-        "policy_tags": [],
-        "requires_identity_binding": False,
-        "capability_resolution": "unresolved",
-    }
-    if normalized_task_type == "adapter_action_task":
-        action_id = str(payload.get("action_id") or "").strip().lower()
-        descriptor = registry.get(action_id) if action_id else None
-        if descriptor is None:
-            return {**fallback, "primary_capability_id": action_id or None, "capability_id": action_id or None, "action_id": action_id or None}
-        plan = {
-            **fallback,
-            "primary_capability_id": descriptor.capability_id,
-            "capability_id": descriptor.capability_id,
-            "capability_type": descriptor.type,
-            "involved_capability_ids": [descriptor.capability_id],
-            "policy_tags": list(descriptor.policy_tags or []),
-            "requires_identity_binding": bool(descriptor.requires_identity_binding),
-            "capability_resolution": "resolved",
-            "action_id": descriptor.capability_id,
-        }
-        return plan
-    if normalized_task_type == "jira_workflow_review_task":
-        descriptor = registry.get("adapter:jira:read_issue")
-        if descriptor is None:
-            return {
-                **fallback,
-                "involved_capability_ids": _resolve_involved_capability_ids(task_type, payload),
-            }
-        return {
-            **fallback,
-            "primary_capability_id": descriptor.capability_id,
-            "capability_id": descriptor.capability_id,
-            "capability_type": descriptor.type,
-            "involved_capability_ids": _resolve_involved_capability_ids(task_type, payload),
-            "policy_tags": list(descriptor.policy_tags or []),
-            "requires_identity_binding": bool(descriptor.requires_identity_binding),
-            "capability_resolution": "resolved",
-            "action_id": descriptor.capability_id,
-        }
-    if normalized_task_type == "github_review_task":
-        descriptor = registry.get("adapter:github:review_pull_request")
-        if descriptor is None:
-            return {
-                **fallback,
-                "involved_capability_ids": _resolve_involved_capability_ids(task_type, payload),
-            }
-        return {
-            **fallback,
-            "primary_capability_id": descriptor.capability_id,
-            "capability_id": descriptor.capability_id,
-            "capability_type": descriptor.type,
-            "involved_capability_ids": _resolve_involved_capability_ids(task_type, payload),
-            "policy_tags": list(descriptor.policy_tags or []),
-            "requires_identity_binding": bool(descriptor.requires_identity_binding),
-            "capability_resolution": "resolved",
-            "action_id": descriptor.capability_id,
-        }
-    if normalized_task_type == "delegation_task":
-        skill_name = _non_empty_string(payload.get("skill_name"))
-        if not skill_name:
-            return fallback
-        capability_id = f"skill:{skill_name.lower()}"
-        descriptor = registry.get(capability_id)
-        if descriptor is None:
-            return {
-                **fallback,
-                "primary_capability_id": capability_id,
-                "capability_id": capability_id,
-                "capability_type": "skill",
-                "capability_resolution": "unresolved",
-                "involved_capability_ids": [capability_id],
-            }
-        return {
-            **fallback,
-            "primary_capability_id": descriptor.capability_id,
-            "capability_id": descriptor.capability_id,
-            "capability_type": descriptor.type,
-            "involved_capability_ids": [descriptor.capability_id],
-            "policy_tags": list(descriptor.policy_tags or []),
-            "requires_identity_binding": bool(descriptor.requires_identity_binding),
-            "capability_resolution": "resolved",
-        }
-    return fallback
+    return resolve_task_capability_contract(task_type, payload)
 
 
 def _resolve_task_capability(task_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     return resolve_task_capability_plan(task_type, payload)
-
-
-def _resolve_involved_capability_ids(task_type: str, payload: Dict[str, Any]) -> list[str]:
-    normalized_task_type = str(task_type or "").strip().lower()
-    if normalized_task_type == "jira_workflow_review_task":
-        involved = {"adapter:jira:read_issue"}
-        has_transition = any(payload.get(key) for key in ("transition", "success_transition", "failure_transition"))
-        has_assign = any(
-            payload.get(key)
-            for key in ("assignee", "success_reassign_to", "failure_reassign_to", "explicit_success_assignee", "explicit_failure_assignee")
-        )
-        has_comment = any(payload.get(key) for key in ("review_comment", "review_comment_template", "transition_comment"))
-        has_update = bool(payload.get("fields"))
-        if has_transition:
-            involved.add("adapter:jira:transition_issue")
-        if has_assign:
-            involved.add("adapter:jira:assign_issue")
-        if has_comment:
-            involved.add("adapter:jira:add_comment")
-        if has_update:
-            involved.add("adapter:jira:update_issue")
-        return sorted(involved)
-    if normalized_task_type == "github_review_task":
-        return ["adapter:github:add_comment", "adapter:github:review_pull_request"]
-    return []
 
 
 async def _execute_adapter_action_task(

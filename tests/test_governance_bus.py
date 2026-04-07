@@ -10,7 +10,7 @@ from src.runtime.governance_bus import (
     build_default_governance_bus,
     _resolve_capability_context,
 )
-from src.runtime.execution_bus import resolve_task_capability_plan
+from src.runtime.task_capability_contracts import resolve_task_capability_contract
 
 
 @pytest.mark.asyncio
@@ -542,23 +542,23 @@ async def test_default_governance_allows_matching_identity_binding_for_external_
     assert result.status in {"success", "error"}
 
 
-def test_governance_and_execution_bus_share_primary_capability_for_github_review_task():
+def test_governance_context_matches_canonical_contract_for_github_review_task():
     req = make_execution_request(
         source_type="task",
         execution_type="task",
         input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 1},
     )
     gov_context = _resolve_capability_context(req)
-    plan = resolve_task_capability_plan("github_review_task", req.input_payload)
+    plan = resolve_task_capability_contract("github_review_task", req.input_payload)
     assert gov_context["capability_id"] == plan["primary_capability_id"]
 
 
-def test_governance_and_execution_bus_share_primary_capability_for_jira_review_task():
+def test_governance_context_matches_canonical_contract_for_jira_review_task():
     req = make_execution_request(
         source_type="task",
         execution_type="task",
         input_payload={"task_type": "jira_workflow_review_task", "issue_key": "ENG-1"},
     )
     gov_context = _resolve_capability_context(req)
-    plan = resolve_task_capability_plan("jira_workflow_review_task", req.input_payload)
+    plan = resolve_task_capability_contract("jira_workflow_review_task", req.input_payload)
     assert gov_context["capability_id"] == plan["primary_capability_id"]

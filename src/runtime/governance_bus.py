@@ -10,6 +10,7 @@ from src.agents.tool_result_policy import should_passthrough_tool_result
 from src.runtime.capability_registry import get_capability_registry
 from src.runtime.contracts import ExecutionRequest, ExecutionResult, make_execution_result
 from src.runtime.events import build_runtime_event
+from src.runtime.task_capability_contracts import resolve_task_capability_contract
 from src.utils.redaction import safe_preview
 
 _ALLOWED_RESULT_STATUSES = {"success", "error", "blocked", "queued", "started"}
@@ -339,9 +340,7 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
     action_id: Optional[str] = None
     if request.execution_type == "task":
         if task_type in {"adapter_action_task", "jira_workflow_review_task", "github_review_task", "delegation_task"}:
-            from src.runtime.execution_bus import resolve_task_capability_plan
-
-            plan = resolve_task_capability_plan(task_type, payload)
+            plan = resolve_task_capability_contract(task_type, payload)
             capability_id = str(plan.get("primary_capability_id") or plan.get("capability_id") or "").strip().lower() or None
             action_id = str(plan.get("action_id") or capability_id or "").strip().lower() or None
         elif task_type == "tool_task":
