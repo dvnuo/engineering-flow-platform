@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from src.agents.executor import execute_skill
-from src.runtime.adapter_executor import execute_jira_workflow_action
+from src.runtime.runtime_adapter_execution import execute_adapter_action_via_bus
 from src.runtime.jira_workflow_contract import (
     JiraWorkflowReviewOutcome,
     derive_workflow_actions_from_outcome,
@@ -13,6 +13,17 @@ from src.runtime.jira_workflow_contract import (
     normalize_workflow_review_payload,
 )
 from src.runtime.events import build_runtime_event
+
+
+async def execute_jira_workflow_action(action_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute Jira workflow actions through the standardized runtime bus path."""
+    action_id = f"adapter:jira:{str(action_name or '').strip().lower()}"
+    return await execute_adapter_action_via_bus(
+        action_id,
+        kwargs,
+        source_type="runtime",
+        source_ref="jira_workflow_review",
+    )
 
 
 def _event(event_type: str, state: str, issue_key: str, detail_payload: Dict[str, Any]) -> Dict[str, Any]:

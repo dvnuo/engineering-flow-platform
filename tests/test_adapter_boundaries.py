@@ -179,6 +179,6 @@ def test_runtime_helper_modules_do_not_import_adapter_executor_directly():
         "leader_orchestration": inspect.getsource(leader_orchestration),
         "jira_workflow_review": inspect.getsource(jira_workflow_review),
     }
-    forbidden = "from src.runtime.adapter_executor import execute_adapter_action"
+    forbidden = "from src.runtime.adapter_executor import"
     for name, source in sources.items():
         assert forbidden not in source, f"{name} unexpectedly imports low-level adapter executor"

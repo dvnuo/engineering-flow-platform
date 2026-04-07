@@ -164,6 +164,27 @@ async def test_jira_workflow_review_skill_path_uses_bus_execute_skill(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_jira_workflow_review_routes_jira_actions_via_bus_helper(monkeypatch):
+    calls = []
+
+    async def _fake_bus_helper(action_id, kwargs, **_meta):
+        calls.append(action_id)
+        if action_id == "adapter:jira:read_issue":
+            return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
+        return {"success": True, "result": "ok", "error": None}
+
+    async def _fake_execute_skill(skill_name, **kwargs):
+        return SkillResult(success=True, output="ok", data={"approved": True})
+
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_adapter_action_via_bus", _fake_bus_helper)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
+
+    result = await run_jira_workflow_review({"issue_key": "PROJ-16", "skill_name": "review_skill"})
+    assert result["success"] is True
+    assert "adapter:jira:read_issue" in calls
+
+
+@pytest.mark.asyncio
 async def test_backward_compatible_direct_payload_path_without_skill_name(monkeypatch):
     async def _fake_execute_jira_workflow_action(action_name, kwargs):
         if action_name == "read_issue":
