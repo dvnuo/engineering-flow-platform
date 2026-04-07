@@ -91,3 +91,51 @@ async def test_execute_adapter_action_github_unsupported_action_failed():
     assert result["success"] is False
     assert result["system"] == "github"
     assert "Unsupported adapter action" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_portal_create_delegation_missing_required_fields(monkeypatch):
+    monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.internal")
+    result = await execute_adapter_action("adapter:portal:create_delegation", {"group_id": "g-1"})
+    assert result["success"] is False
+    assert result["system"] == "portal"
+    assert "Missing required fields" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_portal_create_delegation_normalizes_structured_payload(monkeypatch):
+    captured = {}
+
+    async def _fake_post(url, payload, headers):
+        captured["url"] = url
+        captured["payload"] = payload
+        captured["headers"] = headers
+        return {"success": True, "error": None, "result": {"delegation_id": "d-1"}}
+
+    monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.internal")
+    monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "tok-1")
+    monkeypatch.setattr("src.runtime.adapter_executor._post_portal_json", _fake_post)
+
+    result = await execute_adapter_action(
+        "adapter:portal:create_delegation",
+        {
+            "group_id": "g-1",
+            "leader_agent_id": "leader-1",
+            "assignee_agent_id": "agent-2",
+            "objective": "Review",
+            "visibility": "leader_only",
+            "scoped_context_payload": {"k": "v"},
+            "input_artifacts": [{"artifact_id": "a1"}],
+            "expected_output_schema": {"required": ["summary"]},
+            "retry_policy": {"max_retries": 2},
+            "skill_kwargs": {"x": 1},
+        },
+    )
+    assert result["success"] is True
+    assert result["system"] == "portal"
+    assert captured["url"] == "https://portal.internal/internal/api/delegations"
+    assert isinstance(captured["payload"]["scoped_context_payload_json"], str)
+    assert isinstance(captured["payload"]["input_artifacts_json"], str)
+    assert isinstance(captured["payload"]["expected_output_schema_json"], str)
+    assert isinstance(captured["payload"]["retry_policy_json"], str)
+    assert isinstance(captured["payload"]["skill_kwargs_json"], str)

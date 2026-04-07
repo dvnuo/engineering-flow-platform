@@ -1186,6 +1186,42 @@ async def test_execute_runtime_task_request_forwards_context_ref_to_execution_re
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_delegation_execution_type_works_without_task_handler_wrapping(monkeypatch):
+    async def _fake_run_skill_execution(_skill_name, **_kwargs):
+        return {
+            "success": True,
+            "delegation_result": {
+                "summary": "delegation-direct",
+                "artifacts": [],
+                "blockers": [],
+                "audit_trace": {"from_skill": True},
+                "status": "completed",
+            },
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="delegation",
+        session_id="s-del-direct",
+        input_payload={
+            "delegation_id": "del-direct-1",
+            "objective": "Review",
+            "visibility": "leader_only",
+            "leader_agent_id": "leader-1",
+            "group_id": "group-1",
+            "skill_name": "demo_skill",
+            "strict_delegation_result": True,
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert result.output_payload["task_type"] == "delegation"
+    assert result.output_payload["delegation_id"] == "del-direct-1"
+
+
+@pytest.mark.asyncio
 async def test_execution_bus_task_handler_delegation_task_marks_failed_completion(monkeypatch):
     async def _fake_run_skill_execution(skill_name, **kwargs):
         return {"success": False, "error": "skill failed"}

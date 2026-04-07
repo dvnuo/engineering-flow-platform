@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from typing import Any, Dict
+import json
+import os
+from aiohttp import ClientSession
 
 from src.runtime.events import build_runtime_event
 
@@ -159,7 +162,15 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
     normalized_action_id = str(action_id or "").strip().lower()
     payload = dict(kwargs or {})
 
-    system = "jira" if normalized_action_id.startswith("adapter:jira:") else "github" if normalized_action_id.startswith("adapter:github:") else "unknown"
+    system = (
+        "jira"
+        if normalized_action_id.startswith("adapter:jira:")
+        else "github"
+        if normalized_action_id.startswith("adapter:github:")
+        else "portal"
+        if normalized_action_id.startswith("adapter:portal:")
+        else "unknown"
+    )
     runtime_events = [_event("task.adapter_action.started", "started", {"action_id": normalized_action_id, "system": system})]
 
     jira_action_map = {
@@ -173,10 +184,16 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
         "adapter:github:review_pull_request": "review_pull_request",
         "adapter:github:add_comment": "add_comment",
     }
+    portal_action_map = {
+        "adapter:portal:create_delegation": "create_delegation",
+        "adapter:portal:list_group_delegations": "list_group_delegations",
+        "adapter:portal:get_group_task_board": "get_group_task_board",
+    }
 
     jira_action = jira_action_map.get(normalized_action_id)
     github_action = github_action_map.get(normalized_action_id)
-    if jira_action is None and github_action is None:
+    portal_action = portal_action_map.get(normalized_action_id)
+    if jira_action is None and github_action is None and portal_action is None:
         runtime_events.append(
             _event(
                 "task.adapter_action.failed",
@@ -194,6 +211,8 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
 
     if jira_action is not None:
         outcome = await execute_jira_workflow_action(jira_action, payload)
+    elif portal_action is not None:
+        outcome = await execute_portal_control_plane_action(portal_action, payload)
     else:
         outcome = await execute_github_workflow_action(github_action, payload)
     runtime_events.append(
@@ -215,4 +234,95 @@ async def execute_adapter_action(action_id: str, kwargs: Dict[str, Any]) -> Dict
         "error": outcome.get("error"),
         "result": outcome.get("result"),
         "runtime_events": runtime_events,
+    }
+
+
+def _normalize_json_field(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return value
+
+
+def _build_portal_headers() -> Dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    token = os.getenv("PORTAL_INTERNAL_AUTH_TOKEN", "").strip()
+    api_key = os.getenv("PORTAL_INTERNAL_API_KEY", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if api_key:
+        headers["X-Portal-Internal-Api-Key"] = api_key
+    return headers
+
+
+async def _post_portal_json(url: str, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
+    async with ClientSession(headers=headers) as session:
+        async with session.post(url, json=payload) as response:
+            try:
+                data = await response.json()
+            except Exception:
+                data = {"raw": await response.text()}
+            if response.status >= 400:
+                return {"success": False, "error": f"Portal request failed: HTTP {response.status}", "result": data}
+            return {"success": True, "error": None, "result": data}
+
+
+async def execute_portal_control_plane_action(action_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    action = str(action_name or "").strip()
+    payload = dict(kwargs or {})
+    base_url = os.getenv("PORTAL_INTERNAL_BASE_URL", "").strip().rstrip("/")
+    if not base_url:
+        return {"success": False, "error": "PORTAL_INTERNAL_BASE_URL is not configured", "system": "portal", "action_name": action, "result": None}
+
+    endpoints = {
+        "create_delegation": "/internal/api/delegations",
+        "list_group_delegations": "/internal/api/delegations",
+        "get_group_task_board": "/internal/api/task-board",
+    }
+    endpoint = endpoints.get(action)
+    if endpoint is None:
+        return {"success": False, "error": f"Unsupported portal action: {action}", "system": "portal", "action_name": action, "result": None}
+
+    if action == "create_delegation":
+        required_fields = ["group_id", "leader_agent_id", "assignee_agent_id", "objective", "visibility"]
+        missing = [key for key in required_fields if not str(payload.get(key) or "").strip()]
+        if missing:
+            return {
+                "success": False,
+                "error": f"Missing required fields: {', '.join(missing)}",
+                "system": "portal",
+                "action_name": action,
+                "result": None,
+            }
+        payload["scoped_context_payload_json"] = _normalize_json_field(payload.get("scoped_context_payload_json") or payload.get("scoped_context_payload"))
+        payload["input_artifacts_json"] = _normalize_json_field(payload.get("input_artifacts_json") or payload.get("input_artifacts"))
+        payload["expected_output_schema_json"] = _normalize_json_field(payload.get("expected_output_schema_json") or payload.get("expected_output_schema"))
+        payload["retry_policy_json"] = _normalize_json_field(payload.get("retry_policy_json") or payload.get("retry_policy"))
+        payload["skill_kwargs_json"] = _normalize_json_field(payload.get("skill_kwargs_json") or payload.get("skill_kwargs"))
+        payload.pop("scoped_context_payload", None)
+        payload.pop("input_artifacts", None)
+        payload.pop("expected_output_schema", None)
+        payload.pop("retry_policy", None)
+        payload.pop("skill_kwargs", None)
+        outcome = await _post_portal_json(f"{base_url}{endpoint}", payload, _build_portal_headers())
+    elif action == "list_group_delegations":
+        group_id = str(payload.get("group_id") or "").strip()
+        if not group_id:
+            return {"success": False, "error": "group_id is required", "system": "portal", "action_name": action, "result": None}
+        outcome = await _post_portal_json(f"{base_url}{endpoint}", {"group_id": group_id}, _build_portal_headers())
+    else:
+        group_id = str(payload.get("group_id") or "").strip()
+        if not group_id:
+            return {"success": False, "error": "group_id is required", "system": "portal", "action_name": action, "result": None}
+        outcome = await _post_portal_json(f"{base_url}{endpoint}", {"group_id": group_id}, _build_portal_headers())
+
+    return {
+        "success": bool(outcome.get("success")),
+        "system": "portal",
+        "action_name": action,
+        "result": outcome.get("result"),
+        "error": outcome.get("error"),
     }

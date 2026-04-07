@@ -113,3 +113,48 @@ def build_jira_adapter_capabilities() -> List[AdapterActionDescriptor]:
             source_ref="src.jira",
         ),
     ]
+
+
+def build_portal_adapter_capabilities() -> List[AdapterActionDescriptor]:
+    return [
+        AdapterActionDescriptor(
+            action_id="adapter:portal:create_delegation",
+            adapter="portal",
+            name="create_delegation",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "group_id": {"type": "string"},
+                    "leader_agent_id": {"type": "string"},
+                    "assignee_agent_id": {"type": "string"},
+                    "objective": {"type": "string"},
+                    "visibility": {"type": "string"},
+                },
+                "required": ["group_id", "leader_agent_id", "assignee_agent_id", "objective", "visibility"],
+            },
+            output_schema={"type": "object"},
+            policy_tags=["portal", "control_plane", "delegation", "write"],
+            requires_identity_binding=False,
+            source_ref="src.runtime",
+        ),
+        AdapterActionDescriptor(
+            action_id="adapter:portal:list_group_delegations",
+            adapter="portal",
+            name="list_group_delegations",
+            input_schema={"type": "object", "properties": {"group_id": {"type": "string"}}, "required": ["group_id"]},
+            output_schema={"type": "object"},
+            policy_tags=["portal", "control_plane", "delegation", "read"],
+            requires_identity_binding=False,
+            source_ref="src.runtime",
+        ),
+        AdapterActionDescriptor(
+            action_id="adapter:portal:get_group_task_board",
+            adapter="portal",
+            name="get_group_task_board",
+            input_schema={"type": "object", "properties": {"group_id": {"type": "string"}}, "required": ["group_id"]},
+            output_schema={"type": "object"},
+            policy_tags=["portal", "control_plane", "delegation", "read"],
+            requires_identity_binding=False,
+            source_ref="src.runtime",
+        ),
+    ]

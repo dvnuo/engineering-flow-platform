@@ -1406,6 +1406,26 @@ def build_default_execution_bus(
             audit_ref=normalized["audit_ref"],
         )
 
+    async def delegation_handler(request: ExecutionRequest) -> ExecutionResult:
+        adapted_payload = dict(request.input_payload or {})
+        adapted_payload["task_type"] = "delegation_task"
+        adapted_request = make_execution_request(
+            request_id=request.request_id,
+            source_type=request.source_type,
+            source_ref=request.source_ref,
+            agent_id=request.agent_id,
+            session_id=request.session_id,
+            execution_type="task",
+            input_payload=adapted_payload,
+            context_ref=request.context_ref,
+            policy_profile_id=request.policy_profile_id,
+            metadata=request.metadata,
+        )
+        result = await task_handler(adapted_request)
+        if isinstance(result.output_payload, dict):
+            result.output_payload["task_type"] = "delegation"
+        return result
+
     async def event_handler(request: ExecutionRequest) -> ExecutionResult:
         raw_target = request.metadata.get("target_execution_type") or request.input_payload.get("target_execution_type")
         target = raw_target.strip() if isinstance(raw_target, str) and raw_target.strip() else None
@@ -1454,6 +1474,7 @@ def build_default_execution_bus(
     bus.register_handler("skill", skill_handler)
     bus.register_handler("tool", tool_handler)
     bus.register_handler("task", task_handler)
+    bus.register_handler("delegation", delegation_handler)
     bus.register_handler("subagent", subagent_handler)
     bus.register_handler("event", event_handler)
     return bus
