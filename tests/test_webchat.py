@@ -12,6 +12,10 @@ except ImportError:
     pytest.skip("WebChat module not available", allow_module_level=True)
 
 
+INTERNAL_API_KEY = "runtime-internal-key"
+INTERNAL_HEADERS = {"X-Internal-Api-Key": INTERNAL_API_KEY}
+
+
 class TestWebChatTemplate:
     """Tests for WebChat template loading."""
     
@@ -722,6 +726,7 @@ def test_routes_include_tasks_execute_and_existing_chat_route():
 @pytest.mark.asyncio
 async def test_api_capabilities_returns_catalog_and_filters(monkeypatch):
     from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     class _Registry:
         def export_catalog_snapshot(self):
@@ -739,6 +744,7 @@ async def test_api_capabilities_returns_catalog_and_filters(monkeypatch):
     monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
 
     class _Request:
+        headers = INTERNAL_HEADERS
         query = {"type": "tool", "enabled": "true"}
 
     response = await webchat.api_capabilities(_Request())
@@ -754,6 +760,7 @@ async def test_api_capabilities_returns_catalog_and_filters(monkeypatch):
 @pytest.mark.asyncio
 async def test_api_capabilities_capability_id_not_found_returns_empty(monkeypatch):
     from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     class _Registry:
         def export_catalog_snapshot(self):
@@ -767,6 +774,7 @@ async def test_api_capabilities_capability_id_not_found_returns_empty(monkeypatc
     monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
 
     class _Request:
+        headers = INTERNAL_HEADERS
         query = {"capability_id": "adapter:jira:missing"}
 
     response = await webchat.api_capabilities(_Request())
@@ -780,6 +788,7 @@ async def test_api_capabilities_capability_id_not_found_returns_empty(monkeypatc
 @pytest.mark.asyncio
 async def test_api_capabilities_filters_by_capability_id_and_type(monkeypatch):
     from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     class _Registry:
         def export_catalog_snapshot(self):
@@ -798,6 +807,7 @@ async def test_api_capabilities_filters_by_capability_id_and_type(monkeypatch):
     monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
 
     class _ByCapabilityIdRequest:
+        headers = INTERNAL_HEADERS
         query = {"capability_id": "tool:write"}
 
     by_id_response = await webchat.api_capabilities(_ByCapabilityIdRequest())
@@ -807,6 +817,7 @@ async def test_api_capabilities_filters_by_capability_id_and_type(monkeypatch):
     assert by_id_body["capabilities"] == [{"capability_id": "tool:write", "type": "tool", "enabled": True}]
 
     class _ByTypeRequest:
+        headers = INTERNAL_HEADERS
         query = {"type": "adapter_action"}
 
     by_type_response = await webchat.api_capabilities(_ByTypeRequest())
@@ -817,8 +828,118 @@ async def test_api_capabilities_filters_by_capability_id_and_type(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_api_capabilities_requires_internal_api_key_not_configured(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.delenv("RUNTIME_INTERNAL_API_KEY", raising=False)
+    monkeypatch.setattr(webchat.global_config, "get", lambda *_args, **_kwargs: "")
+
+    class _Request:
+        headers = {}
+        query = {}
+
+    response = await webchat.api_capabilities(_Request())
+    body = json.loads(response.body)
+    assert response.status == 503
+    assert body == {"error": "Runtime internal api key is not configured"}
+
+
+@pytest.mark.asyncio
+async def test_api_capabilities_requires_internal_api_key_invalid(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+
+    class _Request:
+        headers = {"X-Internal-Api-Key": "bad-key"}
+        query = {}
+
+    response = await webchat.api_capabilities(_Request())
+    body = json.loads(response.body)
+    assert response.status == 401
+    assert body == {"error": "Invalid internal api key"}
+
+
+@pytest.mark.asyncio
+async def test_api_capabilities_allows_config_based_internal_api_key(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.delenv("RUNTIME_INTERNAL_API_KEY", raising=False)
+    monkeypatch.setattr(webchat.global_config, "get", lambda key, default=None: "cfg-key" if key == "server.runtime_internal_api_key" else default)
+
+    class _Registry:
+        def export_catalog_snapshot(self):
+            return {"capabilities": [{"capability_id": "tool:read", "type": "tool", "enabled": True}], "count": 1, "catalog_version": "v", "generated_at": "2026-04-07T00:00:00Z"}
+
+    monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
+
+    class _Request:
+        headers = {"X-Internal-Api-Key": "cfg-key"}
+        query = {"enabled": "true"}
+
+    response = await webchat.api_capabilities(_Request())
+    assert response.status == 200
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_execute_requires_internal_api_key_not_configured(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.delenv("RUNTIME_INTERNAL_API_KEY", raising=False)
+    monkeypatch.setattr(webchat.global_config, "get", lambda *_args, **_kwargs: "")
+
+    class _Request:
+        headers = {}
+
+        async def json(self):
+            raise AssertionError("json() should not be called when auth fails")
+
+    response = await webchat.api_tasks_execute(_Request())
+    body = json.loads(response.body)
+    assert response.status == 503
+    assert body == {"error": "Runtime internal api key is not configured"}
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_execute_requires_internal_api_key_missing_header(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+
+    class _Request:
+        headers = {}
+
+        async def json(self):
+            raise AssertionError("json() should not be called when auth fails")
+
+    response = await webchat.api_tasks_execute(_Request())
+    body = json.loads(response.body)
+    assert response.status == 401
+    assert body == {"error": "Invalid internal api key"}
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_execute_requires_internal_api_key_wrong_header(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+
+    class _Request:
+        headers = {"X-Internal-Api-Key": "wrong"}
+
+        async def json(self):
+            raise AssertionError("json() should not be called when auth fails")
+
+    response = await webchat.api_tasks_execute(_Request())
+    body = json.loads(response.body)
+    assert response.status == 401
+    assert body == {"error": "Invalid internal api key"}
+
+
+@pytest.mark.asyncio
 async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
     from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     captured = {}
     async def _fake_execute_runtime_task_request(**kwargs):
@@ -840,6 +961,7 @@ async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
 
     class _Request:
+        headers = INTERNAL_HEADERS
         async def json(self):
             return {
                 "task_id": "task-1",
@@ -879,6 +1001,7 @@ async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
 @pytest.mark.asyncio
 async def test_api_tasks_execute_jira_workflow_review_task_success(monkeypatch):
     from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     async def _fake_execute_runtime_task_request(**kwargs):
         return type(
@@ -898,6 +1021,7 @@ async def test_api_tasks_execute_jira_workflow_review_task_success(monkeypatch):
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
 
     class _Request:
+        headers = INTERNAL_HEADERS
         async def json(self):
             return {
                 "task_id": "task-2",
@@ -917,6 +1041,7 @@ async def test_api_tasks_execute_jira_workflow_review_task_success(monkeypatch):
 @pytest.mark.asyncio
 async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkeypatch):
     from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     captured = {}
     async def _fake_execute_runtime_task_request(**kwargs):
@@ -947,6 +1072,7 @@ async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkey
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
 
     class _Request:
+        headers = INTERNAL_HEADERS
         async def json(self):
             return {
                 "task_id": "gh-task-1",
@@ -969,10 +1095,12 @@ async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkey
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_missing_task_type_returns_400():
+async def test_api_tasks_execute_missing_task_type_returns_400(monkeypatch):
     from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     class _Request:
+        headers = INTERNAL_HEADERS
         async def json(self):
             return {
                 "task_id": "task-3",
@@ -986,10 +1114,12 @@ async def test_api_tasks_execute_missing_task_type_returns_400():
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_non_object_input_payload_returns_400():
+async def test_api_tasks_execute_non_object_input_payload_returns_400(monkeypatch):
     from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     class _Request:
+        headers = INTERNAL_HEADERS
         async def json(self):
             return {
                 "task_id": "task-4",
@@ -1004,10 +1134,12 @@ async def test_api_tasks_execute_non_object_input_payload_returns_400():
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_non_object_context_ref_returns_400():
+async def test_api_tasks_execute_non_object_context_ref_returns_400(monkeypatch):
     from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     class _Request:
+        headers = INTERNAL_HEADERS
         async def json(self):
             return {
                 "task_id": "task-4b",
@@ -1025,6 +1157,7 @@ async def test_api_tasks_execute_non_object_context_ref_returns_400():
 @pytest.mark.asyncio
 async def test_api_tasks_execute_blocked_result_returns_ok_false(monkeypatch):
     from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     async def _fake_execute_runtime_task_request(**kwargs):
         return type(
@@ -1044,6 +1177,7 @@ async def test_api_tasks_execute_blocked_result_returns_ok_false(monkeypatch):
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
 
     class _Request:
+        headers = INTERNAL_HEADERS
         async def json(self):
             return {
                 "task_id": "task-5",

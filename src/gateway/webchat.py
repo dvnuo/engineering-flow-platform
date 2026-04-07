@@ -6,6 +6,7 @@ UNIQUE_MARKER_12345
 """
 
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -182,6 +183,29 @@ def _parse_task_execute_request(data: Dict[str, Any]) -> Dict[str, Any]:
         "context_ref": dict(context_ref or {}),
         "metadata": dict(metadata),
     }
+
+
+def _get_runtime_internal_api_key() -> str:
+    env_key = str(os.getenv("RUNTIME_INTERNAL_API_KEY") or "").strip()
+    if env_key:
+        return env_key
+    config_key = global_config.get("server.runtime_internal_api_key", "")
+    return str(config_key or "").strip()
+
+
+def _build_internal_auth_error_response(status_code: int, message: str) -> web.Response:
+    return web.json_response({"error": message}, status=status_code)
+
+
+def _authorize_internal_runtime_request(request: web.Request) -> Optional[web.Response]:
+    expected_key = _get_runtime_internal_api_key()
+    if not expected_key:
+        return _build_internal_auth_error_response(503, "Runtime internal api key is not configured")
+    headers = getattr(request, "headers", {}) or {}
+    provided_key = str(headers.get("X-Internal-Api-Key") or "").strip()
+    if not provided_key or not hmac.compare_digest(provided_key, expected_key):
+        return _build_internal_auth_error_response(401, "Invalid internal api key")
+    return None
 
 
 def _json_compatible(value: Any) -> Any:
@@ -837,6 +861,9 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
     POST /api/tasks/execute
     """
     try:
+        auth_error = _authorize_internal_runtime_request(request)
+        if auth_error is not None:
+            return auth_error
         data = await request.json()
         parsed = _parse_task_execute_request(data)
 
@@ -920,6 +947,9 @@ async def api_capabilities(request: web.Request) -> web.Response:
     GET /api/capabilities?type=...&enabled=true|false&capability_id=...
     """
     try:
+        auth_error = _authorize_internal_runtime_request(request)
+        if auth_error is not None:
+            return auth_error
         registry = get_capability_registry()
         snapshot = (
             registry.export_catalog_snapshot()

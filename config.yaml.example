@@ -162,6 +162,7 @@ workspace:
 server:
   host: "0.0.0.0"  # Listen on all interfaces
   port: 8000       # Default port
+  runtime_internal_api_key: "change-me"  # Internal Portal -> Runtime control-plane key (X-Internal-Api-Key)
 
 # ============================================
 # Jira Configuration (OPTIONAL)
