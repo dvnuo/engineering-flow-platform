@@ -13,6 +13,72 @@ from src.runtime.leader_delegation_adapter import (
     normalize_leader_delegation_request,
 )
 
+ACTIVE_TASK_STATUSES = {"queued", "running", "blocked"}
+
+
+def _extract_deleted_task_agent_ids(payload: Any) -> List[str]:
+    if not isinstance(payload, dict):
+        return []
+    collected: List[str] = []
+
+    def _append(value: Any) -> None:
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized:
+                collected.append(normalized)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item.strip():
+                    collected.append(item.strip())
+
+    _append(payload.get("deleted_task_agent_ids"))
+    _append(payload.get("cleanup_deleted_task_agent_id"))
+    cleanup_payload = payload.get("cleanup") if isinstance(payload.get("cleanup"), dict) else {}
+    _append(cleanup_payload.get("deleted_task_agent_ids"))
+    delegation_result_payload = payload.get("delegation_result") if isinstance(payload.get("delegation_result"), dict) else {}
+    _append(delegation_result_payload.get("deleted_task_agent_ids"))
+
+    return collected
+
+
+def _dedupe_keep_order(values: List[str]) -> List[str]:
+    seen = set()
+    deduped: List[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            deduped.append(value)
+    return deduped
+
+
+async def _load_group_parallelism_budget(group_id: str) -> Dict[str, Any]:
+    outcome = await execute_adapter_action("adapter:portal:get_group_task_board", {"group_id": group_id})
+    if not outcome.get("success"):
+        return {"effective_max_parallel_tasks": None, "active_parallel_tasks": 0}
+    payload = outcome.get("result") if isinstance(outcome.get("result"), dict) else {}
+    raw_limit = payload.get("effective_max_parallel_tasks")
+    if raw_limit is None and isinstance(payload.get("policy"), dict):
+        raw_limit = payload.get("policy", {}).get("max_parallel_tasks")
+    try:
+        effective_limit = int(raw_limit) if raw_limit is not None else None
+    except Exception:
+        effective_limit = None
+    if effective_limit is not None and effective_limit <= 0:
+        effective_limit = None
+    active_count = 0
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    if summary:
+        active_count = sum(int(summary.get(status, 0) or 0) for status in ACTIVE_TASK_STATUSES)
+    else:
+        items = payload.get("items") if isinstance(payload.get("items"), list) else payload.get("tasks") if isinstance(payload.get("tasks"), list) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status") or "").strip().lower()
+            if status in ACTIVE_TASK_STATUSES:
+                active_count += 1
+    return {"effective_max_parallel_tasks": effective_limit, "active_parallel_tasks": active_count}
+
 
 def build_delegation_requests_from_task_breakdown(
     *,
@@ -89,6 +155,8 @@ async def dispatch_task_breakdown_as_delegations(
             created += 1
         else:
             failed += 1
+        result_payload = result.get("result") if isinstance(result.get("result"), dict) else {}
+        deleted_task_agent_ids.extend(_extract_deleted_task_agent_ids(result_payload))
         items.append({"payload": payload, "result": result})
     return {
         "success": failed == 0,
@@ -97,7 +165,7 @@ async def dispatch_task_breakdown_as_delegations(
         "items": items,
         "auto_selected_assignee_ids": auto_selected_assignee_ids,
         "created_task_agent_ids": created_task_agent_ids,
-        "deleted_task_agent_ids": deleted_task_agent_ids,
+        "deleted_task_agent_ids": _dedupe_keep_order(deleted_task_agent_ids),
         "selection_strategy_used": selection_strategy_used,
     }
 
@@ -474,13 +542,27 @@ async def run_delegation_cycle(
     for item in normalized_tasks:
         if isinstance(item, dict):
             enriched_tasks.append({**item, "coordination_run_id": run_id, "round_index": normalized_round, "leader_session_id": leader_session_id})
-    dispatch_result = {"success": True, "created": 0, "failed": 0, "items": []}
-    if enriched_tasks:
+    budget = await _load_group_parallelism_budget(group_id)
+    effective_max_parallel_tasks = budget.get("effective_max_parallel_tasks")
+    active_parallel_tasks = int(budget.get("active_parallel_tasks", 0))
+    deferred_tasks: List[Dict[str, Any]] = []
+    dispatch_tasks = list(enriched_tasks)
+    if isinstance(effective_max_parallel_tasks, int):
+        available_slots = effective_max_parallel_tasks - active_parallel_tasks
+        if available_slots <= 0:
+            deferred_tasks = list(enriched_tasks)
+            dispatch_tasks = []
+        elif available_slots < len(enriched_tasks):
+            dispatch_tasks = list(enriched_tasks[:available_slots])
+            deferred_tasks = list(enriched_tasks[available_slots:])
+
+    dispatch_result = {"success": True, "created": 0, "failed": 0, "items": [], "deleted_task_agent_ids": []}
+    if dispatch_tasks:
         dispatch_result = await dispatch_task_breakdown_as_delegations(
             group_id=group_id,
             leader_agent_id=leader_agent_id,
             leader_session_id=leader_session_id,
-            tasks=enriched_tasks,
+            tasks=dispatch_tasks,
         )
     run_state: Dict[str, Any] = {
         "coordination_run_id": run_id,
@@ -493,6 +575,14 @@ async def run_delegation_cycle(
         "has_blockers": False,
     }
     run_state = await load_coordination_run_state(group_id=group_id, coordination_run_id=run_id)
+
+    deleted_task_agent_ids: List[str] = list(dispatch_result.get("deleted_task_agent_ids", []))
+    deleted_task_agent_ids.extend(_extract_deleted_task_agent_ids(run_state))
+    if isinstance(run_state.get("summary"), dict):
+        deleted_task_agent_ids.extend(_extract_deleted_task_agent_ids(run_state.get("summary")))
+    for delegation_item in run_state.get("delegations") or []:
+        if isinstance(delegation_item, dict):
+            deleted_task_agent_ids.extend(_extract_deleted_task_agent_ids(delegation_item))
 
     combined_results = list(prior_results or []) + list(dispatch_result.get("items") or []) + list(run_state.get("delegations") or [])
     aggregate = aggregate_delegation_results(combined_results)
@@ -525,8 +615,11 @@ async def run_delegation_cycle(
         "items": list(dispatch_result.get("items", [])),
         "auto_selected_assignee_ids": list(dispatch_result.get("auto_selected_assignee_ids", [])),
         "created_task_agent_ids": list(dispatch_result.get("created_task_agent_ids", [])),
-        "deleted_task_agent_ids": list(dispatch_result.get("deleted_task_agent_ids", [])),
+        "deleted_task_agent_ids": _dedupe_keep_order(deleted_task_agent_ids),
         "selection_strategy_used": bool(dispatch_result.get("selection_strategy_used", False)),
+        "effective_max_parallel_tasks": effective_max_parallel_tasks,
+        "active_parallel_tasks": active_parallel_tasks,
+        "deferred_tasks": deferred_tasks,
         "aggregate": aggregate,
         "run_state": run_state,
         "is_complete": bool(completion_eval.get("is_complete")),

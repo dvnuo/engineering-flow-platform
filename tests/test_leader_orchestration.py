@@ -180,6 +180,26 @@ async def test_dispatch_task_breakdown_as_delegations_returns_batch_result(monke
     assert calls["task"] == 1
 
 
+@pytest.mark.asyncio
+async def test_dispatch_task_breakdown_collects_deleted_task_agent_ids_from_cleanup_metadata(monkeypatch):
+    async def _fake_specialist(payload):
+        return {
+            "success": True,
+            "delegation_id": "d-1",
+            "result": {"cleanup": {"deleted_task_agent_ids": ["ta-1"]}, "delegation_result": {"deleted_task_agent_ids": ["ta-2"]}},
+            "error": None,
+        }
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.create_specialist_delegation", _fake_specialist)
+    result = await dispatch_task_breakdown_as_delegations(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        leader_session_id="s-1",
+        tasks=[{"assignee_agent_id": "a-1", "objective": "Task 1"}],
+    )
+    assert result["deleted_task_agent_ids"] == ["ta-1", "ta-2"]
+
+
 def test_aggregate_delegation_results_done_and_blockers():
     aggregate_done = aggregate_delegation_results(
         [
@@ -399,6 +419,164 @@ async def test_run_delegation_cycle_evaluation_mode_loads_run_state(monkeypatch)
     assert result["run_state"]["latest_round_index"] == 2
     assert result["next_action"] == "continue"
     assert result["leader_summary"]["run_status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_run_delegation_cycle_merges_deleted_task_agent_ids_from_dispatch_and_run_state(monkeypatch):
+    async def _fake_dispatch(**_kwargs):
+        return {"success": True, "created": 1, "failed": 0, "items": [], "deleted_task_agent_ids": ["ta-dispatch"]}
+
+    async def _fake_load_state(*_args, **_kwargs):
+        return {
+            "coordination_run_id": "coord-1",
+            "status": "running",
+            "summary": {"deleted_task_agent_ids": ["ta-summary"]},
+            "delegations": [{"cleanup_deleted_task_agent_id": "ta-delegation"}],
+            "status_counts": {"queued": 0, "running": 1, "done": 0, "failed": 0, "other": 0},
+            "rounds": [1],
+            "latest_round_index": 1,
+            "all_terminal": False,
+            "all_done": False,
+            "has_blockers": False,
+            "completed_at": None,
+        }
+
+    async def _fake_board(_group_id):
+        return {"effective_max_parallel_tasks": None, "active_parallel_tasks": 0}
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.dispatch_task_breakdown_as_delegations", _fake_dispatch)
+    monkeypatch.setattr("src.runtime.leader_orchestration.load_coordination_run_state", _fake_load_state)
+    monkeypatch.setattr("src.runtime.leader_orchestration._load_group_parallelism_budget", _fake_board)
+    result = await run_delegation_cycle(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        leader_session_id="s-1",
+        tasks=[{"assignee_agent_id": "a-1", "objective": "Task"}],
+    )
+    assert result["deleted_task_agent_ids"] == ["ta-dispatch", "ta-summary", "ta-delegation"]
+
+
+@pytest.mark.asyncio
+async def test_run_delegation_cycle_throttles_dispatch_when_no_parallel_slots(monkeypatch):
+    async def _fake_dispatch(**_kwargs):
+        raise AssertionError("dispatch should not be called when no slots are available")
+
+    async def _fake_load_state(*_args, **_kwargs):
+        return {
+            "coordination_run_id": "coord-1",
+            "status": "running",
+            "summary": {},
+            "delegations": [],
+            "status_counts": {"queued": 0, "running": 1, "done": 0, "failed": 0, "other": 0},
+            "rounds": [1],
+            "latest_round_index": 1,
+            "all_terminal": False,
+            "all_done": False,
+            "has_blockers": False,
+            "completed_at": None,
+        }
+
+    async def _fake_board(_group_id):
+        return {"effective_max_parallel_tasks": 2, "active_parallel_tasks": 2}
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.dispatch_task_breakdown_as_delegations", _fake_dispatch)
+    monkeypatch.setattr("src.runtime.leader_orchestration.load_coordination_run_state", _fake_load_state)
+    monkeypatch.setattr("src.runtime.leader_orchestration._load_group_parallelism_budget", _fake_board)
+    result = await run_delegation_cycle(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        leader_session_id="s-1",
+        tasks=[{"assignee_agent_id": "a-1", "objective": "Task"}],
+    )
+    assert result["created"] == 0
+    assert len(result["deferred_tasks"]) == 1
+    assert result["effective_max_parallel_tasks"] == 2
+    assert result["active_parallel_tasks"] == 2
+
+
+@pytest.mark.asyncio
+async def test_run_delegation_cycle_throttles_dispatch_partial_slots(monkeypatch):
+    captured = {}
+
+    async def _fake_dispatch(**kwargs):
+        captured["tasks"] = kwargs["tasks"]
+        return {"success": True, "created": len(kwargs["tasks"]), "failed": 0, "items": []}
+
+    async def _fake_load_state(*_args, **_kwargs):
+        return {
+            "coordination_run_id": "coord-1",
+            "status": "running",
+            "summary": {},
+            "delegations": [],
+            "status_counts": {"queued": 0, "running": 1, "done": 0, "failed": 0, "other": 0},
+            "rounds": [1],
+            "latest_round_index": 1,
+            "all_terminal": False,
+            "all_done": False,
+            "has_blockers": False,
+            "completed_at": None,
+        }
+
+    async def _fake_board(_group_id):
+        return {"effective_max_parallel_tasks": 2, "active_parallel_tasks": 1}
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.dispatch_task_breakdown_as_delegations", _fake_dispatch)
+    monkeypatch.setattr("src.runtime.leader_orchestration.load_coordination_run_state", _fake_load_state)
+    monkeypatch.setattr("src.runtime.leader_orchestration._load_group_parallelism_budget", _fake_board)
+    result = await run_delegation_cycle(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        leader_session_id="s-1",
+        tasks=[
+            {"assignee_agent_id": "a-1", "objective": "Task 1"},
+            {"assignee_agent_id": "a-2", "objective": "Task 2"},
+        ],
+    )
+    assert len(captured["tasks"]) == 1
+    assert len(result["deferred_tasks"]) == 1
+    assert result["created"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_delegation_cycle_without_parallel_policy_keeps_behavior(monkeypatch):
+    captured = {}
+
+    async def _fake_dispatch(**kwargs):
+        captured["tasks"] = kwargs["tasks"]
+        return {"success": True, "created": len(kwargs["tasks"]), "failed": 0, "items": []}
+
+    async def _fake_load_state(*_args, **_kwargs):
+        return {
+            "coordination_run_id": "coord-1",
+            "status": "running",
+            "summary": {},
+            "delegations": [],
+            "status_counts": {"queued": 0, "running": 1, "done": 0, "failed": 0, "other": 0},
+            "rounds": [1],
+            "latest_round_index": 1,
+            "all_terminal": False,
+            "all_done": False,
+            "has_blockers": False,
+            "completed_at": None,
+        }
+
+    async def _fake_board(_group_id):
+        return {"effective_max_parallel_tasks": None, "active_parallel_tasks": 0}
+
+    monkeypatch.setattr("src.runtime.leader_orchestration.dispatch_task_breakdown_as_delegations", _fake_dispatch)
+    monkeypatch.setattr("src.runtime.leader_orchestration.load_coordination_run_state", _fake_load_state)
+    monkeypatch.setattr("src.runtime.leader_orchestration._load_group_parallelism_budget", _fake_board)
+    result = await run_delegation_cycle(
+        group_id="g-1",
+        leader_agent_id="leader-1",
+        leader_session_id="s-1",
+        tasks=[
+            {"assignee_agent_id": "a-1", "objective": "Task 1"},
+            {"assignee_agent_id": "a-2", "objective": "Task 2"},
+        ],
+    )
+    assert len(captured["tasks"]) == 2
+    assert result["deferred_tasks"] == []
 
 
 @pytest.mark.asyncio
