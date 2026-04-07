@@ -364,29 +364,165 @@ def _evaluate_capability_constraints(
     capability_type: Optional[str],
     action_id: Optional[str],
 ) -> Optional[Dict[str, str]]:
-    denied_capability_ids = _as_lower_str_list(metadata.get("denied_capability_ids"))
-    allowed_capability_ids = _as_lower_str_list(metadata.get("allowed_capability_ids"))
-    denied_capability_types = _as_lower_str_list(metadata.get("denied_capability_types"))
-    allowed_capability_types = _as_lower_str_list(metadata.get("allowed_capability_types"))
-    denied_adapter_actions = _as_lower_str_list(metadata.get("denied_adapter_actions"))
-    allowed_adapter_actions = _as_lower_str_list(metadata.get("allowed_adapter_actions"))
+    denied_capability_ids = _normalize_constraint_capability_ids(
+        metadata.get("denied_capability_ids"),
+        capability_type=capability_type,
+        action_id=action_id,
+    )
+    allowed_capability_ids = _normalize_constraint_capability_ids(
+        metadata.get("allowed_capability_ids"),
+        capability_type=capability_type,
+        action_id=action_id,
+    )
+    denied_capability_types = _normalize_constraint_capability_types(metadata.get("denied_capability_types"))
+    allowed_capability_types = _normalize_constraint_capability_types(metadata.get("allowed_capability_types"))
+    denied_adapter_actions = _normalize_action_constraints(
+        metadata.get("denied_adapter_actions"),
+        metadata.get("denied_actions"),
+    )
+    allowed_adapter_actions = _normalize_action_constraints(
+        metadata.get("allowed_adapter_actions"),
+        metadata.get("allowed_actions"),
+    )
 
     normalized_capability_id = str(capability_id or "").strip().lower()
     normalized_capability_type = str(capability_type or "").strip().lower()
     normalized_action_id = str(action_id or "").strip().lower()
+    normalized_action_name = normalized_action_id.split(":")[-1] if normalized_action_id else ""
 
-    if denied_capability_ids and normalized_capability_id and normalized_capability_id in denied_capability_ids:
+    if _matches_capability_constraint(
+        constraints=denied_capability_ids,
+        capability_id=normalized_capability_id,
+        capability_type=normalized_capability_type,
+        action_name=normalized_action_name,
+    ):
         return {"reason": "denied_capability_ids", "message": f"Capability blocked: {normalized_capability_id}"}
     if denied_capability_types and normalized_capability_type and normalized_capability_type in denied_capability_types:
         return {"reason": "denied_capability_types", "message": f"Capability type blocked: {normalized_capability_type}"}
-    if denied_adapter_actions and normalized_action_id and normalized_action_id in denied_adapter_actions:
+    if _matches_action_constraint(
+        constraints=denied_adapter_actions,
+        action_id=normalized_action_id,
+        action_name=normalized_action_name,
+    ):
         return {"reason": "denied_adapter_actions", "message": f"Adapter action blocked: {normalized_action_id}"}
 
-    if allowed_capability_ids and (not normalized_capability_id or normalized_capability_id not in allowed_capability_ids):
+    if allowed_capability_ids and not _matches_capability_constraint(
+        constraints=allowed_capability_ids,
+        capability_id=normalized_capability_id,
+        capability_type=normalized_capability_type,
+        action_name=normalized_action_name,
+    ):
         return {"reason": "allowed_capability_ids", "message": "Capability not in allowlist"}
     if allowed_capability_types and (not normalized_capability_type or normalized_capability_type not in allowed_capability_types):
         return {"reason": "allowed_capability_types", "message": "Capability type not in allowlist"}
-    if allowed_adapter_actions and (not normalized_action_id or normalized_action_id not in allowed_adapter_actions):
+    if allowed_adapter_actions and not _matches_action_constraint(
+        constraints=allowed_adapter_actions,
+        action_id=normalized_action_id,
+        action_name=normalized_action_name,
+    ):
         return {"reason": "allowed_adapter_actions", "message": "Adapter action not in allowlist"}
 
     return None
+
+
+def evaluate_capability_constraint_decision(
+    *,
+    metadata: Dict[str, Any],
+    capability_id: Optional[str],
+    capability_type: Optional[str],
+    action_id: Optional[str],
+) -> Optional[Dict[str, str]]:
+    return _evaluate_capability_constraints(
+        metadata=metadata,
+        capability_id=capability_id,
+        capability_type=capability_type,
+        action_id=action_id,
+    )
+
+
+def _normalize_constraint_capability_ids(value: Any, *, capability_type: Optional[str], action_id: Optional[str]) -> list[str]:
+    entries = _as_lower_str_list(value)
+    normalized: list[str] = []
+    for entry in entries:
+        if ":" in entry:
+            normalized.append(entry)
+            continue
+        expanded = _expand_capability_name_candidates(
+            entry,
+            capability_type=capability_type,
+            action_id=action_id,
+        )
+        normalized.extend(expanded)
+    return sorted(set(normalized))
+
+
+def _normalize_constraint_capability_types(value: Any) -> list[str]:
+    alias_map = {
+        "action": "adapter_action",
+        "adapter": "adapter_action",
+        "channel": "channel_action",
+        "tool": "tool",
+        "skill": "skill",
+        "adapter_action": "adapter_action",
+        "channel_action": "channel_action",
+    }
+    normalized: list[str] = []
+    for item in _as_lower_str_list(value):
+        mapped = alias_map.get(item)
+        if mapped:
+            normalized.append(mapped)
+    return sorted(set(normalized))
+
+
+def _expand_capability_name_candidates(
+    name: str,
+    *,
+    capability_type: Optional[str],
+    action_id: Optional[str],
+) -> list[str]:
+    normalized_name = str(name or "").strip().lower()
+    normalized_type = str(capability_type or "").strip().lower()
+    if not normalized_name:
+        return []
+    if normalized_type == "tool":
+        return [f"tool:{normalized_name}"]
+    if normalized_type == "skill":
+        return [f"skill:{normalized_name}"]
+    if normalized_type == "channel_action":
+        return [f"channel_action:{normalized_name}"]
+    if normalized_type == "adapter_action":
+        return [f"adapter_action_name:{normalized_name}"]
+    if str(action_id or "").strip().lower():
+        return [f"adapter_action_name:{normalized_name}"]
+    return [normalized_name]
+
+
+def _normalize_action_constraints(*values: Any) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        normalized.extend(_as_lower_str_list(value))
+    return sorted(set(normalized))
+
+
+def _matches_capability_constraint(
+    *,
+    constraints: list[str],
+    capability_id: str,
+    capability_type: str,
+    action_name: str,
+) -> bool:
+    if not constraints:
+        return False
+    for constraint in constraints:
+        if constraint == capability_id:
+            return True
+        if constraint.startswith("adapter_action_name:") and capability_type == "adapter_action":
+            if constraint.split(":", 1)[1] == action_name:
+                return True
+    return False
+
+
+def _matches_action_constraint(*, constraints: list[str], action_id: str, action_name: str) -> bool:
+    if not constraints:
+        return False
+    return action_id in constraints or action_name in constraints

@@ -2630,3 +2630,76 @@ async def test_execution_bus_task_capability_unresolved_fallback_for_non_adapter
     result = await bus.execute(req)
     assert result.status == "success"
     assert result.output_payload["capability_resolution"] == "unresolved"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_includes_involved_capability_ids(monkeypatch):
+    async def _fake_execute_adapter_action(action_id, _kwargs):
+        if action_id == "adapter:github:review_pull_request":
+            return {"success": True, "result": {"summary": "ok"}, "error": None, "runtime_events": []}
+        return {"success": True, "result": {"comment_id": "c1"}, "error": None, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.execution_bus.execute_adapter_action", _fake_execute_adapter_action)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 7},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert "adapter:github:review_pull_request" in result.output_payload["involved_capability_ids"]
+    assert "adapter:github:add_comment" in result.output_payload["involved_capability_ids"]
+
+
+@pytest.mark.asyncio
+async def test_jira_workflow_review_task_includes_involved_capability_ids(monkeypatch):
+    async def _fake_run_review(_payload):
+        return {"success": True, "workflow_outcome": "approved", "actions_applied": [], "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_jira_workflow_review", _fake_run_review)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={
+            "task_type": "jira_workflow_review_task",
+            "issue_key": "ENG-3",
+            "success_transition": "Done",
+            "explicit_success_assignee": "u1",
+            "review_comment": "LGTM",
+            "fields": {"summary": "x"},
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    involved = set(result.output_payload["involved_capability_ids"])
+    assert {"adapter:jira:read_issue", "adapter:jira:transition_issue", "adapter:jira:assign_issue", "adapter:jira:add_comment", "adapter:jira:update_issue"}.issubset(involved)
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_secondary_action_denied_by_capability_policy(monkeypatch):
+    calls = []
+
+    async def _fake_execute_adapter_action(action_id, _kwargs):
+        calls.append(action_id)
+        if action_id == "adapter:github:review_pull_request":
+            return {"success": True, "result": {"summary": "ok"}, "error": None, "runtime_events": []}
+        raise AssertionError("secondary action should be blocked before execution")
+
+    monkeypatch.setattr("src.runtime.execution_bus.execute_adapter_action", _fake_execute_adapter_action)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 7},
+        metadata={"denied_actions": ["add_comment"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["secondary_action_attempted"] is True
+    assert result.output_payload["secondary_action_success"] is False
+    assert result.output_payload["secondary_action_id"] == "adapter:github:add_comment"
+    assert "capability policy blocked for secondary action" in str(result.output_payload["error"])
+    assert any(evt.get("event_type") == "task.github_review.secondary_action.blocked" for evt in result.runtime_events)
+    assert calls == ["adapter:github:review_pull_request"]

@@ -367,3 +367,70 @@ async def test_default_governance_malformed_capability_lists_do_not_crash():
     )
     result = await bus.execute(req)
     assert result.status in {"success", "error", "blocked"}
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_bare_tool_capability_name():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "tool_task", "tool_name": "shell", "kwargs": {"cmd": "echo hi"}},
+        metadata={"allowed_capability_ids": ["shell"]},
+    )
+    result = await bus.execute(req)
+    assert result.status in {"success", "error"}
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_capability_type_alias_action():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:read_issue", "kwargs": {"issue_key": "ENG-1"}},
+        metadata={"allowed_capability_types": ["action"]},
+    )
+    result = await bus.execute(req)
+    assert result.status in {"success", "error"}
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_capability_type_alias_channel():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:jira:read_issue", "kwargs": {"issue_key": "ENG-1"}},
+        metadata={"allowed_capability_types": ["channel"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_capability_types"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allowed_actions_alias_supports_action_name():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:github:add_comment", "kwargs": {"owner": "acme", "repo": "demo", "pull_number": 1, "comment": "ok"}},
+        metadata={"allowed_actions": ["add_comment"]},
+    )
+    result = await bus.execute(req)
+    assert result.status in {"success", "error"}
+
+
+@pytest.mark.asyncio
+async def test_default_governance_denied_actions_alias_blocks_by_action_name():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:github:add_comment", "kwargs": {"owner": "acme", "repo": "demo", "pull_number": 1, "comment": "ok"}},
+        metadata={"denied_actions": ["add_comment"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "denied_adapter_actions"
