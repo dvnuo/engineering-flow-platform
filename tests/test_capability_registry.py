@@ -60,6 +60,9 @@ def test_default_registry_includes_skill_and_adapter_capabilities():
     assert any(item.capability_id == "adapter:portal:get_specialist_pool" for item in adapters)
     assert any(item.capability_id == "adapter:portal:create_task_agent" for item in adapters)
     assert any(item.capability_id == "adapter:portal:delete_task_agent" for item in adapters)
+    create_task_agent_descriptor = next(item for item in adapters if item.capability_id == "adapter:portal:create_task_agent")
+    required = set(create_task_agent_descriptor.input_schema.get("required", []))
+    assert {"group_id", "leader_agent_id", "template_agent_id", "name"}.issubset(required)
     portal_actions = [item for item in adapters if item.capability_id.startswith("adapter:portal:")]
     assert portal_actions
     assert all(item.metadata.get("internal_portal_api") is True for item in portal_actions)

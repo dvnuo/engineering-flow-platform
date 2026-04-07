@@ -373,10 +373,21 @@ async def execute_portal_control_plane_action(action_name: str, kwargs: Dict[str
             _build_portal_headers(),
         )
     elif action == "create_task_agent":
-        group_id = str(payload.get("group_id") or "").strip()
-        if not group_id:
-            return {"success": False, "error": "group_id is required", "system": "portal", "action_name": action, "result": None}
+        required_fields = ("group_id", "leader_agent_id", "template_agent_id", "name")
+        normalized_required = {key: str(payload.get(key) or "").strip() for key in required_fields}
+        missing = [key for key in required_fields if not normalized_required.get(key)]
+        if missing:
+            return {
+                "success": False,
+                "error": f"Missing required fields: {', '.join(missing)}",
+                "system": "portal",
+                "action_name": action,
+                "result": None,
+            }
+        group_id = normalized_required["group_id"]
         normalized_payload = dict(payload)
+        for key, value in normalized_required.items():
+            normalized_payload[key] = value
         for key in ("capabilities", "constraints", "metadata", "tags", "runtime_config"):
             if key in normalized_payload:
                 normalized_payload[key] = _normalize_json_field(normalized_payload.get(key))

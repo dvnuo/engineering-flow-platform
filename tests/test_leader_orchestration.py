@@ -1,6 +1,7 @@
 import pytest
 
 from src.runtime.leader_delegation_adapter import (
+    create_task_agent_for_group,
     create_specialist_delegation,
     create_task_agent_delegation,
     normalize_leader_delegation_request,
@@ -584,3 +585,29 @@ async def test_dispatch_task_breakdown_task_mode_existing_ephemeral_bypasses_sel
     assert result["success"] is True
     assert result["created_task_agent_ids"] == []
     assert result["auto_selected_assignee_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_breakdown_task_mode_blank_leader_agent_id_fails_before_create():
+    with pytest.raises(ValueError, match="leader_agent_id is required for task agent creation"):
+        await dispatch_task_breakdown_as_delegations(
+            group_id="g-1",
+            leader_agent_id="",
+            leader_session_id="s-1",
+            tasks=[{"agent_mode": "task", "template_agent_id": "tmpl-1", "objective": "Task"}],
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_task_agent_for_group_missing_required_fields():
+    missing_leader = await create_task_agent_for_group(
+        {"group_id": "g-1", "template_agent_id": "tmpl-1", "name": "ta-1"}
+    )
+    assert missing_leader["success"] is False
+    assert "leader_agent_id" in missing_leader["error"]
+
+    missing_template = await create_task_agent_for_group(
+        {"group_id": "g-1", "leader_agent_id": "leader-1", "name": "ta-1"}
+    )
+    assert missing_template["success"] is False
+    assert "template_agent_id" in missing_template["error"]

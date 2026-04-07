@@ -119,9 +119,12 @@ async def get_group_specialist_pool(group_id: str) -> Dict[str, Any]:
 
 async def create_task_agent_for_group(payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized = dict(payload or {})
-    normalized["group_id"] = str(normalized.get("group_id") or "").strip()
-    if not normalized["group_id"]:
-        return {"success": False, "error": "group_id is required", "result": None}
+    required_fields = ("group_id", "leader_agent_id", "template_agent_id", "name")
+    for key in required_fields:
+        normalized[key] = str(normalized.get(key) or "").strip()
+    missing = [key for key in required_fields if not normalized.get(key)]
+    if missing:
+        return {"success": False, "error": f"Missing required fields: {', '.join(missing)}", "result": None}
     outcome = await execute_adapter_action("adapter:portal:create_task_agent", normalized)
     return {"success": bool(outcome.get("success")), "error": outcome.get("error"), "result": outcome.get("result")}
 

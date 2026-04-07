@@ -214,12 +214,15 @@ async def _prepare_task_for_delegation(
         if existing_task_agent_id:
             task_agent_id = existing_task_agent_id
         else:
+            normalized_leader_agent_id = str(leader_agent_id or "").strip()
+            if not normalized_leader_agent_id:
+                raise ValueError("leader_agent_id is required for task agent creation")
             resolved_scope_for_create = str(
                 normalized_task.get("task_agent_scope_label") or normalized_task.get("scope_label") or f"session:{leader_session_id}"
             ).strip()
             create_payload = {
                 "group_id": group_id,
-                "leader_agent_id": leader_agent_id,
+                "leader_agent_id": normalized_leader_agent_id,
                 "template_agent_id": template_agent_id,
                 "name": normalized_task.get("name") or f"task-agent-{leader_session_id}",
                 "scope_label": resolved_scope_for_create,

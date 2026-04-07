@@ -209,7 +209,14 @@ async def test_execute_adapter_action_portal_create_task_agent_uses_post_and_nor
 
     result = await execute_adapter_action(
         "adapter:portal:create_task_agent",
-        {"group_id": "group-1", "template_agent_id": "tmpl-1", "metadata": {"scope": "x"}, "tags": ["runtime"]},
+        {
+            "group_id": "group-1",
+            "leader_agent_id": "leader-1",
+            "template_agent_id": "tmpl-1",
+            "name": "task-agent-1",
+            "metadata": {"scope": "x"},
+            "tags": ["runtime"],
+        },
     )
 
     assert result["success"] is True
@@ -217,6 +224,21 @@ async def test_execute_adapter_action_portal_create_task_agent_uses_post_and_nor
     assert isinstance(captured["payload"]["metadata"], str)
     assert isinstance(captured["payload"]["tags"], str)
     assert captured["headers"]["X-Internal-Api-Key"] == "k-1"
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_portal_create_task_agent_missing_leader_rejected_before_http(monkeypatch):
+    async def _fake_post(_url, _payload, _headers):
+        raise AssertionError("HTTP should not be called when required fields are missing")
+
+    monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.internal")
+    monkeypatch.setattr("src.runtime.adapter_executor._post_portal_json", _fake_post)
+    result = await execute_adapter_action(
+        "adapter:portal:create_task_agent",
+        {"group_id": "group-1", "template_agent_id": "tmpl-1", "name": "task-agent-1"},
+    )
+    assert result["success"] is False
+    assert "leader_agent_id" in result["error"]
 
 
 @pytest.mark.asyncio
