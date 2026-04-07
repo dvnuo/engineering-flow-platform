@@ -662,6 +662,21 @@ def _record_secondary_action_decision(
     )
 
 
+def _build_secondary_governance_summary(
+    *,
+    governed_secondary_action_ids: list[str],
+    blocked_secondary_action_ids: list[str],
+    applied_secondary_action_ids: list[str],
+    secondary_action_decisions: list[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "governed_secondary_action_ids": sorted(set(governed_secondary_action_ids)),
+        "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
+        "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
+        "secondary_action_decisions": list(secondary_action_decisions),
+    }
+
+
 def _as_dict(value: Any) -> dict:
     return dict(value) if isinstance(value, dict) else {}
 
@@ -1548,6 +1563,12 @@ def build_default_execution_bus(
                         reason="not_invoked",
                         success=False,
                     )
+            secondary_summary = _build_secondary_governance_summary(
+                governed_secondary_action_ids=governed_secondary_action_ids,
+                blocked_secondary_action_ids=blocked_secondary_action_ids,
+                applied_secondary_action_ids=applied_secondary_action_ids,
+                secondary_action_decisions=secondary_action_decisions,
+            )
             runtime_events.append(
                 build_runtime_event(
                     event_type="task.jira_workflow_review.completed" if workflow_result.get("success") else "task.jira_workflow_review.failed",
@@ -1567,10 +1588,7 @@ def build_default_execution_bus(
                         "capability_resolution": capability.get("capability_resolution"),
                         "involved_capability_ids": involved_capability_ids,
                         "involved_action_ids": involved_action_ids,
-                        "governed_secondary_action_ids": governed_secondary_action_ids,
-                        "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
-                        "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
-                        "secondary_action_decisions": secondary_action_decisions,
+                        **secondary_summary,
                         "issue_key": workflow_result.get("issue_key"),
                         "skill_name": workflow_result.get("skill_name") or workflow_payload.get("skill_name"),
                         "workflow_outcome": workflow_result.get("workflow_outcome"),
@@ -1599,10 +1617,7 @@ def build_default_execution_bus(
                     "capability_resolution": capability.get("capability_resolution"),
                     "involved_capability_ids": involved_capability_ids,
                     "involved_action_ids": involved_action_ids,
-                    "governed_secondary_action_ids": governed_secondary_action_ids,
-                    "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
-                    "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
-                    "secondary_action_decisions": secondary_action_decisions,
+                    **secondary_summary,
                     "resolved_skill_capability_id": f"skill:{str(workflow_payload.get('skill_name') or '').strip().lower()}" if workflow_payload.get("skill_name") else None,
                     "workflow_outcome": workflow_result.get("workflow_outcome"),
                     "actions_applied": workflow_result.get("actions_applied") or [],
@@ -1746,6 +1761,12 @@ def build_default_execution_bus(
                     reason="primary_action_failed",
                     success=False,
                 )
+            secondary_summary = _build_secondary_governance_summary(
+                governed_secondary_action_ids=governed_secondary_action_ids,
+                blocked_secondary_action_ids=blocked_secondary_action_ids,
+                applied_secondary_action_ids=applied_secondary_action_ids,
+                secondary_action_decisions=secondary_action_decisions,
+            )
 
             success_value = bool(review_result.get("success")) and comment_written and not error_value
             runtime_events.append(
@@ -1767,10 +1788,7 @@ def build_default_execution_bus(
                         "capability_resolution": capability.get("capability_resolution"),
                         "involved_capability_ids": involved_capability_ids,
                         "involved_action_ids": involved_action_ids,
-                        "governed_secondary_action_ids": governed_secondary_action_ids,
-                        "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
-                        "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
-                        "secondary_action_decisions": secondary_action_decisions,
+                        **secondary_summary,
                         "owner": owner,
                         "repo": repo,
                         "pull_number": pull_number,
@@ -1804,10 +1822,7 @@ def build_default_execution_bus(
                     "capability_resolution": capability.get("capability_resolution"),
                     "involved_capability_ids": involved_capability_ids,
                     "involved_action_ids": involved_action_ids,
-                    "governed_secondary_action_ids": governed_secondary_action_ids,
-                    "blocked_secondary_action_ids": sorted(set(blocked_secondary_action_ids)),
-                    "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
-                    "secondary_action_decisions": secondary_action_decisions,
+                    **secondary_summary,
                     "secondary_action_attempted": secondary_action_attempted,
                     "secondary_action_id": secondary_action_id,
                     "secondary_action_success": secondary_action_success,

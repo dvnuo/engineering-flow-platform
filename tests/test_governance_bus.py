@@ -469,3 +469,23 @@ async def test_default_governance_portal_style_metadata_combo_blocks_when_action
     result = await bus.execute(req)
     assert result.status == "blocked"
     assert result.output_payload["reason"] == "allowed_adapter_actions"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_portal_style_metadata_ignores_explainability_fields():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "adapter_action_task", "action_id": "adapter:github:add_comment", "kwargs": {"owner": "acme", "repo": "demo", "pull_number": 1, "comment": "ok"}},
+        metadata={
+            "capability_profile_id": "cap-2",
+            "policy_profile_id": "policy-2",
+            "allowed_capability_types": ["action"],
+            "allowed_actions": ["add_comment"],
+            "unresolved_actions": ["legacy_comment_action"],
+            "resolved_action_mappings": {"legacy_comment_action": "adapter:github:add_comment"},
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status in {"success", "error"}

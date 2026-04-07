@@ -2858,3 +2858,70 @@ async def test_jira_workflow_review_task_comment_denied_has_governance_audit_eve
     result = await bus.execute(req)
     assert result.status == "success"
     assert any(evt.get("event_type") == "governance.audit" for evt in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_portal_style_metadata_with_explainability_fields(monkeypatch):
+    async def _fake_execute_adapter_action(action_id, _kwargs):
+        if action_id == "adapter:github:review_pull_request":
+            return {"success": True, "result": {"summary": "ok"}, "error": None, "runtime_events": []}
+        return {"success": True, "result": {"id": "c2"}, "error": None, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.execution_bus.execute_adapter_action", _fake_execute_adapter_action)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 10},
+        metadata={
+            "capability_profile_id": "cap-1",
+            "policy_profile_id": "policy-1",
+            "allowed_capability_ids": ["adapter:github:review_pull_request", "adapter:github:add_comment"],
+            "allowed_capability_types": ["action"],
+            "allowed_actions": ["review_pull_request", "add_comment"],
+            "allowed_adapter_actions": ["adapter:github:review_pull_request", "adapter:github:add_comment"],
+            "unresolved_actions": ["foo_action"],
+            "resolved_action_mappings": {"foo_action": "adapter:github:add_comment"},
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert result.output_payload["secondary_action_decisions"][0]["decision"] == "applied"
+
+
+@pytest.mark.asyncio
+async def test_jira_workflow_review_task_portal_style_metadata_deny_transition(monkeypatch):
+    async def _fake_run_review(payload):
+        gate = payload["_action_gate"]
+        gate_result = gate("transition_issue", {"issue_key": payload["issue_key"], "transition": "Done"})
+        return {
+            "success": True,
+            "issue_key": payload["issue_key"],
+            "workflow_outcome": "approved",
+            "approved": True,
+            "actions_applied": [{"action": "transition_issue", "success": False, "blocked": True, "error": gate_result.get("error")}],
+            "runtime_events": [],
+            "error": None,
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_jira_workflow_review", _fake_run_review)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "jira_workflow_review_task", "issue_key": "ENG-53", "success_transition": "Done"},
+        metadata={
+            "capability_profile_id": "cap-jira",
+            "policy_profile_id": "policy-jira",
+            "allowed_capability_ids": ["adapter:jira:read_issue"],
+            "allowed_capability_types": ["action"],
+            "denied_actions": ["transition_issue"],
+            "unresolved_actions": ["old_transition"],
+            "resolved_action_mappings": {"old_transition": "adapter:jira:transition_issue"},
+        },
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert "adapter:jira:transition_issue" in result.output_payload["blocked_secondary_action_ids"]
+    assert any(item.get("decision") == "blocked" for item in result.output_payload["secondary_action_decisions"])
+    assert any(evt.get("event_type") == "governance.audit" for evt in result.runtime_events)
