@@ -1,4 +1,5 @@
 import pytest
+from uuid import uuid4
 
 from src.runtime.contracts import make_execution_result
 from src.runtime.portal_session_metadata_client import (
@@ -129,6 +130,37 @@ def test_build_session_metadata_payload_supports_portal_alias_fallbacks():
     assert payload["current_delegation_id"] == "d-legacy"
     assert payload["current_coordination_run_id"] == "c-legacy"
     assert payload["source_ref"] == "t-legacy"
+
+
+def test_build_session_metadata_payload_stringifies_id_like_top_level_fields_for_canonical_and_alias_values():
+    canonical_coordination = uuid4()
+    alias_delegation = uuid4()
+    alias_source = uuid4()
+
+    payload = build_session_metadata_payload(
+        last_execution_id="exec-5",
+        latest_event_type="task.completed",
+        latest_event_state="success",
+        snapshot_version=None,
+        runtime_events=[],
+        metadata={
+            "group_id": 123,
+            "portal_group_id": "legacy-group",
+            "current_task_id": 456,
+            "portal_task_id": 789,
+            "portal_delegation_id": alias_delegation,
+            "current_coordination_run_id": canonical_coordination,
+            "portal_coordination_run_id": "legacy-coordination",
+            "source_ref": alias_source,
+            "task_id": "task-fallback",
+        },
+    )
+
+    assert payload["group_id"] == "123"
+    assert payload["current_task_id"] == "456"
+    assert payload["current_delegation_id"] == str(alias_delegation)
+    assert payload["current_coordination_run_id"] == str(canonical_coordination)
+    assert payload["source_ref"] == str(alias_source)
 
 
 def test_extract_session_metadata_publish_fields_prefers_latest_runtime_event():

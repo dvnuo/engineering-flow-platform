@@ -11,7 +11,7 @@ async def test_jira_reconciliation_consumes_portal_contract_and_posts_ingress_pa
     runner = jira_reconciliation.JiraReconciliationRunner()
     posts = []
 
-    async def _fake_get_json(path):
+    async def _fake_get_json(path, *, session=None):
         if path.endswith("workflow-transition-rules"):
             return {
                 "items": [
@@ -29,7 +29,7 @@ async def test_jira_reconciliation_consumes_portal_contract_and_posts_ingress_pa
             return {"items": [{"agent_id": "a-1", "provider_type": "jira"}]}
         raise AssertionError("unexpected path")
 
-    async def _fake_post_json(path, payload):
+    async def _fake_post_json(path, payload, *, session=None):
         posts.append((path, payload))
 
     async def _fake_search_issues(jql, max_results=50):
@@ -79,7 +79,7 @@ async def test_jira_reconciliation_issue_failure_does_not_break_loop(monkeypatch
     runner = jira_reconciliation.JiraReconciliationRunner()
     posts = []
 
-    async def _fake_get_json(path):
+    async def _fake_get_json(path, *, session=None):
         if path.endswith("workflow-transition-rules"):
             return {
                 "items": [
@@ -94,7 +94,7 @@ async def test_jira_reconciliation_issue_failure_does_not_break_loop(monkeypatch
             }
         return {"items": []}
 
-    async def _fake_post_json(path, payload):
+    async def _fake_post_json(path, payload, *, session=None):
         if payload["issue_key"] == "ENG-1":
             raise RuntimeError("boom")
         posts.append((path, payload))
@@ -116,6 +116,69 @@ async def test_jira_reconciliation_issue_failure_does_not_break_loop(monkeypatch
 
     assert len(posts) == 1
     assert posts[0][1]["issue_key"] == "ENG-2"
+
+
+@pytest.mark.asyncio
+async def test_jira_reconciliation_reuses_single_client_session_per_run(monkeypatch):
+    from src.cron import jira_reconciliation
+
+    runner = jira_reconciliation.JiraReconciliationRunner()
+    session_constructors = []
+    sessions_seen = []
+    posts = []
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    def _fake_client_session(*args, **kwargs):
+        session = _FakeSession()
+        session_constructors.append(session)
+        return session
+
+    async def _fake_get_json(path, *, session=None):
+        sessions_seen.append(session)
+        if path.endswith("workflow-transition-rules"):
+            return {
+                "items": [
+                    {
+                        "id": "r-1",
+                        "system_type": "jira",
+                        "is_enabled": True,
+                        "project_key": "ENG",
+                        "trigger_status": "In Progress",
+                    }
+                ]
+            }
+        return {"items": [{"agent_id": "a-1", "provider_type": "jira"}]}
+
+    async def _fake_post_json(path, payload, *, session=None):
+        sessions_seen.append(session)
+        posts.append((path, payload))
+
+    async def _fake_search_issues(_jql, max_results=50):
+        return {
+            "issues": [
+                {"key": "ENG-1", "fields": {"project": {"key": "ENG"}, "issuetype": {"name": "Bug"}, "status": {"name": "In Progress"}}},
+                {"key": "ENG-2", "fields": {"project": {"key": "ENG"}, "issuetype": {"name": "Task"}, "status": {"name": "In Progress"}}},
+            ]
+        }
+
+    monkeypatch.setattr("src.cron.jira_reconciliation.ClientSession", _fake_client_session)
+    monkeypatch.setattr(runner, "_get_json", _fake_get_json)
+    monkeypatch.setattr(runner, "_post_json", _fake_post_json)
+    monkeypatch.setattr("src.cron.jira_reconciliation.jira_channel.search_issues", _fake_search_issues)
+    monkeypatch.setattr(runner, "_base_url", lambda: "https://portal.internal")
+
+    await runner.reconcile_once()
+
+    assert len(session_constructors) == 1
+    assert sessions_seen
+    assert all(session is session_constructors[0] for session in sessions_seen)
+    assert [payload["issue_key"] for _, payload in posts] == ["ENG-1", "ENG-2"]
 
 
 def test_build_external_event_ingress_request_shape():

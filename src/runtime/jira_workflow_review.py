@@ -89,6 +89,26 @@ async def run_jira_workflow_review(payload: Dict[str, Any]) -> Dict[str, Any]:
             issue_snapshot=issue_snapshot,
             skill_name=plan.skill_name,
         )
+    if outcome.outcome_type == "failed":
+        normalized_error = outcome.summary or "review_skill_failed"
+        return _build_failure(
+            issue_key=plan.issue_key,
+            error=normalized_error,
+            actions_applied=actions_applied,
+            workflow_outcome="failed",
+            approved=None,
+            issue_snapshot=issue_snapshot,
+            skill_name=plan.skill_name,
+            reassignment_target=None,
+            runtime_events=[
+                _event(
+                    "task.jira_workflow_review.failed",
+                    "failed",
+                    plan.issue_key,
+                    {"error": normalized_error, "skill_name": plan.skill_name},
+                )
+            ],
+        )
 
     action_plan = derive_workflow_actions_from_outcome(plan=plan, outcome=outcome, issue_snapshot=issue_snapshot)
 
@@ -248,11 +268,23 @@ async def _resolve_review_outcome(plan, issue_snapshot: Any) -> JiraWorkflowRevi
     }
     skill_result = await execute_skill(plan.skill_name, _use_execution_bus=True, **skill_kwargs)
     if not getattr(skill_result, "success", False):
+        raw_error = getattr(skill_result, "error", None)
+        raw_output = getattr(skill_result, "output", "")
+        normalized_error = ""
+        if isinstance(raw_error, str) and raw_error.strip():
+            normalized_error = raw_error.strip()
+        elif raw_error:
+            normalized_error = str(raw_error).strip()
+        if not normalized_error:
+            if isinstance(raw_output, str) and raw_output.strip():
+                normalized_error = raw_output.strip()
+            else:
+                normalized_error = "Jira workflow review skill failed without an explicit error"
         return JiraWorkflowReviewOutcome(
-            approved=False,
-            outcome_type="rejected",
-            summary=getattr(skill_result, "error", None),
-            comment=getattr(skill_result, "error", None),
+            approved=None,
+            outcome_type="failed",
+            summary=normalized_error,
+            comment=None,
             data=getattr(skill_result, "data", {}) if isinstance(getattr(skill_result, "data", None), dict) else {},
         )
     return normalize_skill_review_outcome(skill_result)
