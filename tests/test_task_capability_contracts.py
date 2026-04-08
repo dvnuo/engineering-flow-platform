@@ -42,6 +42,16 @@ def test_resolve_task_capability_contract_github_review_task():
     assert plan["primary_capability_id"] == "skill:review-pull-request"
     assert plan["capability_id"] == "skill:review-pull-request"
     assert plan["action_id"] == "skill:review-pull-request"
+    assert plan["involved_capability_ids"] == ["adapter:github:review_pull_request", "skill:review-pull-request"]
+
+
+def test_resolve_task_capability_contract_github_review_task_issue_comment_fallback():
+    plan = resolve_task_capability_contract(
+        "github_review_task",
+        {"owner": "acme", "repo": "demo", "pull_number": 7, "writeback_mode": "issue_comment"},
+    )
+
+    assert plan["primary_capability_id"] == "skill:review-pull-request"
     assert plan["involved_capability_ids"] == ["adapter:github:add_comment", "skill:review-pull-request"]
 
 

@@ -395,6 +395,10 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
             plan = resolve_task_capability_contract(task_type, payload)
             capability_id = str(plan.get("primary_capability_id") or plan.get("capability_id") or "").strip().lower() or None
             action_id = str(plan.get("action_id") or capability_id or "").strip().lower() or None
+            if task_type == "github_review_task":
+                # Secondary adapter actions for this wrapper task are gated at invocation
+                # time inside the runtime handler rather than at task admission.
+                action_id = None
         elif task_type == "tool_task":
             tool_name = str(payload.get("tool_name") or "").strip().lower()
             capability_id = f"tool:{tool_name}" if tool_name else None
@@ -407,6 +411,8 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
 
     descriptor = get_capability_registry().get(capability_id) if capability_id else None
     capability_type = descriptor.type if descriptor is not None else _infer_capability_type_from_id(capability_id)
+    if request.execution_type == "task" and task_type == "github_review_task":
+        capability_type = "adapter_action"
     return {
         "capability_id": capability_id,
         "capability_type": capability_type,
@@ -470,7 +476,7 @@ def _evaluate_capability_constraints(
         return {"reason": "denied_capability_ids", "message": f"Capability blocked: {normalized_capability_id}"}
     if denied_capability_types and normalized_capability_type and normalized_capability_type in denied_capability_types:
         return {"reason": "denied_capability_types", "message": f"Capability type blocked: {normalized_capability_type}"}
-    if _matches_action_constraint(
+    if normalized_action_id and _matches_action_constraint(
         constraints=denied_adapter_actions,
         action_id=normalized_action_id,
         action_name=normalized_action_name,
@@ -486,7 +492,7 @@ def _evaluate_capability_constraints(
         return {"reason": "allowed_capability_ids", "message": "Capability not in allowlist"}
     if allowed_capability_types and (not normalized_capability_type or normalized_capability_type not in allowed_capability_types):
         return {"reason": "allowed_capability_types", "message": "Capability type not in allowlist"}
-    if allowed_adapter_actions and not _matches_action_constraint(
+    if normalized_action_id and allowed_adapter_actions and not _matches_action_constraint(
         constraints=allowed_adapter_actions,
         action_id=normalized_action_id,
         action_name=normalized_action_name,

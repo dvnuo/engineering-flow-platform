@@ -548,12 +548,16 @@ class GitHubChannel:
         repo: str,
         pull_number: int,
         body: str,
+        event: str = "COMMENT",
         commit_id: Optional[str] = None,
         path: Optional[str] = None,
         line: Optional[int] = None
     ) -> Dict[str, Any]:
         """Add a review comment to a pull request."""
         logger.info(f"Adding PR review comment {owner}/{repo}#{pull_number}")
+        normalized_event = str(event or "COMMENT").strip().upper()
+        if normalized_event not in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
+            raise ValueError("event must be one of COMMENT, APPROVE, REQUEST_CHANGES")
         
         if path and line:
             # For inline comments, we need a real commit SHA
@@ -584,7 +588,7 @@ class GitHubChannel:
                 f"/repos/{owner}/{repo}/pulls/{pull_number}/reviews",
                 json={
                     "body": body,
-                    "event": "COMMENT"
+                    "event": normalized_event
                 }
             )
     
@@ -891,6 +895,7 @@ async def github_add_pr_review_comment(
     repo: str,
     pull_number: int,
     body: str,
+    event: str = "COMMENT",
     commit_id: Optional[str] = None,
     path: Optional[str] = None,
     line: Optional[int] = None
@@ -898,11 +903,43 @@ async def github_add_pr_review_comment(
     """Add a review comment to a PR."""
     try:
         result = await github_channel.add_pr_review_comment(
-            owner, repo, pull_number, body, commit_id, path, line
+            owner, repo, pull_number, body, event, commit_id, path, line
         )
         return f"Review comment added to PR #{pull_number}"
     except Exception as e:
         return f"Error adding review comment: {e}"
+
+
+async def github_submit_pr_review(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    body: Optional[str] = None,
+    event: str = "COMMENT",
+    *,
+    commit_id: Optional[str] = None,
+    path: Optional[str] = None,
+    line: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Submit a PR review using GitHub review submission APIs."""
+    normalized_event = str(event or "COMMENT").strip().upper()
+    if normalized_event not in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
+        raise ValueError("event must be one of COMMENT, APPROVE, REQUEST_CHANGES")
+
+    review_body = str(body or "").strip()
+    if not review_body:
+        review_body = "Automated runtime review."
+
+    return await github_channel.add_pr_review_comment(
+        owner=owner,
+        repo=repo,
+        pull_number=pull_number,
+        body=review_body,
+        event=normalized_event,
+        commit_id=commit_id,
+        path=path,
+        line=line,
+    )
 
 
 async def github_list_pr_reviews(owner: str, repo: str, pull_number: int) -> str:

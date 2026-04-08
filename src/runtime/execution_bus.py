@@ -553,7 +553,19 @@ def resolve_task_capability_plan(task_type: str, payload: Dict[str, Any]) -> Dic
     Keep this function name for existing callers, but do not add mapping logic
     here; `src.runtime.task_capability_contracts` owns the contract mapping.
     """
-    return resolve_task_capability_contract(task_type, payload)
+    plan = resolve_task_capability_contract(task_type, payload)
+    capability_id = str(plan.get("capability_id") or "").strip().lower()
+    if not capability_id:
+        return plan
+
+    descriptor = get_capability_registry().get(capability_id)
+    if descriptor is None:
+        unresolved = dict(plan)
+        unresolved["capability_resolution"] = "unresolved"
+        unresolved.setdefault("policy_tags", [])
+        unresolved["requires_identity_binding"] = False
+        return unresolved
+    return plan
 
 
 def _resolve_task_capability(task_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1667,7 +1679,8 @@ def build_default_execution_bus(
             owner = _get_required(request.input_payload, "owner")
             repo = _get_required(request.input_payload, "repo")
             pull_number = _get_required(request.input_payload, "pull_number")
-            secondary_action_id = "adapter:github:add_comment"
+            writeback_mode = str(request.input_payload.get("writeback_mode") or "").strip().lower()
+            secondary_action_id = "adapter:github:add_comment" if writeback_mode == "issue_comment" else "adapter:github:review_pull_request"
             governed_secondary_action_ids = [secondary_action_id]
             blocked_secondary_action_ids: list[str] = []
             applied_secondary_action_ids: list[str] = []
@@ -1689,6 +1702,10 @@ def build_default_execution_bus(
             runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
             review_summary = review_result.get("review_summary")
             comment_written = bool(review_result.get("comment_written"))
+            review_written = bool(review_result.get("review_written", comment_written))
+            review_event = review_result.get("review_event")
+            secondary_action_id = str(review_result.get("secondary_action_id") or secondary_action_id)
+            governed_secondary_action_ids = [secondary_action_id]
             error_value = review_result.get("error")
             secondary_action_attempted = bool(review_result.get("secondary_action_attempted"))
             secondary_action_success = bool(review_result.get("secondary_action_success"))
@@ -1765,6 +1782,8 @@ def build_default_execution_bus(
                         "repo": repo,
                         "pull_number": pull_number,
                         "comment_written": comment_written,
+                        "review_written": review_written,
+                        "review_event": review_event,
                         "secondary_action_attempted": secondary_action_attempted,
                         "secondary_action_id": secondary_action_id,
                         "secondary_action_success": secondary_action_success,
@@ -1783,6 +1802,8 @@ def build_default_execution_bus(
                     "repo": repo,
                     "pull_number": pull_number,
                     "review_summary": review_summary,
+                    "review_event": review_event,
+                    "review_written": review_written,
                     "comment_written": comment_written,
                     "success": success_value,
                     "error": error_value,

@@ -35,6 +35,33 @@ def _normalize_review_summary(skill_output: Any, skill_data: Dict[str, Any], fal
     return ""
 
 
+def _normalize_review_writeback(skill_output: Any, skill_data: Dict[str, Any], fallback_comment: Optional[str]) -> tuple[str, str | None]:
+    review_body = _normalize_review_summary(skill_output, skill_data, fallback_comment)
+
+    raw_event = (
+        skill_data.get("review_event")
+        or skill_data.get("event")
+    )
+    if isinstance(raw_event, str) and raw_event.strip():
+        event = raw_event.strip().upper()
+        if event in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
+            return event, review_body or None
+
+    decision = str(skill_data.get("decision") or "").strip().lower()
+    if decision in {"approved", "approve"}:
+        return "APPROVE", review_body or None
+    if decision in {"rejected", "changes_requested", "request_changes"}:
+        return "REQUEST_CHANGES", review_body or None
+
+    if "approved" in skill_data and isinstance(skill_data.get("approved"), bool):
+        return ("APPROVE" if skill_data.get("approved") else "REQUEST_CHANGES"), review_body or None
+
+    if "request_changes" in skill_data and isinstance(skill_data.get("request_changes"), bool) and skill_data.get("request_changes"):
+        return "REQUEST_CHANGES", review_body or None
+
+    return "COMMENT", review_body or None
+
+
 async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     owner = str(payload.get("owner") or "").strip()
     repo = str(payload.get("repo") or "").strip()
@@ -78,8 +105,9 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
         "error": skill_error,
     })]
 
-    review_summary = _normalize_review_summary(skill_output, skill_data, review_comment_input)
-    secondary_action_id = "adapter:github:add_comment"
+    review_event, review_summary = _normalize_review_writeback(skill_output, skill_data, review_comment_input)
+    writeback_mode = str(payload.get("writeback_mode") or "").strip().lower()
+    secondary_action_id = "adapter:github:add_comment" if writeback_mode == "issue_comment" else "adapter:github:review_pull_request"
     action_gate = payload.get("_action_gate") if callable(payload.get("_action_gate")) else None
 
     secondary_action_attempted = False
@@ -89,12 +117,15 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if skill_success and review_summary:
         secondary_action_attempted = True
-        gate = action_gate(secondary_action_id, {
+        action_payload = {
             "owner": owner,
             "repo": repo,
             "pull_number": pull_number,
             "comment": review_summary,
-        }) if action_gate else None
+        }
+        if secondary_action_id == "adapter:github:review_pull_request":
+            action_payload["review_event"] = review_event
+        gate = action_gate(secondary_action_id, action_payload) if action_gate else None
         if gate is not None:
             error_value = "capability policy blocked for secondary action"
             runtime_events.append(
@@ -111,12 +142,7 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
         else:
             add_comment_result = await execute_adapter_action(
                 secondary_action_id,
-                {
-                    "owner": owner,
-                    "repo": repo,
-                    "pull_number": pull_number,
-                    "comment": review_summary,
-                },
+                action_payload,
             )
             secondary_action_success = bool(add_comment_result.get("success"))
             actions_applied.append({"action_id": secondary_action_id, "success": secondary_action_success, "error": add_comment_result.get("error")})
@@ -148,6 +174,7 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "repo": repo,
                 "pull_number": pull_number,
                 "skill_name": skill_name,
+                "review_event": review_event,
                 "success": success,
                 "error": error_value,
             },
@@ -162,6 +189,8 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
         "repo": repo,
         "pull_number": pull_number,
         "review_summary": review_summary or None,
+        "review_event": review_event,
+        "review_written": secondary_action_success,
         "comment_written": secondary_action_success,
         "secondary_action_attempted": secondary_action_attempted,
         "secondary_action_success": secondary_action_success,

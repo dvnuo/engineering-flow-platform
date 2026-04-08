@@ -138,5 +138,7 @@ def _resolve_involved_capability_ids_for_task(task_type: str, payload: Dict[str,
         return sorted(involved)
     if normalized_task_type == "github_review_task":
         skill_name = str(payload.get("skill_name") or "review-pull-request").strip().lower() or "review-pull-request"
-        return ["adapter:github:add_comment", f"skill:{skill_name}"]
+        writeback_mode = str(payload.get("writeback_mode") or "").strip().lower()
+        secondary = "adapter:github:add_comment" if writeback_mode == "issue_comment" else "adapter:github:review_pull_request"
+        return [secondary, f"skill:{skill_name}"]
     return []

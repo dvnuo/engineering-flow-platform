@@ -2140,10 +2140,12 @@ async def test_execution_bus_task_handler_github_review_task_success(monkeypatch
             "success": True,
             "error": None,
             "review_summary": "LGTM with minor suggestions",
+            "review_event": "APPROVE",
+            "review_written": True,
             "comment_written": True,
             "secondary_action_attempted": True,
             "secondary_action_success": True,
-            "secondary_action_id": "adapter:github:add_comment",
+            "secondary_action_id": "adapter:github:review_pull_request",
             "runtime_events": [{"event_type": "task.github_review.completed"}],
             "result": {"skill": {"name": "review-pull-request"}},
         }
@@ -2160,6 +2162,7 @@ async def test_execution_bus_task_handler_github_review_task_success(monkeypatch
     assert result.status == "success"
     assert result.output_payload["task_type"] == "github_review_task"
     assert result.output_payload["comment_written"] is True
+    assert result.output_payload["review_event"] == "APPROVE"
     assert result.output_payload["success"] is True
     assert any(evt.get("event_type") == "task.github_review.completed" for evt in result.runtime_events)
     assert captured["owner"] == "acme"
@@ -2168,9 +2171,97 @@ async def test_execution_bus_task_handler_github_review_task_success(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_github_review_task_approved_event_reflected_in_output(monkeypatch):
+    async def _fake_run_github_review_task(_payload):
+        return {
+            "success": True,
+            "error": None,
+            "review_summary": "approved",
+            "review_event": "APPROVE",
+            "review_written": True,
+            "comment_written": True,
+            "secondary_action_attempted": True,
+            "secondary_action_success": True,
+            "secondary_action_id": "adapter:github:review_pull_request",
+            "runtime_events": [],
+            "result": {},
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 42},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert result.output_payload["review_event"] == "APPROVE"
+    assert result.output_payload["secondary_action_id"] == "adapter:github:review_pull_request"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_github_review_task_request_changes_event_reflected_in_output(monkeypatch):
+    async def _fake_run_github_review_task(_payload):
+        return {
+            "success": True,
+            "error": None,
+            "review_summary": "needs changes",
+            "review_event": "REQUEST_CHANGES",
+            "review_written": True,
+            "comment_written": True,
+            "secondary_action_attempted": True,
+            "secondary_action_success": True,
+            "secondary_action_id": "adapter:github:review_pull_request",
+            "runtime_events": [],
+            "result": {},
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 42},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert result.output_payload["review_event"] == "REQUEST_CHANGES"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_github_review_task_comment_event_reflected_in_output(monkeypatch):
+    async def _fake_run_github_review_task(_payload):
+        return {
+            "success": True,
+            "error": None,
+            "review_summary": "comment",
+            "review_event": "COMMENT",
+            "review_written": True,
+            "comment_written": True,
+            "secondary_action_attempted": True,
+            "secondary_action_success": True,
+            "secondary_action_id": "adapter:github:review_pull_request",
+            "runtime_events": [],
+            "result": {},
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 42},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert result.output_payload["review_event"] == "COMMENT"
+
+
+@pytest.mark.asyncio
 async def test_execution_bus_task_events_include_task_id_for_github_review(monkeypatch):
     async def _fake_run_github_review_task(_payload):
-        return {"success": True, "error": None, "review_summary": "ok", "comment_written": True, "secondary_action_attempted": True, "secondary_action_success": True, "runtime_events": []}
+        return {"success": True, "error": None, "review_summary": "ok", "review_event": "COMMENT", "review_written": True, "comment_written": True, "secondary_action_attempted": True, "secondary_action_success": True, "secondary_action_id": "adapter:github:review_pull_request", "runtime_events": []}
 
     monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
     bus = build_default_execution_bus()
@@ -2192,9 +2283,12 @@ async def test_execution_bus_task_handler_github_review_task_comment_writeback_f
             "success": False,
             "error": "permission denied",
             "review_summary": "Needs changes",
+            "review_event": "REQUEST_CHANGES",
+            "review_written": False,
             "comment_written": False,
             "secondary_action_attempted": True,
             "secondary_action_success": False,
+            "secondary_action_id": "adapter:github:review_pull_request",
             "runtime_events": [{"event_type": "task.github_review.failed"}],
             "result": {},
         }
@@ -2693,7 +2787,7 @@ async def test_execution_bus_task_capability_unresolved_fallback_for_non_adapter
 @pytest.mark.asyncio
 async def test_github_review_task_includes_involved_capability_ids(monkeypatch):
     async def _fake_run_github_review_task(_payload):
-        return {"success": True, "review_summary": "ok", "error": None, "comment_written": True, "secondary_action_attempted": True, "secondary_action_success": True, "runtime_events": []}
+        return {"success": True, "review_summary": "ok", "review_event": "COMMENT", "review_written": True, "error": None, "comment_written": True, "secondary_action_attempted": True, "secondary_action_success": True, "secondary_action_id": "adapter:github:review_pull_request", "runtime_events": []}
 
     monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
     bus = build_default_execution_bus()
@@ -2705,10 +2799,10 @@ async def test_github_review_task_includes_involved_capability_ids(monkeypatch):
     result = await bus.execute(req)
     assert result.status == "success"
     assert "skill:review-pull-request" in result.output_payload["involved_capability_ids"]
-    assert "adapter:github:add_comment" in result.output_payload["involved_capability_ids"]
-    assert result.output_payload["governed_secondary_action_ids"] == ["adapter:github:add_comment"]
+    assert "adapter:github:review_pull_request" in result.output_payload["involved_capability_ids"]
+    assert result.output_payload["governed_secondary_action_ids"] == ["adapter:github:review_pull_request"]
     assert result.output_payload["blocked_secondary_action_ids"] == []
-    assert result.output_payload["applied_secondary_action_ids"] == ["adapter:github:add_comment"]
+    assert result.output_payload["applied_secondary_action_ids"] == ["adapter:github:review_pull_request"]
     decisions = result.output_payload["secondary_action_decisions"]
     assert decisions and decisions[0]["decision"] == "applied"
 
@@ -2745,9 +2839,12 @@ async def test_github_review_task_secondary_action_denied_by_capability_policy(m
             "success": False,
             "review_summary": "ok",
             "error": "capability policy blocked for secondary action",
+            "review_event": "REQUEST_CHANGES",
+            "review_written": False,
             "comment_written": False,
             "secondary_action_attempted": True,
             "secondary_action_success": False,
+            "secondary_action_id": "adapter:github:review_pull_request",
             "runtime_events": [{"event_type": "task.github_review.secondary_action.blocked"}],
         }
 
@@ -2757,16 +2854,16 @@ async def test_github_review_task_secondary_action_denied_by_capability_policy(m
         source_type="task",
         execution_type="task",
         input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 7},
-        metadata={"denied_actions": ["add_comment"]},
+        metadata={"denied_actions": ["review_pull_request"]},
     )
     result = await bus.execute(req)
     assert result.status == "error"
     assert result.output_payload["secondary_action_attempted"] is True
     assert result.output_payload["secondary_action_success"] is False
-    assert result.output_payload["secondary_action_id"] == "adapter:github:add_comment"
+    assert result.output_payload["secondary_action_id"] == "adapter:github:review_pull_request"
     assert "capability policy blocked for secondary action" in str(result.output_payload["error"])
-    assert result.output_payload["governed_secondary_action_ids"] == ["adapter:github:add_comment"]
-    assert result.output_payload["blocked_secondary_action_ids"] == ["adapter:github:add_comment"]
+    assert result.output_payload["governed_secondary_action_ids"] == ["adapter:github:review_pull_request"]
+    assert result.output_payload["blocked_secondary_action_ids"] == ["adapter:github:review_pull_request"]
     assert result.output_payload["applied_secondary_action_ids"] == []
     assert result.output_payload["secondary_action_decisions"][0]["decision"] == "blocked"
     assert any(evt.get("event_type") == "task.github_review.secondary_action.blocked" for evt in result.runtime_events)
@@ -2853,7 +2950,7 @@ async def test_jira_workflow_review_task_comment_and_assign_denied(monkeypatch):
 @pytest.mark.asyncio
 async def test_github_review_task_secondary_action_allowed_by_allowed_adapter_actions(monkeypatch):
     async def _fake_run_github_review_task(_payload):
-        return {"success": True, "review_summary": "ok", "error": None, "comment_written": True, "secondary_action_attempted": True, "secondary_action_success": True, "runtime_events": []}
+        return {"success": True, "review_summary": "ok", "review_event": "COMMENT", "review_written": True, "error": None, "comment_written": True, "secondary_action_attempted": True, "secondary_action_success": True, "secondary_action_id": "adapter:github:review_pull_request", "runtime_events": []}
 
     monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
     bus = build_default_execution_bus()
@@ -2861,7 +2958,7 @@ async def test_github_review_task_secondary_action_allowed_by_allowed_adapter_ac
         source_type="task",
         execution_type="task",
         input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 8},
-        metadata={"allowed_adapter_actions": ["adapter:github:add_comment"]},
+        metadata={"allowed_adapter_actions": ["adapter:github:review_pull_request"]},
     )
     result = await bus.execute(req)
     assert result.status == "success"
@@ -2871,7 +2968,7 @@ async def test_github_review_task_secondary_action_allowed_by_allowed_adapter_ac
 @pytest.mark.asyncio
 async def test_github_review_task_secondary_action_allowed_by_allowed_actions_alias(monkeypatch):
     async def _fake_run_github_review_task(_payload):
-        return {"success": True, "review_summary": "ok", "error": None, "comment_written": True, "secondary_action_attempted": True, "secondary_action_success": True, "runtime_events": []}
+        return {"success": True, "review_summary": "ok", "review_event": "COMMENT", "review_written": True, "error": None, "comment_written": True, "secondary_action_attempted": True, "secondary_action_success": True, "secondary_action_id": "adapter:github:review_pull_request", "runtime_events": []}
 
     monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
     bus = build_default_execution_bus()
@@ -2879,7 +2976,7 @@ async def test_github_review_task_secondary_action_allowed_by_allowed_actions_al
         source_type="task",
         execution_type="task",
         input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 9},
-        metadata={"allowed_actions": ["add_comment"]},
+        metadata={"allowed_actions": ["review_pull_request"]},
     )
     result = await bus.execute(req)
     assert result.status == "success"
@@ -2917,7 +3014,7 @@ async def test_jira_workflow_review_task_comment_denied_has_governance_audit_eve
 @pytest.mark.asyncio
 async def test_github_review_task_portal_style_metadata_with_explainability_fields(monkeypatch):
     async def _fake_run_github_review_task(_payload):
-        return {"success": True, "review_summary": "ok", "error": None, "comment_written": True, "secondary_action_attempted": True, "secondary_action_success": True, "runtime_events": []}
+        return {"success": True, "review_summary": "ok", "review_event": "COMMENT", "review_written": True, "error": None, "comment_written": True, "secondary_action_attempted": True, "secondary_action_success": True, "secondary_action_id": "adapter:github:review_pull_request", "runtime_events": []}
 
     monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
     bus = build_default_execution_bus()
@@ -2928,10 +3025,10 @@ async def test_github_review_task_portal_style_metadata_with_explainability_fiel
         metadata={
             "capability_profile_id": "cap-1",
             "policy_profile_id": "policy-1",
-            "allowed_capability_ids": ["skill:review-pull-request", "adapter:github:add_comment"],
+            "allowed_capability_ids": ["skill:review-pull-request", "adapter:github:review_pull_request"],
             "allowed_capability_types": ["action"],
-            "allowed_actions": ["add_comment"],
-            "allowed_adapter_actions": ["adapter:github:add_comment"],
+            "allowed_actions": ["review_pull_request"],
+            "allowed_adapter_actions": ["adapter:github:review_pull_request"],
             "unresolved_actions": ["foo_action"],
             "resolved_action_mappings": {"foo_action": "adapter:github:add_comment"},
         },
@@ -2939,6 +3036,42 @@ async def test_github_review_task_portal_style_metadata_with_explainability_fiel
     result = await bus.execute(req)
     assert result.status == "success"
     assert result.output_payload["secondary_action_decisions"][0]["decision"] == "applied"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_explicit_issue_comment_fallback_secondary_action(monkeypatch):
+    async def _fake_run_github_review_task(_payload):
+        return {
+            "success": True,
+            "review_summary": "ok",
+            "review_event": "COMMENT",
+            "review_written": True,
+            "error": None,
+            "comment_written": True,
+            "secondary_action_attempted": True,
+            "secondary_action_success": True,
+            "secondary_action_id": "adapter:github:add_comment",
+            "runtime_events": [],
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={
+            "task_type": "github_review_task",
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 11,
+            "writeback_mode": "issue_comment",
+        },
+        metadata={"allowed_adapter_actions": ["adapter:github:add_comment"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "success"
+    assert result.output_payload["secondary_action_id"] == "adapter:github:add_comment"
+    assert result.output_payload["governed_secondary_action_ids"] == ["adapter:github:add_comment"]
 
 
 @pytest.mark.asyncio
