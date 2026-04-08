@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional
+import logging
 
 from src.agents.executor import execute_skill
+from src.github.api import github_channel
 from src.runtime.adapter_executor import execute_adapter_action
 from src.runtime.events import build_runtime_event
+
+logger = logging.getLogger(__name__)
 
 
 def _event(event_type: str, state: str, detail_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -60,6 +64,15 @@ def _normalize_review_writeback(skill_output: Any, skill_data: Dict[str, Any], f
         return "REQUEST_CHANGES", review_body or None
 
     return "COMMENT", review_body or None
+
+
+async def _get_current_pr_head_sha(owner: str, repo: str, pull_number: int) -> str | None:
+    pr_payload = await github_channel.get_pull_request(owner, repo, pull_number)
+    head = pr_payload.get("head") if isinstance(pr_payload, dict) else {}
+    sha = head.get("sha") if isinstance(head, dict) else None
+    if isinstance(sha, str) and sha.strip():
+        return sha.strip()
+    return None
 
 
 async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -116,7 +129,6 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     error_value = skill_error
 
     if skill_success and review_summary:
-        secondary_action_attempted = True
         action_payload = {
             "owner": owner,
             "repo": repo,
@@ -125,6 +137,74 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
         if secondary_action_id == "adapter:github:review_pull_request":
             action_payload["review_event"] = review_event
+
+        requested_head_sha = str(payload.get("head_sha") or "").strip()
+        if requested_head_sha:
+            current_head_sha: str | None = None
+            try:
+                current_head_sha = await _get_current_pr_head_sha(owner, repo, int(pull_number))
+            except Exception as exc:
+                logger.warning(
+                    "github_review_task freshness guard fetch failed for %s/%s#%s: %s",
+                    owner,
+                    repo,
+                    pull_number,
+                    exc,
+                )
+                runtime_events.append(
+                    _event(
+                        "task.github_review.freshness_guard.warning",
+                        "warning",
+                        {"expected_head_sha": requested_head_sha, "error": str(exc)},
+                    )
+                )
+            if current_head_sha and current_head_sha != requested_head_sha:
+                runtime_events.append(
+                    _event(
+                        "task.github_review.superseded",
+                        "stale",
+                        {
+                            "error_code": "superseded_by_new_head_sha",
+                            "stale": True,
+                            "expected_head_sha": requested_head_sha,
+                            "current_head_sha": current_head_sha,
+                            "secondary_action_id": secondary_action_id,
+                        },
+                    )
+                )
+                return {
+                    "task_type": "github_review_task",
+                    "success": False,
+                    "stale": True,
+                    "error": "superseded_by_new_head_sha",
+                    "error_code": "superseded_by_new_head_sha",
+                    "expected_head_sha": requested_head_sha,
+                    "current_head_sha": current_head_sha,
+                    "owner": owner,
+                    "repo": repo,
+                    "pull_number": pull_number,
+                    "review_summary": review_summary or None,
+                    "review_event": review_event,
+                    "review_written": False,
+                    "comment_written": False,
+                    "secondary_action_attempted": False,
+                    "secondary_action_success": False,
+                    "secondary_action_id": secondary_action_id,
+                    "actions_applied": actions_applied,
+                    "runtime_events": runtime_events,
+                    "result": {
+                        "skill": {
+                            "name": skill_name,
+                            "success": skill_success,
+                            "output": skill_output,
+                            "error": skill_error,
+                            "data": skill_data,
+                        }
+                    },
+                    "skill_name": skill_name,
+                }
+
+        secondary_action_attempted = True
         gate = action_gate(secondary_action_id, action_payload) if action_gate else None
         if gate is not None:
             error_value = "capability policy blocked for secondary action"

@@ -55,3 +55,9 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 - Runtime session metadata publish keeps canonical field precedence:
   - `group_id`, `current_task_id`, `current_delegation_id`, `current_coordination_run_id`, `source_type`, `source_ref`.
 - Runtime publish also supports compatibility aliases from Portal dispatch metadata (`portal_*` fields), while preserving original metadata in `metadata_json`.
+
+## 7) GitHub Review Task Freshness Guard
+
+- Portal may dispatch `github_review_task` with `head_sha`.
+- Runtime treats `head_sha` as a write-back freshness guard before secondary GitHub review/comment submission.
+- If current PR head SHA no longer matches the dispatched `head_sha`, runtime marks task as superseded (`error_code = superseded_by_new_head_sha`, `stale = true`) and skips write-back.

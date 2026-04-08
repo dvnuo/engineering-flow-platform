@@ -1707,6 +1707,10 @@ def build_default_execution_bus(
             secondary_action_id = str(review_result.get("secondary_action_id") or secondary_action_id)
             governed_secondary_action_ids = [secondary_action_id]
             error_value = review_result.get("error")
+            error_code = review_result.get("error_code")
+            stale = bool(review_result.get("stale"))
+            expected_head_sha = review_result.get("expected_head_sha")
+            current_head_sha = review_result.get("current_head_sha")
             secondary_action_attempted = bool(review_result.get("secondary_action_attempted"))
             secondary_action_success = bool(review_result.get("secondary_action_success"))
             if secondary_action_attempted and not secondary_action_success and error_value and "capability policy blocked" in str(error_value):
@@ -1789,6 +1793,10 @@ def build_default_execution_bus(
                         "secondary_action_success": secondary_action_success,
                         "success": success_value,
                         "error": error_value,
+                        "error_code": error_code,
+                        "stale": stale,
+                        "expected_head_sha": expected_head_sha,
+                        "current_head_sha": current_head_sha,
                     },
                     legacy_payload={"legacy_type": "task_github_review"},
                 )
@@ -1807,6 +1815,10 @@ def build_default_execution_bus(
                     "comment_written": comment_written,
                     "success": success_value,
                     "error": error_value,
+                    "error_code": error_code,
+                    "stale": stale,
+                    "expected_head_sha": expected_head_sha,
+                    "current_head_sha": current_head_sha,
                     "task_boundary": True,
                     "capability_id": capability.get("capability_id"),
                     "capability_type": capability.get("capability_type"),

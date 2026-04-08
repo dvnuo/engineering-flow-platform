@@ -106,3 +106,68 @@ async def test_github_review_task_explicit_issue_comment_fallback(monkeypatch):
     assert result["success"] is True
     assert captured["action_id"] == "adapter:github:add_comment"
     assert "review_event" not in captured["kwargs"]
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_head_sha_mismatch_suppresses_writeback(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(success=True, output="Looks stale now", data={"approved": True})
+
+    called = {"adapter": False}
+
+    async def _fake_execute_adapter_action(_action_id, _kwargs):
+        called["adapter"] = True
+        return {"success": True, "error": None, "result": {"id": 5}, "runtime_events": []}
+
+    async def _fake_get_current_pr_head_sha(_owner, _repo, _pull_number):
+        return "sha-new"
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action", _fake_execute_adapter_action)
+    monkeypatch.setattr("src.runtime.github_review._get_current_pr_head_sha", _fake_get_current_pr_head_sha)
+
+    result = await run_github_review_task(
+        {"owner": "acme", "repo": "demo", "pull_number": 12, "head_sha": "sha-old"}
+    )
+
+    assert called["adapter"] is False
+    assert result["success"] is False
+    assert result["error_code"] == "superseded_by_new_head_sha"
+    assert result["stale"] is True
+    assert result["review_written"] is False
+    assert result["secondary_action_attempted"] is False
+    assert result["expected_head_sha"] == "sha-old"
+    assert result["current_head_sha"] == "sha-new"
+    assert any(evt.get("event_type") == "task.github_review.superseded" for evt in result["runtime_events"])
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_head_sha_match_still_writes_review(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(success=True, output="Still current", data={"approved": True})
+
+    captured = {}
+
+    async def _fake_execute_adapter_action(action_id, kwargs):
+        captured["action_id"] = action_id
+        captured["kwargs"] = kwargs
+        return {"success": True, "error": None, "result": {"id": 6}, "runtime_events": []}
+
+    async def _fake_get_current_pr_head_sha(_owner, _repo, _pull_number):
+        return "sha-1"
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action", _fake_execute_adapter_action)
+    monkeypatch.setattr("src.runtime.github_review._get_current_pr_head_sha", _fake_get_current_pr_head_sha)
+
+    result = await run_github_review_task(
+        {"owner": "acme", "repo": "demo", "pull_number": 13, "head_sha": "sha-1"}
+    )
+
+    assert result["success"] is True
+    assert captured["action_id"] == "adapter:github:review_pull_request"
+    assert captured["kwargs"]["review_event"] == "APPROVE"

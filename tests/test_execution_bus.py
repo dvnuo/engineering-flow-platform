@@ -3075,6 +3075,46 @@ async def test_github_review_task_explicit_issue_comment_fallback_secondary_acti
 
 
 @pytest.mark.asyncio
+async def test_github_review_task_superseded_fields_passthrough(monkeypatch):
+    async def _fake_run_github_review_task(_payload):
+        return {
+            "success": False,
+            "review_summary": "stale",
+            "review_event": "COMMENT",
+            "review_written": False,
+            "comment_written": False,
+            "error": "superseded_by_new_head_sha",
+            "error_code": "superseded_by_new_head_sha",
+            "stale": True,
+            "expected_head_sha": "sha-old",
+            "current_head_sha": "sha-new",
+            "secondary_action_attempted": False,
+            "secondary_action_success": False,
+            "secondary_action_id": "adapter:github:review_pull_request",
+            "runtime_events": [{"event_type": "task.github_review.superseded", "state": "stale"}],
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 14},
+    )
+    result = await bus.execute(req)
+    assert result.status == "error"
+    assert result.output_payload["error_code"] == "superseded_by_new_head_sha"
+    assert result.output_payload["stale"] is True
+    assert result.output_payload["expected_head_sha"] == "sha-old"
+    assert result.output_payload["current_head_sha"] == "sha-new"
+    task_events = [evt for evt in result.runtime_events if evt.get("event_type") == "task.github_review.failed"]
+    assert task_events
+    detail = task_events[-1].get("detail_payload") or {}
+    assert detail.get("error_code") == "superseded_by_new_head_sha"
+    assert detail.get("stale") is True
+
+
+@pytest.mark.asyncio
 async def test_jira_workflow_review_task_portal_style_metadata_deny_transition(monkeypatch):
     async def _fake_run_review(payload):
         gate = payload["_action_gate"]
