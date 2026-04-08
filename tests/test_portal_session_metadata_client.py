@@ -38,6 +38,49 @@ def test_build_session_metadata_payload_includes_supported_fields_only():
     assert "metadata_json" in payload
 
 
+def test_build_session_metadata_payload_includes_pending_delegations_when_non_empty():
+    payload = build_session_metadata_payload(
+        last_execution_id="exec-1",
+        latest_event_type="task.completed",
+        latest_event_state="success",
+        snapshot_version=None,
+        runtime_events=[],
+        metadata={},
+        pending_delegations=[{"delegation_id": "d-1"}],
+    )
+
+    assert payload["pending_delegations_json"] == '[{"delegation_id": "d-1"}]'
+
+
+def test_build_session_metadata_payload_includes_pending_delegations_when_empty_list():
+    payload = build_session_metadata_payload(
+        last_execution_id="exec-1",
+        latest_event_type="task.completed",
+        latest_event_state="success",
+        snapshot_version=None,
+        runtime_events=[],
+        metadata={},
+        pending_delegations=[],
+    )
+
+    assert "pending_delegations_json" in payload
+    assert payload["pending_delegations_json"] == "[]"
+
+
+def test_build_session_metadata_payload_omits_pending_delegations_when_none():
+    payload = build_session_metadata_payload(
+        last_execution_id="exec-1",
+        latest_event_type="task.completed",
+        latest_event_state="success",
+        snapshot_version=None,
+        runtime_events=[],
+        metadata={},
+        pending_delegations=None,
+    )
+
+    assert "pending_delegations_json" not in payload
+
+
 def test_build_session_metadata_payload_canonical_keys_take_precedence_over_portal_aliases():
     payload = build_session_metadata_payload(
         last_execution_id="exec-3",

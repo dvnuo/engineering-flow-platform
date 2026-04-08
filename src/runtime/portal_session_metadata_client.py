@@ -108,7 +108,7 @@ def build_session_metadata_payload(
     if snapshot_version:
         payload["snapshot_version"] = str(snapshot_version)
 
-    if pending_delegations:
+    if pending_delegations is not None:
         payload["pending_delegations_json"] = _safe_json(pending_delegations)
 
     trimmed_runtime_events = list(runtime_events or [])[-_MAX_RUNTIME_EVENTS:]

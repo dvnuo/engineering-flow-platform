@@ -1688,8 +1688,19 @@ def build_default_execution_bus(
 
             def _github_action_gate(action_id: str, _kwargs: Dict[str, Any]) -> Dict[str, Any] | None:
                 if action_id != secondary_action_id:
-                    return {"reason": "unsupported_secondary_action", "message": f"Unsupported secondary action: {action_id}"}
-                return _evaluate_secondary_action_gate(request=request, action_id=action_id)
+                    return {
+                        "blocked": True,
+                        "reason": "unsupported_secondary_action",
+                        "message": f"Unsupported secondary action: {action_id}",
+                    }
+                decision = _evaluate_secondary_action_gate(request=request, action_id=action_id)
+                if decision:
+                    return {
+                        "blocked": True,
+                        "reason": decision.get("reason"),
+                        "message": decision.get("message"),
+                    }
+                return {"blocked": False}
 
             review_result = await run_github_review_task(
                 {

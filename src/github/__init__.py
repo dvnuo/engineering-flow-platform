@@ -178,13 +178,27 @@ async def github_add_pr_review_comment(
     body: str,
     commit_id: Optional[str] = None,
     path: Optional[str] = None,
-    line: Optional[int] = None
+    line: Optional[int] = None,
+    *,
+    event: str = "COMMENT",
 ) -> str:
     """Add a review comment to a PR."""
     try:
+        normalized_event = str(event or "COMMENT").strip().upper()
         result = await github_channel.add_pr_review_comment(
-            owner, repo, pull_number, body, commit_id, path, line
+            owner=owner,
+            repo=repo,
+            pull_number=pull_number,
+            body=body,
+            commit_id=commit_id,
+            path=path,
+            line=line,
+            event=normalized_event,
         )
+        if normalized_event == "APPROVE":
+            return f"Review approved on PR #{pull_number}"
+        if normalized_event == "REQUEST_CHANGES":
+            return f"Changes requested on PR #{pull_number}"
         return f"Review comment added to PR #{pull_number}"
     except Exception as e:
         return f"Error adding review comment: {e}"

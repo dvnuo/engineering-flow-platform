@@ -58,7 +58,7 @@ async def run_jira_workflow_review(payload: Dict[str, Any]) -> Dict[str, Any]:
     for warning in plan.normalization_warnings:
         runtime_events.append(
             _event(
-                "recovery.warning",
+                "task.jira_workflow_review.warning",
                 "warning",
                 plan.issue_key,
                 {"warning": warning},
@@ -187,7 +187,7 @@ async def run_jira_workflow_review(payload: Dict[str, Any]) -> Dict[str, Any]:
     if action_plan.get("reassignment_warning"):
         runtime_events.append(
             _event(
-                "recovery.warning",
+                "task.jira_workflow_review.warning",
                 "warning",
                 plan.issue_key,
                 {"warning": action_plan.get("reassignment_warning")},

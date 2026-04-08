@@ -73,6 +73,22 @@ def check_config() -> tuple[bool, list[str]]:
     return can_start, warnings
 
 
+async def _shutdown_jira_reconciliation_task(
+    jira_reconciliation_task: asyncio.Task | None,
+    logger: logging.Logger,
+) -> None:
+    if not jira_reconciliation_task or jira_reconciliation_task.done():
+        return
+    logger.info("Stopping Jira reconciliation...")
+    await stop_reconciliation()
+    jira_reconciliation_task.cancel()
+    try:
+        await jira_reconciliation_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("Jira reconciliation stopped")
+
+
 async def main() -> None:
     """Main entry point."""
     import argparse
@@ -213,11 +229,7 @@ async def main() -> None:
             await polling_task
             logger.info("Mention polling stopped")
 
-        if jira_reconciliation_task and not jira_reconciliation_task.done():
-            logger.info("Stopping Jira reconciliation...")
-            await stop_reconciliation()
-            await jira_reconciliation_task
-            logger.info("Jira reconciliation stopped")
+        await _shutdown_jira_reconciliation_task(jira_reconciliation_task, logger)
         
         try:
             await gateway.stop()

@@ -245,6 +245,7 @@ class TestSessionsSpawn:
         assert fake_loop.tasks
         assert fake_loop.tasks[0].callbacks
         assert "loop-session" in subagent._subagent_sessions
+        assert subagent._subagent_sessions["loop-session"]["parent_session_id"] is None
         fake_loop.tasks[0].close()
 
     def test_background_task_exception_callback_logs(self, monkeypatch):

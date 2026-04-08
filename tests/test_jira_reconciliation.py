@@ -1,4 +1,5 @@
 import json
+import asyncio
 
 import pytest
 
@@ -156,3 +157,37 @@ def test_jira_reconciliation_disabled_flag(monkeypatch):
 
     monkeypatch.setattr(jira_reconciliation.config, "get", lambda key, default=None: False if key == "server.jira_reconciliation_enabled" else default)
     assert jira_reconciliation.is_enabled() is False
+
+
+@pytest.mark.asyncio
+async def test_shutdown_jira_reconciliation_task_cancels_and_swallows_cancelled_error(monkeypatch):
+    import main as main_module
+
+    class _FakeTask:
+        def __init__(self):
+            self.cancel_called = False
+
+        def done(self):
+            return False
+
+        def cancel(self):
+            self.cancel_called = True
+
+        def __await__(self):
+            async def _raise_cancelled():
+                raise asyncio.CancelledError()
+
+            return _raise_cancelled().__await__()
+
+    calls = {"stop": 0}
+
+    async def _fake_stop_reconciliation():
+        calls["stop"] += 1
+
+    monkeypatch.setattr(main_module, "stop_reconciliation", _fake_stop_reconciliation)
+
+    fake_task = _FakeTask()
+    await main_module._shutdown_jira_reconciliation_task(fake_task, main_module.logging.getLogger(__name__))
+
+    assert calls["stop"] == 1
+    assert fake_task.cancel_called is True

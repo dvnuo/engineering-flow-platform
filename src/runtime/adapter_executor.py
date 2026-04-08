@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Dict
 import json
-import os
 from aiohttp import ClientSession
 
 from src.runtime.events import build_runtime_event
