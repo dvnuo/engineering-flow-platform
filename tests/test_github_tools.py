@@ -313,6 +313,66 @@ async def test_github_review_comment_wrapper_supports_keyword_event(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_github_review_comment_wrapper_message_for_comment_event(monkeypatch, github_modules):
+    github_module, _ = github_modules
+
+    async def _fake_add_pr_review_comment(**kwargs):
+        return {"id": 3}
+
+    monkeypatch.setattr(github_module.github_channel, "add_pr_review_comment", _fake_add_pr_review_comment)
+
+    result = await github_module.github_add_pr_review_comment(
+        owner="acme",
+        repo="repo",
+        pull_number=20,
+        body="Looks fine",
+        event="COMMENT",
+    )
+
+    assert result == "Review comment added to PR #20"
+
+
+@pytest.mark.asyncio
+async def test_github_review_comment_wrapper_message_for_approve_event(monkeypatch, github_modules):
+    github_module, _ = github_modules
+
+    async def _fake_add_pr_review_comment(**kwargs):
+        return {"id": 4}
+
+    monkeypatch.setattr(github_module.github_channel, "add_pr_review_comment", _fake_add_pr_review_comment)
+
+    result = await github_module.github_add_pr_review_comment(
+        owner="acme",
+        repo="repo",
+        pull_number=21,
+        body="Ship it",
+        event="APPROVE",
+    )
+
+    assert result == "Review approved on PR #21"
+
+
+@pytest.mark.asyncio
+async def test_github_review_comment_wrapper_message_for_request_changes_event(monkeypatch, github_modules):
+    github_module, _ = github_modules
+
+    async def _fake_add_pr_review_comment(**kwargs):
+        return {"id": 5}
+
+    monkeypatch.setattr(github_module.github_channel, "add_pr_review_comment", _fake_add_pr_review_comment)
+
+    result = await github_module.github_add_pr_review_comment(
+        owner="acme",
+        repo="repo",
+        pull_number=22,
+        body="Needs work",
+        event="REQUEST_CHANGES",
+    )
+
+    assert result == "Changes requested on PR #22"
+
+
+@pytest.mark.asyncio
 async def test_channel_add_pr_review_comment_rejects_invalid_event(github_modules):
     _, github_api = github_modules
     with pytest.raises(ValueError, match="event must be one of COMMENT, APPROVE, REQUEST_CHANGES"):

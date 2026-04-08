@@ -236,6 +236,16 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         if is_blocked:
             error_value = "capability policy blocked for secondary action"
+            actions_applied.append(
+                {
+                    "action_id": secondary_action_id,
+                    "success": False,
+                    "blocked": True,
+                    "reason": gate_reason,
+                    "message": gate_message,
+                    "error": error_value,
+                }
+            )
             runtime_events.append(
                 _event(
                     "task.github_review.secondary_action.blocked",

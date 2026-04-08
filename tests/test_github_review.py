@@ -225,7 +225,11 @@ async def test_github_review_task_gate_with_blocked_true_blocks_secondary_action
             "owner": "acme",
             "repo": "demo",
             "pull_number": 22,
-            "_action_gate": lambda *_args, **_kwargs: {"blocked": True, "reason": "denied_by_policy"},
+            "_action_gate": lambda *_args, **_kwargs: {
+                "blocked": True,
+                "reason": "denied_by_policy",
+                "message": "blocked by test",
+            },
         }
     )
 
@@ -235,6 +239,11 @@ async def test_github_review_task_gate_with_blocked_true_blocks_secondary_action
     assert result["secondary_action_success"] is False
     assert "capability policy blocked for secondary action" in str(result["error"])
     assert any(evt.get("event_type") == "task.github_review.secondary_action.blocked" for evt in result["runtime_events"])
+    assert len(result["actions_applied"]) == 1
+    assert result["actions_applied"][0]["action_id"] == "adapter:github:review_pull_request"
+    assert result["actions_applied"][0]["blocked"] is True
+    assert result["actions_applied"][0]["reason"] == "denied_by_policy"
+    assert result["actions_applied"][0]["message"] == "blocked by test"
 
 
 @pytest.mark.asyncio

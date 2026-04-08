@@ -64,7 +64,14 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
         descriptor = registry.get(primary_capability_id)
         involved = _resolve_involved_capability_ids_for_task(normalized_task_type, normalized_payload)
         if descriptor is None:
-            return {**fallback, "primary_capability_id": primary_capability_id, "capability_id": primary_capability_id, "action_id": primary_capability_id, "involved_capability_ids": involved}
+            return {
+                **fallback,
+                "primary_capability_id": primary_capability_id,
+                "capability_id": primary_capability_id,
+                "capability_type": "adapter_action",
+                "action_id": primary_capability_id,
+                "involved_capability_ids": involved,
+            }
         return {
             **fallback,
             "primary_capability_id": descriptor.capability_id,

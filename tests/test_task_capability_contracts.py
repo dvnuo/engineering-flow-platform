@@ -47,6 +47,26 @@ def test_resolve_task_capability_contract_jira_workflow_review_task():
     ]
 
 
+def test_resolve_task_capability_contract_jira_workflow_review_task_unresolved_sets_adapter_action_type(monkeypatch):
+    from src.runtime import task_capability_contracts as module
+
+    class _Registry:
+        def get(self, capability_id):
+            if capability_id == "adapter:jira:read_issue":
+                return None
+            return None
+
+    monkeypatch.setattr(module, "get_capability_registry", lambda: _Registry())
+
+    plan = module.resolve_task_capability_contract("jira_workflow_review_task", {"issue_key": "ENG-1"})
+
+    assert plan["primary_capability_id"] == "adapter:jira:read_issue"
+    assert plan["capability_id"] == "adapter:jira:read_issue"
+    assert plan["action_id"] == "adapter:jira:read_issue"
+    assert plan["capability_type"] == "adapter_action"
+    assert plan["capability_resolution"] == "unresolved"
+
+
 def test_resolve_task_capability_contract_jira_workflow_review_task_fields_on_success_triggers_update():
     plan = resolve_task_capability_contract(
         "jira_workflow_review_task",

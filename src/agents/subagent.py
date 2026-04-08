@@ -104,7 +104,7 @@ def _register_subagent_session(
     thinking: Optional[str],
     cleanup: str,
     disable_tools: bool,
-    parent_session_id: Optional[str],
+    parent_session_id: Optional[str] = None,
 ) -> SubAgent:
     existing = _subagent_sessions.get(session_key)
     if existing and isinstance(existing.get("agent"), SubAgent):
@@ -416,6 +416,7 @@ def sessions_spawn(
             thinking=thinking,
             cleanup=cleanup,
             disable_tools=disable_tools,
+            parent_session_id=None,
         )
         # Existing behavior is sync "started"; preserve by scheduling when loop exists.
         background_task = running_loop.create_task(_spawn_via_bus())
