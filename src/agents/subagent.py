@@ -137,17 +137,21 @@ def list_active_subagent_summaries(
     parent_session_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Return serializable summaries for active sub-agent sessions."""
+    active_statuses = {"started", "running"}
     summaries: List[Dict[str, Any]] = []
     for session_key, state in _subagent_sessions.items():
         if session_key_prefix and not session_key.startswith(session_key_prefix):
             continue
         if parent_session_id is not None and state.get("parent_session_id") != parent_session_id:
             continue
+        status = state.get("status")
+        if status not in active_statuses:
+            continue
         summaries.append(
             {
                 "session_key": session_key,
                 "task": state.get("task"),
-                "status": state.get("status"),
+                "status": status,
                 "model": state.get("model"),
                 "thinking": state.get("thinking"),
                 "created_at": state.get("created_at"),

@@ -569,6 +569,15 @@ class GitHubChannel:
         else:
             normalized_path = str(path).strip() or None
 
+        normalized_commit_id: Optional[str]
+        if commit_id is None:
+            normalized_commit_id = None
+        elif isinstance(commit_id, str):
+            stripped_commit_id = commit_id.strip()
+            normalized_commit_id = stripped_commit_id or None
+        else:
+            normalized_commit_id = str(commit_id).strip() or None
+
         normalized_line: Optional[int]
         if line is None:
             normalized_line = None
@@ -589,7 +598,7 @@ class GitHubChannel:
                     "APPROVE and REQUEST_CHANGES require the pull request reviews endpoint"
                 )
             # For inline comments, we need a real commit SHA
-            commit_id_to_use = commit_id
+            commit_id_to_use = normalized_commit_id
             if not commit_id_to_use:
                 pr = await self._request(
                     "GET",

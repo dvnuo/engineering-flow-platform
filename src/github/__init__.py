@@ -456,7 +456,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "github_add_pr_review_comment",
-                "description": "Add a review comment to a PR (can specify file path and line number)",
+                "description": "Add a PR review comment or submit a review event. Inline file comments require both path and line; APPROVE/REQUEST_CHANGES are submitted as review events (non-inline).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -466,7 +466,13 @@ def get_tools_schemas() -> list:
                         "body": {"type": "string", "description": "Comment text"},
                         "commit_id": {"type": "string", "description": "Commit SHA (optional)"},
                         "path": {"type": "string", "description": "File path for line comment (optional)"},
-                        "line": {"type": "integer", "description": "Line number for line comment (optional)"}
+                        "line": {"type": "integer", "description": "Line number for line comment (optional)"},
+                        "event": {
+                            "type": "string",
+                            "description": "Review event. Use COMMENT for a normal review comment, APPROVE to approve the PR, REQUEST_CHANGES to request changes.",
+                            "enum": ["COMMENT", "APPROVE", "REQUEST_CHANGES"],
+                            "default": "COMMENT",
+                        },
                     },
                     "required": ["owner", "repo", "pull_number", "body"]
                 }

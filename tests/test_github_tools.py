@@ -372,6 +372,22 @@ async def test_github_review_comment_wrapper_message_for_request_changes_event(m
     assert result == "Changes requested on PR #22"
 
 
+def test_github_add_pr_review_comment_schema_includes_event_enum(github_modules):
+    github_module, _ = github_modules
+
+    schemas = github_module.get_tools_schemas()
+    review_comment_schema = next(
+        schema
+        for schema in schemas
+        if schema.get("type") == "function"
+        and schema.get("function", {}).get("name") == "github_add_pr_review_comment"
+    )
+    event_schema = review_comment_schema["function"]["parameters"]["properties"]["event"]
+
+    assert event_schema["enum"] == ["COMMENT", "APPROVE", "REQUEST_CHANGES"]
+    assert event_schema["default"] == "COMMENT"
+
+
 @pytest.mark.asyncio
 async def test_channel_add_pr_review_comment_rejects_invalid_event(github_modules):
     _, github_api = github_modules
@@ -451,6 +467,69 @@ async def test_channel_add_pr_review_comment_inline_comment_happy_path(monkeypat
     assert captured["method"] == "POST"
     assert captured["endpoint"] == "/repos/acme/repo/pulls/12/comments"
     assert captured["json"]["commit_id"] == "deadbeef"
+    assert captured["json"]["path"] == "x.py"
+    assert captured["json"]["line"] == 10
+
+
+@pytest.mark.asyncio
+async def test_channel_add_pr_review_comment_strips_inline_commit_id(monkeypatch, github_modules):
+    _, github_api = github_modules
+    captured = {}
+
+    async def _fake_request(method, endpoint, **kwargs):
+        captured["method"] = method
+        captured["endpoint"] = endpoint
+        captured["json"] = kwargs.get("json", {})
+        return {"id": 126}
+
+    monkeypatch.setattr(github_api.github_channel, "_request", _fake_request)
+
+    result = await github_api.github_channel.add_pr_review_comment(
+        owner="acme",
+        repo="repo",
+        pull_number=12,
+        body="Inline comment",
+        commit_id="  deadbeef  ",
+        path="x.py",
+        line=10,
+        event="COMMENT",
+    )
+
+    assert result["id"] == 126
+    assert captured["endpoint"] == "/repos/acme/repo/pulls/12/comments"
+    assert captured["json"]["commit_id"] == "deadbeef"
+    assert captured["json"]["path"] == "x.py"
+    assert captured["json"]["line"] == 10
+
+
+@pytest.mark.asyncio
+async def test_channel_add_pr_review_comment_blank_commit_id_falls_back_to_head_sha(monkeypatch, github_modules):
+    _, github_api = github_modules
+    captured = {}
+
+    async def _fake_request(method, endpoint, **kwargs):
+        if method == "GET" and endpoint == "/repos/acme/repo/pulls/12":
+            return {"head": {"sha": "abc123"}}
+        if method == "POST" and endpoint == "/repos/acme/repo/pulls/12/comments":
+            captured["json"] = kwargs.get("json", {})
+            return {"id": 127}
+        raise AssertionError(f"Unexpected request: {method} {endpoint}")
+
+    monkeypatch.setattr(github_api.github_channel, "_request", _fake_request)
+
+    result = await github_api.github_channel.add_pr_review_comment(
+        owner="acme",
+        repo="repo",
+        pull_number=12,
+        body="Inline comment",
+        commit_id="   ",
+        path="x.py",
+        line=10,
+        event="COMMENT",
+    )
+
+    assert result["id"] == 127
+    assert captured["json"]["commit_id"] == "abc123"
     assert captured["json"]["path"] == "x.py"
     assert captured["json"]["line"] == 10
 
