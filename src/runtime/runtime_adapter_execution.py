@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, Dict, Optional
 
 from src.runtime.chat_orchestration_adapter import execute_runtime_task_request
@@ -20,7 +21,7 @@ async def execute_adapter_action_via_bus(
     context_ref: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     result = await execute_runtime_task_request(
-        request_id=f"runtime-{action_id}",
+        request_id=f"runtime-{action_id}-{uuid.uuid4().hex}",
         source_type=source_type,
         source_ref=source_ref,
         session_id=session_id,

@@ -239,6 +239,36 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_chat_execution_bus_adapter_does_not_mutate_execution_output_payload(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+    original_payload = {"response": "ok"}
+
+    async def _fake_execute_chat_orchestration(**kwargs):
+        execution_result = type("R", (), {"status": "success", "output_payload": original_payload})()
+        captured["execution_result"] = execution_result
+        return execution_result
+
+    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
+    monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
+
+    result = await webchat._run_chat_via_execution_bus(
+        agent=object(),
+        session_id="s-chat",
+        message="hello",
+        user_name="u1",
+        portal_user_id=None,
+        portal_user_name=None,
+    )
+
+    execution_result = captured["execution_result"]
+    assert result["_execution_result"] is execution_result
+    assert "_execution_result" not in execution_result.output_payload
+    assert result is not execution_result.output_payload
+
+
+@pytest.mark.asyncio
 async def test_chat_execution_bus_adapter_forwards_agent_id(monkeypatch):
     from src.gateway import webchat
 
