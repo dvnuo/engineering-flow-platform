@@ -156,7 +156,7 @@ class TestSessionManagerInfo:
         assert info is None
 
     @pytest.mark.asyncio
-    async def test_set_last_execution_id_updates_in_memory_without_triggering_save(self, fresh_session_manager):
+    async def test_set_last_execution_id_updates_in_memory_and_schedules_metadata_persist(self, fresh_session_manager):
         import uuid
 
         session_id = f"exec_meta_{uuid.uuid4().hex[:8]}"
