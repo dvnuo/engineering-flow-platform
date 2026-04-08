@@ -22,11 +22,19 @@ async def handle_websocket(request: web.Request) -> WebSocketResponse:
     
     # Create a queue for this connection
     queue = asyncio.Queue()
-    
+
+    query = request.rel_url.query
+    filter_keys = ("session_id", "task_id", "group_id", "coordination_run_id", "agent_id")
+    filters = {key: str(query.get(key, "")).strip() for key in filter_keys if str(query.get(key, "")).strip()}
+
     # Register this connection as a listener
-    await event_bus.add_listener(queue)
-    
-    logger.info(f"WebSocket client connected. Total listeners: {len(event_bus._listeners)}")
+    await event_bus.add_listener(queue, filters=filters)
+
+    logger.info(
+        "WebSocket client connected. filters=%s total_listeners=%d",
+        filters,
+        len(event_bus._listeners),
+    )
     
     async def read_events():
         """Background task to read from queue and send to WebSocket."""

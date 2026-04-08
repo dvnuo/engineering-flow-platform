@@ -758,12 +758,14 @@ async def api_chat(request: web.Request) -> web.Response:
 
 async def api_chat_stream(request: web.Request) -> web.StreamResponse:
     """Handle streaming chat API requests (Server-Sent Events).
-    
+
     POST /api/chat/stream
     Body: {"message": "...", "session_id": "optional"}
-    
+
     Returns: text/event-stream with chunks of the response
     """
+    response: Optional[web.StreamResponse] = None
+    run_task: Optional[asyncio.Task] = None
     try:
         data = await request.json()
         message = (data.get('message') or '').strip()
@@ -771,11 +773,11 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
-        
+
         if not message:
             response = web.json_response({'error': 'Empty message'}, status=400)
             return response
-        
+
         # Create streaming response
         response = web.StreamResponse(
             status=200,
@@ -786,19 +788,17 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 'X-Accel-Buffering': 'no',  # Disable nginx buffering
             }
         )
-        
+
         await response.prepare(request)
-        
+
         # Send start event
         await response.write(f"event: start\ndata: {json.dumps({'session_id': session_id})}\n\n".encode())
-        
-        # Create an async queue for streaming events
-        import asyncio
+
         event_queue = asyncio.Queue()
-        
+
         # Get model from config
         model = global_config.llm.get('model', 'gpt-5-mini')
-        
+
         # Run agent and stream response
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
         agent = AgentCore(
@@ -807,20 +807,31 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             agent_id=runtime_agent_id,
             agent_name=runtime_agent_name,
         )
-        
-        # Pass the queue to the agent for real-time events
-        result = await _run_chat_via_execution_bus(
-            agent=agent,
-            message=message,
-            session_id=session_id,
-            user_name=effective_user_name,
-            portal_user_id=portal_user_id,
-            portal_user_name=portal_user_name,
-            stream_callback=event_queue,
-            request_path="/api/chat/stream",
-            execution_metadata=execution_metadata,
-            agent_id=runtime_agent_id,
+
+        run_task = asyncio.create_task(
+            _run_chat_via_execution_bus(
+                agent=agent,
+                message=message,
+                session_id=session_id,
+                user_name=effective_user_name,
+                portal_user_id=portal_user_id,
+                portal_user_name=portal_user_name,
+                stream_callback=event_queue,
+                request_path="/api/chat/stream",
+                execution_metadata=execution_metadata,
+                agent_id=runtime_agent_id,
+            )
         )
+
+        while not run_task.done() or not event_queue.empty():
+            try:
+                event = await asyncio.wait_for(event_queue.get(), timeout=0.15)
+                escaped = str(event).replace('\n', '\\n').replace('\r', '\\r')
+                await response.write(f"event: progress\ndata: {escaped}\n\n".encode())
+            except asyncio.TimeoutError:
+                continue
+
+        result = await run_task
         execution_result = result.get("_execution_result")
         if runtime_agent_id and execution_result is not None:
             publish_fields = extract_session_metadata_publish_fields(
@@ -837,21 +848,9 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 )
             except Exception:
                 logger.warning("Best-effort session metadata publish failed for streaming chat path", exc_info=True)
-        
-        # Stream events from queue while agent is running
-        while not event_queue.empty():
-            try:
-                event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
-                escaped = event.replace('\n', '\\n').replace('\r', '\\r')
-                await response.write(f"event: progress\ndata: {escaped}\n\n".encode())
-            except asyncio.TimeoutError:
-                break
-            except Exception as e:
-                logger.error(f"Error streaming event: {e}")
-        
-        response_text = result.get("response", "") if result else ""
+
         usage = result.get("usage", {}) if result else {}
-        
+
         # Record usage
         if usage:
             provider = global_config.llm.get('provider', 'openai')
@@ -864,19 +863,19 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 session_id=session_id,
                 task_type="chat"
             )
-        
+
         # Send usage data
         usage_data = json.dumps({
             'usage': usage,
             'session_id': session_id,
         })
         await response.write(f"event: usage\ndata: {usage_data}\n\n".encode())
-        
+
         # Send done event
         await response.write(f"event: done\ndata: \n\n".encode())
-        
+
         return response
-        
+
     except json.JSONDecodeError:
         response = web.json_response({'error': 'Invalid JSON'}, status=400)
         return response
@@ -887,11 +886,14 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         raise
     except Exception as e:
         logger.error(f"Stream error: {e}")
-        error_data = json.dumps({'error': str(e)})
-        try:
-            await response.write(f"event: error\ndata: {error_data}\n\n".encode())
-        except Exception:
-            pass
+        if response is not None and run_task is not None:
+            error_data = json.dumps({'error': str(e)})
+            try:
+                await response.write(f"event: error\ndata: {error_data}\n\n".encode())
+                await response.write(f"event: done\ndata: \n\n".encode())
+            except Exception:
+                pass
+            return response
         return web.Response(status=500, text=str(e))
 
 
