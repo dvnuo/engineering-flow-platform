@@ -110,8 +110,10 @@ class Config:
                 return path
         # Return the primary path even if it doesn't exist
         import shutil
-        shutil.copy(self.PROJECT_EXAMPLE, self.DEFAULT_PATHS[0])
-        return self.DEFAULT_PATHS[0]
+        target = self.DEFAULT_PATHS[0]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(self.PROJECT_EXAMPLE, target)
+        return target
 
     def load(self) -> None:
         """Load configuration from YAML file."""
