@@ -110,11 +110,19 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
         capability_id = f"skill:{skill_name}"
         descriptor = registry.get(capability_id)
         if descriptor is None:
-            return {**fallback, "primary_capability_id": capability_id, "capability_id": capability_id, "involved_capability_ids": [capability_id], "capability_type": "skill"}
+            return {
+                **fallback,
+                "primary_capability_id": capability_id,
+                "capability_id": capability_id,
+                "action_id": capability_id,
+                "involved_capability_ids": [capability_id],
+                "capability_type": "skill",
+            }
         return {
             **fallback,
             "primary_capability_id": descriptor.capability_id,
             "capability_id": descriptor.capability_id,
+            "action_id": descriptor.capability_id,
             "capability_type": descriptor.type,
             "involved_capability_ids": [descriptor.capability_id],
             "policy_tags": list(descriptor.policy_tags or []),

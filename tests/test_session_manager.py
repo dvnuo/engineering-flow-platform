@@ -224,6 +224,37 @@ class TestSessionManagerInfo:
         assert saved["metadata"]["pending_delegations"][0]["delegation_id"] == "d1"
 
     @pytest.mark.asyncio
+    async def test_add_pending_delegation_ignores_corrupted_non_dict_entries(self, fresh_session_manager):
+        import uuid
+
+        session_id = f"pending_corrupt_{uuid.uuid4().hex[:8]}"
+        session = await fresh_session_manager.get_session(session_id)
+        session["metadata"]["pending_delegations"] = [None, "bad", {"delegation_id": "d1", "x": 1}, 123]
+
+        await fresh_session_manager.add_pending_delegation(session_id, {"delegation_id": "d2", "y": 2})
+
+        pending = session["metadata"]["pending_delegations"]
+        assert all(isinstance(item, dict) for item in pending)
+        assert {"delegation_id": "d1", "x": 1} in pending
+        assert {"delegation_id": "d2", "y": 2} in pending
+
+    @pytest.mark.asyncio
+    async def test_add_pending_delegation_replaces_existing_same_delegation_id(self, fresh_session_manager):
+        import uuid
+
+        session_id = f"pending_replace_{uuid.uuid4().hex[:8]}"
+        session = await fresh_session_manager.get_session(session_id)
+        session["metadata"]["pending_delegations"] = [None, {"delegation_id": "d1", "x": 1}, {"delegation_id": "d2", "old": True}]
+
+        await fresh_session_manager.add_pending_delegation(session_id, {"delegation_id": "d2", "y": 2})
+
+        pending = session["metadata"]["pending_delegations"]
+        assert all(isinstance(item, dict) for item in pending)
+        d2_items = [item for item in pending if item.get("delegation_id") == "d2"]
+        assert len(d2_items) == 1
+        assert d2_items[0] == {"delegation_id": "d2", "y": 2}
+
+    @pytest.mark.asyncio
     async def test_add_message_still_uses_normal_persistence_path(self, fresh_session_manager):
         import uuid
 

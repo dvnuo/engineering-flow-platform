@@ -456,11 +456,12 @@ class SessionManager:
         metadata = session.setdefault("metadata", {})
         pending = metadata.get("pending_delegations")
         pending_list = list(pending) if isinstance(pending, list) else []
+        pending_dicts = [item for item in pending_list if isinstance(item, dict)]
         delegation_id = delegation_record.get("delegation_id")
         if delegation_id:
-            pending_list = [item for item in pending_list if item.get("delegation_id") != delegation_id]
-        pending_list.append(dict(delegation_record))
-        metadata["pending_delegations"] = pending_list
+            pending_dicts = [item for item in pending_dicts if item.get("delegation_id") != delegation_id]
+        pending_dicts.append(dict(delegation_record))
+        metadata["pending_delegations"] = pending_dicts
         session["updated_at"] = datetime.now().isoformat()
         self._schedule_metadata_persist(session_id, session)
 

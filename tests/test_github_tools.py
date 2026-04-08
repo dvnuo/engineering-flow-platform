@@ -396,6 +396,99 @@ async def test_channel_add_pr_review_comment_inline_comment_happy_path(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_channel_add_pr_review_comment_blank_path_without_line_uses_reviews_endpoint(monkeypatch, github_modules):
+    _, github_api = github_modules
+    captured = {}
+
+    async def _fake_request(method, endpoint, **kwargs):
+        captured["method"] = method
+        captured["endpoint"] = endpoint
+        captured["json"] = kwargs.get("json", {})
+        return {"id": 124}
+
+    monkeypatch.setattr(github_api.github_channel, "_request", _fake_request)
+
+    result = await github_api.github_channel.add_pr_review_comment(
+        owner="acme",
+        repo="repo",
+        pull_number=12,
+        body="Review comment",
+        path="",
+        line=None,
+        event="COMMENT",
+    )
+
+    assert result["id"] == 124
+    assert captured["endpoint"] == "/repos/acme/repo/pulls/12/reviews"
+    assert captured["json"]["event"] == "COMMENT"
+
+
+@pytest.mark.asyncio
+async def test_channel_add_pr_review_comment_whitespace_path_without_line_uses_reviews_endpoint(monkeypatch, github_modules):
+    _, github_api = github_modules
+    captured = {}
+
+    async def _fake_request(method, endpoint, **kwargs):
+        captured["endpoint"] = endpoint
+        return {"id": 125}
+
+    monkeypatch.setattr(github_api.github_channel, "_request", _fake_request)
+
+    result = await github_api.github_channel.add_pr_review_comment(
+        owner="acme",
+        repo="repo",
+        pull_number=12,
+        body="Review comment",
+        path="   ",
+        line=None,
+        event="COMMENT",
+    )
+
+    assert result["id"] == 125
+    assert captured["endpoint"] == "/repos/acme/repo/pulls/12/reviews"
+
+
+@pytest.mark.asyncio
+async def test_channel_add_pr_review_comment_blank_path_with_line_still_fails_pairing(github_modules):
+    _, github_api = github_modules
+    with pytest.raises(ValueError, match="path and line must be provided together"):
+        await github_api.github_channel.add_pr_review_comment(
+            owner="acme",
+            repo="repo",
+            pull_number=11,
+            body="Invalid",
+            path="",
+            line=10,
+            event="COMMENT",
+        )
+
+
+@pytest.mark.asyncio
+async def test_channel_add_pr_review_comment_rejects_non_positive_line_values(github_modules):
+    _, github_api = github_modules
+    with pytest.raises(ValueError, match="line must be a positive integer for inline PR review comments"):
+        await github_api.github_channel.add_pr_review_comment(
+            owner="acme",
+            repo="repo",
+            pull_number=11,
+            body="Invalid",
+            path="x.py",
+            line=0,
+            event="COMMENT",
+        )
+    with pytest.raises(ValueError, match="line must be a positive integer for inline PR review comments"):
+        await github_api.github_channel.add_pr_review_comment(
+            owner="acme",
+            repo="repo",
+            pull_number=11,
+            body="Invalid",
+            path="x.py",
+            line=-1,
+            event="COMMENT",
+        )
+
+
+@pytest.mark.asyncio
 async def test_github_get_pr_files_dispatch_does_not_fail_on_error_word_in_content(monkeypatch):
     from src import execute_tool
 

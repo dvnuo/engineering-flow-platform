@@ -71,8 +71,20 @@ def test_resolve_task_capability_contract_delegation_task():
 
     assert plan["primary_capability_id"] == "skill:demo"
     assert plan["capability_id"] == "skill:demo"
+    assert plan["action_id"] == "skill:demo"
     assert plan["capability_type"] == "skill"
     assert plan["involved_capability_ids"] == ["skill:demo"]
+
+
+def test_resolve_task_capability_contract_delegation_task_unresolved_sets_action_id():
+    plan = resolve_task_capability_contract("delegation_task", {"skill_name": "Missing"})
+
+    assert plan["primary_capability_id"] == "skill:missing"
+    assert plan["capability_id"] == "skill:missing"
+    assert plan["action_id"] == "skill:missing"
+    assert plan["capability_type"] == "skill"
+    assert plan["involved_capability_ids"] == ["skill:missing"]
+    assert plan["capability_resolution"] == "unresolved"
 
 
 def test_execution_bus_resolve_task_capability_plan_delegates_to_canonical_contract(monkeypatch):

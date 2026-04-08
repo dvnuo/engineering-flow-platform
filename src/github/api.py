@@ -560,8 +560,25 @@ class GitHubChannel:
         if normalized_event not in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
             raise ValueError("event must be one of COMMENT, APPROVE, REQUEST_CHANGES")
 
-        has_path = path is not None
-        has_line = line is not None
+        normalized_path: Optional[str]
+        if path is None:
+            normalized_path = None
+        elif isinstance(path, str):
+            stripped_path = path.strip()
+            normalized_path = stripped_path or None
+        else:
+            normalized_path = str(path).strip() or None
+
+        normalized_line: Optional[int]
+        if line is None:
+            normalized_line = None
+        else:
+            if not isinstance(line, int) or line <= 0:
+                raise ValueError("line must be a positive integer for inline PR review comments")
+            normalized_line = line
+
+        has_path = normalized_path is not None
+        has_line = normalized_line is not None
         if has_path != has_line:
             raise ValueError("path and line must be provided together for inline PR review comments")
 
@@ -588,8 +605,8 @@ class GitHubChannel:
                 json={
                     "body": body,
                     "commit_id": commit_id_to_use,
-                    "path": path,
-                    "line": line,
+                    "path": normalized_path,
+                    "line": normalized_line,
                     "side": "RIGHT"
                 }
             )
