@@ -1,5 +1,6 @@
 """Tests for SessionManager."""
 
+import asyncio
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -173,12 +174,109 @@ class TestSessionManagerInfo:
         manager_module.session_persistence.save_session = _fake_save_session
         try:
             await fresh_session_manager.set_last_execution_id(session_id, "req-123")
+            await asyncio.sleep(0)
         finally:
             manager_module.session_persistence.save_session = original_save
 
         assert session["metadata"]["last_execution_id"] == "req-123"
         assert session["updated_at"]
-        assert save_calls == []
+        assert len(save_calls) == 1
+        assert save_calls[0]["session_id"] == session_id
+
+    @pytest.mark.asyncio
+    async def test_metadata_persist_uses_snapshots(self, fresh_session_manager):
+        import uuid
+        import asyncio
+
+        session_id = f"snapshot_meta_{uuid.uuid4().hex[:8]}"
+        session = await fresh_session_manager.get_session(session_id)
+        session["channel"] = "chat"
+        session["history"] = [{"id": "m1", "content": "before"}]
+        session["metadata"] = {"pending_delegations": [{"delegation_id": "d1"}]}
+
+        save_calls = []
+        gate = asyncio.Event()
+
+        async def _fake_save_session(**kwargs):
+            await gate.wait()
+            save_calls.append(kwargs)
+            return True
+
+        fresh_session_manager.auto_save = True
+        fresh_session_manager.persistence_enabled = True
+        from src.sessions import manager as manager_module
+        original_save = manager_module.session_persistence.save_session
+        manager_module.session_persistence.save_session = _fake_save_session
+        try:
+            await fresh_session_manager.set_last_execution_id(session_id, "req-1")
+            session["channel"] = "mutated-channel"
+            session["history"][0]["content"] = "after"
+            session["metadata"]["pending_delegations"][0]["delegation_id"] = "d2"
+            gate.set()
+            await asyncio.sleep(0)
+        finally:
+            manager_module.session_persistence.save_session = original_save
+
+        assert len(save_calls) == 1
+        saved = save_calls[0]
+        assert saved["channel"] == "chat"
+        assert saved["messages"][0]["content"] == "before"
+        assert saved["metadata"]["pending_delegations"][0]["delegation_id"] == "d1"
+
+    @pytest.mark.asyncio
+    async def test_add_pending_delegation_ignores_corrupted_non_dict_entries(self, fresh_session_manager):
+        import uuid
+
+        session_id = f"pending_corrupt_{uuid.uuid4().hex[:8]}"
+        session = await fresh_session_manager.get_session(session_id)
+        session["metadata"]["pending_delegations"] = [None, "bad", {"delegation_id": "d1", "x": 1}, 123]
+
+        await fresh_session_manager.add_pending_delegation(session_id, {"delegation_id": "d2", "y": 2})
+
+        pending = session["metadata"]["pending_delegations"]
+        assert all(isinstance(item, dict) for item in pending)
+        assert {"delegation_id": "d1", "x": 1} in pending
+        assert {"delegation_id": "d2", "y": 2} in pending
+
+    @pytest.mark.asyncio
+    async def test_add_pending_delegation_replaces_existing_same_delegation_id(self, fresh_session_manager):
+        import uuid
+
+        session_id = f"pending_replace_{uuid.uuid4().hex[:8]}"
+        session = await fresh_session_manager.get_session(session_id)
+        session["metadata"]["pending_delegations"] = [None, {"delegation_id": "d1", "x": 1}, {"delegation_id": "d2", "old": True}]
+
+        await fresh_session_manager.add_pending_delegation(session_id, {"delegation_id": "d2", "y": 2})
+
+        pending = session["metadata"]["pending_delegations"]
+        assert all(isinstance(item, dict) for item in pending)
+        d2_items = [item for item in pending if item.get("delegation_id") == "d2"]
+        assert len(d2_items) == 1
+        assert d2_items[0] == {"delegation_id": "d2", "y": 2}
+
+    @pytest.mark.asyncio
+    async def test_metadata_persist_logs_background_failure(self, fresh_session_manager, caplog):
+        import uuid
+        import logging
+
+        session_id = f"persist_fail_{uuid.uuid4().hex[:8]}"
+
+        async def _fake_save_session(**_kwargs):
+            raise RuntimeError("boom")
+
+        fresh_session_manager.auto_save = True
+        fresh_session_manager.persistence_enabled = True
+        from src.sessions import manager as manager_module
+        original_save = manager_module.session_persistence.save_session
+        manager_module.session_persistence.save_session = _fake_save_session
+        caplog.set_level(logging.ERROR, logger="src.sessions.manager")
+        try:
+            await fresh_session_manager.set_last_execution_id(session_id, "req-1")
+            await asyncio.sleep(0)
+        finally:
+            manager_module.session_persistence.save_session = original_save
+
+        assert "Failed to persist metadata-only session update" in caplog.text
 
     @pytest.mark.asyncio
     async def test_add_message_still_uses_normal_persistence_path(self, fresh_session_manager):

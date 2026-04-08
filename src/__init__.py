@@ -401,8 +401,16 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         commit_id = kwargs.get("commit_id")
         path = kwargs.get("path")
         line = kwargs.get("line")
+        event = kwargs.get("event", "COMMENT")
         result = await github_module.github_add_pr_review_comment(
-            owner, repo, pull_number, body, commit_id, path, line
+            owner=owner,
+            repo=repo,
+            pull_number=pull_number,
+            body=body,
+            commit_id=commit_id,
+            path=path,
+            line=line,
+            event=event,
         )
         return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
