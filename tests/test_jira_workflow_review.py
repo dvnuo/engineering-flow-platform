@@ -95,6 +95,60 @@ async def test_jira_workflow_review_failure_path_reassigns_without_success_trans
 
 
 @pytest.mark.asyncio
+async def test_jira_workflow_review_skill_execution_failure_short_circuits_without_side_effects(monkeypatch):
+    calls = []
+
+    async def _fake_execute_jira_workflow_action(action_name, kwargs):
+        calls.append((action_name, dict(kwargs)))
+        if action_name == "read_issue":
+            return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
+        return {"success": True, "result": "ok", "error": None}
+
+    async def _fake_execute_skill(skill_name, **kwargs):
+        return SkillResult(success=False, error="temporary skill failure", output="", data={})
+
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
+
+    result = await run_jira_workflow_review({"issue_key": "PROJ-200", "skill_name": "review_skill"})
+
+    assert result["success"] is False
+    assert result["workflow_outcome"] == "failed"
+    assert result["approved"] is None
+    assert result["error"] == "temporary skill failure"
+    assert result["actions_applied"] == []
+    assert [name for name, _ in calls] == ["read_issue"]
+    assert any(evt.get("event_type") == "task.jira_workflow_review.failed" for evt in result["runtime_events"])
+
+
+@pytest.mark.asyncio
+async def test_jira_workflow_review_skill_failure_without_error_uses_output_or_generic_message(monkeypatch):
+    async def _fake_execute_jira_workflow_action(action_name, kwargs):
+        if action_name == "read_issue":
+            return {"success": True, "result": {"key": kwargs["issue_key"]}, "error": None}
+        return {"success": True, "result": "ok", "error": None}
+
+    results = [
+        SkillResult(success=False, error=None, output="skill output failure reason", data={}),
+        SkillResult(success=False, error=None, output="", data={}),
+    ]
+
+    async def _fake_execute_skill(skill_name, **kwargs):
+        return results.pop(0)
+
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_jira_workflow_action", _fake_execute_jira_workflow_action)
+    monkeypatch.setattr("src.runtime.jira_workflow_review.execute_skill", _fake_execute_skill)
+
+    first = await run_jira_workflow_review({"issue_key": "PROJ-201", "skill_name": "review_skill"})
+    second = await run_jira_workflow_review({"issue_key": "PROJ-202", "skill_name": "review_skill"})
+
+    assert first["success"] is False
+    assert first["error"] == "skill output failure reason"
+    assert second["success"] is False
+    assert "Jira workflow review skill failed without an explicit error" in second["error"]
+
+
+@pytest.mark.asyncio
 async def test_requester_resolution_from_issue_snapshot(monkeypatch):
     async def _fake_execute_jira_workflow_action(action_name, kwargs):
         if action_name == "read_issue":

@@ -67,25 +67,37 @@ class JiraReconciliationRunner:
             "failure_transition": cls._first_non_empty(rule, "failure_transition"),
         }
 
-    async def _get_json(self, path: str) -> Dict[str, Any]:
+    async def _get_json(self, path: str, *, session: ClientSession | None = None) -> Dict[str, Any]:
         url = f"{self._base_url()}{path}"
-        async with ClientSession(headers=self._headers()) as session:
+        if session is not None:
             async with session.get(url) as response:
                 data = await response.json(content_type=None)
                 if response.status >= 400:
                     raise RuntimeError(f"HTTP {response.status}: {data}")
                 return data if isinstance(data, dict) else {"items": data}
+        async with ClientSession(headers=self._headers()) as temp_session:
+            async with temp_session.get(url) as response:
+                data = await response.json(content_type=None)
+                if response.status >= 400:
+                    raise RuntimeError(f"HTTP {response.status}: {data}")
+                return data if isinstance(data, dict) else {"items": data}
 
-    async def _post_json(self, path: str, payload: Dict[str, Any]) -> None:
+    async def _post_json(self, path: str, payload: Dict[str, Any], *, session: ClientSession | None = None) -> None:
         url = f"{self._base_url()}{path}"
-        async with ClientSession(headers=self._headers()) as session:
+        if session is not None:
             async with session.post(url, json=payload) as response:
                 if response.status >= 400:
                     body = await response.text()
                     raise RuntimeError(f"HTTP {response.status}: {body}")
+            return
+        async with ClientSession(headers=self._headers()) as temp_session:
+            async with temp_session.post(url, json=payload) as response:
+                if response.status >= 400:
+                    body = await response.text()
+                    raise RuntimeError(f"HTTP {response.status}: {body}")
 
-    async def fetch_enabled_workflow_rules(self) -> List[Dict[str, Any]]:
-        data = await self._get_json("/api/internal/workflow-transition-rules")
+    async def fetch_enabled_workflow_rules(self, *, session: ClientSession | None = None) -> List[Dict[str, Any]]:
+        data = await self._get_json("/api/internal/workflow-transition-rules", session=session)
         rules = data.get("items") if isinstance(data.get("items"), list) else data.get("rules")
         if not isinstance(rules, list):
             return []
@@ -98,8 +110,8 @@ class JiraReconciliationRunner:
                 normalized_rules.append(normalized)
         return normalized_rules
 
-    async def fetch_identity_bindings(self) -> List[Dict[str, Any]]:
-        data = await self._get_json("/api/internal/agent-identity-bindings")
+    async def fetch_identity_bindings(self, *, session: ClientSession | None = None) -> List[Dict[str, Any]]:
+        data = await self._get_json("/api/internal/agent-identity-bindings", session=session)
         items = data.get("items") if isinstance(data.get("items"), list) else []
         return [item for item in items if isinstance(item, dict)]
 
@@ -176,44 +188,45 @@ class JiraReconciliationRunner:
             return
 
         try:
-            rules = await self.fetch_enabled_workflow_rules()
-            identity_bindings = await self.fetch_identity_bindings()
+            async with ClientSession(headers=self._headers()) as session:
+                rules = await self.fetch_enabled_workflow_rules(session=session)
+                identity_bindings = await self.fetch_identity_bindings(session=session)
+
+                for rule in rules:
+                    project_keys = [str(x).strip() for x in (rule.get("project_keys") or []) if str(x).strip()]
+                    trigger_statuses = [str(x).strip() for x in (rule.get("trigger_statuses") or []) if str(x).strip()]
+
+                    if not project_keys:
+                        continue
+
+                    jql = f"project IN ({','.join(project_keys)})"
+                    if trigger_statuses:
+                        quoted = ",".join(f'\"{s}\"' for s in trigger_statuses)
+                        jql = f"{jql} AND status IN ({quoted})"
+
+                    try:
+                        search_result = await jira_channel.search_issues(jql, max_results=50)
+                    except Exception as exc:
+                        logger.warning("Jira reconciliation search failed for rule=%s: %s", rule.get("id"), exc)
+                        continue
+
+                    issues = search_result.get("issues") if isinstance(search_result, dict) and isinstance(search_result.get("issues"), list) else []
+                    for issue in issues:
+                        try:
+                            ingress_payload = self.build_external_event_ingress_request(rule=rule, issue=issue, identity_bindings=identity_bindings)
+                            if not ingress_payload:
+                                continue
+                            await self._post_json("/api/internal/external-events/ingest", ingress_payload, session=session)
+                        except Exception as exc:
+                            logger.warning(
+                                "Jira reconciliation ingest failed for rule=%s issue=%s: %s",
+                                rule.get("id"),
+                                issue.get("key") if isinstance(issue, dict) else None,
+                                exc,
+                            )
         except Exception as exc:
             logger.warning("Jira reconciliation failed to load Portal control-plane exports: %s", exc)
             return
-
-        for rule in rules:
-            project_keys = [str(x).strip() for x in (rule.get("project_keys") or []) if str(x).strip()]
-            trigger_statuses = [str(x).strip() for x in (rule.get("trigger_statuses") or []) if str(x).strip()]
-
-            if not project_keys:
-                continue
-
-            jql = f"project IN ({','.join(project_keys)})"
-            if trigger_statuses:
-                quoted = ",".join(f'\"{s}\"' for s in trigger_statuses)
-                jql = f"{jql} AND status IN ({quoted})"
-
-            try:
-                search_result = await jira_channel.search_issues(jql, max_results=50)
-            except Exception as exc:
-                logger.warning("Jira reconciliation search failed for rule=%s: %s", rule.get("id"), exc)
-                continue
-
-            issues = search_result.get("issues") if isinstance(search_result, dict) and isinstance(search_result.get("issues"), list) else []
-            for issue in issues:
-                try:
-                    ingress_payload = self.build_external_event_ingress_request(rule=rule, issue=issue, identity_bindings=identity_bindings)
-                    if not ingress_payload:
-                        continue
-                    await self._post_json("/api/internal/external-events/ingest", ingress_payload)
-                except Exception as exc:
-                    logger.warning(
-                        "Jira reconciliation ingest failed for rule=%s issue=%s: %s",
-                        rule.get("id"),
-                        issue.get("key") if isinstance(issue, dict) else None,
-                        exc,
-                    )
 
     async def start(self) -> None:
         self.running = True
