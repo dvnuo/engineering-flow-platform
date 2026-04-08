@@ -284,3 +284,50 @@ async def test_github_review_task_forwards_runtime_context_to_bus_helper(monkeyp
     assert captured["meta"]["agent_id"] == "agent-123"
     assert captured["meta"]["policy_profile_id"] == "pp-123"
     assert captured["meta"]["metadata"] == {"k": "v"}
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_failed_skill_without_error_uses_output_as_error(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(
+            success=False,
+            error=None,
+            output="Review skill failed because repository context was unavailable",
+            data={},
+        )
+
+    async def _fail_bus_call(*_args, **_kwargs):
+        raise AssertionError("secondary write-back should not run for failed skill")
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fail_bus_call)
+
+    result = await run_github_review_task({"owner": "acme", "repo": "demo", "pull_number": 24})
+
+    assert result["success"] is False
+    assert result["error"] == "Review skill failed because repository context was unavailable"
+    failed_events = [evt for evt in result["runtime_events"] if evt.get("event_type") == "task.github_review.failed"]
+    assert failed_events
+    assert failed_events[-1]["detail_payload"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_failed_skill_without_error_or_output_uses_generic_error(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(success=False, error=None, output="", data={})
+
+    async def _fail_bus_call(*_args, **_kwargs):
+        raise AssertionError("secondary write-back should not run for failed skill")
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fail_bus_call)
+
+    result = await run_github_review_task({"owner": "acme", "repo": "demo", "pull_number": 25})
+
+    assert result["success"] is False
+    assert "GitHub review skill 'review-pull-request' failed without an explicit error" in result["error"]
+    assert result["secondary_action_attempted"] is False
