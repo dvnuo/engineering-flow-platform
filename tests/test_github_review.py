@@ -331,3 +331,95 @@ async def test_github_review_task_failed_skill_without_error_or_output_uses_gene
     assert result["success"] is False
     assert "GitHub review skill 'review-pull-request' failed without an explicit error" in result["error"]
     assert result["secondary_action_attempted"] is False
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_parses_json_object_string_skill_kwargs(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    captured = {}
+
+    async def _fake_execute_skill(skill_name, **kwargs):
+        captured["skill_name"] = skill_name
+        captured["kwargs"] = kwargs
+        return _SkillResult(success=False, output="stop", error="stop", data={})
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+
+    result = await run_github_review_task(
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 30,
+            "skill_kwargs": '{"mode":"strict","max_comments":2}',
+        }
+    )
+
+    assert captured["skill_name"] == "review-pull-request"
+    assert captured["kwargs"]["mode"] == "strict"
+    assert captured["kwargs"]["max_comments"] == 2
+    assert result["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_invalid_json_skill_kwargs_returns_structured_failure(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    called = {"skill": False}
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        called["skill"] = True
+        return _SkillResult(success=True, output="ok", error=None, data={})
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+
+    result = await run_github_review_task(
+        {"owner": "acme", "repo": "demo", "pull_number": 31, "skill_kwargs": "{not-json"}
+    )
+
+    assert called["skill"] is False
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_skill_kwargs_json"
+    assert result["secondary_action_attempted"] is False
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_non_object_json_skill_kwargs_returns_structured_failure(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    called = {"skill": False}
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        called["skill"] = True
+        return _SkillResult(success=True, output="ok", error=None, data={})
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+
+    result = await run_github_review_task(
+        {"owner": "acme", "repo": "demo", "pull_number": 32, "skill_kwargs": "[1,2]"}
+    )
+
+    assert called["skill"] is False
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_skill_kwargs_type"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_non_dict_skill_kwargs_returns_structured_failure(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    called = {"skill": False}
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        called["skill"] = True
+        return _SkillResult(success=True, output="ok", error=None, data={})
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+
+    result = await run_github_review_task(
+        {"owner": "acme", "repo": "demo", "pull_number": 33, "skill_kwargs": [1, 2]}
+    )
+
+    assert called["skill"] is False
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_skill_kwargs_type"

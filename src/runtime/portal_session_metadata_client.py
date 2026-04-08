@@ -57,6 +57,12 @@ def _first_non_empty(metadata: Dict[str, Any], *keys: str) -> Any:
     return None
 
 
+def _optional_string(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
 def build_session_metadata_payload(
     *,
     last_execution_id: Optional[str],
@@ -71,16 +77,19 @@ def build_session_metadata_payload(
     payload: Dict[str, Any] = {}
 
     group_id = _first_non_empty(metadata, "group_id", "portal_group_id")
-    if group_id:
-        payload["group_id"] = str(group_id)
+    normalized_group_id = _optional_string(group_id)
+    if normalized_group_id is not None:
+        payload["group_id"] = normalized_group_id
 
     current_task_id = _first_non_empty(metadata, "current_task_id", "portal_task_id", "task_id")
-    if current_task_id not in (None, ""):
-        payload["current_task_id"] = current_task_id
+    normalized_current_task_id = _optional_string(current_task_id)
+    if normalized_current_task_id is not None:
+        payload["current_task_id"] = normalized_current_task_id
 
     current_delegation_id = _first_non_empty(metadata, "current_delegation_id", "portal_delegation_id", "delegation_id")
-    if current_delegation_id not in (None, ""):
-        payload["current_delegation_id"] = current_delegation_id
+    normalized_current_delegation_id = _optional_string(current_delegation_id)
+    if normalized_current_delegation_id is not None:
+        payload["current_delegation_id"] = normalized_current_delegation_id
 
     current_coordination_run_id = _first_non_empty(
         metadata,
@@ -88,16 +97,18 @@ def build_session_metadata_payload(
         "portal_coordination_run_id",
         "coordination_run_id",
     )
-    if current_coordination_run_id not in (None, ""):
-        payload["current_coordination_run_id"] = current_coordination_run_id
+    normalized_current_coordination_run_id = _optional_string(current_coordination_run_id)
+    if normalized_current_coordination_run_id is not None:
+        payload["current_coordination_run_id"] = normalized_current_coordination_run_id
 
     source_type = metadata.get("source_type")
     if source_type not in (None, ""):
         payload["source_type"] = source_type
 
     source_ref = _first_non_empty(metadata, "source_ref", "portal_task_id", "task_id")
-    if source_ref not in (None, ""):
-        payload["source_ref"] = source_ref
+    normalized_source_ref = _optional_string(source_ref)
+    if normalized_source_ref is not None:
+        payload["source_ref"] = normalized_source_ref
 
     if last_execution_id:
         payload["last_execution_id"] = str(last_execution_id)

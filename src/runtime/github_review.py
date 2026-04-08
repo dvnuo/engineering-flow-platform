@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Callable, Dict, Optional
 import logging
 
@@ -37,6 +38,22 @@ def _normalize_review_summary(skill_output: Any, skill_data: Dict[str, Any], fal
     if isinstance(fallback_comment, str) and fallback_comment.strip():
         return fallback_comment.strip()
     return ""
+
+
+def _normalize_skill_kwargs(raw_value: Any) -> tuple[Dict[str, Any] | None, str | None, str | None]:
+    if raw_value is None:
+        return {}, None, None
+    if isinstance(raw_value, dict):
+        return dict(raw_value), None, None
+    if isinstance(raw_value, str):
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return None, "invalid_skill_kwargs_json", "skill_kwargs must be valid JSON when provided as a string"
+        if not isinstance(parsed, dict):
+            return None, "invalid_skill_kwargs_type", "skill_kwargs JSON string must decode to an object"
+        return dict(parsed), None, None
+    return None, "invalid_skill_kwargs_type", "skill_kwargs must be a dict or JSON object string"
 
 
 def _normalize_review_writeback(skill_output: Any, skill_data: Dict[str, Any], fallback_comment: Optional[str]) -> tuple[str, str | None]:
@@ -108,7 +125,31 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     skill_name = str(payload.get("skill_name") or "review-pull-request").strip() or "review-pull-request"
-    skill_kwargs = dict(payload.get("skill_kwargs") or {})
+    skill_kwargs, skill_kwargs_error_code, skill_kwargs_error = _normalize_skill_kwargs(payload.get("skill_kwargs"))
+    if skill_kwargs_error_code:
+        return {
+            "task_type": "github_review_task",
+            "success": False,
+            "error_code": skill_kwargs_error_code,
+            "error": skill_kwargs_error,
+            "review_summary": None,
+            "secondary_action_attempted": False,
+            "secondary_action_success": False,
+            "actions_applied": [],
+            "result": {},
+            "skill_name": skill_name,
+            "runtime_events": [
+                _event(
+                    "task.github_review.failed",
+                    "failed",
+                    {
+                        "error_code": skill_kwargs_error_code,
+                        "error": skill_kwargs_error,
+                        "skill_name": skill_name,
+                    },
+                )
+            ],
+        }
     review_comment_input = payload.get("comment")
     review_metadata = payload.get("metadata")
 
