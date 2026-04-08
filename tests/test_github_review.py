@@ -171,3 +171,67 @@ async def test_github_review_task_head_sha_match_still_writes_review(monkeypatch
     assert result["success"] is True
     assert captured["action_id"] == "adapter:github:review_pull_request"
     assert captured["kwargs"]["review_event"] == "APPROVE"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_gate_with_blocked_false_allows_secondary_action(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(success=True, output="Looks good", data={"approved": True})
+
+    captured = {}
+
+    async def _fake_execute_adapter_action(action_id, kwargs):
+        captured["action_id"] = action_id
+        captured["kwargs"] = kwargs
+        return {"success": True, "error": None, "result": {"id": 7}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action", _fake_execute_adapter_action)
+
+    result = await run_github_review_task(
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 21,
+            "_action_gate": lambda *_args, **_kwargs: {"blocked": False},
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["action_id"] == "adapter:github:review_pull_request"
+    assert result["secondary_action_success"] is True
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_gate_with_blocked_true_blocks_secondary_action(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(success=True, output="Needs changes", data={"approved": False})
+
+    called = {"adapter": False}
+
+    async def _fake_execute_adapter_action(_action_id, _kwargs):
+        called["adapter"] = True
+        return {"success": True, "error": None, "result": {"id": 8}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action", _fake_execute_adapter_action)
+
+    result = await run_github_review_task(
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 22,
+            "_action_gate": lambda *_args, **_kwargs: {"blocked": True, "reason": "denied_by_policy"},
+        }
+    )
+
+    assert called["adapter"] is False
+    assert result["success"] is False
+    assert result["secondary_action_attempted"] is True
+    assert result["secondary_action_success"] is False
+    assert "capability policy blocked for secondary action" in str(result["error"])
+    assert any(evt.get("event_type") == "task.github_review.secondary_action.blocked" for evt in result["runtime_events"])

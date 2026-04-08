@@ -206,7 +206,20 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         secondary_action_attempted = True
         gate = action_gate(secondary_action_id, action_payload) if action_gate else None
-        if gate is not None:
+        gate_reason = None
+        gate_message = None
+        is_blocked = False
+        if isinstance(gate, dict):
+            gate_reason = gate.get("reason")
+            gate_message = gate.get("message")
+            if "blocked" in gate:
+                is_blocked = bool(gate.get("blocked"))
+            else:
+                is_blocked = bool(gate)
+        elif gate is not None:
+            is_blocked = bool(gate)
+
+        if is_blocked:
             error_value = "capability policy blocked for secondary action"
             runtime_events.append(
                 _event(
@@ -214,8 +227,8 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "blocked",
                     {
                         "secondary_action_id": secondary_action_id,
-                        "reason": gate.get("reason"),
-                        "message": gate.get("message"),
+                        "reason": gate_reason,
+                        "message": gate_message,
                     },
                 )
             )

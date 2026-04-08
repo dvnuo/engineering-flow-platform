@@ -548,10 +548,11 @@ class GitHubChannel:
         repo: str,
         pull_number: int,
         body: str,
-        event: str = "COMMENT",
         commit_id: Optional[str] = None,
         path: Optional[str] = None,
-        line: Optional[int] = None
+        line: Optional[int] = None,
+        *,
+        event: str = "COMMENT",
     ) -> Dict[str, Any]:
         """Add a review comment to a pull request."""
         logger.info(f"Adding PR review comment {owner}/{repo}#{pull_number}")
@@ -895,15 +896,23 @@ async def github_add_pr_review_comment(
     repo: str,
     pull_number: int,
     body: str,
-    event: str = "COMMENT",
     commit_id: Optional[str] = None,
     path: Optional[str] = None,
-    line: Optional[int] = None
+    line: Optional[int] = None,
+    *,
+    event: str = "COMMENT",
 ) -> str:
     """Add a review comment to a PR."""
     try:
         result = await github_channel.add_pr_review_comment(
-            owner, repo, pull_number, body, event, commit_id, path, line
+            owner=owner,
+            repo=repo,
+            pull_number=pull_number,
+            body=body,
+            commit_id=commit_id,
+            path=path,
+            line=line,
+            event=event,
         )
         return f"Review comment added to PR #{pull_number}"
     except Exception as e:

@@ -12,6 +12,17 @@ def test_resolve_task_capability_contract_adapter_action_task_known_action():
     assert "adapter:github:add_comment" in plan["involved_capability_ids"]
 
 
+def test_resolve_task_capability_contract_adapter_action_task_unknown_action_structurally_complete():
+    plan = resolve_task_capability_contract("adapter_action_task", {"action_id": "ADAPTER:GITHUB:UNKNOWN_REVIEW"})
+
+    assert plan["primary_capability_id"] == "adapter:github:unknown_review"
+    assert plan["capability_id"] == "adapter:github:unknown_review"
+    assert plan["action_id"] == "adapter:github:unknown_review"
+    assert plan["capability_type"] == "adapter_action"
+    assert plan["involved_capability_ids"] == ["adapter:github:unknown_review"]
+    assert plan["capability_resolution"] == "unresolved"
+
+
 def test_resolve_task_capability_contract_jira_workflow_review_task():
     plan = resolve_task_capability_contract(
         "jira_workflow_review_task",

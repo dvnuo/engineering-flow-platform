@@ -2871,6 +2871,46 @@ async def test_github_review_task_secondary_action_denied_by_capability_policy(m
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_github_action_gate_returns_normalized_blocked_shape(monkeypatch):
+    captured = {}
+
+    async def _fake_run_github_review_task(payload):
+        gate = payload["_action_gate"]
+        captured["allowed"] = gate("adapter:github:review_pull_request", {"owner": "acme"})
+        captured["denied"] = gate("adapter:github:add_comment", {"owner": "acme"})
+        return {
+            "success": True,
+            "review_summary": "ok",
+            "review_event": "COMMENT",
+            "review_written": True,
+            "comment_written": True,
+            "secondary_action_attempted": True,
+            "secondary_action_success": True,
+            "secondary_action_id": "adapter:github:review_pull_request",
+            "runtime_events": [],
+            "error": None,
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
+
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 88},
+        metadata={"allowed_adapter_actions": ["adapter:github:review_pull_request"]},
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert captured["allowed"] == {"blocked": False}
+    assert captured["denied"]["blocked"] is True
+    assert captured["denied"]["reason"] == "unsupported_secondary_action"
+    assert "Unsupported secondary action" in captured["denied"]["message"]
+    assert result.output_payload["secondary_action_decisions"][0]["decision"] == "applied"
+
+
+@pytest.mark.asyncio
 async def test_jira_workflow_review_task_transition_denied_adds_blocked_secondary_fields(monkeypatch):
     async def _fake_run_review(payload):
         gate = payload["_action_gate"]
