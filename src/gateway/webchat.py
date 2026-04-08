@@ -275,7 +275,8 @@ async def _run_chat_via_execution_bus(
         },
         chat_handler=_chat_handler,
     )
-    output_payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
+    original_output_payload = execution_result.output_payload
+    output_payload = dict(original_output_payload) if isinstance(original_output_payload, dict) else {}
     output_payload["_execution_result"] = execution_result
     if execution_result.status == "error" or output_payload.get("error"):
         error_value = output_payload.get("error", "Execution bus error")

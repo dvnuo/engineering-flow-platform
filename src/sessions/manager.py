@@ -1,6 +1,7 @@
 """Session management for Engineering Flow Platform with persistence and TTL support."""
 
 import asyncio
+from copy import deepcopy
 import json
 import logging
 import uuid
@@ -435,8 +436,9 @@ class SessionManager:
     async def set_last_execution_id(self, session_id: str, request_id: Optional[str]) -> None:
         """Record latest runtime execution request id in session metadata.
 
-        This updates in-memory session metadata; persistence is deferred to
-        normal session save paths (e.g. add_message autosave, save_all, shutdown).
+        This updates in-memory session metadata and schedules asynchronous
+        metadata persistence without blocking the current request path. This
+        pattern is used for lightweight metadata-only state transitions.
         """
         if not session_id or not request_id:
             return
@@ -454,11 +456,12 @@ class SessionManager:
         metadata = session.setdefault("metadata", {})
         pending = metadata.get("pending_delegations")
         pending_list = list(pending) if isinstance(pending, list) else []
+        pending_dicts = [item for item in pending_list if isinstance(item, dict)]
         delegation_id = delegation_record.get("delegation_id")
         if delegation_id:
-            pending_list = [item for item in pending_list if item.get("delegation_id") != delegation_id]
-        pending_list.append(dict(delegation_record))
-        metadata["pending_delegations"] = pending_list
+            pending_dicts = [item for item in pending_dicts if item.get("delegation_id") != delegation_id]
+        pending_dicts.append(dict(delegation_record))
+        metadata["pending_delegations"] = pending_dicts
         session["updated_at"] = datetime.now().isoformat()
         self._schedule_metadata_persist(session_id, session)
 
@@ -500,12 +503,15 @@ class SessionManager:
         """Persist metadata-only state transitions without blocking request flow."""
         if not self.auto_save or not self.persistence_enabled:
             return
+        channel_snapshot = str(session.get("channel", ""))
+        messages_snapshot = deepcopy(session.get("history", []))
+        metadata_snapshot = deepcopy(session.get("metadata", {}))
         asyncio.create_task(
             session_persistence.save_session(
                 session_id=session_id,
-                channel=session.get("channel", ""),
-                messages=session.get("history", []),
-                metadata=session.get("metadata", {}),
+                channel=channel_snapshot,
+                messages=messages_snapshot,
+                metadata=metadata_snapshot,
             )
         )
 

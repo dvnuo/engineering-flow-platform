@@ -37,7 +37,16 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
         action_id = str(normalized_payload.get("action_id") or "").strip().lower()
         descriptor = registry.get(action_id) if action_id else None
         if descriptor is None:
-            return {**fallback, "primary_capability_id": action_id or None, "capability_id": action_id or None, "action_id": action_id or None}
+            if not action_id:
+                return fallback
+            return {
+                **fallback,
+                "primary_capability_id": action_id,
+                "capability_id": action_id,
+                "capability_type": "adapter_action",
+                "action_id": action_id,
+                "involved_capability_ids": [action_id],
+            }
         return {
             **fallback,
             "primary_capability_id": descriptor.capability_id,
@@ -101,11 +110,19 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
         capability_id = f"skill:{skill_name}"
         descriptor = registry.get(capability_id)
         if descriptor is None:
-            return {**fallback, "primary_capability_id": capability_id, "capability_id": capability_id, "involved_capability_ids": [capability_id], "capability_type": "skill"}
+            return {
+                **fallback,
+                "primary_capability_id": capability_id,
+                "capability_id": capability_id,
+                "action_id": capability_id,
+                "involved_capability_ids": [capability_id],
+                "capability_type": "skill",
+            }
         return {
             **fallback,
             "primary_capability_id": descriptor.capability_id,
             "capability_id": descriptor.capability_id,
+            "action_id": descriptor.capability_id,
             "capability_type": descriptor.type,
             "involved_capability_ids": [descriptor.capability_id],
             "policy_tags": list(descriptor.policy_tags or []),
