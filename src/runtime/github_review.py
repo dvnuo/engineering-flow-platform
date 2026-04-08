@@ -126,11 +126,25 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     skill_error = getattr(skill_result, "error", None)
     skill_output = getattr(skill_result, "output", "")
     skill_data = getattr(skill_result, "data", {}) if isinstance(getattr(skill_result, "data", None), dict) else {}
+    normalized_skill_error = skill_error
+    if not skill_success:
+        if isinstance(skill_error, str):
+            normalized_skill_error = skill_error.strip() or None
+        elif skill_error:
+            normalized_skill_error = str(skill_error).strip() or None
+        else:
+            normalized_skill_error = None
+
+        if not normalized_skill_error:
+            if isinstance(skill_output, str) and skill_output.strip():
+                normalized_skill_error = skill_output.strip()
+            else:
+                normalized_skill_error = f"GitHub review skill '{skill_name}' failed without an explicit error"
 
     runtime_events = [_event("task.github_review.skill.completed" if skill_success else "task.github_review.skill.failed", "completed" if skill_success else "failed", {
         "skill_name": skill_name,
         "success": skill_success,
-        "error": skill_error,
+        "error": normalized_skill_error,
     })]
 
     review_event, review_summary = _normalize_review_writeback(skill_output, skill_data, review_comment_input)
@@ -141,7 +155,7 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     secondary_action_attempted = False
     secondary_action_success = False
     actions_applied = []
-    error_value = skill_error
+    error_value = normalized_skill_error
 
     if skill_success and review_summary:
         action_payload = {
