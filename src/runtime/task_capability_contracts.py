@@ -37,7 +37,16 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
         action_id = str(normalized_payload.get("action_id") or "").strip().lower()
         descriptor = registry.get(action_id) if action_id else None
         if descriptor is None:
-            return {**fallback, "primary_capability_id": action_id or None, "capability_id": action_id or None, "action_id": action_id or None}
+            if not action_id:
+                return fallback
+            return {
+                **fallback,
+                "primary_capability_id": action_id,
+                "capability_id": action_id,
+                "capability_type": "adapter_action",
+                "action_id": action_id,
+                "involved_capability_ids": [action_id],
+            }
         return {
             **fallback,
             "primary_capability_id": descriptor.capability_id,
