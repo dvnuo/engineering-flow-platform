@@ -266,7 +266,7 @@ async def test_malformed_workflow_fields_emit_warning_and_continue(monkeypatch):
 
     assert result["success"] is True
     assert captured["skill_kwargs"]["workflow_context"] == {}
-    warnings = [evt.get("detail_payload", {}).get("warning") for evt in result["runtime_events"] if evt.get("event_type") == "recovery.warning"]
+    warnings = [evt.get("detail_payload", {}).get("warning") for evt in result["runtime_events"] if evt.get("event_type") == "task.jira_workflow_review.warning"]
     assert "invalid_workflow_context_json" in warnings
     assert "invalid_skill_kwargs_type" in warnings
     assert "invalid_fields_on_success_type" in warnings
@@ -331,5 +331,5 @@ async def test_workflow_context_non_object_json_is_ignored(monkeypatch):
 
     assert result["success"] is True
     assert captured["workflow_context"] == {}
-    warnings = [evt.get("detail_payload", {}).get("warning") for evt in result["runtime_events"] if evt.get("event_type") == "recovery.warning"]
+    warnings = [evt.get("detail_payload", {}).get("warning") for evt in result["runtime_events"] if evt.get("event_type") == "task.jira_workflow_review.warning"]
     assert "invalid_workflow_context_type" in warnings

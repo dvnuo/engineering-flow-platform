@@ -28,3 +28,34 @@ async def test_execute_adapter_action_via_bus_uses_unique_request_ids(monkeypatc
     assert captured_request_ids[0] != captured_request_ids[1]
     assert captured_request_ids[0].startswith("runtime-adapter:jira:read_issue-")
     assert captured_request_ids[1].startswith("runtime-adapter:jira:read_issue-")
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_via_bus_policy_profile_id_argument_overrides_metadata(monkeypatch):
+    from src.runtime import runtime_adapter_execution as module
+
+    captured = {}
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        captured.update(kwargs)
+        return type(
+            "R",
+            (),
+            {
+                "status": "success",
+                "output_payload": {"success": True, "result": {"ok": True}},
+                "runtime_events": [],
+            },
+        )()
+
+    monkeypatch.setattr(module, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+
+    await module.execute_adapter_action_via_bus(
+        "adapter:jira:read_issue",
+        {"issue_key": "ABC-1"},
+        metadata={"policy_profile_id": "from-metadata", "x": 1},
+        policy_profile_id="from-arg",
+    )
+
+    assert captured["metadata"]["policy_profile_id"] == "from-arg"
+    assert captured["metadata"]["x"] == 1

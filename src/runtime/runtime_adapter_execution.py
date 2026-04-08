@@ -20,6 +20,10 @@ async def execute_adapter_action_via_bus(
     policy_profile_id: Optional[str] = None,
     context_ref: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    metadata_payload = dict(metadata or {})
+    if policy_profile_id:
+        metadata_payload["policy_profile_id"] = policy_profile_id
+
     result = await execute_runtime_task_request(
         request_id=f"runtime-{action_id}-{uuid.uuid4().hex}",
         source_type=source_type,
@@ -32,7 +36,7 @@ async def execute_adapter_action_via_bus(
             "action_id": action_id,
             "kwargs": dict(kwargs or {}),
         },
-        metadata={"policy_profile_id": policy_profile_id, **dict(metadata or {})} if policy_profile_id else dict(metadata or {}),
+        metadata=metadata_payload,
     )
     output = result.output_payload if isinstance(result.output_payload, dict) else {}
     return {
