@@ -6,6 +6,7 @@ UNIQUE_MARKER_12345
 """
 
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ init_storage()
 from src.utils.file_parser import parse_file
 from src.utils.truncate import truncate
 from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception_message
+from src.utils.internal_api_keys import get_portal_internal_api_key, get_runtime_internal_api_key
 
 
 from ruamel.yaml import YAML
@@ -40,6 +42,10 @@ from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.config import config as global_config
 from src.runtime.chat_orchestration_adapter import execute_chat_orchestration, execute_runtime_task_request
+from src.runtime.portal_session_metadata_client import (
+    extract_session_metadata_publish_fields,
+    publish_session_metadata,
+)
 from src.runtime.capability_registry import get_capability_registry
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
@@ -52,6 +58,22 @@ logger = logging.getLogger(__name__)
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_PORTAL_IDENTITY_LENGTH = 256
+_DERIVED_RUNTIME_RULE_KEYS = {
+    "allowed_capability_ids",
+    "allowed_capability_types",
+    "denied_capability_ids",
+    "denied_capability_types",
+    "allowed_external_systems",
+    "allowed_webhook_triggers",
+    "allowed_actions",
+    "allowed_adapter_actions",
+    "denied_actions",
+    "denied_adapter_actions",
+    "governance_require_explicit_allow",
+    "governance_allow_auto_run",
+    "governance_external_allowlist",
+    "governance_external_blocklist",
+}
 
 
 def _sanitize_portal_identity_value(value: Any) -> str:
@@ -64,20 +86,61 @@ def _extract_portal_identity(request: web.Request, data: Dict[str, Any]) -> tupl
     headers = getattr(request, "headers", {}) or {}
     header_user_id = _sanitize_portal_identity_value(headers.get("X-Portal-User-Id"))
     header_user_name = _sanitize_portal_identity_value(headers.get("X-Portal-User-Name"))
-    body_user_id = _sanitize_portal_identity_value(data.get("portal_user_id"))
-    body_user_name = _sanitize_portal_identity_value(data.get("portal_user_name"))
 
-    resolved_user_id = header_user_id or body_user_id or None
-    resolved_user_name = header_user_name or body_user_name or None
+    if not _is_trusted_portal_request(request):
+        logger.debug("[portal_identity] resolved_source=untrusted has_user_id=False has_user_name=False")
+        return None, None
+
+    resolved_user_id = header_user_id or None
+    resolved_user_name = header_user_name or None
 
     if header_user_id or header_user_name:
-        source = "headers"
-    elif body_user_id or body_user_name:
-        source = "body"
+        source = "trusted_headers"
     else:
-        source = "none"
+        source = "trusted_none"
     logger.debug("[portal_identity] resolved_source=%s has_user_id=%s has_user_name=%s", source, bool(resolved_user_id), bool(resolved_user_name))
     return resolved_user_id, resolved_user_name
+
+
+def _is_trusted_portal_request(request: web.Request) -> bool:
+    headers = getattr(request, "headers", {}) or {}
+    portal_source = str(headers.get("X-Portal-Author-Source") or "").strip().lower()
+    if portal_source != "portal":
+        return False
+    expected_internal_key = get_portal_internal_api_key()
+    if not expected_internal_key:
+        return True
+    provided_internal_key = str(headers.get("X-Portal-Internal-Api-Key") or "").strip()
+    return hmac.compare_digest(provided_internal_key, expected_internal_key)
+
+
+def _resolve_chat_display_user_name(data: Dict[str, Any], portal_user_name: Optional[str]) -> str:
+    direct_user_name = _sanitize_portal_identity_value(data.get("user_name")) or None
+    return portal_user_name or direct_user_name or "webchat-user"
+
+
+def _parse_optional_execution_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
+    if "metadata" not in data or data.get("metadata") is None:
+        return {}
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be a JSON object")
+    return dict(metadata)
+
+
+def _extract_trusted_control_plane_metadata(request: web.Request, data: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = _parse_optional_execution_metadata(data)
+    if not _is_trusted_portal_request(request):
+        return {}
+    trusted_metadata = dict(metadata)
+    policy_context = trusted_metadata.get("policy_context")
+    if isinstance(policy_context, dict):
+        derived_rules = policy_context.get("derived_runtime_rules")
+        if isinstance(derived_rules, dict):
+            for key, value in derived_rules.items():
+                if key in _DERIVED_RUNTIME_RULE_KEYS:
+                    trusted_metadata[key] = value
+    return trusted_metadata
 
 
 def _require_non_empty_string(data: Dict[str, Any], key: str) -> str:
@@ -132,6 +195,21 @@ def _parse_task_execute_request(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _build_internal_auth_error_response(status_code: int, message: str) -> web.Response:
+    return web.json_response({"error": message}, status=status_code)
+
+
+def _authorize_internal_runtime_request(request: web.Request) -> Optional[web.Response]:
+    expected_key = get_runtime_internal_api_key()
+    if not expected_key:
+        return _build_internal_auth_error_response(503, "Runtime internal api key is not configured")
+    headers = getattr(request, "headers", {}) or {}
+    provided_key = str(headers.get("X-Internal-Api-Key") or "").strip()
+    if not provided_key or not hmac.compare_digest(provided_key, expected_key):
+        return _build_internal_auth_error_response(401, "Invalid internal api key")
+    return None
+
+
 def _json_compatible(value: Any) -> Any:
     try:
         json.dumps(value)
@@ -153,6 +231,8 @@ async def _run_chat_via_execution_bus(
     reasoning_replay: Optional[bool] = None,
     stream_callback: Optional[Any] = None,
     request_path: str = "/api/chat",
+    execution_metadata: Optional[Dict[str, Any]] = None,
+    agent_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     async def _chat_handler(execution_request):
         payload = execution_request.input_payload
@@ -170,10 +250,13 @@ async def _run_chat_via_execution_bus(
             stream_callback=payload.get("stream_callback"),
         )
 
+    merged_metadata = dict(execution_metadata or {})
+    merged_metadata.pop("path", None)
     execution_result = await execute_chat_orchestration(
         request_id=f"chat-{uuid.uuid4()}",
         session_id=session_id,
         source_ref="webchat",
+        agent_id=agent_id,
         input_payload={
             "message": message,
             "user_name": user_name,
@@ -185,10 +268,15 @@ async def _run_chat_via_execution_bus(
             "reasoning_replay": reasoning_replay,
             "stream_callback": stream_callback,
         },
-        metadata={"path": request_path, "persist_last_execution_id": True},
+        metadata={
+            "path": request_path,
+            "persist_last_execution_id": True,
+            **merged_metadata,
+        },
         chat_handler=_chat_handler,
     )
     output_payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
+    output_payload["_execution_result"] = execution_result
     if execution_result.status == "error" or output_payload.get("error"):
         error_value = output_payload.get("error", "Execution bus error")
         if isinstance(error_value, dict):
@@ -366,7 +454,8 @@ async def api_chat(request: web.Request) -> web.Response:
         # Get attachments from new field
         attachments = data.get('attachments', [])
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
-        effective_user_name = portal_user_name or "webchat-user"
+        execution_metadata = _extract_trusted_control_plane_metadata(request, data)
+        effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
         logger.debug(
             "[api_chat] Request summary: session_id=%s, has_message=%s, attachment_count=%d, portal_user_id_present=%s",
             session_id,
@@ -517,7 +606,25 @@ async def api_chat(request: web.Request) -> web.Response:
             attached_images=attached_images if attached_images else None,
             attachments=attachments if attachments else None,
             request_path="/api/chat",
+            execution_metadata=execution_metadata,
+            agent_id=runtime_agent_id,
         )
+        execution_result = result.get("_execution_result")
+        if runtime_agent_id and execution_result is not None:
+            publish_fields = extract_session_metadata_publish_fields(
+                execution_result,
+                metadata=execution_metadata,
+                default_event_type="chat.completed",
+                default_state="success",
+            )
+            try:
+                await publish_session_metadata(
+                    agent_id=runtime_agent_id,
+                    session_id=session_id,
+                    **publish_fields,
+                )
+            except Exception:
+                logger.warning("Best-effort session metadata publish failed for chat path", exc_info=True)
         
         # Force save session to persistence
         session = await session_manager.get_session(session_id)
@@ -607,6 +714,8 @@ async def api_chat(request: web.Request) -> web.Response:
         
     except json.JSONDecodeError:
         return web.json_response({'error': 'Invalid JSON'}, status=400)
+    except ValueError as e:
+        return web.json_response({'error': str(e)}, status=400)
     except web.HTTPException:
         raise
     except Exception as e:
@@ -659,7 +768,8 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         message = (data.get('message') or '').strip()
         session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
-        effective_user_name = portal_user_name or "webchat-user"
+        execution_metadata = _extract_trusted_control_plane_metadata(request, data)
+        effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
         
         if not message:
             response = web.json_response({'error': 'Empty message'}, status=400)
@@ -707,7 +817,25 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             portal_user_name=portal_user_name,
             stream_callback=event_queue,
             request_path="/api/chat/stream",
+            execution_metadata=execution_metadata,
+            agent_id=runtime_agent_id,
         )
+        execution_result = result.get("_execution_result")
+        if runtime_agent_id and execution_result is not None:
+            publish_fields = extract_session_metadata_publish_fields(
+                execution_result,
+                metadata=execution_metadata,
+                default_event_type="chat.completed",
+                default_state="success",
+            )
+            try:
+                await publish_session_metadata(
+                    agent_id=runtime_agent_id,
+                    session_id=session_id,
+                    **publish_fields,
+                )
+            except Exception:
+                logger.warning("Best-effort session metadata publish failed for streaming chat path", exc_info=True)
         
         # Stream events from queue while agent is running
         while not event_queue.empty():
@@ -751,6 +879,9 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
     except json.JSONDecodeError:
         response = web.json_response({'error': 'Invalid JSON'}, status=400)
         return response
+    except ValueError as e:
+        response = web.json_response({'error': str(e)}, status=400)
+        return response
     except web.HTTPException:
         raise
     except Exception as e:
@@ -769,6 +900,9 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
     POST /api/tasks/execute
     """
     try:
+        auth_error = _authorize_internal_runtime_request(request)
+        if auth_error is not None:
+            return auth_error
         data = await request.json()
         parsed = _parse_task_execute_request(data)
 
@@ -791,6 +925,7 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             metadata["portal_workflow_rule_id"] = parsed["workflow_rule_id"]
         if parsed["shared_context_ref"]:
             metadata["shared_context_ref"] = parsed["shared_context_ref"]
+        runtime_agent_id, _runtime_agent_name = _resolve_runtime_agent_identity(request)
 
         execution_result = await execute_runtime_task_request(
             request_id=f"task-{parsed['task_id']}",
@@ -798,10 +933,26 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             source_ref=parsed["source"] or "portal",
             execution_type="task",
             session_id=parsed["session_id"],
+            agent_id=runtime_agent_id,
             context_ref=parsed["context_ref"] or None,
             input_payload=merged_input_payload,
             metadata=metadata,
         )
+        if runtime_agent_id and parsed["session_id"]:
+            publish_fields = extract_session_metadata_publish_fields(
+                execution_result,
+                metadata=metadata,
+                default_event_type="task.completed" if execution_result.status == "success" else "task.failed",
+                default_state="success" if execution_result.status == "success" else "error",
+            )
+            try:
+                await publish_session_metadata(
+                    agent_id=runtime_agent_id,
+                    session_id=parsed["session_id"],
+                    **publish_fields,
+                )
+            except Exception:
+                logger.warning("Best-effort session metadata publish failed for task execution path", exc_info=True)
 
         status = execution_result.status
         is_ok = status == "success"
@@ -852,6 +1003,9 @@ async def api_capabilities(request: web.Request) -> web.Response:
     GET /api/capabilities?type=...&enabled=true|false&capability_id=...
     """
     try:
+        auth_error = _authorize_internal_runtime_request(request)
+        if auth_error is not None:
+            return auth_error
         registry = get_capability_registry()
         snapshot = (
             registry.export_catalog_snapshot()

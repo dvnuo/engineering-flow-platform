@@ -114,6 +114,7 @@ def test_subagent_sessions_spawn_uses_execute_subagent_orchestration(monkeypatch
 @pytest.mark.asyncio
 async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypatch):
     from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", "runtime-internal-key")
 
     captured = {}
 
@@ -136,6 +137,7 @@ async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypat
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
 
     class _Request:
+        headers = {"X-Internal-Api-Key": "runtime-internal-key"}
         async def json(self):
             return {
                 "task_id": "task-rt-1",
@@ -182,3 +184,12 @@ def test_runtime_helper_modules_do_not_import_adapter_executor_directly():
     forbidden = "from src.runtime.adapter_executor import"
     for name, source in sources.items():
         assert forbidden not in source, f"{name} unexpectedly imports low-level adapter executor"
+
+
+def test_agent_core_no_longer_calls_apply_skill_hooks_directly():
+    from src.agents import core
+
+    source = inspect.getsource(core)
+    assert "apply_skill_hooks(" not in source
+    assert "_run_pre_tool_hooks_via_governance(" in source
+    assert "_run_post_tool_hooks_via_governance(" in source

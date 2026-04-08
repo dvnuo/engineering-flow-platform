@@ -2,11 +2,13 @@ import pytest
 
 from src.runtime.adapter_executor import (
     ACTION_ID_TO_EXECUTOR,
+    _build_portal_headers,
     execute_adapter_action,
     execute_jira_workflow_action,
     validate_enabled_adapter_actions_have_executors,
 )
 from src.runtime.leader_delegation_adapter import create_portal_delegation_from_runtime
+from src.utils.internal_api_keys import build_portal_internal_api_headers
 
 
 @pytest.mark.asyncio
@@ -67,28 +69,46 @@ async def test_execute_adapter_action_add_comment(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_execute_adapter_action_github_review_pull_request(monkeypatch):
-    async def _fake_get_pr(owner, repo, pull_number):
-        return f"PR {owner}/{repo}#{pull_number}"
+    captured = {}
 
-    async def _fake_get_pr_files(owner, repo, pull_number):
-        return "files changed"
+    async def _fake_submit(owner, repo, pull_number, body=None, event="COMMENT", **kwargs):
+        captured.update(
+            {
+                "owner": owner,
+                "repo": repo,
+                "pull_number": pull_number,
+                "body": body,
+                "event": event,
+                **kwargs,
+            }
+        )
+        return {"id": 99, "state": "submitted"}
 
-    async def _fake_get_pr_comments(owner, repo, pull_number):
-        return "existing comments"
-
-    monkeypatch.setattr("src.github.github_get_pr", _fake_get_pr)
-    monkeypatch.setattr("src.github.github_get_pr_files", _fake_get_pr_files)
-    monkeypatch.setattr("src.github.github_get_pr_comments", _fake_get_pr_comments)
+    monkeypatch.setattr("src.github.github_submit_pr_review", _fake_submit)
 
     result = await execute_adapter_action(
         "adapter:github:review_pull_request",
-        {"owner": "acme", "repo": "demo", "pull_number": 12},
+        {"owner": "acme", "repo": "demo", "pull_number": 12, "comment": "Looks good", "review_event": "APPROVE"},
     )
 
     assert result["success"] is True
     assert result["action_id"] == "adapter:github:review_pull_request"
     assert result["system"] == "github"
-    assert "Automated review summary" in result["result"]["summary"]
+    assert captured["owner"] == "acme"
+    assert captured["repo"] == "demo"
+    assert captured["pull_number"] == 12
+    assert captured["event"] == "APPROVE"
+    assert result["result"]["review_event"] == "APPROVE"
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_github_review_pull_request_rejects_invalid_event():
+    result = await execute_adapter_action(
+        "adapter:github:review_pull_request",
+        {"owner": "acme", "repo": "demo", "pull_number": 12, "review_event": "BOGUS"},
+    )
+    assert result["success"] is False
+    assert "Invalid review_event" in str(result["error"])
 
 
 @pytest.mark.asyncio
@@ -267,6 +287,113 @@ async def test_execute_adapter_action_portal_delete_task_agent_uses_delete(monke
     assert result["success"] is True
     assert captured["url"] == "https://portal.internal/api/internal/agent-groups/group-1/task-agents/ta-1"
     assert captured["headers"]["X-Internal-Api-Key"] == "k-1"
+
+
+def test_build_portal_headers_uses_config_fallback_api_key(monkeypatch):
+    monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
+    monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "src.utils.internal_api_keys.global_config.get",
+        lambda key, default=None: "cfg-key" if key == "server.portal_internal_api_key" else default,
+    )
+
+    headers = _build_portal_headers()
+
+    assert headers["Content-Type"] == "application/json"
+    assert headers["X-Internal-Api-Key"] == "cfg-key"
+    assert "Authorization" not in headers
+
+
+def test_build_portal_headers_keeps_auth_token_and_config_fallback_api_key(monkeypatch):
+    monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
+    monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "legacy-token")
+    monkeypatch.setattr(
+        "src.utils.internal_api_keys.global_config.get",
+        lambda key, default=None: "cfg-key-2" if key == "server.portal_internal_api_key" else default,
+    )
+
+    headers = _build_portal_headers()
+
+    assert headers["Authorization"] == "Bearer legacy-token"
+    assert headers["X-Internal-Api-Key"] == "cfg-key-2"
+
+
+@pytest.mark.asyncio
+async def test_execute_portal_action_uses_config_fallback_base_url(monkeypatch):
+    captured = {}
+
+    async def _fake_get(url, headers):
+        captured["url"] = url
+        captured["headers"] = headers
+        return {"success": True, "error": None, "result": {"items": []}}
+
+    monkeypatch.delenv("PORTAL_INTERNAL_BASE_URL", raising=False)
+    monkeypatch.setattr(
+        "src.utils.internal_api_keys.global_config.get",
+        lambda key, default=None: (
+            "https://portal.cfg"
+            if key == "server.portal_internal_base_url"
+            else "cfg-key"
+            if key == "server.portal_internal_api_key"
+            else default
+        ),
+    )
+    monkeypatch.setattr("src.runtime.adapter_executor._get_portal_json", _fake_get)
+
+    result = await execute_adapter_action("adapter:portal:list_group_delegations", {"group_id": "group-1"})
+    assert result["success"] is True
+    assert captured["url"].startswith("https://portal.cfg/")
+
+
+@pytest.mark.asyncio
+async def test_execute_portal_action_base_url_env_precedence_over_config(monkeypatch):
+    captured = {}
+
+    async def _fake_get(url, headers):
+        captured["url"] = url
+        captured["headers"] = headers
+        return {"success": True, "error": None, "result": {"items": []}}
+
+    monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.env")
+    monkeypatch.setattr(
+        "src.utils.internal_api_keys.global_config.get",
+        lambda key, default=None: (
+            "https://portal.cfg"
+            if key == "server.portal_internal_base_url"
+            else "cfg-key"
+            if key == "server.portal_internal_api_key"
+            else default
+        ),
+    )
+    monkeypatch.setattr("src.runtime.adapter_executor._get_portal_json", _fake_get)
+
+    result = await execute_adapter_action("adapter:portal:get_group_task_board", {"group_id": "group-1"})
+    assert result["success"] is True
+    assert captured["url"].startswith("https://portal.env/")
+
+
+def test_build_portal_internal_api_headers_auth_token_config_fallback(monkeypatch):
+    monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "src.utils.internal_api_keys.global_config.get",
+        lambda key, default=None: "tok-cfg" if key == "server.portal_internal_auth_token" else default,
+    )
+
+    headers = build_portal_internal_api_headers()
+
+    assert headers["Authorization"] == "Bearer tok-cfg"
+
+
+def test_build_portal_internal_api_headers_auth_token_env_precedence(monkeypatch):
+    monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "tok-env")
+    monkeypatch.setattr(
+        "src.utils.internal_api_keys.global_config.get",
+        lambda key, default=None: "tok-cfg" if key == "server.portal_internal_auth_token" else default,
+    )
+
+    headers = build_portal_internal_api_headers()
+
+    assert headers["Authorization"] == "Bearer tok-env"
 
 
 @pytest.mark.asyncio

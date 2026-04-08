@@ -13,6 +13,7 @@ from src.runtime.capability_adapters import (
     build_jira_adapter_capabilities,
     build_portal_adapter_capabilities,
 )
+from src.utils.internal_api_keys import build_portal_internal_api_headers, get_portal_internal_base_url
 
 
 def _event(event_type: str, state: str, detail_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -142,20 +143,31 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
                 "system": "github",
                 "action_name": action,
             }
-        review_comment = payload.get("comment")
-        if review_comment and isinstance(review_comment, str) and review_comment.strip():
-            summary = review_comment.strip()
-            raw = {"summary": summary, "source": "provided_comment"}
-        else:
-            # Reuse existing github module surface instead of introducing a separate HTTP client.
-            pr_text = await github_module.github_get_pr(owner, repo, int(pull_number))
-            files_text = await github_module.github_get_pr_files(owner, repo, int(pull_number))
-            comments_text = await github_module.github_get_pr_comments(owner, repo, int(pull_number))
-            summary = (
-                f"Automated review summary for {owner}/{repo}#{pull_number}\n\n"
-                f"{pr_text}\n\n{files_text}\n\nExisting review comments snapshot:\n{comments_text}"
-            )
-            raw = {"summary": summary, "source": "github_api"}
+        review_body = payload.get("comment") or payload.get("body")
+        raw_event = payload.get("review_event") or payload.get("event") or "COMMENT"
+        normalized_event = str(raw_event).strip().upper()
+        if normalized_event not in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
+            return {
+                "success": False,
+                "error": f"Invalid review_event: {raw_event}",
+                "system": "github",
+                "action_name": action,
+            }
+        commit_id = payload.get("commit_id")
+        path = payload.get("path")
+        line = payload.get("line")
+        raw = await github_module.github_submit_pr_review(
+            owner=owner,
+            repo=repo,
+            pull_number=int(pull_number),
+            body=str(review_body or "").strip() or None,
+            event=normalized_event,
+            commit_id=str(commit_id).strip() if isinstance(commit_id, str) and commit_id.strip() else None,
+            path=str(path).strip() if isinstance(path, str) and path.strip() else None,
+            line=int(line) if isinstance(line, int) or (isinstance(line, str) and line.strip().isdigit()) else None,
+        )
+        if isinstance(raw, dict):
+            raw["review_event"] = normalized_event
     elif action == "add_comment":
         issue_number = payload.get("issue_number", pull_number)
         comment = payload.get("comment") or payload.get("body")
@@ -289,14 +301,7 @@ def _normalize_json_field(value: Any) -> Any:
 
 
 def _build_portal_headers() -> Dict[str, str]:
-    headers = {"Content-Type": "application/json"}
-    token = os.getenv("PORTAL_INTERNAL_AUTH_TOKEN", "").strip()
-    api_key = os.getenv("PORTAL_INTERNAL_API_KEY", "").strip()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    if api_key:
-        headers["X-Internal-Api-Key"] = api_key
-    return headers
+    return build_portal_internal_api_headers(include_content_type=True)
 
 
 async def _post_portal_json(url: str, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
@@ -338,7 +343,7 @@ async def _delete_portal_json(url: str, headers: Dict[str, str]) -> Dict[str, An
 async def execute_portal_control_plane_action(action_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     action = str(action_name or "").strip()
     payload = dict(kwargs or {})
-    base_url = os.getenv("PORTAL_INTERNAL_BASE_URL", "").strip().rstrip("/")
+    base_url = get_portal_internal_base_url()
     if not base_url:
         return {"success": False, "error": "PORTAL_INTERNAL_BASE_URL is not configured", "system": "portal", "action_name": action, "result": None}
 
