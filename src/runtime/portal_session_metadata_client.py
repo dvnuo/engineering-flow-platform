@@ -49,6 +49,14 @@ def _normalized_state(status: Optional[str], *, fallback: str) -> str:
     return fallback
 
 
+def _first_non_empty(metadata: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = metadata.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
 def build_session_metadata_payload(
     *,
     last_execution_id: Optional[str],
@@ -62,20 +70,34 @@ def build_session_metadata_payload(
     metadata = dict(metadata or {})
     payload: Dict[str, Any] = {}
 
-    group_id = metadata.get("group_id")
+    group_id = _first_non_empty(metadata, "group_id", "portal_group_id")
     if group_id:
         payload["group_id"] = str(group_id)
 
-    for src_key, dst_key in (
-        ("current_task_id", "current_task_id"),
-        ("current_delegation_id", "current_delegation_id"),
-        ("current_coordination_run_id", "current_coordination_run_id"),
-        ("source_type", "source_type"),
-        ("source_ref", "source_ref"),
-    ):
-        value = metadata.get(src_key)
-        if value not in (None, ""):
-            payload[dst_key] = value
+    current_task_id = _first_non_empty(metadata, "current_task_id", "portal_task_id", "task_id")
+    if current_task_id not in (None, ""):
+        payload["current_task_id"] = current_task_id
+
+    current_delegation_id = _first_non_empty(metadata, "current_delegation_id", "portal_delegation_id", "delegation_id")
+    if current_delegation_id not in (None, ""):
+        payload["current_delegation_id"] = current_delegation_id
+
+    current_coordination_run_id = _first_non_empty(
+        metadata,
+        "current_coordination_run_id",
+        "portal_coordination_run_id",
+        "coordination_run_id",
+    )
+    if current_coordination_run_id not in (None, ""):
+        payload["current_coordination_run_id"] = current_coordination_run_id
+
+    source_type = metadata.get("source_type")
+    if source_type not in (None, ""):
+        payload["source_type"] = source_type
+
+    source_ref = _first_non_empty(metadata, "source_ref", "portal_task_id", "task_id")
+    if source_ref not in (None, ""):
+        payload["source_ref"] = source_ref
 
     if last_execution_id:
         payload["last_execution_id"] = str(last_execution_id)

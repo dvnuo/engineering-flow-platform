@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from aiohttp import ClientSession
@@ -25,6 +25,47 @@ class JiraReconciliationRunner:
 
     def _headers(self) -> Dict[str, str]:
         return build_portal_internal_api_headers(include_content_type=True)
+
+    @staticmethod
+    def _first_non_empty(mapping: Dict[str, Any], *keys: str) -> Any:
+        for key in keys:
+            value = mapping.get(key)
+            if value not in (None, ""):
+                return value
+        return None
+
+    @staticmethod
+    def _normalize_string_list(value: Any) -> List[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    @classmethod
+    def _normalize_workflow_rule(cls, rule: Dict[str, Any]) -> Dict[str, Any] | None:
+        if not isinstance(rule, dict):
+            return None
+        provider_type = str(cls._first_non_empty(rule, "provider_type", "system_type") or "").strip().lower()
+        enabled_value = rule["enabled"] if "enabled" in rule else rule.get("is_enabled")
+        enabled = bool(enabled_value is True)
+        project_keys = cls._normalize_string_list(rule.get("project_keys"))
+        if not project_keys:
+            project_keys = cls._normalize_string_list(rule.get("project_key"))
+        trigger_statuses = cls._normalize_string_list(rule.get("trigger_statuses"))
+        if not trigger_statuses:
+            trigger_statuses = cls._normalize_string_list(rule.get("trigger_status"))
+        return {
+            "id": str(cls._first_non_empty(rule, "id", "rule_id") or "").strip() or None,
+            "provider_type": provider_type,
+            "enabled": enabled,
+            "project_keys": project_keys,
+            "trigger_statuses": trigger_statuses,
+            "assignee_binding": cls._first_non_empty(rule, "assignee_binding"),
+            "skill_name": cls._first_non_empty(rule, "skill_name"),
+            "success_transition": cls._first_non_empty(rule, "success_transition"),
+            "failure_transition": cls._first_non_empty(rule, "failure_transition"),
+        }
 
     async def _get_json(self, path: str) -> Dict[str, Any]:
         url = f"{self._base_url()}{path}"
@@ -48,38 +89,84 @@ class JiraReconciliationRunner:
         rules = data.get("items") if isinstance(data.get("items"), list) else data.get("rules")
         if not isinstance(rules, list):
             return []
-        return [rule for rule in rules if isinstance(rule, dict) and rule.get("enabled") and str(rule.get("provider_type") or "").lower() == "jira"]
+        normalized_rules: List[Dict[str, Any]] = []
+        for rule in rules:
+            normalized = self._normalize_workflow_rule(rule) if isinstance(rule, dict) else None
+            if not normalized:
+                continue
+            if normalized["provider_type"] == "jira" and normalized["enabled"] is True:
+                normalized_rules.append(normalized)
+        return normalized_rules
 
     async def fetch_identity_bindings(self) -> List[Dict[str, Any]]:
         data = await self._get_json("/api/internal/agent-identity-bindings")
         items = data.get("items") if isinstance(data.get("items"), list) else []
         return [item for item in items if isinstance(item, dict)]
 
-    def build_normalized_external_event(self, *, rule: Dict[str, Any], issue: Dict[str, Any], identity_bindings: List[Dict[str, Any]]) -> Dict[str, Any]:
+    @staticmethod
+    def _extract_issue_assignee(issue_fields: Dict[str, Any]) -> str | None:
+        assignee = issue_fields.get("assignee") if isinstance(issue_fields, dict) else None
+        if not isinstance(assignee, dict):
+            return None
+        for key in ("accountId", "name", "emailAddress", "displayName"):
+            value = assignee.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    def build_external_event_ingress_request(self, *, rule: Dict[str, Any], issue: Dict[str, Any], identity_bindings: List[Dict[str, Any]]) -> Dict[str, Any] | None:
         issue_key = str(issue.get("key") or "").strip()
         issue_fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else {}
-        status = ""
+        if not issue_key:
+            return None
+
+        project_key = str(self._first_non_empty(issue_fields.get("project", {}) if isinstance(issue_fields.get("project"), dict) else {}, "key") or "").strip()
+        if not project_key:
+            project_key = str(self._first_non_empty(rule, "project_key") or "").strip()
+        if not project_key and rule.get("project_keys"):
+            project_key = str(rule["project_keys"][0]).strip()
+
+        issue_type = str(self._first_non_empty(issue_fields.get("issuetype", {}) if isinstance(issue_fields.get("issuetype"), dict) else {}, "name") or "").strip() or "Task"
+        trigger_status = ""
         status_obj = issue_fields.get("status") if isinstance(issue_fields.get("status"), dict) else {}
         if isinstance(status_obj, dict):
-            status = str(status_obj.get("name") or status_obj.get("id") or "").strip()
+            trigger_status = str(status_obj.get("name") or status_obj.get("id") or "").strip()
+        if not trigger_status and rule.get("trigger_statuses"):
+            trigger_status = str(rule["trigger_statuses"][0]).strip()
+        issue_assignee = self._extract_issue_assignee(issue_fields)
+        external_account_id = issue_assignee or str(rule.get("assignee_binding") or "").strip() or None
+        rule_id = str(rule.get("id") or "").strip() or "unknown-rule"
+        if not project_key or not trigger_status:
+            return None
 
+        payload_json = {
+            "issue_key": issue_key,
+            "project_key": project_key,
+            "issue_type": issue_type,
+            "trigger_status": trigger_status,
+            "issue_assignee": issue_assignee,
+            "workflow_rule_id": rule_id,
+            "mode": "reconciliation",
+            "identity_bindings": identity_bindings,
+        }
+        metadata_json = {
+            "provider": "jira",
+            "mode": "reconciliation",
+            "workflow_rule_id": rule_id,
+        }
         return {
-            "event_type": "jira.issue.updated",
-            "event_key": f"jira:reconciliation:{rule.get('id') or rule.get('rule_id')}:{issue_key}",
             "source_type": "jira",
-            "source_ref": issue_key,
-            "occurred_at": datetime.now(timezone.utc).isoformat(),
-            "payload": {
-                "provider": "jira",
-                "mode": "reconciliation",
-                "workflow_rule_id": rule.get("id") or rule.get("rule_id"),
-                "issue": {
-                    "key": issue_key,
-                    "status": status,
-                    "fields": issue_fields,
-                },
-                "identity_bindings": identity_bindings,
-            },
+            "event_type": "workflow_review_requested",
+            "external_account_id": external_account_id,
+            "target_ref": project_key,
+            "dedupe_key": f"jira:reconciliation:{rule_id}:{issue_key}:{trigger_status}",
+            "payload_json": json.dumps(payload_json, ensure_ascii=False),
+            "metadata_json": json.dumps(metadata_json, ensure_ascii=False),
+            "project_key": project_key,
+            "issue_type": issue_type,
+            "trigger_status": trigger_status,
+            "issue_key": issue_key,
+            "issue_assignee": issue_assignee,
         }
 
     async def reconcile_once(self) -> None:
@@ -96,16 +183,8 @@ class JiraReconciliationRunner:
             return
 
         for rule in rules:
-            project_keys = []
-            trigger_statuses = []
-            if isinstance(rule.get("project_keys"), list):
-                project_keys = [str(x).strip() for x in rule.get("project_keys") if str(x).strip()]
-            elif isinstance(rule.get("project_key"), str) and rule.get("project_key").strip():
-                project_keys = [rule.get("project_key").strip()]
-            if isinstance(rule.get("trigger_statuses"), list):
-                trigger_statuses = [str(x).strip() for x in rule.get("trigger_statuses") if str(x).strip()]
-            elif isinstance(rule.get("trigger_status"), str) and rule.get("trigger_status").strip():
-                trigger_statuses = [rule.get("trigger_status").strip()]
+            project_keys = [str(x).strip() for x in (rule.get("project_keys") or []) if str(x).strip()]
+            trigger_statuses = [str(x).strip() for x in (rule.get("trigger_statuses") or []) if str(x).strip()]
 
             if not project_keys:
                 continue
@@ -118,18 +197,20 @@ class JiraReconciliationRunner:
             try:
                 search_result = await jira_channel.search_issues(jql, max_results=50)
             except Exception as exc:
-                logger.warning("Jira reconciliation search failed for rule=%s: %s", rule.get("id") or rule.get("rule_id"), exc)
+                logger.warning("Jira reconciliation search failed for rule=%s: %s", rule.get("id"), exc)
                 continue
 
             issues = search_result.get("issues") if isinstance(search_result, dict) and isinstance(search_result.get("issues"), list) else []
             for issue in issues:
                 try:
-                    event_payload = self.build_normalized_external_event(rule=rule, issue=issue, identity_bindings=identity_bindings)
-                    await self._post_json("/api/internal/external-events/ingest", event_payload)
+                    ingress_payload = self.build_external_event_ingress_request(rule=rule, issue=issue, identity_bindings=identity_bindings)
+                    if not ingress_payload:
+                        continue
+                    await self._post_json("/api/internal/external-events/ingest", ingress_payload)
                 except Exception as exc:
                     logger.warning(
                         "Jira reconciliation ingest failed for rule=%s issue=%s: %s",
-                        rule.get("id") or rule.get("rule_id"),
+                        rule.get("id"),
                         issue.get("key") if isinstance(issue, dict) else None,
                         exc,
                     )

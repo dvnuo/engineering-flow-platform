@@ -38,6 +38,56 @@ def test_build_session_metadata_payload_includes_supported_fields_only():
     assert "metadata_json" in payload
 
 
+def test_build_session_metadata_payload_canonical_keys_take_precedence_over_portal_aliases():
+    payload = build_session_metadata_payload(
+        last_execution_id="exec-3",
+        latest_event_type="task.completed",
+        latest_event_state="success",
+        snapshot_version=None,
+        runtime_events=[],
+        metadata={
+            "group_id": "g-canonical",
+            "portal_group_id": "g-legacy",
+            "current_task_id": "t-canonical",
+            "portal_task_id": "t-legacy",
+            "current_delegation_id": "d-canonical",
+            "portal_delegation_id": "d-legacy",
+            "current_coordination_run_id": "c-canonical",
+            "portal_coordination_run_id": "c-legacy",
+            "source_ref": "src-canonical",
+            "task_id": "task-fallback",
+        },
+    )
+
+    assert payload["group_id"] == "g-canonical"
+    assert payload["current_task_id"] == "t-canonical"
+    assert payload["current_delegation_id"] == "d-canonical"
+    assert payload["current_coordination_run_id"] == "c-canonical"
+    assert payload["source_ref"] == "src-canonical"
+
+
+def test_build_session_metadata_payload_supports_portal_alias_fallbacks():
+    payload = build_session_metadata_payload(
+        last_execution_id="exec-4",
+        latest_event_type="task.completed",
+        latest_event_state="success",
+        snapshot_version=None,
+        runtime_events=[],
+        metadata={
+            "portal_group_id": "g-legacy",
+            "portal_task_id": "t-legacy",
+            "portal_delegation_id": "d-legacy",
+            "portal_coordination_run_id": "c-legacy",
+        },
+    )
+
+    assert payload["group_id"] == "g-legacy"
+    assert payload["current_task_id"] == "t-legacy"
+    assert payload["current_delegation_id"] == "d-legacy"
+    assert payload["current_coordination_run_id"] == "c-legacy"
+    assert payload["source_ref"] == "t-legacy"
+
+
 def test_extract_session_metadata_publish_fields_prefers_latest_runtime_event():
     result = make_execution_result(
         request_id="exec-2",

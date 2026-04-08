@@ -92,6 +92,10 @@ Environment variables override config values:
 - `RUNTIME_INTERNAL_API_KEY`
 - `PORTAL_INTERNAL_API_KEY`
 
+Reconciliation/session contract notes:
+- Jira reconciliation fallback publishes to Portal via `/api/internal/external-events/ingest` using Portal `ExternalEventIngressRequest`-compatible fields (`workflow_review_requested`, `payload_json`, `project_key`, `issue_key`, etc.).
+- Runtime session metadata publish keeps canonical keys first and supports legacy Portal aliases (`portal_group_id`, `portal_task_id`, `portal_delegation_id`, `portal_coordination_run_id`) for cross-version compatibility.
+
 ### Integrations
 
 #### Jira (Multiple Instances)

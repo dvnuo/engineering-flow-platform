@@ -37,3 +37,21 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 | Portal → EFP `/api/tasks/execute`, `/api/capabilities` | `server.runtime_internal_api_key` or `RUNTIME_INTERNAL_API_KEY` | `X-Internal-Api-Key` |
 | Portal → EFP trusted chat metadata/identity | `server.portal_internal_api_key` or `PORTAL_INTERNAL_API_KEY` | `X-Portal-Internal-Api-Key` |
 | Runtime adapter (`adapter:portal:*`) → Portal internal API | `server.portal_internal_base_url` / `PORTAL_INTERNAL_BASE_URL`; `server.portal_internal_api_key` / `PORTAL_INTERNAL_API_KEY`; optional `server.portal_internal_auth_token` / `PORTAL_INTERNAL_AUTH_TOKEN` | `X-Internal-Api-Key` (+ optional `Authorization`) |
+
+## 5) Jira Reconciliation Contract (Runtime Fallback)
+
+- Runtime reconciliation must ingest into Portal using the **ExternalEventIngressRequest** shape.
+- Required reconciliation event shape:
+  - `source_type = "jira"`
+  - `event_type = "workflow_review_requested"`
+  - `target_ref = <project_key>`
+  - `payload_json` (JSON string)
+  - Jira contextual fields (`project_key`, `issue_type`, `trigger_status`, `issue_key`, `issue_assignee`)
+  - optional `dedupe_key`, `metadata_json`, `external_account_id`
+- Do **not** send legacy nested event envelopes (`event_key` / `source_ref` / `occurred_at` / nested `payload`) to `/api/internal/external-events/ingest`.
+
+## 6) Session Metadata Compatibility
+
+- Runtime session metadata publish keeps canonical field precedence:
+  - `group_id`, `current_task_id`, `current_delegation_id`, `current_coordination_run_id`, `source_type`, `source_ref`.
+- Runtime publish also supports compatibility aliases from Portal dispatch metadata (`portal_*` fields), while preserving original metadata in `metadata_json`.
