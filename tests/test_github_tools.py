@@ -472,6 +472,69 @@ async def test_channel_add_pr_review_comment_inline_comment_happy_path(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_channel_add_pr_review_comment_strips_inline_commit_id(monkeypatch, github_modules):
+    _, github_api = github_modules
+    captured = {}
+
+    async def _fake_request(method, endpoint, **kwargs):
+        captured["method"] = method
+        captured["endpoint"] = endpoint
+        captured["json"] = kwargs.get("json", {})
+        return {"id": 126}
+
+    monkeypatch.setattr(github_api.github_channel, "_request", _fake_request)
+
+    result = await github_api.github_channel.add_pr_review_comment(
+        owner="acme",
+        repo="repo",
+        pull_number=12,
+        body="Inline comment",
+        commit_id="  deadbeef  ",
+        path="x.py",
+        line=10,
+        event="COMMENT",
+    )
+
+    assert result["id"] == 126
+    assert captured["endpoint"] == "/repos/acme/repo/pulls/12/comments"
+    assert captured["json"]["commit_id"] == "deadbeef"
+    assert captured["json"]["path"] == "x.py"
+    assert captured["json"]["line"] == 10
+
+
+@pytest.mark.asyncio
+async def test_channel_add_pr_review_comment_blank_commit_id_falls_back_to_head_sha(monkeypatch, github_modules):
+    _, github_api = github_modules
+    captured = {}
+
+    async def _fake_request(method, endpoint, **kwargs):
+        if method == "GET" and endpoint == "/repos/acme/repo/pulls/12":
+            return {"head": {"sha": "abc123"}}
+        if method == "POST" and endpoint == "/repos/acme/repo/pulls/12/comments":
+            captured["json"] = kwargs.get("json", {})
+            return {"id": 127}
+        raise AssertionError(f"Unexpected request: {method} {endpoint}")
+
+    monkeypatch.setattr(github_api.github_channel, "_request", _fake_request)
+
+    result = await github_api.github_channel.add_pr_review_comment(
+        owner="acme",
+        repo="repo",
+        pull_number=12,
+        body="Inline comment",
+        commit_id="   ",
+        path="x.py",
+        line=10,
+        event="COMMENT",
+    )
+
+    assert result["id"] == 127
+    assert captured["json"]["commit_id"] == "abc123"
+    assert captured["json"]["path"] == "x.py"
+    assert captured["json"]["line"] == 10
+
+
+@pytest.mark.asyncio
 async def test_channel_add_pr_review_comment_blank_path_without_line_uses_reviews_endpoint(monkeypatch, github_modules):
     _, github_api = github_modules
     captured = {}
