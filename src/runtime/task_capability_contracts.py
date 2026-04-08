@@ -136,6 +136,9 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
 def _resolve_involved_capability_ids_for_task(task_type: str, payload: Dict[str, Any]) -> list[str]:
     normalized_task_type = str(task_type or "").strip().lower()
     if normalized_task_type == "jira_workflow_review_task":
+        def _is_non_empty_mapping(value: Any) -> bool:
+            return isinstance(value, dict) and bool(value)
+
         involved = {"adapter:jira:read_issue"}
         has_transition = any(payload.get(key) for key in ("transition", "success_transition", "failure_transition"))
         has_assign = any(
@@ -143,7 +146,10 @@ def _resolve_involved_capability_ids_for_task(task_type: str, payload: Dict[str,
             for key in ("assignee", "success_reassign_to", "failure_reassign_to", "explicit_success_assignee", "explicit_failure_assignee")
         )
         has_comment = any(payload.get(key) for key in ("review_comment", "review_comment_template", "transition_comment"))
-        has_update = bool(payload.get("fields"))
+        has_update = any(
+            _is_non_empty_mapping(payload.get(key))
+            for key in ("fields", "fields_on_success", "fields_on_failure")
+        )
         if has_transition:
             involved.add("adapter:jira:transition_issue")
         if has_assign:

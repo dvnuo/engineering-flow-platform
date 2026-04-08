@@ -255,6 +255,30 @@ class TestSessionManagerInfo:
         assert d2_items[0] == {"delegation_id": "d2", "y": 2}
 
     @pytest.mark.asyncio
+    async def test_metadata_persist_logs_background_failure(self, fresh_session_manager, caplog):
+        import uuid
+        import logging
+
+        session_id = f"persist_fail_{uuid.uuid4().hex[:8]}"
+
+        async def _fake_save_session(**_kwargs):
+            raise RuntimeError("boom")
+
+        fresh_session_manager.auto_save = True
+        fresh_session_manager.persistence_enabled = True
+        from src.sessions import manager as manager_module
+        original_save = manager_module.session_persistence.save_session
+        manager_module.session_persistence.save_session = _fake_save_session
+        caplog.set_level(logging.ERROR, logger="src.sessions.manager")
+        try:
+            await fresh_session_manager.set_last_execution_id(session_id, "req-1")
+            await asyncio.sleep(0)
+        finally:
+            manager_module.session_persistence.save_session = original_save
+
+        assert "Failed to persist metadata-only session update" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_add_message_still_uses_normal_persistence_path(self, fresh_session_manager):
         import uuid
 

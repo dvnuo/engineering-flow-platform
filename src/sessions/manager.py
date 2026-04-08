@@ -506,14 +506,19 @@ class SessionManager:
         channel_snapshot = str(session.get("channel", ""))
         messages_snapshot = deepcopy(session.get("history", []))
         metadata_snapshot = deepcopy(session.get("metadata", {}))
-        asyncio.create_task(
-            session_persistence.save_session(
-                session_id=session_id,
-                channel=channel_snapshot,
-                messages=messages_snapshot,
-                metadata=metadata_snapshot,
-            )
-        )
+
+        async def _persist_metadata_snapshot() -> None:
+            try:
+                await session_persistence.save_session(
+                    session_id=session_id,
+                    channel=channel_snapshot,
+                    messages=messages_snapshot,
+                    metadata=metadata_snapshot,
+                )
+            except Exception:
+                logger.exception("Failed to persist metadata-only session update", extra={"session_id": session_id})
+
+        asyncio.create_task(_persist_metadata_snapshot())
 
     async def recover_session_state(self, session_id: str) -> Dict[str, Any]:
         """Recover runtime-facing session state through the runtime recovery pipeline."""

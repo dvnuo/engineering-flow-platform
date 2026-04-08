@@ -47,6 +47,56 @@ def test_resolve_task_capability_contract_jira_workflow_review_task():
     ]
 
 
+def test_resolve_task_capability_contract_jira_workflow_review_task_fields_on_success_triggers_update():
+    plan = resolve_task_capability_contract(
+        "jira_workflow_review_task",
+        {
+            "issue_key": "ENG-2",
+            "fields_on_success": {"summary": "Approved"},
+        },
+    )
+
+    assert "adapter:jira:update_issue" in plan["involved_capability_ids"]
+
+
+def test_resolve_task_capability_contract_jira_workflow_review_task_fields_on_failure_triggers_update():
+    plan = resolve_task_capability_contract(
+        "jira_workflow_review_task",
+        {
+            "issue_key": "ENG-3",
+            "fields_on_failure": {"summary": "Rejected"},
+        },
+    )
+
+    assert "adapter:jira:update_issue" in plan["involved_capability_ids"]
+
+
+def test_resolve_task_capability_contract_jira_workflow_review_task_empty_fields_on_outcomes_do_not_trigger_update():
+    plan = resolve_task_capability_contract(
+        "jira_workflow_review_task",
+        {
+            "issue_key": "ENG-4",
+            "fields_on_success": {},
+            "fields_on_failure": {},
+        },
+    )
+
+    assert "adapter:jira:update_issue" not in plan["involved_capability_ids"]
+
+
+def test_resolve_task_capability_contract_jira_workflow_review_task_invalid_fields_on_outcomes_do_not_trigger_update():
+    plan = resolve_task_capability_contract(
+        "jira_workflow_review_task",
+        {
+            "issue_key": "ENG-5",
+            "fields_on_success": "x",
+            "fields_on_failure": ["y"],
+        },
+    )
+
+    assert "adapter:jira:update_issue" not in plan["involved_capability_ids"]
+
+
 def test_resolve_task_capability_contract_github_review_task():
     plan = resolve_task_capability_contract("github_review_task", {"owner": "acme", "repo": "demo", "pull_number": 7})
 
