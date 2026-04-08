@@ -372,6 +372,22 @@ async def test_github_review_comment_wrapper_message_for_request_changes_event(m
     assert result == "Changes requested on PR #22"
 
 
+def test_github_add_pr_review_comment_schema_includes_event_enum(github_modules):
+    github_module, _ = github_modules
+
+    schemas = github_module.get_tools_schemas()
+    review_comment_schema = next(
+        schema
+        for schema in schemas
+        if schema.get("type") == "function"
+        and schema.get("function", {}).get("name") == "github_add_pr_review_comment"
+    )
+    event_schema = review_comment_schema["function"]["parameters"]["properties"]["event"]
+
+    assert event_schema["enum"] == ["COMMENT", "APPROVE", "REQUEST_CHANGES"]
+    assert event_schema["default"] == "COMMENT"
+
+
 @pytest.mark.asyncio
 async def test_channel_add_pr_review_comment_rejects_invalid_event(github_modules):
     _, github_api = github_modules

@@ -129,6 +129,29 @@ async def test_execute_adapter_action_portal_create_delegation_missing_required_
 
 
 @pytest.mark.asyncio
+async def test_execute_adapter_action_portal_missing_base_url_mentions_env_and_config(monkeypatch):
+    monkeypatch.delenv("PORTAL_INTERNAL_BASE_URL", raising=False)
+    monkeypatch.setattr("src.runtime.adapter_executor.get_portal_internal_base_url", lambda: "")
+
+    result = await execute_adapter_action(
+        "adapter:portal:create_delegation",
+        {
+            "group_id": "g-1",
+            "leader_agent_id": "leader-1",
+            "assignee_agent_id": "agent-1",
+            "objective": "Review",
+            "visibility": "leader_only",
+            "skill_name": "skill",
+        },
+    )
+
+    assert result["success"] is False
+    assert result["system"] == "portal"
+    assert "PORTAL_INTERNAL_BASE_URL" in result["error"]
+    assert "server.portal_internal_base_url" in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_execute_adapter_action_portal_create_delegation_missing_skill_name_fails(monkeypatch):
     monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.internal")
     result = await execute_adapter_action(

@@ -344,7 +344,13 @@ async def execute_portal_control_plane_action(action_name: str, kwargs: Dict[str
     payload = dict(kwargs or {})
     base_url = get_portal_internal_base_url()
     if not base_url:
-        return {"success": False, "error": "PORTAL_INTERNAL_BASE_URL is not configured", "system": "portal", "action_name": action, "result": None}
+        return {
+            "success": False,
+            "error": "Portal internal base URL is not configured; set PORTAL_INTERNAL_BASE_URL or server.portal_internal_base_url",
+            "system": "portal",
+            "action_name": action,
+            "result": None,
+        }
 
     if action not in {
         "create_delegation",
