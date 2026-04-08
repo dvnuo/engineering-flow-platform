@@ -46,7 +46,6 @@ from src.agents.executor import (
     ToolResult,
 )
 from src.agents.skill_runtime import (
-    apply_skill_hooks,
     build_skill_runtime_event_payload,
     build_skill_tool_denied_result,
     get_effective_skill_runtime_prompt,
@@ -57,6 +56,18 @@ from src.skills.runtime import SkillRuntimeConfig
 from src.runtime.chat_orchestration_adapter import execute_tool_or_task_orchestration
 
 logger = logging.getLogger(__name__)
+
+
+def _run_pre_tool_hooks_via_governance(**kwargs):
+    from src.runtime.governance_bus import run_pre_tool_hooks
+
+    return run_pre_tool_hooks(**kwargs)
+
+
+def _run_post_tool_hooks_via_governance(**kwargs):
+    from src.runtime.governance_bus import run_post_tool_hooks
+
+    return run_post_tool_hooks(**kwargs)
 
 # Context variable for skill workdir - async-safe
 _skill_workdir: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar('skill_workdir', default=None)
@@ -1439,9 +1450,8 @@ You have access to the following tools. When a user asks you to do something tha
                             }
                         )
                         executed_tool_results.append((tool_name, deny_result))
-                        apply_skill_hooks(
+                        _run_post_tool_hooks_via_governance(
                             runtime_config=active_skill_runtime,
-                            stage="post_tool",
                             session_id=session_id,
                             tool_name=tool_name,
                             payload={"denied": True, "result": safe_preview(deny_result, 500)},
@@ -1449,9 +1459,8 @@ You have access to the following tools. When a user asks you to do something tha
                         )
                         continue
 
-                pre_hook_effects = apply_skill_hooks(
+                pre_hook_effects = _run_pre_tool_hooks_via_governance(
                     runtime_config=active_skill_runtime,
-                    stage="pre_tool",
                     session_id=session_id,
                     tool_name=tool_name,
                     payload={"args": args},
@@ -1482,9 +1491,8 @@ You have access to the following tools. When a user asks you to do something tha
                         "success": short_result.success
                     })
                     executed_tool_results.append((tool_name, short_result))
-                    apply_skill_hooks(
+                    _run_post_tool_hooks_via_governance(
                         runtime_config=active_skill_runtime,
-                        stage="post_tool",
                         session_id=session_id,
                         tool_name=tool_name,
                         payload={"short_circuit": True, "result": str(short_result)},
@@ -1519,9 +1527,8 @@ You have access to the following tools. When a user asks you to do something tha
                     source_ref="agents.core.tool_loop",
                 )
                 result_preview = safe_preview(tool_result, 200)
-                post_hook_effects = apply_skill_hooks(
+                post_hook_effects = _run_post_tool_hooks_via_governance(
                     runtime_config=active_skill_runtime,
-                    stage="post_tool",
                     session_id=session_id,
                     tool_name=tool_name,
                     payload={"success": tool_result.success, "result_preview": result_preview},

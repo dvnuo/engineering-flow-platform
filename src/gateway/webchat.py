@@ -42,6 +42,10 @@ from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.config import config as global_config
 from src.runtime.chat_orchestration_adapter import execute_chat_orchestration, execute_runtime_task_request
+from src.runtime.portal_session_metadata_client import (
+    extract_session_metadata_publish_fields,
+    publish_session_metadata,
+)
 from src.runtime.capability_registry import get_capability_registry
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
@@ -228,6 +232,7 @@ async def _run_chat_via_execution_bus(
     stream_callback: Optional[Any] = None,
     request_path: str = "/api/chat",
     execution_metadata: Optional[Dict[str, Any]] = None,
+    agent_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     async def _chat_handler(execution_request):
         payload = execution_request.input_payload
@@ -251,6 +256,7 @@ async def _run_chat_via_execution_bus(
         request_id=f"chat-{uuid.uuid4()}",
         session_id=session_id,
         source_ref="webchat",
+        agent_id=agent_id,
         input_payload={
             "message": message,
             "user_name": user_name,
@@ -270,6 +276,7 @@ async def _run_chat_via_execution_bus(
         chat_handler=_chat_handler,
     )
     output_payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
+    output_payload["_execution_result"] = execution_result
     if execution_result.status == "error" or output_payload.get("error"):
         error_value = output_payload.get("error", "Execution bus error")
         if isinstance(error_value, dict):
@@ -600,7 +607,24 @@ async def api_chat(request: web.Request) -> web.Response:
             attachments=attachments if attachments else None,
             request_path="/api/chat",
             execution_metadata=execution_metadata,
+            agent_id=runtime_agent_id,
         )
+        execution_result = result.get("_execution_result")
+        if runtime_agent_id and execution_result is not None:
+            publish_fields = extract_session_metadata_publish_fields(
+                execution_result,
+                metadata=execution_metadata,
+                default_event_type="chat.completed",
+                default_state="success",
+            )
+            try:
+                await publish_session_metadata(
+                    agent_id=runtime_agent_id,
+                    session_id=session_id,
+                    **publish_fields,
+                )
+            except Exception:
+                logger.warning("Best-effort session metadata publish failed for chat path", exc_info=True)
         
         # Force save session to persistence
         session = await session_manager.get_session(session_id)
@@ -794,7 +818,24 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             stream_callback=event_queue,
             request_path="/api/chat/stream",
             execution_metadata=execution_metadata,
+            agent_id=runtime_agent_id,
         )
+        execution_result = result.get("_execution_result")
+        if runtime_agent_id and execution_result is not None:
+            publish_fields = extract_session_metadata_publish_fields(
+                execution_result,
+                metadata=execution_metadata,
+                default_event_type="chat.completed",
+                default_state="success",
+            )
+            try:
+                await publish_session_metadata(
+                    agent_id=runtime_agent_id,
+                    session_id=session_id,
+                    **publish_fields,
+                )
+            except Exception:
+                logger.warning("Best-effort session metadata publish failed for streaming chat path", exc_info=True)
         
         # Stream events from queue while agent is running
         while not event_queue.empty():
@@ -884,6 +925,7 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             metadata["portal_workflow_rule_id"] = parsed["workflow_rule_id"]
         if parsed["shared_context_ref"]:
             metadata["shared_context_ref"] = parsed["shared_context_ref"]
+        runtime_agent_id, _runtime_agent_name = _resolve_runtime_agent_identity(request)
 
         execution_result = await execute_runtime_task_request(
             request_id=f"task-{parsed['task_id']}",
@@ -891,10 +933,26 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             source_ref=parsed["source"] or "portal",
             execution_type="task",
             session_id=parsed["session_id"],
+            agent_id=runtime_agent_id,
             context_ref=parsed["context_ref"] or None,
             input_payload=merged_input_payload,
             metadata=metadata,
         )
+        if runtime_agent_id and parsed["session_id"]:
+            publish_fields = extract_session_metadata_publish_fields(
+                execution_result,
+                metadata=metadata,
+                default_event_type="task.completed" if execution_result.status == "success" else "task.failed",
+                default_state="success" if execution_result.status == "success" else "error",
+            )
+            try:
+                await publish_session_metadata(
+                    agent_id=runtime_agent_id,
+                    session_id=parsed["session_id"],
+                    **publish_fields,
+                )
+            except Exception:
+                logger.warning("Best-effort session metadata publish failed for task execution path", exc_info=True)
 
         status = execution_result.status
         is_ok = status == "success"

@@ -318,6 +318,56 @@ class NoopGovernanceBus(GovernanceBus):
     """Explicit no-op governance implementation for compatibility paths."""
 
 
+def run_pre_tool_hooks(
+    *,
+    runtime_config: Optional[Any],
+    session_id: str,
+    tool_name: str,
+    payload: Optional[Dict[str, Any]] = None,
+    event_callback: Any = None,
+) -> Any:
+    """Governance boundary facade for pre-tool hook invocation."""
+    try:
+        from src.agents.skill_runtime import apply_skill_hooks
+        return apply_skill_hooks(
+            runtime_config=runtime_config,
+            stage="pre_tool",
+            session_id=session_id,
+            tool_name=tool_name,
+            payload=payload,
+            event_callback=event_callback,
+        )
+    except Exception:
+        from src.agents.skill_runtime import HookEffects
+
+        return HookEffects()
+
+
+def run_post_tool_hooks(
+    *,
+    runtime_config: Optional[Any],
+    session_id: str,
+    tool_name: str,
+    payload: Optional[Dict[str, Any]] = None,
+    event_callback: Any = None,
+) -> Any:
+    """Governance boundary facade for post-tool hook invocation."""
+    try:
+        from src.agents.skill_runtime import apply_skill_hooks
+        return apply_skill_hooks(
+            runtime_config=runtime_config,
+            stage="post_tool",
+            session_id=session_id,
+            tool_name=tool_name,
+            payload=payload,
+            event_callback=event_callback,
+        )
+    except Exception:
+        from src.agents.skill_runtime import HookEffects
+
+        return HookEffects()
+
+
 def _as_lower_str_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []

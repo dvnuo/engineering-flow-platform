@@ -84,6 +84,8 @@ llm:
 server:
   runtime_internal_api_key: "change-me"  # Portal -> EFP (/api/tasks/execute, /api/capabilities)
   portal_internal_api_key: "change-me"   # Portal -> EFP trusted chat metadata/identity
+  jira_reconciliation_enabled: false     # Runtime scheduled Jira reconciliation loop
+  jira_reconciliation_interval_seconds: 300
 ```
 
 Environment variables override config values:

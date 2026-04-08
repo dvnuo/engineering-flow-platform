@@ -30,6 +30,7 @@ from src.runtime.governance_bus import (
     evaluate_capability_constraint_decision,
     governance_audit_runtime_event,
 )
+from src.runtime.github_review import run_github_review_task
 from src.runtime.jira_workflow_review import run_jira_workflow_review
 from src.runtime.leader_orchestration import dispatch_task_breakdown_as_delegations, run_delegation_cycle
 
@@ -1666,132 +1667,70 @@ def build_default_execution_bus(
             owner = _get_required(request.input_payload, "owner")
             repo = _get_required(request.input_payload, "repo")
             pull_number = _get_required(request.input_payload, "pull_number")
-            review_comment_input = request.input_payload.get("comment")
-            review_metadata = request.input_payload.get("metadata")
-
-            review_result = await execute_adapter_action(
-                "adapter:github:review_pull_request",
-                {
-                    "owner": owner,
-                    "repo": repo,
-                    "pull_number": pull_number,
-                    "comment": review_comment_input,
-                    "metadata": review_metadata,
-                },
-            )
-
-            runtime_events = list(review_result.get("runtime_events") or [])
-            runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
-            review_summary = None
-            if isinstance(review_result.get("result"), dict):
-                review_summary = review_result.get("result", {}).get("summary")
-            if review_summary is None:
-                review_summary = review_comment_input
-            comment_written = False
-            error_value = review_result.get("error")
             secondary_action_id = "adapter:github:add_comment"
-            secondary_action_attempted = False
-            secondary_action_success = False
             governed_secondary_action_ids = [secondary_action_id]
             blocked_secondary_action_ids: list[str] = []
             applied_secondary_action_ids: list[str] = []
             secondary_action_decisions: list[Dict[str, Any]] = []
 
-            if review_result.get("success"):
-                comment_body = review_summary if isinstance(review_summary, str) and review_summary.strip() else review_comment_input
-                if isinstance(comment_body, str) and comment_body.strip():
-                    secondary_action_attempted = True
-                    secondary_gate = _evaluate_secondary_action_gate(request=request, action_id=secondary_action_id)
-                    if secondary_gate is not None:
-                        blocked_secondary_action_ids.append(secondary_action_id)
-                        error_value = "capability policy blocked for secondary action"
-                        _append_secondary_action_event(
-                            runtime_events=runtime_events,
-                            request=request,
-                            task_id=task_id,
-                            event_type="task.github_review.secondary_action.blocked",
-                            state="blocked",
-                            detail_payload={
-                                "task_type": task_type,
-                                "secondary_action_id": secondary_action_id,
-                                "reason": secondary_gate.get("reason"),
-                                "message": secondary_gate.get("message"),
-                            },
-                        )
-                        _append_secondary_governance_audit_event(
-                            runtime_events=runtime_events,
-                            request=request,
-                            task_type=task_type,
-                            action_id=secondary_action_id,
-                            deny_reason=str(secondary_gate.get("reason") or "capability_policy_blocked"),
-                        )
-                        _record_secondary_action_decision(
-                            secondary_action_decisions,
-                            action_id=secondary_action_id,
-                            decision="blocked",
-                            reason=str(secondary_gate.get("reason") or "capability_policy_blocked"),
-                            success=False,
-                        )
-                    else:
-                        applied_secondary_action_ids.append(secondary_action_id)
-                        add_comment_result = await execute_adapter_action(
-                            secondary_action_id,
-                            {
-                                "owner": owner,
-                                "repo": repo,
-                                "pull_number": pull_number,
-                                "comment": comment_body,
-                            },
-                        )
-                        runtime_events.extend(add_comment_result.get("runtime_events") or [])
-                        runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
-                        comment_written = bool(add_comment_result.get("success"))
-                        secondary_action_success = comment_written
-                        _append_secondary_action_event(
-                            runtime_events=runtime_events,
-                            request=request,
-                            task_id=task_id,
-                            event_type="task.github_review.secondary_action.completed" if comment_written else "task.github_review.secondary_action.failed",
-                            state="completed" if comment_written else "failed",
-                            detail_payload={
-                                "task_type": task_type,
-                                "secondary_action_id": secondary_action_id,
-                                "success": comment_written,
-                                "error": add_comment_result.get("error"),
-                            },
-                        )
-                        if not comment_written:
-                            error_value = add_comment_result.get("error") or "Failed to write GitHub review comment"
-                            _record_secondary_action_decision(
-                                secondary_action_decisions,
-                                action_id=secondary_action_id,
-                                decision="failed",
-                                reason=str(add_comment_result.get("error") or "action_failed"),
-                                success=False,
-                            )
-                        else:
-                            _record_secondary_action_decision(
-                                secondary_action_decisions,
-                                action_id=secondary_action_id,
-                                decision="applied",
-                                reason=None,
-                                success=True,
-                            )
-                else:
-                    error_value = "Review succeeded but no summary/comment text available for write-back"
-                    _record_secondary_action_decision(
-                        secondary_action_decisions,
-                        action_id=secondary_action_id,
-                        decision="failed",
-                        reason="missing_comment_body",
-                        success=False,
-                    )
-            elif not secondary_action_decisions:
+            def _github_action_gate(action_id: str, _kwargs: Dict[str, Any]) -> Dict[str, Any] | None:
+                if action_id != secondary_action_id:
+                    return {"reason": "unsupported_secondary_action", "message": f"Unsupported secondary action: {action_id}"}
+                return _evaluate_secondary_action_gate(request=request, action_id=action_id)
+
+            review_result = await run_github_review_task(
+                {
+                    **dict(request.input_payload or {}),
+                    "_action_gate": _github_action_gate,
+                }
+            )
+
+            runtime_events = list(review_result.get("runtime_events") or [])
+            runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+            review_summary = review_result.get("review_summary")
+            comment_written = bool(review_result.get("comment_written"))
+            error_value = review_result.get("error")
+            secondary_action_attempted = bool(review_result.get("secondary_action_attempted"))
+            secondary_action_success = bool(review_result.get("secondary_action_success"))
+            if secondary_action_attempted and not secondary_action_success and error_value and "capability policy blocked" in str(error_value):
+                blocked_secondary_action_ids.append(secondary_action_id)
+                _append_secondary_governance_audit_event(
+                    runtime_events=runtime_events,
+                    request=request,
+                    task_type=task_type,
+                    action_id=secondary_action_id,
+                    deny_reason="capability_policy_blocked",
+                )
+                _record_secondary_action_decision(
+                    secondary_action_decisions,
+                    action_id=secondary_action_id,
+                    decision="blocked",
+                    reason="capability_policy_blocked",
+                    success=False,
+                )
+            elif secondary_action_success:
+                applied_secondary_action_ids.append(secondary_action_id)
+                _record_secondary_action_decision(
+                    secondary_action_decisions,
+                    action_id=secondary_action_id,
+                    decision="applied",
+                    reason=None,
+                    success=True,
+                )
+            elif secondary_action_attempted:
+                _record_secondary_action_decision(
+                    secondary_action_decisions,
+                    action_id=secondary_action_id,
+                    decision="failed",
+                    reason=str(error_value or "action_failed"),
+                    success=False,
+                )
+            else:
                 _record_secondary_action_decision(
                     secondary_action_decisions,
                     action_id=secondary_action_id,
                     decision="allowed",
-                    reason="primary_action_failed",
+                    reason="not_invoked",
                     success=False,
                 )
             secondary_summary = _build_secondary_governance_summary(
@@ -1859,6 +1798,7 @@ def build_default_execution_bus(
                     "secondary_action_attempted": secondary_action_attempted,
                     "secondary_action_id": secondary_action_id,
                     "secondary_action_success": secondary_action_success,
+                    "result": review_result.get("result"),
                 },
                 runtime_events=runtime_events,
             )

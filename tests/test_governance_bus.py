@@ -562,3 +562,25 @@ def test_governance_context_matches_canonical_contract_for_jira_review_task():
     gov_context = _resolve_capability_context(req)
     plan = resolve_task_capability_contract("jira_workflow_review_task", req.input_payload)
     assert gov_context["capability_id"] == plan["primary_capability_id"]
+
+
+def test_governance_hook_facades_delegate_to_skill_runtime(monkeypatch):
+    from src.runtime import governance_bus
+    from src.agents.skill_runtime import HookEffects
+
+    calls = []
+
+    def _fake_apply_skill_hooks(**kwargs):
+        calls.append(kwargs)
+        return HookEffects(modified_args={"x": 1}, invoked_hooks=["pre_tool:noop"])
+
+    monkeypatch.setattr("src.agents.skill_runtime.apply_skill_hooks", _fake_apply_skill_hooks)
+    effects = governance_bus.run_pre_tool_hooks(
+        runtime_config=None,
+        session_id="s-1",
+        tool_name="demo_tool",
+        payload={"args": {"a": 1}},
+        event_callback=None,
+    )
+    assert effects.modified_args == {"x": 1}
+    assert calls and calls[0]["stage"] == "pre_tool"

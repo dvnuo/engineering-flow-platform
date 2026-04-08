@@ -69,11 +69,19 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
         }
 
     if normalized_task_type == "github_review_task":
-        primary_capability_id = "adapter:github:review_pull_request"
+        skill_name = str(normalized_payload.get("skill_name") or "review-pull-request").strip().lower() or "review-pull-request"
+        primary_capability_id = f"skill:{skill_name}"
         descriptor = registry.get(primary_capability_id)
         involved = _resolve_involved_capability_ids_for_task(normalized_task_type, normalized_payload)
         if descriptor is None:
-            return {**fallback, "primary_capability_id": primary_capability_id, "capability_id": primary_capability_id, "action_id": primary_capability_id, "involved_capability_ids": involved}
+            return {
+                **fallback,
+                "primary_capability_id": primary_capability_id,
+                "capability_id": primary_capability_id,
+                "action_id": primary_capability_id,
+                "capability_type": "skill",
+                "involved_capability_ids": involved,
+            }
         return {
             **fallback,
             "primary_capability_id": descriptor.capability_id,
@@ -129,5 +137,6 @@ def _resolve_involved_capability_ids_for_task(task_type: str, payload: Dict[str,
             involved.add("adapter:jira:update_issue")
         return sorted(involved)
     if normalized_task_type == "github_review_task":
-        return ["adapter:github:add_comment", "adapter:github:review_pull_request"]
+        skill_name = str(payload.get("skill_name") or "review-pull-request").strip().lower() or "review-pull-request"
+        return ["adapter:github:add_comment", f"skill:{skill_name}"]
     return []

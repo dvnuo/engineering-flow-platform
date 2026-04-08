@@ -166,6 +166,8 @@ server:
   portal_internal_api_key: "change-me"   # Trusted Portal -> Runtime chat identity/metadata key (X-Portal-Internal-Api-Key)
   portal_internal_base_url: "https://portal.internal"  # Runtime -> Portal internal API base URL (adapter:portal:*)
   portal_internal_auth_token: ""  # Optional legacy Runtime -> Portal bearer token; env/config supported, env takes precedence
+  jira_reconciliation_enabled: false  # Enable scheduled Jira reconciliation -> Portal external event ingest
+  jira_reconciliation_interval_seconds: 300  # Reconciliation polling interval
 
 # ============================================
 # Jira Configuration (OPTIONAL)

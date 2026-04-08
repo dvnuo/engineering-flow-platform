@@ -184,3 +184,12 @@ def test_runtime_helper_modules_do_not_import_adapter_executor_directly():
     forbidden = "from src.runtime.adapter_executor import"
     for name, source in sources.items():
         assert forbidden not in source, f"{name} unexpectedly imports low-level adapter executor"
+
+
+def test_agent_core_no_longer_calls_apply_skill_hooks_directly():
+    from src.agents import core
+
+    source = inspect.getsource(core)
+    assert "apply_skill_hooks(" not in source
+    assert "_run_pre_tool_hooks_via_governance(" in source
+    assert "_run_post_tool_hooks_via_governance(" in source

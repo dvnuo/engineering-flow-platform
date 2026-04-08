@@ -239,6 +239,31 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_chat_execution_bus_adapter_forwards_agent_id(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_execute_chat_orchestration(**kwargs):
+        captured.update(kwargs)
+        return type("R", (), {"status": "success", "output_payload": {"response": "ok"}})()
+
+    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
+    monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
+
+    await webchat._run_chat_via_execution_bus(
+        agent=object(),
+        session_id="s-chat",
+        message="hello",
+        user_name="u1",
+        portal_user_id=None,
+        portal_user_name=None,
+        agent_id="agent-77",
+    )
+    assert captured["agent_id"] == "agent-77"
+
+
+@pytest.mark.asyncio
 async def test_chat_execution_bus_adapter_merges_execution_metadata_without_overriding_path(monkeypatch):
     from src.gateway import webchat
 
@@ -572,6 +597,88 @@ async def test_api_chat_flattens_policy_context_derived_runtime_rules(monkeypatc
     assert resp.status == 200
     assert captured["execution_metadata"]["governance_require_explicit_allow"] is True
     assert captured["execution_metadata"]["governance_external_allowlist"] == ["github_review_task"]
+
+
+@pytest.mark.asyncio
+async def test_api_chat_best_effort_publishes_session_metadata(monkeypatch):
+    from src.gateway import webchat
+
+    published = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {
+            "response": "ok",
+            "usage": {},
+            "_execution_result": type(
+                "R",
+                (),
+                {"request_id": "exec-1", "status": "success", "runtime_events": [], "artifacts": {}, "output_payload": {}},
+            )(),
+        }
+
+    async def _fake_publish_session_metadata(**kwargs):
+        published.update(kwargs)
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "publish_session_metadata", _fake_publish_session_metadata)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _request: ("agent-1", "Agent One"))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-meta-chat"}
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
+    assert published["agent_id"] == "agent-1"
+    assert published["session_id"] == "s-meta-chat"
+    assert published["last_execution_id"] == "exec-1"
+    assert published["latest_event_state"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_publish_failure_does_not_break_response(monkeypatch):
+    from src.gateway import webchat
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {
+            "response": "ok",
+            "usage": {},
+            "_execution_result": type(
+                "R",
+                (),
+                {"request_id": "exec-2", "status": "success", "runtime_events": [], "artifacts": {}, "output_payload": {}},
+            )(),
+        }
+
+    async def _failing_publish_session_metadata(**_kwargs):
+        raise RuntimeError("portal unavailable")
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "publish_session_metadata", _failing_publish_session_metadata)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _request: ("agent-2", "Agent Two"))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-meta-chat-fail"}
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
 
 
 @pytest.mark.asyncio
@@ -1084,6 +1191,7 @@ async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
     monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     captured = {}
+    published = {}
     async def _fake_execute_runtime_task_request(**kwargs):
         captured.update(kwargs)
         return type(
@@ -1101,6 +1209,12 @@ async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
         )()
 
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _request: ("agent-task-1", "Task Agent"))
+
+    async def _fake_publish_session_metadata(**kwargs):
+        published.update(kwargs)
+
+    monkeypatch.setattr(webchat, "publish_session_metadata", _fake_publish_session_metadata)
 
     class _Request:
         headers = INTERNAL_HEADERS
@@ -1138,6 +1252,11 @@ async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
     assert captured["input_payload"]["shared_context_ref"] == "ctx://1"
     assert captured["context_ref"] == {"workspace": "w1"}
     assert captured["request_id"] == "task-task-1"
+    assert captured["agent_id"] == "agent-task-1"
+    assert published["agent_id"] == "agent-task-1"
+    assert published["session_id"] == "session-1"
+    assert published["last_execution_id"] == "task-task-1"
+    assert published["latest_event_state"] == "success"
 
 
 @pytest.mark.asyncio

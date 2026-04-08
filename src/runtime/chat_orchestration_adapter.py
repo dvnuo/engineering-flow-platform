@@ -21,6 +21,7 @@ async def _execute_with_bus(
     register_handler_type: Optional[str] = None,
     custom_handler: Optional[Callable[[Any], Any]] = None,
     execute_tool_func: Optional[Callable[..., Any]] = None,
+    agent_id: Optional[str] = None,
 ) -> ExecutionResult:
     bus = build_default_execution_bus(execute_tool_func=execute_tool_func)
     if register_handler_type and custom_handler is not None:
@@ -29,6 +30,7 @@ async def _execute_with_bus(
         request_id=request_id,
         source_type=source_type,
         source_ref=source_ref,
+        agent_id=agent_id,
         execution_type=execution_type,
         session_id=session_id,
         context_ref=dict(context_ref or {}) if context_ref is not None else None,
@@ -46,6 +48,7 @@ async def execute_chat_orchestration(
     input_payload: Dict[str, Any],
     metadata: Optional[Dict[str, Any]],
     chat_handler: Callable[[Any], Any],
+    agent_id: Optional[str] = None,
 ) -> ExecutionResult:
     """Build and execute a chat ExecutionRequest through the default bus."""
     return await _execute_with_bus(
@@ -59,6 +62,7 @@ async def execute_chat_orchestration(
         input_payload=dict(input_payload or {}),
         register_handler_type="chat",
         custom_handler=chat_handler,
+        agent_id=agent_id,
     )
 
 
@@ -71,6 +75,7 @@ async def execute_tool_or_task_orchestration(
     input_payload: Dict[str, Any],
     metadata: Optional[Dict[str, Any]],
     execute_tool_func: Optional[Callable[..., Any]] = None,
+    agent_id: Optional[str] = None,
 ) -> ExecutionResult:
     """Build and execute a tool/task request through the default bus."""
     return await _execute_with_bus(
@@ -83,6 +88,7 @@ async def execute_tool_or_task_orchestration(
         input_payload=dict(input_payload or {}),
         metadata=dict(metadata or {}),
         execute_tool_func=execute_tool_func,
+        agent_id=agent_id,
     )
 
 
@@ -93,6 +99,7 @@ async def execute_skill_orchestration(
     input_payload: Dict[str, Any],
     metadata: Optional[Dict[str, Any]] = None,
     custom_skill_handler: Optional[Callable[[Any], Any]] = None,
+    agent_id: Optional[str] = None,
 ) -> ExecutionResult:
     """Execute a skill request through the runtime bus boundary."""
     return await _execute_with_bus(
@@ -106,6 +113,7 @@ async def execute_skill_orchestration(
         metadata=metadata,
         register_handler_type="skill" if custom_skill_handler is not None else None,
         custom_handler=custom_skill_handler,
+        agent_id=agent_id,
     )
 
 
@@ -115,6 +123,7 @@ async def execute_subagent_orchestration(
     session_id: Optional[str],
     input_payload: Dict[str, Any],
     metadata: Optional[Dict[str, Any]] = None,
+    agent_id: Optional[str] = None,
 ) -> ExecutionResult:
     """Execute a subagent request through the runtime bus boundary."""
     return await _execute_with_bus(
@@ -126,6 +135,7 @@ async def execute_subagent_orchestration(
         context_ref=None,
         input_payload=input_payload,
         metadata=metadata,
+        agent_id=agent_id,
     )
 
 
@@ -139,6 +149,7 @@ async def execute_runtime_task_request(
     context_ref: Optional[Dict[str, Any]] = None,
     input_payload: Dict[str, Any],
     metadata: Optional[Dict[str, Any]] = None,
+    agent_id: Optional[str] = None,
 ) -> ExecutionResult:
     """Execute a generic runtime request through the runtime bus boundary."""
     return await _execute_with_bus(
@@ -150,4 +161,5 @@ async def execute_runtime_task_request(
         context_ref=context_ref,
         input_payload=input_payload,
         metadata=metadata,
+        agent_id=agent_id,
     )
