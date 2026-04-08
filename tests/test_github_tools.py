@@ -326,6 +326,76 @@ async def test_channel_add_pr_review_comment_rejects_invalid_event(github_module
 
 
 @pytest.mark.asyncio
+async def test_channel_add_pr_review_comment_rejects_inline_non_comment_event(github_modules):
+    _, github_api = github_modules
+    with pytest.raises(ValueError, match="Inline PR review comments only support event='COMMENT'"):
+        await github_api.github_channel.add_pr_review_comment(
+            owner="acme",
+            repo="repo",
+            pull_number=11,
+            body="Invalid",
+            path="x.py",
+            line=10,
+            event="APPROVE",
+        )
+
+
+@pytest.mark.asyncio
+async def test_channel_add_pr_review_comment_requires_path_and_line_together(github_modules):
+    _, github_api = github_modules
+    with pytest.raises(ValueError, match="path and line must be provided together"):
+        await github_api.github_channel.add_pr_review_comment(
+            owner="acme",
+            repo="repo",
+            pull_number=11,
+            body="Invalid",
+            path="x.py",
+            event="COMMENT",
+        )
+    with pytest.raises(ValueError, match="path and line must be provided together"):
+        await github_api.github_channel.add_pr_review_comment(
+            owner="acme",
+            repo="repo",
+            pull_number=11,
+            body="Invalid",
+            line=10,
+            event="COMMENT",
+        )
+
+
+@pytest.mark.asyncio
+async def test_channel_add_pr_review_comment_inline_comment_happy_path(monkeypatch, github_modules):
+    _, github_api = github_modules
+    captured = {}
+
+    async def _fake_request(method, endpoint, **kwargs):
+        captured["method"] = method
+        captured["endpoint"] = endpoint
+        captured["json"] = kwargs.get("json", {})
+        return {"id": 123}
+
+    monkeypatch.setattr(github_api.github_channel, "_request", _fake_request)
+
+    result = await github_api.github_channel.add_pr_review_comment(
+        owner="acme",
+        repo="repo",
+        pull_number=12,
+        body="Inline comment",
+        commit_id="deadbeef",
+        path="x.py",
+        line=10,
+        event="COMMENT",
+    )
+
+    assert result["id"] == 123
+    assert captured["method"] == "POST"
+    assert captured["endpoint"] == "/repos/acme/repo/pulls/12/comments"
+    assert captured["json"]["commit_id"] == "deadbeef"
+    assert captured["json"]["path"] == "x.py"
+    assert captured["json"]["line"] == 10
+
+
+@pytest.mark.asyncio
 async def test_github_get_pr_files_dispatch_does_not_fail_on_error_word_in_content(monkeypatch):
     from src import execute_tool
 

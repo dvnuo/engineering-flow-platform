@@ -7,8 +7,8 @@ import logging
 
 from src.agents.executor import execute_skill
 from src.github.api import github_channel
-from src.runtime.adapter_executor import execute_adapter_action
 from src.runtime.events import build_runtime_event
+from src.runtime.runtime_adapter_execution import execute_adapter_action_via_bus
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,21 @@ async def _get_current_pr_head_sha(owner: str, repo: str, pull_number: int) -> s
     if isinstance(sha, str) and sha.strip():
         return sha.strip()
     return None
+
+
+async def execute_github_review_action(action_id: str, kwargs: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    execution_metadata = payload.get("_execution_metadata")
+    metadata = dict(execution_metadata) if isinstance(execution_metadata, dict) else None
+    return await execute_adapter_action_via_bus(
+        action_id,
+        kwargs,
+        source_type="runtime",
+        source_ref="github_review",
+        session_id=payload.get("session_id"),
+        agent_id=payload.get("agent_id"),
+        policy_profile_id=payload.get("policy_profile_id"),
+        metadata=metadata,
+    )
 
 
 async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -233,9 +248,10 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                 )
             )
         else:
-            add_comment_result = await execute_adapter_action(
+            add_comment_result = await execute_github_review_action(
                 secondary_action_id,
                 action_payload,
+                payload,
             )
             secondary_action_success = bool(add_comment_result.get("success"))
             actions_applied.append({"action_id": secondary_action_id, "success": secondary_action_success, "error": add_comment_result.get("error")})

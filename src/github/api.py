@@ -559,8 +559,18 @@ class GitHubChannel:
         normalized_event = str(event or "COMMENT").strip().upper()
         if normalized_event not in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
             raise ValueError("event must be one of COMMENT, APPROVE, REQUEST_CHANGES")
-        
-        if path and line:
+
+        has_path = path is not None
+        has_line = line is not None
+        if has_path != has_line:
+            raise ValueError("path and line must be provided together for inline PR review comments")
+
+        if has_path and has_line:
+            if normalized_event != "COMMENT":
+                raise ValueError(
+                    "Inline PR review comments only support event='COMMENT'; "
+                    "APPROVE and REQUEST_CHANGES require the pull request reviews endpoint"
+                )
             # For inline comments, we need a real commit SHA
             commit_id_to_use = commit_id
             if not commit_id_to_use:

@@ -29,6 +29,7 @@ async def execute_adapter_action_via_bus(
         source_type=source_type,
         source_ref=source_ref,
         session_id=session_id,
+        agent_id=agent_id,
         execution_type="task",
         context_ref=context_ref,
         input_payload={

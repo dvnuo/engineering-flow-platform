@@ -18,13 +18,13 @@ async def test_github_review_task_maps_approved_to_approve_event(monkeypatch):
 
     captured = {}
 
-    async def _fake_execute_adapter_action(action_id, kwargs):
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
         captured["action_id"] = action_id
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 1}, "runtime_events": []}
 
     monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
-    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action", _fake_execute_adapter_action)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task({"owner": "acme", "repo": "demo", "pull_number": 1})
 
@@ -43,13 +43,13 @@ async def test_github_review_task_maps_rejected_to_request_changes_event(monkeyp
 
     captured = {}
 
-    async def _fake_execute_adapter_action(action_id, kwargs):
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
         captured["action_id"] = action_id
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 2}, "runtime_events": []}
 
     monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
-    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action", _fake_execute_adapter_action)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task({"owner": "acme", "repo": "demo", "pull_number": 2})
 
@@ -67,13 +67,13 @@ async def test_github_review_task_plain_summary_defaults_to_comment_event(monkey
 
     captured = {}
 
-    async def _fake_execute_adapter_action(action_id, kwargs):
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
         captured["action_id"] = action_id
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 3}, "runtime_events": []}
 
     monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
-    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action", _fake_execute_adapter_action)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task({"owner": "acme", "repo": "demo", "pull_number": 3})
 
@@ -91,13 +91,13 @@ async def test_github_review_task_explicit_issue_comment_fallback(monkeypatch):
 
     captured = {}
 
-    async def _fake_execute_adapter_action(action_id, kwargs):
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
         captured["action_id"] = action_id
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 4}, "runtime_events": []}
 
     monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
-    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action", _fake_execute_adapter_action)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
         {"owner": "acme", "repo": "demo", "pull_number": 4, "writeback_mode": "issue_comment"}
@@ -117,7 +117,7 @@ async def test_github_review_task_head_sha_mismatch_suppresses_writeback(monkeyp
 
     called = {"adapter": False}
 
-    async def _fake_execute_adapter_action(_action_id, _kwargs):
+    async def _fake_execute_adapter_action_via_bus(_action_id, _kwargs, **_meta):
         called["adapter"] = True
         return {"success": True, "error": None, "result": {"id": 5}, "runtime_events": []}
 
@@ -125,7 +125,7 @@ async def test_github_review_task_head_sha_mismatch_suppresses_writeback(monkeyp
         return "sha-new"
 
     monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
-    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action", _fake_execute_adapter_action)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
     monkeypatch.setattr("src.runtime.github_review._get_current_pr_head_sha", _fake_get_current_pr_head_sha)
 
     result = await run_github_review_task(
@@ -152,7 +152,7 @@ async def test_github_review_task_head_sha_match_still_writes_review(monkeypatch
 
     captured = {}
 
-    async def _fake_execute_adapter_action(action_id, kwargs):
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
         captured["action_id"] = action_id
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 6}, "runtime_events": []}
@@ -161,7 +161,7 @@ async def test_github_review_task_head_sha_match_still_writes_review(monkeypatch
         return "sha-1"
 
     monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
-    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action", _fake_execute_adapter_action)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
     monkeypatch.setattr("src.runtime.github_review._get_current_pr_head_sha", _fake_get_current_pr_head_sha)
 
     result = await run_github_review_task(
@@ -182,13 +182,13 @@ async def test_github_review_task_gate_with_blocked_false_allows_secondary_actio
 
     captured = {}
 
-    async def _fake_execute_adapter_action(action_id, kwargs):
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
         captured["action_id"] = action_id
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 7}, "runtime_events": []}
 
     monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
-    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action", _fake_execute_adapter_action)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
         {
@@ -213,12 +213,12 @@ async def test_github_review_task_gate_with_blocked_true_blocks_secondary_action
 
     called = {"adapter": False}
 
-    async def _fake_execute_adapter_action(_action_id, _kwargs):
+    async def _fake_execute_adapter_action_via_bus(_action_id, _kwargs, **_meta):
         called["adapter"] = True
         return {"success": True, "error": None, "result": {"id": 8}, "runtime_events": []}
 
     monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
-    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action", _fake_execute_adapter_action)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
         {
@@ -235,3 +235,43 @@ async def test_github_review_task_gate_with_blocked_true_blocks_secondary_action
     assert result["secondary_action_success"] is False
     assert "capability policy blocked for secondary action" in str(result["error"])
     assert any(evt.get("event_type") == "task.github_review.secondary_action.blocked" for evt in result["runtime_events"])
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_forwards_runtime_context_to_bus_helper(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(success=True, output="Looks good", data={"approved": True})
+
+    captured = {}
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **meta):
+        captured["action_id"] = action_id
+        captured["kwargs"] = kwargs
+        captured["meta"] = meta
+        return {"success": True, "error": None, "result": {"id": 9}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 23,
+            "session_id": "s-123",
+            "agent_id": "agent-123",
+            "policy_profile_id": "pp-123",
+            "_execution_metadata": {"k": "v"},
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["action_id"] == "adapter:github:review_pull_request"
+    assert captured["meta"]["source_type"] == "runtime"
+    assert captured["meta"]["source_ref"] == "github_review"
+    assert captured["meta"]["session_id"] == "s-123"
+    assert captured["meta"]["agent_id"] == "agent-123"
+    assert captured["meta"]["policy_profile_id"] == "pp-123"
+    assert captured["meta"]["metadata"] == {"k": "v"}

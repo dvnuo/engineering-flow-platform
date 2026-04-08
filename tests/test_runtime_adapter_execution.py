@@ -59,3 +59,32 @@ async def test_execute_adapter_action_via_bus_policy_profile_id_argument_overrid
 
     assert captured["metadata"]["policy_profile_id"] == "from-arg"
     assert captured["metadata"]["x"] == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_adapter_action_via_bus_forwards_agent_id(monkeypatch):
+    from src.runtime import runtime_adapter_execution as module
+
+    captured = {}
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        captured.update(kwargs)
+        return type(
+            "R",
+            (),
+            {
+                "status": "success",
+                "output_payload": {"success": True, "result": {"ok": True}},
+                "runtime_events": [],
+            },
+        )()
+
+    monkeypatch.setattr(module, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+
+    await module.execute_adapter_action_via_bus(
+        "adapter:jira:read_issue",
+        {"issue_key": "ABC-1"},
+        agent_id="agent-123",
+    )
+
+    assert captured["agent_id"] == "agent-123"
