@@ -548,18 +548,29 @@ class GitHubChannel:
         repo: str,
         pull_number: int,
         body: str,
-        event: str = "COMMENT",
         commit_id: Optional[str] = None,
         path: Optional[str] = None,
-        line: Optional[int] = None
+        line: Optional[int] = None,
+        *,
+        event: str = "COMMENT",
     ) -> Dict[str, Any]:
         """Add a review comment to a pull request."""
         logger.info(f"Adding PR review comment {owner}/{repo}#{pull_number}")
         normalized_event = str(event or "COMMENT").strip().upper()
         if normalized_event not in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
             raise ValueError("event must be one of COMMENT, APPROVE, REQUEST_CHANGES")
-        
-        if path and line:
+
+        has_path = path is not None
+        has_line = line is not None
+        if has_path != has_line:
+            raise ValueError("path and line must be provided together for inline PR review comments")
+
+        if has_path and has_line:
+            if normalized_event != "COMMENT":
+                raise ValueError(
+                    "Inline PR review comments only support event='COMMENT'; "
+                    "APPROVE and REQUEST_CHANGES require the pull request reviews endpoint"
+                )
             # For inline comments, we need a real commit SHA
             commit_id_to_use = commit_id
             if not commit_id_to_use:
@@ -895,15 +906,23 @@ async def github_add_pr_review_comment(
     repo: str,
     pull_number: int,
     body: str,
-    event: str = "COMMENT",
     commit_id: Optional[str] = None,
     path: Optional[str] = None,
-    line: Optional[int] = None
+    line: Optional[int] = None,
+    *,
+    event: str = "COMMENT",
 ) -> str:
     """Add a review comment to a PR."""
     try:
         result = await github_channel.add_pr_review_comment(
-            owner, repo, pull_number, body, event, commit_id, path, line
+            owner=owner,
+            repo=repo,
+            pull_number=pull_number,
+            body=body,
+            commit_id=commit_id,
+            path=path,
+            line=line,
+            event=event,
         )
         return f"Review comment added to PR #{pull_number}"
     except Exception as e:
