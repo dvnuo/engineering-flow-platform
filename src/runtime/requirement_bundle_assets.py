@@ -156,6 +156,22 @@ async def load_bundle_manifest(bundle_ref: Dict[str, Any]) -> Tuple[BundleRef, D
     return ref, manifest
 
 
+def resolve_bundle_links(manifest: Dict[str, Any]) -> tuple[str, str]:
+    links = manifest.get("links")
+    if not isinstance(links, dict):
+        raise RequirementBundleError("bundle.yaml field 'links' must be an object")
+
+    requirements_file = str(links.get("requirements_file") or "").strip().strip("/")
+    test_cases_file = str(links.get("test_cases_file") or "").strip().strip("/")
+
+    if not requirements_file:
+        raise RequirementBundleError("bundle.yaml field 'links.requirements_file' must be a non-empty string")
+    if not test_cases_file:
+        raise RequirementBundleError("bundle.yaml field 'links.test_cases_file' must be a non-empty string")
+
+    return requirements_file, test_cases_file
+
+
 def resolve_target_bundle_ref(input_ref: BundleRef, manifest: Dict[str, Any]) -> BundleRef:
     storage = manifest.get("storage")
     if storage is None:
@@ -170,8 +186,8 @@ def resolve_target_bundle_ref(input_ref: BundleRef, manifest: Dict[str, Any]) ->
     return parse_bundle_ref({"repo": repo_full, "path": path, "branch": branch})
 
 
-async def load_requirements_doc_for_ref(ref: BundleRef) -> Dict[str, Any]:
-    requirements = await read_bundle_yaml(ref, "requirements.yaml")
+async def load_requirements_doc_for_ref(ref: BundleRef, requirements_file: str = "requirements.yaml") -> Dict[str, Any]:
+    requirements = await read_bundle_yaml(ref, requirements_file)
     validate_requirements_doc(requirements)
     return requirements
 
@@ -201,12 +217,14 @@ async def write_requirements_doc(bundle_ref: Dict[str, Any], payload: Dict[str, 
     return await write_requirements_doc_for_ref(ref, payload)
 
 
-async def write_requirements_doc_for_ref(ref: BundleRef, payload: Dict[str, Any]) -> Dict[str, Any]:
+async def write_requirements_doc_for_ref(
+    ref: BundleRef, payload: Dict[str, Any], requirements_file: str = "requirements.yaml"
+) -> Dict[str, Any]:
     return await write_bundle_yaml(
         ref,
-        "requirements.yaml",
+        requirements_file,
         payload,
-        f"chore(requirement-bundle): update requirements.yaml for {ref.path}",
+        f"chore(requirement-bundle): update {requirements_file} for {ref.path}",
     )
 
 
@@ -215,12 +233,14 @@ async def write_test_cases_doc(bundle_ref: Dict[str, Any], payload: Dict[str, An
     return await write_test_cases_doc_for_ref(ref, payload)
 
 
-async def write_test_cases_doc_for_ref(ref: BundleRef, payload: Dict[str, Any]) -> Dict[str, Any]:
+async def write_test_cases_doc_for_ref(
+    ref: BundleRef, payload: Dict[str, Any], test_cases_file: str = "test-cases.yaml"
+) -> Dict[str, Any]:
     return await write_bundle_yaml(
         ref,
-        "test-cases.yaml",
+        test_cases_file,
         payload,
-        f"chore(requirement-bundle): update test-cases.yaml for {ref.path}",
+        f"chore(requirement-bundle): update {test_cases_file} for {ref.path}",
     )
 
 

@@ -14,6 +14,7 @@ from src.runtime.requirement_bundle_assets import (
     load_bundle_manifest,
     parse_bundle_ref,
     read_github_doc_text,
+    resolve_bundle_links,
     resolve_target_bundle_ref,
     write_requirements_doc_for_ref,
 )
@@ -86,6 +87,7 @@ async def collect_requirements_to_bundle(bundle_ref: Dict[str, Any], sources: Di
 
         input_ref, manifest = await load_bundle_manifest(bundle_ref)
         target_ref = resolve_target_bundle_ref(input_ref, manifest)
+        requirements_file, _ = resolve_bundle_links(manifest)
         normalized_sources = dict(sources or {})
         jira_ids = [str(item).strip() for item in normalized_sources.get("jira", []) if str(item).strip()]
         confluence_ids = [str(item).strip() for item in normalized_sources.get("confluence", []) if str(item).strip()]
@@ -157,7 +159,9 @@ async def collect_requirements_to_bundle(bundle_ref: Dict[str, Any], sources: Di
             ),
         }
 
-        write_result = await write_requirements_doc_for_ref(target_ref, requirements_doc)
+        write_result = await write_requirements_doc_for_ref(
+            target_ref, requirements_doc, requirements_file=requirements_file
+        )
         commit_sha = ((write_result.get("commit") or {}).get("sha")) if isinstance(write_result, dict) else None
         warnings: List[str] = []
         if figma_refs:
@@ -172,7 +176,7 @@ async def collect_requirements_to_bundle(bundle_ref: Dict[str, Any], sources: Di
                     "path": target_ref.path,
                     "branch": target_ref.branch,
                 },
-                "updated_files": [f"{target_ref.path}/requirements.yaml"],
+                "updated_files": [f"{target_ref.path}/{requirements_file}"],
                 "commit_sha": commit_sha,
                 "summary": "Collected bundle requirements from configured sources",
                 "warnings": warnings,

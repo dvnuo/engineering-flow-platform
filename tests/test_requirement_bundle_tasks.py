@@ -10,6 +10,7 @@ from src.runtime.requirement_bundle_assets import (
     build_test_design_context,
     parse_github_doc_ref,
     parse_bundle_ref,
+    resolve_bundle_links,
     resolve_target_bundle_ref,
     validate_bundle_manifest,
 )
@@ -19,7 +20,9 @@ def _b64(text: str) -> str:
     return base64.b64encode(text.encode("utf-8")).decode("utf-8")
 
 
-def _valid_manifest_yaml(bundle_id: str = "rb-1") -> str:
+def _valid_manifest_yaml(
+    bundle_id: str = "rb-1", requirements_file: str = "requirements.yaml", test_cases_file: str = "test-cases.yaml"
+) -> str:
     return (
         f"bundle_id: {bundle_id}\n"
         "title: Maker Checker\n"
@@ -33,8 +36,8 @@ def _valid_manifest_yaml(bundle_id: str = "rb-1") -> str:
         "  base_branch: main\n"
         "  working_branch: bundle/1\n"
         "links:\n"
-        "  requirements_file: requirements.yaml\n"
-        "  test_cases_file: test-cases.yaml\n"
+        f"  requirements_file: {requirements_file}\n"
+        f"  test_cases_file: {test_cases_file}\n"
     )
 
 
@@ -289,6 +292,45 @@ async def test_collect_prompt_uses_scope_summary_from_manifest(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_collect_skill_writes_custom_requirements_file_from_manifest_links(monkeypatch):
+    writes = []
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        if path.endswith("bundle.yaml"):
+            return {
+                "content": _b64(
+                    _valid_manifest_yaml(
+                        "rb-custom-links-collect", requirements_file="docs/reqs.yaml", test_cases_file="outputs/tc.yaml"
+                    )
+                )
+            }
+        if path == "docs/spec.md":
+            return {"content": _b64("# Spec")}
+        raise AssertionError((owner, repo, path, ref))
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        writes.append({"path": path, "branch": branch})
+        return {"commit": {"sha": "sha-custom-collect"}}
+
+    async def _fake_chat(self, **kwargs):
+        return {"content": "{\"summary\":{},\"functional_requirements\":[\"a\"],\"business_rules\":[],\"acceptance_criteria\":[],\"edge_cases\":[],\"quality_flags\":{\"ambiguities\":[],\"conflicts\":[],\"missing_information\":[]}}"}
+
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.github_channel.is_configured", lambda: True)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+
+    result = await collect_requirements_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
+        sources={"github_docs": ["docs/spec.md"]},
+    )
+
+    assert result.success is True
+    assert writes and writes[0]["path"] == "requirement-bundles/payments/maker/docs/reqs.yaml"
+    assert result.data["updated_files"] == ["requirement-bundles/payments/maker/docs/reqs.yaml"]
+
+
+@pytest.mark.asyncio
 async def test_design_skill_reads_requirements_and_writes_test_cases(monkeypatch):
     writes = []
 
@@ -323,6 +365,52 @@ async def test_design_skill_reads_requirements_and_writes_test_cases(monkeypatch
     assert result.success is True
     assert writes and writes[0]["path"].endswith("test-cases.yaml")
     assert writes[0]["branch"] == "bundle/1"
+
+
+@pytest.mark.asyncio
+async def test_design_skill_reads_writes_custom_linked_files(monkeypatch):
+    writes = []
+    reads = []
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        reads.append((path, ref))
+        if path.endswith("bundle.yaml"):
+            return {
+                "content": _b64(
+                    _valid_manifest_yaml(
+                        "rb-custom-links-design", requirements_file="docs/reqs.yaml", test_cases_file="outputs/tc.yaml"
+                    )
+                )
+            }
+        if path.endswith("docs/reqs.yaml"):
+            return {
+                "content": _b64(
+                    "bundle_id: rb-custom-links-design\nsources: {}\nsummary: {text: ok}\nfunctional_requirements: [FR-1]\nbusiness_rules: []\nacceptance_criteria: []\nedge_cases: []\nquality_flags:\n  ambiguities: []\n  conflicts: []\n  missing_information: []\n"
+                )
+            }
+        raise AssertionError((owner, repo, path, ref))
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        writes.append({"path": path, "branch": branch})
+        return {"commit": {"sha": "sha-custom-design"}}
+
+    async def _fake_chat(self, **_kwargs):
+        return {
+            "content": "{\"test_cases\":[{\"case_id\":\"TC-1\",\"title\":\"happy\",\"category\":\"functional\",\"priority\":\"P1\",\"preconditions\":[],\"steps\":[],\"expected_results\":[],\"traceability\":[\"FR-1\"]}]}"
+        }
+
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+
+    result = await design_test_cases_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"}
+    )
+
+    assert result.success is True
+    assert ("requirement-bundles/payments/maker/docs/reqs.yaml", "bundle/1") in reads
+    assert writes and writes[0]["path"] == "requirement-bundles/payments/maker/outputs/tc.yaml"
+    assert result.data["updated_files"] == ["requirement-bundles/payments/maker/outputs/tc.yaml"]
 
 
 @pytest.mark.asyncio
@@ -545,6 +633,20 @@ def test_validate_bundle_manifest_rejects_blank_required_fields():
     }
     with pytest.raises(RequirementBundleError, match="storage.working_branch"):
         validate_bundle_manifest(blank_working_branch)
+
+
+def test_resolve_bundle_links_uses_manifest_links():
+    manifest = {
+        "links": {
+            "requirements_file": " docs/reqs.yaml ",
+            "test_cases_file": "/outputs/tc.yaml/",
+        }
+    }
+
+    requirements_file, test_cases_file = resolve_bundle_links(manifest)
+
+    assert requirements_file == "docs/reqs.yaml"
+    assert test_cases_file == "outputs/tc.yaml"
 
 
 def test_build_test_design_context_is_trimmed():
