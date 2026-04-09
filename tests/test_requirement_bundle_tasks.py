@@ -497,6 +497,96 @@ async def test_design_skill_reads_writes_via_manifest_working_branch(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_collect_skill_reads_manifest_from_manifest_ref_and_writes_to_target_ref(monkeypatch):
+    writes = []
+    reads = []
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        reads.append((path, ref))
+        if path.endswith("bundle.yaml") and ref == "main":
+            yaml = _valid_manifest_yaml("rb-dual-collect").replace("working_branch: bundle/1", "working_branch: bundle/checkout/abcd1234")
+            return {"content": _b64(yaml)}
+        if path == "docs/spec.md" and ref == "bundle/checkout/abcd1234":
+            return {"content": _b64("# Canonical Spec")}
+        raise AssertionError((owner, repo, path, ref))
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        writes.append({"path": path, "branch": branch})
+        return {"commit": {"sha": "sha-dual-collect"}}
+
+    async def _fake_chat(self, **_kwargs):
+        return {
+            "content": "{\"summary\":{},\"functional_requirements\":[\"FR-1\"],\"business_rules\":[],\"acceptance_criteria\":[],\"edge_cases\":[],\"quality_flags\":{\"ambiguities\":[],\"conflicts\":[],\"missing_information\":[]}}"
+        }
+
+    async def _fake_text(*args, **kwargs):
+        return "ok"
+
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.github_channel.is_configured", lambda: True)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue", _fake_text)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue_by_url", _fake_text)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page", _fake_text)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page_by_url", _fake_text)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+
+    result = await collect_requirements_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/checkout/abcd1234"},
+        manifest_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "main"},
+        sources={"github_docs": ["docs/spec.md"]},
+    )
+
+    assert result.success is True
+    assert ("requirement-bundles/payments/maker/bundle.yaml", "main") in reads
+    assert writes and writes[0]["branch"] == "bundle/checkout/abcd1234"
+    assert result.data["bundle_ref"]["branch"] == "bundle/checkout/abcd1234"
+
+
+@pytest.mark.asyncio
+async def test_design_skill_reads_manifest_from_manifest_ref_and_reads_writes_target_ref(monkeypatch):
+    writes = []
+    reads = []
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        reads.append((path, ref))
+        if path.endswith("bundle.yaml") and ref == "main":
+            yaml = _valid_manifest_yaml("rb-dual-design").replace("working_branch: bundle/1", "working_branch: bundle/checkout/abcd1234")
+            return {"content": _b64(yaml)}
+        if path.endswith("requirements.yaml") and ref == "bundle/checkout/abcd1234":
+            return {
+                "content": _b64(
+                    "bundle_id: rb-dual-design\nsources: {}\nsummary: {text: ok}\nfunctional_requirements: [FR-1]\nbusiness_rules: []\nacceptance_criteria: []\nedge_cases: []\nquality_flags:\n  ambiguities: []\n  conflicts: []\n  missing_information: []\n"
+                )
+            }
+        raise AssertionError((owner, repo, path, ref))
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        writes.append({"path": path, "branch": branch})
+        return {"commit": {"sha": "sha-dual-design"}}
+
+    async def _fake_chat(self, **_kwargs):
+        return {
+            "content": "{\"test_cases\":[{\"case_id\":\"TC-1\",\"title\":\"happy\",\"category\":\"functional\",\"priority\":\"P1\",\"preconditions\":[],\"steps\":[],\"expected_results\":[],\"traceability\":[\"FR-1\"]}]}"
+        }
+
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+
+    result = await design_test_cases_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/checkout/abcd1234"},
+        manifest_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "main"},
+    )
+
+    assert result.success is True
+    assert ("requirement-bundles/payments/maker/bundle.yaml", "main") in reads
+    assert ("requirement-bundles/payments/maker/requirements.yaml", "bundle/checkout/abcd1234") in reads
+    assert writes and writes[0]["branch"] == "bundle/checkout/abcd1234"
+    assert result.data["bundle_ref"]["branch"] == "bundle/checkout/abcd1234"
+
+
+@pytest.mark.asyncio
 async def test_collect_skill_invalid_bundle_ref_returns_clear_error(monkeypatch):
     monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.github_channel.is_configured", lambda: True)
     result = await collect_requirements_skill.execute(bundle_ref={"repo": "bad-format"}, sources={})
