@@ -1,5 +1,6 @@
 import json
 import inspect
+import asyncio
 
 import pytest
 
@@ -115,8 +116,10 @@ def test_subagent_sessions_spawn_uses_execute_subagent_orchestration(monkeypatch
 async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypatch):
     from src.gateway import webchat
     monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", "runtime-internal-key")
+    webchat.runtime_task_tracker.reset()
 
     captured = {}
+    spawned = []
 
     async def _fake_execute_runtime_task_request(**kwargs):
         captured.update(kwargs)
@@ -135,6 +138,7 @@ async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypat
         )()
 
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
     class _Request:
         headers = {"X-Internal-Api-Key": "runtime-internal-key"}
@@ -148,8 +152,9 @@ async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypat
 
     response = await webchat.api_tasks_execute(_Request())
     payload = json.loads(response.body)
+    await spawned[0]
 
-    assert response.status == 200
+    assert response.status == 202
     assert payload["task_id"] == "task-rt-1"
     assert captured["request_id"] == "task-task-rt-1"
     assert captured["metadata"]["task_id"] == "task-rt-1"

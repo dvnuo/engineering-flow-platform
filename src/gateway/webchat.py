@@ -44,16 +44,19 @@ from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.config import config as global_config
 from src.runtime.chat_orchestration_adapter import execute_chat_orchestration, execute_runtime_task_request
+from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 from src.runtime.portal_session_metadata_client import (
     extract_session_metadata_publish_fields,
     publish_session_metadata,
 )
 from src.runtime.capability_registry import get_capability_registry
+from src.gateway.event_bus import emit_agent_event
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
 from src.sessions.usage import usage_tracker
 
 logger = logging.getLogger(__name__)
+runtime_task_tracker = RuntimeTaskTracker()
 
 
 # Get template and static paths
@@ -970,8 +973,6 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             sorted(parsed["metadata"].keys()),
             sorted(parsed["input_payload"].keys()),
         )
-        execution_started_at = time.perf_counter()
-
         merged_input_payload = dict(parsed["input_payload"])
         merged_input_payload["task_type"] = parsed["task_type"]
         # shared_context_ref is transported top-level and mirrored into input_payload for canonical task handler consumption.
@@ -1004,19 +1005,160 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             f"task-{parsed['task_id']}",
             runtime_agent_id or "-",
         )
-
-        execution_result = await execute_runtime_task_request(
-            request_id=f"task-{parsed['task_id']}",
-            source_type="task",
-            source_ref=parsed["source"] or "portal",
-            execution_type="task",
+        request_id = f"task-{parsed['task_id']}"
+        runtime_task_tracker.create_pending(
+            task_id=parsed["task_id"],
+            request_id=request_id,
+            task_type=parsed["task_type"],
+            source=parsed["source"] or "portal",
             session_id=parsed["session_id"],
             agent_id=runtime_agent_id,
-            context_ref=parsed["context_ref"] or None,
+            trace_id=trace_headers.get("trace_id"),
+            portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+            portal_task_id=metadata.get("portal_task_id"),
+        )
+        await _emit_task_lifecycle_event(
+            "task.accepted",
+            task_id=parsed["task_id"],
+            portal_task_id=metadata.get("portal_task_id"),
+            agent_id=runtime_agent_id,
+            session_id=parsed["session_id"],
+            trace_id=trace_headers.get("trace_id"),
+            portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+        )
+        background_task = _spawn_runtime_background_task(
+            _run_task_execution_in_background(
+                task_id=parsed["task_id"],
+                request_id=request_id,
+                task_type=parsed["task_type"],
+                session_id=parsed["session_id"],
+                source=parsed["source"] or "portal",
+                runtime_agent_id=runtime_agent_id,
+                context_ref=parsed["context_ref"] or None,
+                merged_input_payload=merged_input_payload,
+                metadata=metadata,
+                trace_headers=trace_headers,
+            )
+        )
+        runtime_task_tracker.set_background_task(parsed["task_id"], background_task)
+        return web.json_response(
+            {
+                "ok": True,
+                "accepted": True,
+                "task_id": parsed["task_id"],
+                "execution_type": "task",
+                "request_id": request_id,
+                "status": "accepted",
+                "trace_id": trace_headers.get("trace_id"),
+                "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
+            },
+            status=202,
+        )
+    except (json.JSONDecodeError, ContentTypeError):
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.error("Task execution API error: %s", sanitize_exception_message(exc), exc_info=True)
+        return web.json_response({"error": "Internal server error"}, status=500)
+    finally:
+        clear_log_context()
+
+
+def _spawn_runtime_background_task(coro: Any) -> asyncio.Task:
+    return asyncio.create_task(coro)
+
+
+async def _emit_task_lifecycle_event(
+    event_type: str,
+    *,
+    task_id: str,
+    portal_task_id: Optional[str],
+    agent_id: Optional[str],
+    session_id: Optional[str],
+    trace_id: Optional[str],
+    portal_dispatch_id: Optional[str],
+) -> None:
+    await emit_agent_event(
+        event_type,
+        {
+            "task_id": task_id,
+            "portal_task_id": portal_task_id,
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "trace_id": trace_id,
+            "portal_dispatch_id": portal_dispatch_id,
+        },
+    )
+
+
+def _build_runtime_task_terminal_payload(
+    *,
+    task_id: str,
+    execution_result: Any,
+    trace_headers: Dict[str, Optional[str]],
+) -> Dict[str, Any]:
+    status = execution_result.status
+    output_payload = execution_result.output_payload
+    response_payload: Dict[str, Any] = {
+        "ok": status == "success",
+        "task_id": task_id,
+        "execution_type": "task",
+        "request_id": execution_result.request_id,
+        "status": status,
+        "output_payload": _json_compatible(output_payload),
+        "artifacts": _json_compatible(execution_result.artifacts),
+        "runtime_events": _json_compatible(execution_result.runtime_events),
+        "next_action_hint": execution_result.next_action_hint,
+        "audit_ref": execution_result.audit_ref,
+        "trace_id": trace_headers.get("trace_id"),
+        "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
+    }
+    if status in {"error", "blocked"}:
+        if isinstance(output_payload, dict):
+            response_payload["error"] = output_payload.get("error") or output_payload
+        else:
+            response_payload["error"] = str(output_payload)
+    return response_payload
+
+
+async def _run_task_execution_in_background(
+    *,
+    task_id: str,
+    request_id: str,
+    task_type: str,
+    session_id: Optional[str],
+    source: str,
+    runtime_agent_id: Optional[str],
+    context_ref: Optional[Dict[str, Any]],
+    merged_input_payload: Dict[str, Any],
+    metadata: Dict[str, Any],
+    trace_headers: Dict[str, Optional[str]],
+) -> None:
+    execution_started_at = time.perf_counter()
+    runtime_task_tracker.mark_running(task_id)
+    await _emit_task_lifecycle_event(
+        "task.started",
+        task_id=task_id,
+        portal_task_id=metadata.get("portal_task_id"),
+        agent_id=runtime_agent_id,
+        session_id=session_id,
+        trace_id=trace_headers.get("trace_id"),
+        portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+    )
+    try:
+        execution_result = await execute_runtime_task_request(
+            request_id=request_id,
+            source_type="task",
+            source_ref=source,
+            execution_type="task",
+            session_id=session_id,
+            agent_id=runtime_agent_id,
+            context_ref=context_ref,
             input_payload=merged_input_payload,
             metadata=metadata,
         )
-        if runtime_agent_id and parsed["session_id"]:
+        if runtime_agent_id and session_id:
             publish_fields = extract_session_metadata_publish_fields(
                 execution_result,
                 metadata=metadata,
@@ -1026,52 +1168,111 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             try:
                 await publish_session_metadata(
                     agent_id=runtime_agent_id,
-                    session_id=parsed["session_id"],
+                    session_id=session_id,
                     **publish_fields,
                 )
             except Exception:
                 logger.warning("Best-effort session metadata publish failed for task execution path", exc_info=True)
 
-        status = execution_result.status
-        is_ok = status == "success"
-        output_payload = execution_result.output_payload
-
-        response_payload: Dict[str, Any] = {
-            "ok": is_ok,
-            "task_id": parsed["task_id"],
-            "execution_type": "task",
-            "request_id": execution_result.request_id,
-            "status": status,
-            "output_payload": _json_compatible(output_payload),
-            "artifacts": _json_compatible(execution_result.artifacts),
-            "runtime_events": _json_compatible(execution_result.runtime_events),
-            "next_action_hint": execution_result.next_action_hint,
-            "audit_ref": execution_result.audit_ref,
-            "trace_id": trace_headers.get("trace_id"),
-            "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
-        }
-        if status in {"error", "blocked"}:
-            if isinstance(output_payload, dict):
-                response_payload["error"] = output_payload.get("error") or output_payload
-            else:
-                response_payload["error"] = str(output_payload)
-
+        response_payload = _build_runtime_task_terminal_payload(
+            task_id=task_id,
+            execution_result=execution_result,
+            trace_headers=trace_headers,
+        )
+        status = str(execution_result.status or "error")
+        runtime_task_tracker.mark_terminal(
+            task_id,
+            status=status,
+            payload=response_payload,
+            error_message=str(response_payload.get("error") or "") or None,
+        )
+        await _emit_task_lifecycle_event(
+            "task.completed" if status == "success" else "task.failed",
+            task_id=task_id,
+            portal_task_id=metadata.get("portal_task_id"),
+            agent_id=runtime_agent_id,
+            session_id=session_id,
+            trace_id=trace_headers.get("trace_id"),
+            portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+        )
         logger.info(
-            "Task execute dispatch end | status=%s runtime_events_count=%s artifacts_type=%s has_next_action_hint=%s duration_ms=%s",
+            "Task execute dispatch end | status=%s task_type=%s runtime_events_count=%s artifacts_type=%s has_next_action_hint=%s duration_ms=%s",
             status,
+            task_type,
             len(execution_result.runtime_events or []),
             type(execution_result.artifacts).__name__,
             bool(execution_result.next_action_hint),
             int((time.perf_counter() - execution_started_at) * 1000),
         )
-        return web.json_response(response_payload)
-    except (json.JSONDecodeError, ContentTypeError):
-        return web.json_response({"error": "Invalid JSON"}, status=400)
-    except ValueError as exc:
-        return web.json_response({"error": str(exc)}, status=400)
     except Exception as exc:
-        logger.error("Task execution API error: %s", sanitize_exception_message(exc), exc_info=True)
-        return web.json_response({"error": "Internal server error"}, status=500)
+        sanitized_message = sanitize_exception_message(exc)
+        logger.error("Task execution background error: %s", sanitized_message, exc_info=True)
+        failure_payload = {
+            "ok": False,
+            "task_id": task_id,
+            "execution_type": "task",
+            "request_id": request_id,
+            "status": "error",
+            "trace_id": trace_headers.get("trace_id"),
+            "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
+            "error": sanitized_message,
+        }
+        runtime_task_tracker.mark_internal_failure(
+            task_id,
+            payload=failure_payload,
+            error_message=sanitized_message,
+        )
+        await _emit_task_lifecycle_event(
+            "task.failed",
+            task_id=task_id,
+            portal_task_id=metadata.get("portal_task_id"),
+            agent_id=runtime_agent_id,
+            session_id=session_id,
+            trace_id=trace_headers.get("trace_id"),
+            portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+        )
+
+
+async def api_task_status(request: web.Request) -> web.Response:
+    clear_log_context()
+    trace_headers = _extract_task_trace_headers(request)
+    set_log_context(
+        trace_id=trace_headers.get("trace_id"),
+        span_id=trace_headers.get("span_id"),
+        parent_span_id=trace_headers.get("parent_span_id"),
+        portal_task_id=trace_headers.get("portal_task_id"),
+        portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+        path="/api/tasks/{task_id}",
+    )
+    try:
+        auth_error = _authorize_internal_runtime_request(request)
+        if auth_error is not None:
+            return auth_error
+        task_id = str(request.match_info.get("task_id") or "").strip()
+        if not task_id:
+            return web.json_response({"error": "task_id is required"}, status=400)
+        record = runtime_task_tracker.get(task_id)
+        if record is None:
+            return web.json_response({"error": "Task not found"}, status=404)
+        if record.status in {"accepted", "running"}:
+            payload = {
+                "ok": True,
+                "task_id": record.task_id,
+                "execution_type": "task",
+                "request_id": record.request_id,
+                "status": record.status,
+                "trace_id": record.trace_id,
+                "portal_dispatch_id": record.portal_dispatch_id,
+                "accepted_at": record.accepted_at,
+                "started_at": record.started_at,
+                "finished_at": record.finished_at,
+            }
+            return web.json_response(payload)
+        payload = dict(record.payload)
+        payload["accepted_at"] = record.accepted_at
+        payload["started_at"] = record.started_at
+        payload["finished_at"] = record.finished_at
+        return web.json_response(payload)
     finally:
         clear_log_context()
 
@@ -2811,7 +3012,8 @@ def setup_webchat_routes(app: web.Application):
         GET  /static/*     - Static files (CSS, JS)
         POST /api/chat     - Send message
         POST /api/chat/stream - Send message (streaming SSE)
-        POST /api/tasks/execute - Execute structured runtime task
+        POST /api/tasks/execute - Accept and execute structured runtime task
+        GET  /api/tasks/{task_id} - Runtime task status for portal polling
         GET  /api/sessions - List recent sessions
         GET  /api/sessions/{session_id} - Load session messages
         GET  /api/files    - Browse files
@@ -2825,6 +3027,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)
     app.router.add_post('/api/tasks/execute', api_tasks_execute)
+    app.router.add_get('/api/tasks/{task_id}', api_task_status)
     app.router.add_get('/api/capabilities', api_capabilities)
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/sessions/{session_id}', api_load_session)
@@ -2870,7 +3073,8 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  GET  /static/*     - Static files (CSS, JS)")
     logger.info("  POST /api/chat     - Send message")
     logger.info("  POST /api/chat/stream - Send message (streaming SSE)")
-    logger.info("  POST /api/tasks/execute - Execute structured runtime task")
+    logger.info("  POST /api/tasks/execute - Accept and execute structured runtime task")
+    logger.info("  GET  /api/tasks/{task_id} - Runtime task status for portal polling")
     logger.info("  GET  /api/sessions - List recent sessions")
     logger.info("  GET  /api/sessions/{id} - Load session messages")
     logger.info("  GET  /api/files    - Browse files")
