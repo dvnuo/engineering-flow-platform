@@ -3319,3 +3319,24 @@ async def test_unknown_task_type_still_returns_unsupported_blocked():
 
     assert result.status == "blocked"
     assert "Unsupported task_type" in result.output_payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_requirement_bundle_collect_task_skill_failure_keeps_task_boundary(monkeypatch):
+    async def _fake_run_skill_execution(_skill_name, **_kwargs):
+        return SkillResult(success=False, error="bad inputs")
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={
+            "task_type": "requirement_bundle_collect_task",
+            "bundle_ref": {"repo": "acme/demo", "path": "bundles/a", "branch": "feat/a"},
+            "sources": {"jira": []},
+        },
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "error"
+    assert result.output_payload["task_boundary"] is True
+    assert result.output_payload["success"] is False

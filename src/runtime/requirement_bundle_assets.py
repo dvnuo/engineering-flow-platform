@@ -52,6 +52,13 @@ def parse_bundle_ref(bundle_ref: Dict[str, Any]) -> BundleRef:
 
 async def read_bundle_text(ref: BundleRef, relative_file: str) -> str:
     file_path = f"{ref.path}/{relative_file}".strip("/")
+    return await read_repo_text(ref, file_path)
+
+
+async def read_repo_text(ref: BundleRef, repo_relative_file: str) -> str:
+    file_path = str(repo_relative_file or "").strip().strip("/")
+    if not file_path:
+        raise RequirementBundleError("repo_relative_file is required")
     file_data = await github_channel.get_file(ref.owner, ref.repo, file_path, ref.branch)
     content = file_data.get("content")
     if not isinstance(content, str) or not content.strip():
@@ -75,12 +82,14 @@ async def read_bundle_yaml(ref: BundleRef, relative_file: str) -> Dict[str, Any]
 async def load_bundle_manifest(bundle_ref: Dict[str, Any]) -> Tuple[BundleRef, Dict[str, Any]]:
     ref = parse_bundle_ref(bundle_ref)
     manifest = await read_bundle_yaml(ref, "bundle.yaml")
+    validate_bundle_manifest(manifest)
     return ref, manifest
 
 
 async def load_requirements_doc(bundle_ref: Dict[str, Any]) -> Tuple[BundleRef, Dict[str, Any]]:
     ref = parse_bundle_ref(bundle_ref)
     requirements = await read_bundle_yaml(ref, "requirements.yaml")
+    validate_requirements_doc(requirements)
     return ref, requirements
 
 
@@ -120,6 +129,8 @@ async def write_test_cases_doc(bundle_ref: Dict[str, Any], payload: Dict[str, An
 
 def build_test_design_context(bundle_manifest: Dict[str, Any], requirements_doc: Dict[str, Any]) -> Dict[str, Any]:
     return {
+        "bundle_id": bundle_manifest.get("bundle_id"),
+        "title": bundle_manifest.get("title"),
         "scope": bundle_manifest.get("scope", {}),
         "summary": requirements_doc.get("summary", {}),
         "functional_requirements": requirements_doc.get("functional_requirements", []),
@@ -131,3 +142,52 @@ def build_test_design_context(bundle_manifest: Dict[str, Any], requirements_doc:
             {"ambiguities": [], "conflicts": [], "missing_information": []},
         ),
     }
+
+
+def validate_bundle_manifest(manifest: Dict[str, Any]) -> None:
+    if not isinstance(manifest, dict):
+        raise RequirementBundleError("bundle.yaml must be an object")
+
+    required_top_level = ("bundle_id", "title", "status", "scope", "storage", "links")
+    for key in required_top_level:
+        if key not in manifest:
+            raise RequirementBundleError(f"bundle.yaml missing required field: {key}")
+
+    scope = manifest.get("scope")
+    if not isinstance(scope, dict):
+        raise RequirementBundleError("bundle.yaml field 'scope' must be an object")
+    for key in ("domain", "summary"):
+        if key not in scope:
+            raise RequirementBundleError(f"bundle.yaml missing required field: scope.{key}")
+
+    storage = manifest.get("storage")
+    if not isinstance(storage, dict):
+        raise RequirementBundleError("bundle.yaml field 'storage' must be an object")
+    for key in ("repo", "path", "base_branch", "working_branch"):
+        if key not in storage:
+            raise RequirementBundleError(f"bundle.yaml missing required field: storage.{key}")
+
+    links = manifest.get("links")
+    if not isinstance(links, dict):
+        raise RequirementBundleError("bundle.yaml field 'links' must be an object")
+    for key in ("requirements_file", "test_cases_file"):
+        if key not in links:
+            raise RequirementBundleError(f"bundle.yaml missing required field: links.{key}")
+
+
+def validate_requirements_doc(requirements_doc: Dict[str, Any]) -> None:
+    if not isinstance(requirements_doc, dict):
+        raise RequirementBundleError("requirements.yaml must be an object")
+    required_top_level = (
+        "bundle_id",
+        "sources",
+        "summary",
+        "functional_requirements",
+        "business_rules",
+        "acceptance_criteria",
+        "edge_cases",
+        "quality_flags",
+    )
+    for key in required_top_level:
+        if key not in requirements_doc:
+            raise RequirementBundleError(f"requirements.yaml missing required field: {key}")

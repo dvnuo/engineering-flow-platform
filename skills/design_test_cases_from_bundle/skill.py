@@ -38,6 +38,17 @@ async def design_test_cases_from_bundle(bundle_ref: Dict[str, Any]) -> SkillResu
     try:
         parsed_ref, manifest = await load_bundle_manifest(bundle_ref)
         _, requirements_doc = await load_requirements_doc(bundle_ref)
+        designable_fields = (
+            requirements_doc.get("functional_requirements") or [],
+            requirements_doc.get("business_rules") or [],
+            requirements_doc.get("acceptance_criteria") or [],
+            requirements_doc.get("edge_cases") or [],
+        )
+        if not any(bool(field) for field in designable_fields):
+            return SkillResult(
+                success=False,
+                error="requirements.yaml does not contain any designable requirement content",
+            )
         design_context = build_test_design_context(manifest, requirements_doc)
 
         llm = LLMClient()

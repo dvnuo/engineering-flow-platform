@@ -12,7 +12,7 @@ from src.runtime.requirement_bundle_assets import (
     RequirementBundleError,
     load_bundle_manifest,
     parse_bundle_ref,
-    read_bundle_text,
+    read_repo_text,
     write_requirements_doc,
 )
 
@@ -53,7 +53,7 @@ async def _load_github_doc_sources(bundle_ref: Dict[str, Any], doc_paths: List[s
     parsed_ref = parse_bundle_ref(bundle_ref)
     items: List[Dict[str, Any]] = []
     for doc_path in doc_paths:
-        raw = await read_bundle_text(parsed_ref, doc_path)
+        raw = await read_repo_text(parsed_ref, doc_path)
         items.append({"path": doc_path, "content": raw})
     return items
 
@@ -73,6 +73,12 @@ async def collect_requirements_to_bundle(bundle_ref: Dict[str, Any], sources: Di
         confluence_ids = [str(item).strip() for item in normalized_sources.get("confluence", []) if str(item).strip()]
         github_docs = [str(item).strip() for item in normalized_sources.get("github_docs", []) if str(item).strip()]
         figma_refs = [str(item).strip() for item in normalized_sources.get("figma", []) if str(item).strip()]
+        supported_source_count = len(jira_ids) + len(confluence_ids) + len(github_docs)
+        if supported_source_count <= 0:
+            error = "At least one supported source is required"
+            if figma_refs:
+                error = f"{error}; figma is ignored in MVP"
+            return SkillResult(success=False, error=error)
 
         jira_payload = await _load_jira_sources(jira_ids) if jira_ids else []
         confluence_payload = await _load_confluence_sources(confluence_ids) if confluence_ids else []
