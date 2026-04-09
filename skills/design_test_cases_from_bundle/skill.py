@@ -10,8 +10,9 @@ from src.runtime.requirement_bundle_assets import (
     RequirementBundleError,
     build_test_design_context,
     load_bundle_manifest,
-    load_requirements_doc,
-    write_test_cases_doc,
+    load_requirements_doc_for_ref,
+    resolve_target_bundle_ref,
+    write_test_cases_doc_for_ref,
 )
 
 JSON_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL | re.IGNORECASE)
@@ -36,8 +37,9 @@ def _extract_json_dict(raw: str) -> Dict[str, Any]:
 )
 async def design_test_cases_from_bundle(bundle_ref: Dict[str, Any]) -> SkillResult:
     try:
-        parsed_ref, manifest = await load_bundle_manifest(bundle_ref)
-        _, requirements_doc = await load_requirements_doc(bundle_ref)
+        input_ref, manifest = await load_bundle_manifest(bundle_ref)
+        target_ref = resolve_target_bundle_ref(input_ref, manifest)
+        requirements_doc = await load_requirements_doc_for_ref(target_ref)
         designable_fields = (
             requirements_doc.get("functional_requirements") or [],
             requirements_doc.get("business_rules") or [],
@@ -64,11 +66,11 @@ async def design_test_cases_from_bundle(bundle_ref: Dict[str, Any]) -> SkillResu
         structured = _extract_json_dict(str(llm_response.get("content") or ""))
 
         payload = {
-            "bundle_id": manifest.get("bundle_id") or manifest.get("id") or parsed_ref.path,
+            "bundle_id": manifest.get("bundle_id") or manifest.get("id") or target_ref.path,
             "generated_from_requirements_commit": "",
             "test_cases": structured.get("test_cases", []),
         }
-        write_result = await write_test_cases_doc(bundle_ref, payload)
+        write_result = await write_test_cases_doc_for_ref(target_ref, payload)
         commit_sha = ((write_result.get("commit") or {}).get("sha")) if isinstance(write_result, dict) else None
 
         return SkillResult(
@@ -76,11 +78,11 @@ async def design_test_cases_from_bundle(bundle_ref: Dict[str, Any]) -> SkillResu
             output="test-cases.yaml updated",
             data={
                 "bundle_ref": {
-                    "repo": parsed_ref.repo_full_name,
-                    "path": parsed_ref.path,
-                    "branch": parsed_ref.branch,
+                    "repo": target_ref.repo_full_name,
+                    "path": target_ref.path,
+                    "branch": target_ref.branch,
                 },
-                "updated_files": [f"{parsed_ref.path}/test-cases.yaml"],
+                "updated_files": [f"{target_ref.path}/test-cases.yaml"],
                 "commit_sha": commit_sha,
                 "summary": "Designed test cases from requirement bundle context",
             },

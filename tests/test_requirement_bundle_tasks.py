@@ -10,6 +10,7 @@ from src.runtime.requirement_bundle_assets import (
     build_test_design_context,
     parse_github_doc_ref,
     parse_bundle_ref,
+    resolve_target_bundle_ref,
 )
 
 
@@ -248,7 +249,90 @@ async def test_design_skill_reads_requirements_and_writes_test_cases(monkeypatch
 
     assert result.success is True
     assert writes and writes[0]["path"].endswith("test-cases.yaml")
-    assert writes[0]["branch"] == "bundle/2"
+    assert writes[0]["branch"] == "bundle/1"
+
+
+@pytest.mark.asyncio
+async def test_collect_skill_respects_manifest_working_branch(monkeypatch):
+    writes = []
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        if path.endswith("bundle.yaml"):
+            return {"content": _b64(_valid_manifest_yaml("rb-working-collect").replace("working_branch: bundle/1", "working_branch: bundle/checkout/abcd1234"))}
+        if path == "docs/spec.md" and ref == "bundle/checkout/abcd1234":
+            return {"content": _b64("# Canonical Spec")}
+        raise AssertionError((owner, repo, path, ref))
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        writes.append({"owner": owner, "repo": repo, "path": path, "content": content, "branch": branch})
+        return {"commit": {"sha": "sha-canonical-req"}}
+
+    async def _fake_chat(self, **_kwargs):
+        return {
+            "content": "{\"summary\":{},\"functional_requirements\":[\"FR-1\"],\"business_rules\":[],\"acceptance_criteria\":[],\"edge_cases\":[],\"quality_flags\":{\"ambiguities\":[],\"conflicts\":[],\"missing_information\":[]}}"
+        }
+
+    async def _fake_text(*args, **kwargs):
+        return "ok"
+
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.github_channel.is_configured", lambda: True)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue", _fake_text)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue_by_url", _fake_text)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page", _fake_text)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page_by_url", _fake_text)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+
+    result = await collect_requirements_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "main"},
+        sources={"github_docs": ["docs/spec.md"]},
+    )
+
+    assert result.success is True
+    assert writes and writes[0]["branch"] == "bundle/checkout/abcd1234"
+    assert result.data["bundle_ref"]["branch"] == "bundle/checkout/abcd1234"
+
+
+@pytest.mark.asyncio
+async def test_design_skill_reads_writes_via_manifest_working_branch(monkeypatch):
+    writes = []
+    reads = []
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        reads.append((path, ref))
+        if path.endswith("bundle.yaml") and ref == "main":
+            yaml = _valid_manifest_yaml("rb-working-design").replace("working_branch: bundle/1", "working_branch: bundle/checkout/abcd1234")
+            return {"content": _b64(yaml)}
+        if path.endswith("requirements.yaml") and ref == "bundle/checkout/abcd1234":
+            return {
+                "content": _b64(
+                    "bundle_id: rb-working-design\nsources: {}\nsummary: {text: ok}\nfunctional_requirements: [FR-1]\nbusiness_rules: []\nacceptance_criteria: []\nedge_cases: []\nquality_flags:\n  ambiguities: []\n  conflicts: []\n  missing_information: []\n"
+                )
+            }
+        raise AssertionError((owner, repo, path, ref))
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        writes.append({"path": path, "branch": branch})
+        return {"commit": {"sha": "sha-canonical-tc"}}
+
+    async def _fake_chat(self, **_kwargs):
+        return {
+            "content": "{\"test_cases\":[{\"case_id\":\"TC-1\",\"title\":\"happy\",\"category\":\"functional\",\"priority\":\"P1\",\"preconditions\":[],\"steps\":[],\"expected_results\":[],\"traceability\":[\"FR-1\"]}]}"
+        }
+
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+
+    result = await design_test_cases_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "main"}
+    )
+
+    assert result.success is True
+    assert ("requirement-bundles/payments/maker/requirements.yaml", "bundle/checkout/abcd1234") in reads
+    assert writes and writes[0]["branch"] == "bundle/checkout/abcd1234"
+    assert result.data["bundle_ref"]["branch"] == "bundle/checkout/abcd1234"
 
 
 @pytest.mark.asyncio
@@ -381,3 +465,20 @@ def test_build_test_design_context_is_trimmed():
         "edge_cases",
         "quality_flags",
     }
+
+
+def test_resolve_target_bundle_ref_prefers_manifest_storage():
+    input_ref = parse_bundle_ref({"repo": "acme/assets", "path": "bundle/input", "branch": "main"})
+    manifest = {
+        "storage": {
+            "repo": "org/target-repo",
+            "path": "bundle/target",
+            "working_branch": "bundle/checkout/abcd1234",
+        }
+    }
+
+    resolved = resolve_target_bundle_ref(input_ref, manifest)
+
+    assert resolved.repo_full_name == "org/target-repo"
+    assert resolved.path == "bundle/target"
+    assert resolved.branch == "bundle/checkout/abcd1234"
