@@ -69,6 +69,39 @@ def _run_post_tool_hooks_via_governance(**kwargs):
 
     return run_post_tool_hooks(**kwargs)
 
+
+
+def _enrich_runtime_event_context(
+    data: Dict[str, Any],
+    *,
+    session_id: str,
+    agent_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+    group_id: Optional[str] = None,
+    coordination_run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fill runtime event context fields when absent, preserving explicit payload values."""
+    merged: Dict[str, Any] = dict(data or {})
+    context_fields = {
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "task_id": task_id,
+        "group_id": group_id,
+        "coordination_run_id": coordination_run_id,
+    }
+    for key, value in context_fields.items():
+        existing = merged.get(key)
+        if existing is not None and (not isinstance(existing, str) or existing.strip()):
+            continue
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                continue
+        merged[key] = value
+    return merged
+
 # Context variable for skill workdir - async-safe
 _skill_workdir: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar('skill_workdir', default=None)
 
@@ -793,28 +826,36 @@ You have access to the following tools. When a user asks you to do something tha
         # Supports both simple callbacks and asyncio.Queue
         def send_event(event_type: str, data: dict):
             """Send event via stream_callback and event bus."""
+            event_data = _enrich_runtime_event_context(
+                data,
+                session_id=session_id,
+                agent_id=self.agent_id,
+                task_id=data.get("task_id"),
+                group_id=data.get("group_id") or data.get("portal_group_id"),
+                coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
+            )
             # Also log to tracer for persistence
             if event_type == 'llm_thinking':
                 try:
                     from src.skills import get_tracer
                     tracer_instance = get_tracer()
-                    message = data.get('message', '')
+                    message = event_data.get('message', '')
                     if message:
                         tracer_instance.log_thinking(message)
                 except Exception:
                     pass  # Tracer may not be initialized
-            
+
             # Emit to event bus for WebSocket clients
             try:
                 from src.gateway.event_bus import emit_agent_event_sync
-                emit_agent_event_sync(event_type, data)
+                emit_agent_event_sync(event_type, event_data)
             except Exception as e:
                 logger.info(f"Event bus emit error: {e}")
-            
+
             # Also send via callback if provided
             if stream_callback:
                 import json
-                event = json.dumps({"type": event_type, **data})
+                event = json.dumps({"type": event_type, **event_data})
                 try:
                     # Check if it's an asyncio.Queue
                     if hasattr(stream_callback, 'put'):
@@ -1656,8 +1697,16 @@ You have access to the following tools. When a user asks you to do something tha
         def send_skill_event(event_type: str, data: dict):
             """Send skill event via stream_callback if available, and also emit to event_bus for WebSocket."""
             import json
-            event = json.dumps({"type": event_type, "data": data})
-            
+            event_data = _enrich_runtime_event_context(
+                data,
+                session_id=session_id,
+                agent_id=self.agent_id,
+                task_id=data.get("task_id"),
+                group_id=data.get("group_id") or data.get("portal_group_id"),
+                coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
+            )
+            event = json.dumps({"type": event_type, "data": event_data})
+
             # Send via stream_callback (for SSE)
             if stream_callback:
                 try:
@@ -1667,11 +1716,11 @@ You have access to the following tools. When a user asks you to do something tha
                         stream_callback(event)
                 except Exception:
                     pass  # Ignore callback errors
-            
+
             # Also emit to event_bus for WebSocket listeners
             try:
                 from src.gateway.event_bus import event_bus
-                event_bus.emit_sync(event_type, data)
+                event_bus.emit_sync(event_type, event_data)
             except Exception:
                 pass  # Ignore if event_bus not available
 
@@ -1746,9 +1795,17 @@ You have access to the following tools. When a user asks you to do something tha
         def send_skill_event(event_type: str, data: dict):
             """Send skill event via stream_callback if available, and also emit to event_bus for WebSocket."""
             import json
-            event = json.dumps({"type": event_type, "data": data})
-            logger.debug(f"[SkillMode] [EVENT] type={event_type}, data={safe_preview(data, 200)}")
-            
+            event_data = _enrich_runtime_event_context(
+                data,
+                session_id=session_id,
+                agent_id=self.agent_id,
+                task_id=data.get("task_id"),
+                group_id=data.get("group_id") or data.get("portal_group_id"),
+                coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
+            )
+            event = json.dumps({"type": event_type, "data": event_data})
+            logger.debug(f"[SkillMode] [EVENT] type={event_type}, data={safe_preview(event_data, 200)}")
+
             # Send via stream_callback (for SSE)
             if stream_callback:
                 try:
@@ -1758,11 +1815,11 @@ You have access to the following tools. When a user asks you to do something tha
                         stream_callback(event)
                 except Exception:
                     pass  # Ignore callback errors
-            
+
             # Also emit to event_bus for WebSocket listeners
             try:
                 from src.gateway.event_bus import event_bus
-                event_bus.emit_sync(event_type, data)
+                event_bus.emit_sync(event_type, event_data)
             except Exception:
                 pass  # Ignore if event_bus not available
 

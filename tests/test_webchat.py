@@ -711,6 +711,56 @@ async def test_api_chat_publish_failure_does_not_break_response(monkeypatch):
     assert resp.status == 200
 
 
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_emits_progress_before_done_while_task_running(monkeypatch):
+    from src.gateway import webchat
+
+    observed = {"task_running_during_progress": False}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        stream_callback = kwargs["stream_callback"]
+        await stream_callback.put('{"type":"progress","step":1}')
+        await asyncio.sleep(0.2)
+        return {"response": "ok", "usage": {}}
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            decoded = data.decode()
+            if "event: progress" in decoded:
+                pending_tasks = [t for t in asyncio.all_tasks() if not t.done()]
+                observed["task_running_during_progress"] = any(
+                    getattr(getattr(t, "get_coro", lambda: None)(), "__name__", "") == "_fake_run_chat_via_execution_bus"
+                    for t in pending_tasks
+                )
+            self.writes.append(decoded)
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-live-stream"}
+
+    response = await webchat.api_chat_stream(_Request())
+
+    progress_index = next(i for i, chunk in enumerate(response.writes) if "event: progress" in chunk)
+    done_index = next(i for i, chunk in enumerate(response.writes) if "event: done" in chunk)
+    assert progress_index < done_index
+    assert observed["task_running_during_progress"] is True
 @pytest.mark.asyncio
 async def test_api_chat_stream_trusted_portal_metadata_passed_to_execution_bus(monkeypatch):
     from src.gateway import webchat
