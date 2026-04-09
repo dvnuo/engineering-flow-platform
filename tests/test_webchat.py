@@ -31,7 +31,7 @@ class TestWebChatTemplate:
         html = load_template("webchat.html")
         
         # Check for key elements
-        assert 'class="header"' in html
+        assert '<header' in html
         assert 'class="chat-container"' in html
         assert 'class="messages"' in html
         assert 'id="messageInput"' in html
@@ -56,7 +56,7 @@ class TestWebChatStaticFiles:
     
     def test_css_file_exists(self):
         """Test CSS file exists and has content."""
-        css_path = Path(__file__).parent.parent / "gateway" / "static" / "css" / "webchat.css"
+        css_path = Path(__file__).parent.parent / "src" / "gateway" / "static" / "css" / "webchat.css"
         assert css_path.exists()
         
         with open(css_path, 'r') as f:
@@ -69,7 +69,7 @@ class TestWebChatStaticFiles:
     
     def test_js_file_exists(self):
         """Test JS file exists and has content."""
-        js_path = Path(__file__).parent.parent / "gateway" / "static" / "js" / "webchat.js"
+        js_path = Path(__file__).parent.parent / "src" / "gateway" / "static" / "js" / "webchat.js"
         assert js_path.exists()
         
         with open(js_path, 'r') as f:
@@ -100,7 +100,7 @@ class TestWebChatRoutes:
         
         routes = [r.resource.canonical for r in app.router.routes() if r.resource]
         
-        assert '/chat' in routes
+        assert '/' in routes
         assert '/api/chat' in routes
         assert '/api/sessions' in routes
         assert '/api/usage' in routes
@@ -124,25 +124,25 @@ class TestWebChatDirectoryStructure:
     
     def test_templates_directory_exists(self):
         """Test templates directory exists."""
-        templates_dir = Path(__file__).parent.parent / "gateway" / "templates"
+        templates_dir = Path(__file__).parent.parent / "src" / "gateway" / "templates"
         assert templates_dir.exists()
         assert templates_dir.is_dir()
     
     def test_static_directory_exists(self):
         """Test static directory exists."""
-        static_dir = Path(__file__).parent.parent / "gateway" / "static"
+        static_dir = Path(__file__).parent.parent / "src" / "gateway" / "static"
         assert static_dir.exists()
         assert static_dir.is_dir()
     
     def test_css_subdirectory_exists(self):
         """Test CSS subdirectory exists."""
-        css_dir = Path(__file__).parent.parent / "gateway" / "static" / "css"
+        css_dir = Path(__file__).parent.parent / "src" / "gateway" / "static" / "css"
         assert css_dir.exists()
         assert css_dir.is_dir()
     
     def test_js_subdirectory_exists(self):
         """Test JS subdirectory exists."""
-        js_dir = Path(__file__).parent.parent / "gateway" / "static" / "js"
+        js_dir = Path(__file__).parent.parent / "src" / "gateway" / "static" / "js"
         assert js_dir.exists()
         assert js_dir.is_dir()
 
@@ -1048,6 +1048,7 @@ def test_routes_include_tasks_execute_and_existing_chat_route():
 
     routes = [r.resource.canonical for r in app.router.routes() if r.resource]
     assert "/api/tasks/execute" in routes
+    assert "/api/tasks/{task_id}" in routes
     assert "/api/capabilities" in routes
     assert "/api/chat" in routes
 
@@ -1292,9 +1293,12 @@ async def test_api_tasks_execute_requires_internal_api_key_wrong_header(monkeypa
 async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
     from src.gateway import webchat
     monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    webchat.runtime_task_tracker.reset()
 
     captured = {}
     published = {}
+    spawned = []
+
     async def _fake_execute_runtime_task_request(**kwargs):
         captured.update(kwargs)
         return type(
@@ -1313,6 +1317,7 @@ async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
 
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
     monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _request: ("agent-task-1", "Task Agent"))
+    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
     async def _fake_publish_session_metadata(**kwargs):
         published.update(kwargs)
@@ -1336,11 +1341,14 @@ async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
 
     response = await webchat.api_tasks_execute(_Request())
     body = json.loads(response.body)
+    assert len(spawned) == 1
+    await spawned[0]
 
-    assert response.status == 200
+    assert response.status == 202
     assert body["ok"] is True
+    assert body["accepted"] is True
     assert body["task_id"] == "task-1"
-    assert body["status"] == "success"
+    assert body["status"] == "accepted"
     assert captured["execution_type"] == "task"
     assert captured["input_payload"]["task_type"] == "adapter_action_task"
     assert captured["metadata"]["portal_task_id"] == "task-1"
@@ -1361,11 +1369,25 @@ async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
     assert published["last_execution_id"] == "task-task-1"
     assert published["latest_event_state"] == "success"
 
+    class _StatusRequest:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": "task-1"}
+
+    status_response = await webchat.api_task_status(_StatusRequest())
+    status_body = json.loads(status_response.body)
+    assert status_response.status == 200
+    assert status_body["status"] == "success"
+    assert status_body["accepted_at"]
+    assert status_body["started_at"]
+    assert status_body["finished_at"]
+
 
 @pytest.mark.asyncio
 async def test_api_tasks_execute_jira_workflow_review_task_success(monkeypatch):
     from src.gateway import webchat
     monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    webchat.runtime_task_tracker.reset()
+    spawned = []
 
     async def _fake_execute_runtime_task_request(**kwargs):
         return type(
@@ -1383,6 +1405,7 @@ async def test_api_tasks_execute_jira_workflow_review_task_success(monkeypatch):
         )()
 
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
     class _Request:
         headers = INTERNAL_HEADERS
@@ -1395,17 +1418,28 @@ async def test_api_tasks_execute_jira_workflow_review_task_success(monkeypatch):
 
     response = await webchat.api_tasks_execute(_Request())
     body = json.loads(response.body)
+    await spawned[0]
 
-    assert response.status == 200
+    assert response.status == 202
     assert body["task_id"] == "task-2"
     assert body["execution_type"] == "task"
-    assert body["status"] == "success"
+    assert body["status"] == "accepted"
+
+    class _StatusRequest:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": "task-2"}
+
+    status_response = await webchat.api_task_status(_StatusRequest())
+    status_body = json.loads(status_response.body)
+    assert status_body["status"] == "success"
 
 
 @pytest.mark.asyncio
 async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkeypatch):
     from src.gateway import webchat
     monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    webchat.runtime_task_tracker.reset()
+    spawned = []
 
     captured = {}
     async def _fake_execute_runtime_task_request(**kwargs):
@@ -1434,6 +1468,7 @@ async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkey
         )()
 
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
     class _Request:
         headers = INTERNAL_HEADERS
@@ -1447,15 +1482,24 @@ async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkey
 
     response = await webchat.api_tasks_execute(_Request())
     body = json.loads(response.body)
+    await spawned[0]
 
-    assert response.status == 200
+    assert response.status == 202
     assert body["ok"] is True
+    assert body["accepted"] is True
     assert body["task_id"] == "gh-task-1"
     assert body["execution_type"] == "task"
-    assert body["status"] == "success"
+    assert body["status"] == "accepted"
     assert captured["input_payload"]["task_type"] == "github_review_task"
     assert captured["metadata"]["task_id"] == "gh-task-1"
-    assert body["runtime_events"][0]["task_id"] == "gh-task-1"
+
+    class _StatusRequest:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": "gh-task-1"}
+
+    status_response = await webchat.api_task_status(_StatusRequest())
+    status_body = json.loads(status_response.body)
+    assert status_body["runtime_events"][0]["task_id"] == "gh-task-1"
 
 
 @pytest.mark.asyncio
@@ -1522,6 +1566,8 @@ async def test_api_tasks_execute_non_object_context_ref_returns_400(monkeypatch)
 async def test_api_tasks_execute_blocked_result_returns_ok_false(monkeypatch):
     from src.gateway import webchat
     monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    webchat.runtime_task_tracker.reset()
+    spawned = []
 
     async def _fake_execute_runtime_task_request(**kwargs):
         return type(
@@ -1539,6 +1585,7 @@ async def test_api_tasks_execute_blocked_result_returns_ok_false(monkeypatch):
         )()
 
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
     class _Request:
         headers = INTERNAL_HEADERS
@@ -1551,18 +1598,29 @@ async def test_api_tasks_execute_blocked_result_returns_ok_false(monkeypatch):
 
     response = await webchat.api_tasks_execute(_Request())
     body = json.loads(response.body)
-    assert response.status == 200
-    assert body["ok"] is False
-    assert body["status"] == "blocked"
-    assert body["error"] == "blocked by policy"
+    await spawned[0]
+    assert response.status == 202
+    assert body["status"] == "accepted"
+
+    class _StatusRequest:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": "task-5"}
+
+    status_response = await webchat.api_task_status(_StatusRequest())
+    status_body = json.loads(status_response.body)
+    assert status_body["ok"] is False
+    assert status_body["status"] == "blocked"
+    assert status_body["error"] == "blocked by policy"
 
 
 @pytest.mark.asyncio
 async def test_api_tasks_execute_tracing_headers_merge_to_metadata_and_response(monkeypatch):
     from src.gateway import webchat
     monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    webchat.runtime_task_tracker.reset()
 
     captured = {}
+    spawned = []
 
     async def _fake_execute_runtime_task_request(**kwargs):
         captured.update(kwargs)
@@ -1581,6 +1639,7 @@ async def test_api_tasks_execute_tracing_headers_merge_to_metadata_and_response(
         )()
 
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
     class _Request:
         headers = {
@@ -1602,8 +1661,9 @@ async def test_api_tasks_execute_tracing_headers_merge_to_metadata_and_response(
 
     response = await webchat.api_tasks_execute(_Request())
     body = json.loads(response.body)
+    await spawned[0]
 
-    assert response.status == 200
+    assert response.status == 202
     assert captured["metadata"]["trace_id"] == "trace-200"
     assert captured["metadata"]["span_id"] == "span-200"
     assert captured["metadata"]["parent_span_id"] == "parent-200"
@@ -1611,3 +1671,212 @@ async def test_api_tasks_execute_tracing_headers_merge_to_metadata_and_response(
     assert captured["metadata"]["portal_task_id"] == "portal-task-200"
     assert body["trace_id"] == "trace-200"
     assert body["portal_dispatch_id"] == "dispatch-200"
+
+    class _StatusRequest:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": "task-200"}
+
+    status_response = await webchat.api_task_status(_StatusRequest())
+    status_body = json.loads(status_response.body)
+    assert status_body["trace_id"] == "trace-200"
+    assert status_body["portal_dispatch_id"] == "dispatch-200"
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_execute_accepts_without_waiting_for_terminal_result(monkeypatch):
+    from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    webchat.runtime_task_tracker.reset()
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    called = {"count": 0}
+    spawned = []
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        called["count"] += 1
+        started.set()
+        await release.wait()
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"success": True},
+                "artifacts": {},
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+        async def json(self):
+            return {"task_id": "task-async-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
+
+    response = await webchat.api_tasks_execute(_Request())
+    body = json.loads(response.body)
+    assert response.status == 202
+    assert body["status"] == "accepted"
+    await started.wait()
+    assert called["count"] == 1
+    release.set()
+    await spawned[0]
+
+
+@pytest.mark.asyncio
+async def test_api_task_status_pending_and_auth(monkeypatch):
+    from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    webchat.runtime_task_tracker.reset()
+
+    class _ExecuteRequest:
+        headers = INTERNAL_HEADERS
+        async def json(self):
+            return {"task_id": "task-pending-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
+
+    never = asyncio.Event()
+
+    async def _never_finishes(**kwargs):
+        await never.wait()
+        return kwargs
+
+    spawned = []
+    monkeypatch.setattr(webchat, "execute_runtime_task_request", _never_finishes)
+    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    await webchat.api_tasks_execute(_ExecuteRequest())
+
+    class _StatusBadAuth:
+        headers = {"X-Internal-Api-Key": "bad"}
+        match_info = {"task_id": "task-pending-1"}
+
+    bad_auth_response = await webchat.api_task_status(_StatusBadAuth())
+    assert bad_auth_response.status == 401
+
+    class _StatusRequest:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": "task-pending-1"}
+
+    status_response = await webchat.api_task_status(_StatusRequest())
+    payload = json.loads(status_response.body)
+    assert status_response.status == 200
+    assert payload["status"] in {"accepted", "running"}
+    assert payload["finished_at"] is None
+
+    spawned[0].cancel()
+
+
+@pytest.mark.asyncio
+async def test_api_task_status_returns_error_payload_when_background_crashes(monkeypatch):
+    from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    webchat.runtime_task_tracker.reset()
+    spawned = []
+
+    async def _boom(**_kwargs):
+        raise RuntimeError("runtime boom")
+
+    monkeypatch.setattr(webchat, "execute_runtime_task_request", _boom)
+    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _ExecuteRequest:
+        headers = INTERNAL_HEADERS
+        async def json(self):
+            return {"task_id": "task-fail-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
+
+    execute_response = await webchat.api_tasks_execute(_ExecuteRequest())
+    assert execute_response.status == 202
+    await spawned[0]
+
+    class _StatusRequest:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": "task-fail-1"}
+
+    status_response = await webchat.api_task_status(_StatusRequest())
+    payload = json.loads(status_response.body)
+    assert payload["status"] == "error"
+    assert payload["ok"] is False
+    assert payload["error"] == "runtime boom"
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_execute_spawn_failure_removes_pending_record(monkeypatch):
+    from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    webchat.runtime_task_tracker.reset()
+
+    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda _coro: (_ for _ in ()).throw(RuntimeError("spawn failed")))
+    emitted = []
+
+    async def _fake_emit_task_lifecycle_event(event_type, **kwargs):
+        emitted.append((event_type, kwargs))
+
+    monkeypatch.setattr(webchat, "_emit_task_lifecycle_event", _fake_emit_task_lifecycle_event)
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+
+        async def json(self):
+            return {"task_id": "task-spawn-fail-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
+
+    response = await webchat.api_tasks_execute(_Request())
+    body = json.loads(response.body)
+    assert response.status == 500
+    assert body["error"] == "Internal server error"
+    assert webchat.runtime_task_tracker.get("task-spawn-fail-1") is None
+    assert emitted == []
+
+
+def test_runtime_task_tracker_prune_removes_terminal_records_even_if_oldest_is_running():
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    tracker = RuntimeTaskTracker(max_records=2)
+    tracker.create_pending(
+        task_id="task-running",
+        request_id="task-running",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id=None,
+        agent_id=None,
+        trace_id=None,
+        portal_dispatch_id=None,
+        portal_task_id="task-running",
+    )
+    tracker.mark_running("task-running")
+
+    tracker.create_pending(
+        task_id="task-success",
+        request_id="task-success",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id=None,
+        agent_id=None,
+        trace_id=None,
+        portal_dispatch_id=None,
+        portal_task_id="task-success",
+    )
+    tracker.mark_terminal("task-success", status="success", payload={"ok": True})
+
+    tracker.create_pending(
+        task_id="task-error",
+        request_id="task-error",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id=None,
+        agent_id=None,
+        trace_id=None,
+        portal_dispatch_id=None,
+        portal_task_id="task-error",
+    )
+    tracker.mark_terminal("task-error", status="error", payload={"ok": False})
+    tracker.prune()
+
+    assert tracker.get("task-running") is not None
+    remaining_terminal = [task_id for task_id in ("task-success", "task-error") if tracker.get(task_id) is not None]
+    assert len(remaining_terminal) == 1
