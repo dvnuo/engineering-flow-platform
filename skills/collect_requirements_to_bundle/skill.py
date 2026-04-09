@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Dict, List
 
@@ -18,9 +19,11 @@ from src.runtime.requirement_bundle_assets import (
     resolve_target_bundle_ref,
     write_requirements_doc_for_ref,
 )
+from src.utils.redaction import sanitize_exception_message
 
 
 JSON_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL | re.IGNORECASE)
+logger = logging.getLogger(__name__)
 
 
 def _strip_json_fence(text: str) -> str:
@@ -89,14 +92,30 @@ async def collect_requirements_to_bundle(
         if not github_channel.is_configured():
             return SkillResult(success=False, error="GitHub integration is not configured")
 
-        manifest_source_ref, manifest = await load_bundle_manifest(bundle_ref, manifest_ref=manifest_ref)
-        target_ref = resolve_target_bundle_ref(manifest_source_ref, manifest)
-        requirements_file, _ = resolve_bundle_links(manifest)
         normalized_sources = dict(sources or {})
         jira_ids = [str(item).strip() for item in normalized_sources.get("jira", []) if str(item).strip()]
         confluence_ids = [str(item).strip() for item in normalized_sources.get("confluence", []) if str(item).strip()]
         github_docs = [str(item).strip() for item in normalized_sources.get("github_docs", []) if str(item).strip()]
         figma_refs = [str(item).strip() for item in normalized_sources.get("figma", []) if str(item).strip()]
+        logger.info(
+            "Collect requirements skill start | bundle_ref=%s has_manifest_ref=%s jira_count=%s confluence_count=%s github_docs_count=%s figma_count=%s",
+            {"repo": bundle_ref.get("repo"), "path": bundle_ref.get("path"), "branch": bundle_ref.get("branch")} if isinstance(bundle_ref, dict) else {},
+            bool(manifest_ref),
+            len(jira_ids),
+            len(confluence_ids),
+            len(github_docs),
+            len(figma_refs),
+        )
+
+        manifest_source_ref, manifest = await load_bundle_manifest(bundle_ref, manifest_ref=manifest_ref)
+        target_ref = resolve_target_bundle_ref(manifest_source_ref, manifest)
+        requirements_file, _ = resolve_bundle_links(manifest)
+        logger.info(
+            "Collect requirements manifest resolved | manifest_ref=%s target_ref=%s requirements_file=%s",
+            {"repo": manifest_source_ref.repo_full_name, "path": manifest_source_ref.path, "branch": manifest_source_ref.branch},
+            {"repo": target_ref.repo_full_name, "path": target_ref.path, "branch": target_ref.branch},
+            requirements_file,
+        )
         supported_source_count = len(jira_ids) + len(confluence_ids) + len(github_docs)
         if supported_source_count <= 0:
             error = "At least one supported source is required"
@@ -104,8 +123,11 @@ async def collect_requirements_to_bundle(
                 error = f"{error}; figma is ignored in MVP"
             return SkillResult(success=False, error=error)
 
+        logger.info("Collect requirements load sources start | jira_count=%s confluence_count=%s github_docs_count=%s", len(jira_ids), len(confluence_ids), len(github_docs))
         jira_payload = await _load_jira_sources(jira_ids) if jira_ids else []
+        logger.debug("Collect requirements load jira done | count=%s", len(jira_payload))
         confluence_payload = await _load_confluence_sources(confluence_ids) if confluence_ids else []
+        logger.debug("Collect requirements load confluence done | count=%s", len(confluence_payload))
         github_payload = (
             await _load_github_doc_sources(
                 {
@@ -118,6 +140,7 @@ async def collect_requirements_to_bundle(
             if github_docs
             else []
         )
+        logger.debug("Collect requirements load github docs done | count=%s", len(github_payload))
 
         prompt_context = {
             "bundle": {
@@ -133,6 +156,7 @@ async def collect_requirements_to_bundle(
         }
 
         llm = LLMClient()
+        logger.info("Collect requirements llm request start")
         llm_response = await llm.chat(
             system_prompt=(
                 "You are a requirements analyst. Return STRICT JSON only (no markdown, no prose) with keys: "
@@ -142,6 +166,7 @@ async def collect_requirements_to_bundle(
             messages=[{"role": "user", "content": json.dumps(prompt_context, ensure_ascii=False)}],
             temperature=0.1,
         )
+        logger.info("Collect requirements llm request done | response_content_length=%s", len(str(llm_response.get("content") or "")))
         structured = _extract_json_dict(str(llm_response.get("content") or ""))
 
         requirements_doc = {
@@ -163,14 +188,22 @@ async def collect_requirements_to_bundle(
             ),
         }
 
+        logger.info(
+            "Collect requirements write start | target_ref=%s requirements_file=%s",
+            {"repo": target_ref.repo_full_name, "path": target_ref.path, "branch": target_ref.branch},
+            requirements_file,
+        )
         write_result = await write_requirements_doc_for_ref(
             target_ref, requirements_doc, requirements_file=requirements_file
         )
         commit_sha = ((write_result.get("commit") or {}).get("sha")) if isinstance(write_result, dict) else None
+        logger.info("Collect requirements write done | requirements_file=%s has_commit_sha=%s", requirements_file, bool(commit_sha))
         warnings: List[str] = []
         if figma_refs:
             warnings.append("figma sources are ignored in MVP")
+            logger.info("Collect requirements figma ignored in MVP | figma_count=%s", len(figma_refs))
 
+        logger.info("Collect requirements skill finish | success=%s has_commit_sha=%s", True, bool(commit_sha))
         return SkillResult(
             success=True,
             output="requirements.yaml updated",
@@ -187,6 +220,16 @@ async def collect_requirements_to_bundle(
             },
         )
     except RequirementBundleError as exc:
+        logger.warning(
+            "Collect requirements skill failed | action=collect_requirements_to_bundle error_class=%s error=%s",
+            exc.__class__.__name__,
+            sanitize_exception_message(exc),
+        )
         return SkillResult(success=False, error=str(exc))
     except Exception as exc:
+        logger.warning(
+            "Collect requirements skill failed | action=collect_requirements_to_bundle error_class=%s error=%s",
+            exc.__class__.__name__,
+            sanitize_exception_message(exc),
+        )
         return SkillResult(success=False, error=f"collect_requirements_to_bundle failed: {exc}")

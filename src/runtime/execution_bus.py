@@ -33,6 +33,7 @@ from src.runtime.governance_bus import (
 from src.runtime.github_review import run_github_review_task
 from src.runtime.jira_workflow_review import run_jira_workflow_review
 from src.runtime.leader_orchestration import dispatch_task_breakdown_as_delegations, run_delegation_cycle
+from src.utils.redaction import safe_preview, sanitize_exception_message
 
 logger = logging.getLogger(__name__)
 
@@ -58,16 +59,45 @@ class ExecutionBus:
         self._handlers[execution_type] = handler
 
     async def execute(self, request: ExecutionRequest) -> ExecutionResult:
+        payload = request.input_payload if isinstance(request.input_payload, dict) else {}
+        logger.info(
+            "ExecutionBus.execute start | execution_type=%s request_id=%s session_id=%s agent_id=%s source_type=%s task_type=%s",
+            request.execution_type,
+            request.request_id,
+            request.session_id or "-",
+            request.agent_id or "-",
+            request.source_type or "-",
+            payload.get("task_type") if isinstance(payload.get("task_type"), str) else "-",
+        )
         await self._persist_last_execution_id(request)
         decision = await self._safe_before_governance(request)
         if decision is not None and not decision.allowed:
+            logger.warning(
+                "ExecutionBus governance blocked | request_id=%s execution_type=%s task_type=%s reason=%s",
+                request.request_id,
+                request.execution_type,
+                payload.get("task_type") if isinstance(payload.get("task_type"), str) else "-",
+                decision.reason or "governance_blocked",
+            )
             result = self._blocked_result(request, reason=decision.reason, audit=decision.audit_record)
             final_result = await self._safe_after_governance(request, result)
             self._emit_terminal_lifecycle_event(request, final_result)
+            logger.info(
+                "ExecutionBus.execute end | request_id=%s final_status=%s runtime_events_count=%s audit_ref=%s",
+                request.request_id,
+                final_result.status,
+                len(final_result.runtime_events or []),
+                final_result.audit_ref or "-",
+            )
             return final_result
         self._emit_lifecycle_event("execution.started", request, "started", {"status": "started"})
         handler = self._handlers.get(request.execution_type)
         if handler is None:
+            logger.error(
+                "ExecutionBus missing handler | execution_type=%s request_id=%s",
+                request.execution_type,
+                request.request_id,
+            )
             result = make_execution_result(
                 request_id=request.request_id,
                 status="blocked",
@@ -75,14 +105,36 @@ class ExecutionBus:
             )
             final_result = await self._safe_after_governance(request, result)
             self._emit_terminal_lifecycle_event(request, final_result)
+            logger.info(
+                "ExecutionBus.execute end | request_id=%s final_status=%s runtime_events_count=%s audit_ref=%s",
+                request.request_id,
+                final_result.status,
+                len(final_result.runtime_events or []),
+                final_result.audit_ref or "-",
+            )
             return final_result
 
         try:
             raw_result = await handler(request)
             result = self._normalize_result(request, raw_result)
+            logger.debug(
+                "ExecutionBus handler normalized | request_id=%s execution_type=%s status=%s output_summary=%s",
+                request.request_id,
+                request.execution_type,
+                result.status,
+                safe_preview(summarize_output_payload(result.output_payload), 240),
+            )
         except Exception as exc:
             error_audit = await self._safe_on_error_governance(request, exc)
-            logger.exception("ExecutionBus handler failed for %s", request.execution_type)
+            logger.exception(
+                "ExecutionBus handler failed | execution_type=%s request_id=%s task_type=%s agent_id=%s error_class=%s error=%s",
+                request.execution_type,
+                request.request_id,
+                payload.get("task_type") if isinstance(payload.get("task_type"), str) else "-",
+                request.agent_id or "-",
+                exc.__class__.__name__,
+                sanitize_exception_message(exc),
+            )
             error_payload = _build_error_payload(exc, request.execution_type)
             result = make_execution_result(
                 request_id=request.request_id,
@@ -100,10 +152,24 @@ class ExecutionBus:
                 )
             final_result = await self._safe_after_governance(request, result)
             self._emit_terminal_lifecycle_event(request, final_result)
+            logger.info(
+                "ExecutionBus.execute end | request_id=%s final_status=%s runtime_events_count=%s audit_ref=%s",
+                request.request_id,
+                final_result.status,
+                len(final_result.runtime_events or []),
+                final_result.audit_ref or "-",
+            )
             return final_result
 
         final_result = await self._safe_after_governance(request, result)
         self._emit_terminal_lifecycle_event(request, final_result)
+        logger.info(
+            "ExecutionBus.execute end | request_id=%s final_status=%s runtime_events_count=%s audit_ref=%s",
+            request.request_id,
+            final_result.status,
+            len(final_result.runtime_events or []),
+            final_result.audit_ref or "-",
+        )
         return final_result
 
     async def _persist_last_execution_id(self, request: ExecutionRequest) -> None:
@@ -312,6 +378,13 @@ class ExecutionBus:
                 "execution_type": request.execution_type,
             },
         )
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        detail = payload.get("detail_payload")
+        if isinstance(detail, dict):
+            if isinstance(metadata.get("trace_id"), str) and metadata.get("trace_id").strip():
+                detail["trace_id"] = metadata.get("trace_id").strip()
+            if isinstance(metadata.get("portal_dispatch_id"), str) and metadata.get("portal_dispatch_id").strip():
+                detail["portal_dispatch_id"] = metadata.get("portal_dispatch_id").strip()
         try:
             self._event_emitter(legacy_type_map.get(event_type, "execution_event"), payload)
         except Exception:
@@ -1045,16 +1118,79 @@ def build_default_execution_bus(
         capability = resolve_task_capability_plan(task_type, request.input_payload)
         skill_name = str(request.input_payload.get("skill_name") or default_skill_name).strip() or default_skill_name
         skill_kwargs = dict(request.input_payload.get("skill_kwargs") or {})
+        logger.debug(
+            "Skill-backed task resolved | task_id=%s task_type=%s skill_name=%s capability_id=%s capability_type=%s",
+            task_id or "-",
+            task_type,
+            skill_name,
+            capability.get("capability_id"),
+            capability.get("capability_type"),
+        )
 
         for passthrough_key in ("bundle_ref", "manifest_ref", "sources"):
             if passthrough_key in request.input_payload and passthrough_key not in skill_kwargs:
                 skill_kwargs[passthrough_key] = request.input_payload.get(passthrough_key)
 
         skill_kwargs.setdefault("session_id", request.session_id)
+        sources = request.input_payload.get("sources") if isinstance(request.input_payload.get("sources"), dict) else {}
+        bundle_ref = request.input_payload.get("bundle_ref") if isinstance(request.input_payload.get("bundle_ref"), dict) else {}
+        manifest_ref = request.input_payload.get("manifest_ref") if isinstance(request.input_payload.get("manifest_ref"), dict) else {}
+        logger.debug(
+            "Skill-backed task input summary | task_type=%s jira_count=%s confluence_count=%s github_docs_count=%s figma_count=%s bundle_ref=%s manifest_ref=%s",
+            task_type,
+            len(_as_list_of_strings(sources.get("jira"))),
+            len(_as_list_of_strings(sources.get("confluence"))),
+            len(_as_list_of_strings(sources.get("github_docs"))),
+            len(_as_list_of_strings(sources.get("figma"))),
+            safe_preview(
+                {
+                    "repo": bundle_ref.get("repo"),
+                    "path": bundle_ref.get("path"),
+                    "branch": bundle_ref.get("branch"),
+                },
+                120,
+            ),
+            safe_preview(
+                {
+                    "repo": manifest_ref.get("repo"),
+                    "path": manifest_ref.get("path"),
+                    "branch": manifest_ref.get("branch"),
+                },
+                120,
+            ),
+        )
         try:
+            logger.info(
+                "Skill-backed task start | request_id=%s task_type=%s skill_name=%s task_id=%s",
+                request.request_id,
+                task_type,
+                skill_name,
+                task_id or "-",
+            )
             skill_result = await run_skill_execution(skill_name, _via_execution_bus=True, **skill_kwargs)
             normalized_skill = bus._normalize_result(request, skill_result)
+            normalized_output = normalized_skill.output_payload if isinstance(normalized_skill.output_payload, dict) else {}
+            normalized_data = normalized_output.get("data") if isinstance(normalized_output.get("data"), dict) else {}
+            logger.info(
+                "Skill-backed task end | request_id=%s task_type=%s skill_name=%s success=%s bundle_ref=%s updated_files_count=%s has_commit_sha=%s summary=%s",
+                request.request_id,
+                task_type,
+                skill_name,
+                normalized_skill.status not in {"error", "blocked"},
+                safe_preview(normalized_data.get("bundle_ref"), 120),
+                len(normalized_data.get("updated_files") or []) if isinstance(normalized_data.get("updated_files"), list) else 0,
+                bool(normalized_data.get("commit_sha")),
+                safe_preview(normalized_data.get("summary") or normalized_output.get("output"), 120),
+            )
         except Exception as exc:
+            logger.exception(
+                "Skill-backed task failed | request_id=%s task_type=%s skill_name=%s error_class=%s error=%s",
+                request.request_id,
+                task_type,
+                skill_name,
+                exc.__class__.__name__,
+                sanitize_exception_message(exc),
+            )
             normalized_skill = make_execution_result(
                 request_id=request.request_id,
                 status="error",

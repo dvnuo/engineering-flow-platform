@@ -8,6 +8,7 @@ from src.runtime.execution_bus import ExecutionBus, build_default_execution_bus
 from src.runtime.events import build_runtime_event
 from src.runtime.governance import GovernanceHooks
 from src.runtime.governance_bus import GovernanceDecision
+from src.runtime.governance_bus import GovernanceBus
 from src.runtime.capability_registry import CapabilityDescriptor
 
 
@@ -415,6 +416,92 @@ async def test_execution_bus_async_governance_on_error_is_awaited():
 
     assert result.status == "error"
     assert governance.error_seen == ("chat", "RuntimeError")
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_execute_logs_request_context(caplog):
+    async def task_handler(_request):
+        return {"status": "success", "response": "ok"}
+
+    bus = ExecutionBus(handlers={"task": task_handler})
+    req = make_execution_request(
+        request_id="req-log-1",
+        source_type="task",
+        execution_type="task",
+        session_id="session-1",
+        agent_id="agent-1",
+        input_payload={"task_type": "adapter_action_task"},
+    )
+    with caplog.at_level("INFO"):
+        result = await bus.execute(req)
+    assert result.status == "success"
+    assert "ExecutionBus.execute start" in caplog.text
+    assert "request_id=req-log-1" in caplog.text
+    assert "execution_type=task" in caplog.text
+    assert "task_type=adapter_action_task" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_logs_blocked_no_handler_and_exception(caplog):
+    async def _bad(_request):
+        raise RuntimeError("boom")
+
+    class _BlockGovernance(GovernanceBus):
+        async def before_execute(self, _request):
+            return GovernanceDecision(allowed=False, reason="denied")
+
+        async def after_execute(self, _request, result):
+            return result
+
+        async def on_error(self, _request, _error):
+            return None
+
+    blocked_bus = ExecutionBus(governance=_BlockGovernance())
+    blocked_req = make_execution_request(request_id="req-blocked", source_type="chat", execution_type="chat")
+
+    no_handler_bus = ExecutionBus()
+    no_handler_req = make_execution_request(request_id="req-no-handler", source_type="chat", execution_type="missing")
+
+    exception_bus = ExecutionBus(handlers={"chat": _bad})
+    exception_req = make_execution_request(
+        request_id="req-exception",
+        source_type="chat",
+        execution_type="chat",
+        input_payload={"task_type": "requirement_bundle_collect_task"},
+    )
+
+    with caplog.at_level("WARNING"):
+        await blocked_bus.execute(blocked_req)
+        await no_handler_bus.execute(no_handler_req)
+        await exception_bus.execute(exception_req)
+
+    assert "ExecutionBus governance blocked" in caplog.text
+    assert "ExecutionBus missing handler" in caplog.text
+    assert "ExecutionBus handler failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_lifecycle_event_includes_trace_id_from_metadata():
+    emitted = []
+
+    async def chat_handler(_request):
+        return {"response": "ok"}
+
+    bus = ExecutionBus(
+        handlers={"chat": chat_handler},
+        event_emitter=lambda event_type, payload: emitted.append((event_type, payload)),
+    )
+    req = make_execution_request(
+        request_id="req-trace-1",
+        source_type="chat",
+        execution_type="chat",
+        metadata={"trace_id": "trace-1", "portal_dispatch_id": "dispatch-1"},
+    )
+    await bus.execute(req)
+    assert emitted
+    first_payload = emitted[0][1]
+    assert first_payload["detail_payload"]["trace_id"] == "trace-1"
+    assert first_payload["detail_payload"]["portal_dispatch_id"] == "dispatch-1"
 
 
 @pytest.mark.asyncio

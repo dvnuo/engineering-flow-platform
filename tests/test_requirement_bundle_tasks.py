@@ -7,12 +7,16 @@ from skills.collect_requirements_to_bundle.skill import collect_requirements_to_
 from skills.design_test_cases_from_bundle.skill import design_test_cases_from_bundle as design_test_cases_skill
 from src.runtime.requirement_bundle_assets import (
     RequirementBundleError,
+    BundleRef,
     build_test_design_context,
+    load_bundle_manifest,
     parse_github_doc_ref,
     parse_bundle_ref,
+    read_github_doc_text,
     resolve_bundle_links,
     resolve_target_bundle_ref,
     validate_bundle_manifest,
+    write_requirements_doc_for_ref,
 )
 
 
@@ -42,7 +46,7 @@ def _valid_manifest_yaml(
 
 
 @pytest.mark.asyncio
-async def test_collect_skill_reads_manifest_and_writes_requirements(monkeypatch):
+async def test_collect_skill_reads_manifest_and_writes_requirements(monkeypatch, caplog):
     writes = []
     observed_paths = []
 
@@ -86,10 +90,11 @@ async def test_collect_skill_reads_manifest_and_writes_requirements(monkeypatch)
     monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue", _fake_jira_issue)
     monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page", _fake_confluence_page)
 
-    result = await collect_requirements_skill.execute(
-        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
-        sources={"jira": ["PAY-101"], "confluence": ["9876"], "github_docs": ["docs/spec.md"], "figma": ["fig-1"]},
-    )
+    with caplog.at_level("INFO"):
+        result = await collect_requirements_skill.execute(
+            bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
+            sources={"jira": ["PAY-101"], "confluence": ["9876"], "github_docs": ["docs/spec.md"], "figma": ["fig-1"]},
+        )
 
     assert result.success is True
     assert writes and writes[0]["branch"] == "bundle/1"
@@ -97,6 +102,85 @@ async def test_collect_skill_reads_manifest_and_writes_requirements(monkeypatch)
     assert "figma sources are ignored in MVP" in result.data.get("warnings", [])
     assert "docs/spec.md" in observed_paths
     assert "requirement-bundles/payments/maker/docs/spec.md" not in observed_paths
+    assert "Collect requirements skill start" in caplog.text
+    assert "Collect requirements skill finish" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_load_bundle_manifest_failure_logs_reason(monkeypatch, caplog):
+    async def _fake_get_file(owner, repo, path, ref=""):
+        if path.endswith("bundle.yaml"):
+            return {"content": _b64("bundle_id: rb-err\ntitle: bad\nstatus: draft\n")}
+        raise AssertionError(path)
+
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+
+    with caplog.at_level("WARNING"):
+        with pytest.raises(RequirementBundleError):
+            await load_bundle_manifest(
+                {"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"}
+            )
+
+    assert "Bundle asset action failed | action=load_bundle_manifest" in caplog.text
+    assert "bundle.yaml missing required field" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_read_github_doc_text_failure_logs_reason(monkeypatch, caplog):
+    async def _fake_get_file(owner, repo, path, ref=""):
+        return {"content": ""}
+
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    default_ref = BundleRef(owner="acme", repo="assets", path="bundles/a", branch="main")
+
+    with caplog.at_level("WARNING"):
+        with pytest.raises(RequirementBundleError):
+            await read_github_doc_text("docs/spec.md", default_ref)
+
+    assert "Bundle asset action failed | action=read_github_doc_text" in caplog.text
+    assert "File not found or empty" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_write_requirements_doc_failure_logs_ref_and_file(monkeypatch, caplog):
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    ref = BundleRef(owner="acme", repo="assets", path="requirement-bundles/payments/maker", branch="bundle/1")
+
+    with caplog.at_level("WARNING"):
+        with pytest.raises(RuntimeError):
+            await write_requirements_doc_for_ref(
+                ref,
+                {"bundle_id": "rb-1", "sources": {}, "summary": {}, "functional_requirements": [], "business_rules": [], "acceptance_criteria": [], "edge_cases": [], "quality_flags": {"ambiguities": [], "conflicts": [], "missing_information": []}},
+                requirements_file="docs/requirements.yaml",
+            )
+
+    assert "Bundle asset action failed | action=write_bundle_yaml" in caplog.text
+    assert "Bundle asset action failed | action=write_requirements_doc_for_ref" in caplog.text
+    assert "repo=acme/assets" in caplog.text
+    assert "relative_file=docs/requirements.yaml" in caplog.text
+    assert "write failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_collect_skill_failure_logs_sanitized_reason(monkeypatch, caplog):
+    async def _raise_manifest(*_args, **_kwargs):
+        raise RequirementBundleError("manifest invalid")
+
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.github_channel.is_configured", lambda: True)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.load_bundle_manifest", _raise_manifest)
+
+    with caplog.at_level("WARNING"):
+        result = await collect_requirements_skill.execute(
+            bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
+            sources={"github_docs": ["docs/spec.md"]},
+        )
+
+    assert result.success is False
+    assert "action=collect_requirements_to_bundle" in caplog.text
+    assert "manifest invalid" in caplog.text
 
 
 @pytest.mark.asyncio
