@@ -10,10 +10,52 @@ from urllib.parse import urlparse
 from ruamel.yaml import YAML
 
 from src.github import github_channel
+from src.utils.redaction import safe_preview, sanitize_exception_message
 
 _yaml = YAML()
 _yaml.default_flow_style = False
 logger = logging.getLogger(__name__)
+
+
+def _log_bundle_asset_failure(
+    action: str,
+    exc: Exception,
+    *,
+    ref: "BundleRef | None" = None,
+    relative_file: str | None = None,
+    raw: str | None = None,
+    extra: Dict[str, Any] | None = None,
+) -> None:
+    fields: Dict[str, Any] = {
+        "action": action,
+        "error_class": exc.__class__.__name__,
+        "error": sanitize_exception_message(exc),
+    }
+    if ref is not None:
+        fields["repo"] = ref.repo_full_name
+        fields["path"] = ref.path
+        fields["branch"] = ref.branch
+    if relative_file:
+        fields["relative_file"] = relative_file
+    if raw is not None:
+        fields["raw_preview"] = safe_preview(raw, 120)
+    if isinstance(extra, dict):
+        filtered_extra = {k: v for k, v in extra.items() if v is not None}
+        if filtered_extra:
+            fields["extra"] = filtered_extra
+
+    logger.warning(
+        "Bundle asset action failed | action=%s error_class=%s error=%s repo=%s path=%s branch=%s relative_file=%s raw_preview=%s extra=%s",
+        fields.get("action"),
+        fields.get("error_class"),
+        fields.get("error"),
+        fields.get("repo", "-"),
+        fields.get("path", "-"),
+        fields.get("branch", "-"),
+        fields.get("relative_file", "-"),
+        fields.get("raw_preview", "-"),
+        safe_preview(fields.get("extra"), 160) if "extra" in fields else "-",
+    )
 
 
 @dataclass(frozen=True)
@@ -127,7 +169,9 @@ def parse_github_doc_ref(raw: str, default_ref: BundleRef) -> GitHubDocRef:
 
 
 async def read_github_doc_text(raw: str, default_ref: BundleRef) -> tuple[GitHubDocRef, str]:
-    logger.debug("Read GitHub doc start | input_kind=%s", "url" if "://" in str(raw or "") else "repo_relative_path")
+    input_kind = "url" if "://" in str(raw or "") else "repo_relative_path"
+    logger.debug("Read GitHub doc start | input_kind=%s", input_kind)
+    doc_ref: GitHubDocRef | None = None
     try:
         doc_ref = parse_github_doc_ref(raw, default_ref)
         logger.debug(
@@ -151,10 +195,33 @@ async def read_github_doc_text(raw: str, default_ref: BundleRef) -> tuple[GitHub
             ) from exc
         logger.info("Read GitHub doc success | owner=%s repo=%s branch=%s path=%s", doc_ref.owner, doc_ref.repo, doc_ref.branch, doc_ref.path)
         return doc_ref, decoded
-    except RequirementBundleError:
+    except RequirementBundleError as exc:
+        _log_bundle_asset_failure(
+            "read_github_doc_text",
+            exc,
+            raw=raw if doc_ref is None else None,
+            extra={
+                "input_kind": input_kind,
+                "owner": doc_ref.owner if doc_ref is not None else None,
+                "repo_name": doc_ref.repo if doc_ref is not None else None,
+                "doc_branch": doc_ref.branch if doc_ref is not None else None,
+                "doc_path": doc_ref.path if doc_ref is not None else None,
+            },
+        )
         raise
     except Exception as exc:
-        logger.warning("Read GitHub doc unexpected failure | error_class=%s", exc.__class__.__name__)
+        _log_bundle_asset_failure(
+            "read_github_doc_text",
+            exc,
+            raw=raw if doc_ref is None else None,
+            extra={
+                "input_kind": input_kind,
+                "owner": doc_ref.owner if doc_ref is not None else None,
+                "repo_name": doc_ref.repo if doc_ref is not None else None,
+                "doc_branch": doc_ref.branch if doc_ref is not None else None,
+                "doc_path": doc_ref.path if doc_ref is not None else None,
+            },
+        )
         raise
 
 
@@ -172,6 +239,7 @@ async def load_bundle_manifest(
     bundle_ref: Dict[str, Any],
     manifest_ref: Dict[str, Any] | None = None,
 ) -> Tuple[BundleRef, Dict[str, Any]]:
+    ref: BundleRef | None = None
     try:
         ref = parse_bundle_ref(manifest_ref or bundle_ref)
         logger.info("Load bundle manifest start | repo=%s path=%s branch=%s", ref.repo_full_name, ref.path, ref.branch)
@@ -179,29 +247,34 @@ async def load_bundle_manifest(
         validate_bundle_manifest(manifest)
         logger.info("Load bundle manifest success | repo=%s path=%s branch=%s", ref.repo_full_name, ref.path, ref.branch)
         return ref, manifest
-    except RequirementBundleError:
+    except RequirementBundleError as exc:
+        _log_bundle_asset_failure("load_bundle_manifest", exc, ref=ref, relative_file="bundle.yaml")
         raise
     except Exception as exc:
-        logger.warning("Load bundle manifest failure | error_class=%s", exc.__class__.__name__)
+        _log_bundle_asset_failure("load_bundle_manifest", exc, ref=ref, relative_file="bundle.yaml")
         raise
 
 
 def resolve_bundle_links(manifest: Dict[str, Any]) -> tuple[str, str]:
     logger.debug("Resolve bundle links start")
-    links = manifest.get("links")
-    if not isinstance(links, dict):
-        raise RequirementBundleError("bundle.yaml field 'links' must be an object")
+    try:
+        links = manifest.get("links")
+        if not isinstance(links, dict):
+            raise RequirementBundleError("bundle.yaml field 'links' must be an object")
 
-    requirements_file = str(links.get("requirements_file") or "").strip().strip("/")
-    test_cases_file = str(links.get("test_cases_file") or "").strip().strip("/")
+        requirements_file = str(links.get("requirements_file") or "").strip().strip("/")
+        test_cases_file = str(links.get("test_cases_file") or "").strip().strip("/")
 
-    if not requirements_file:
-        raise RequirementBundleError("bundle.yaml field 'links.requirements_file' must be a non-empty string")
-    if not test_cases_file:
-        raise RequirementBundleError("bundle.yaml field 'links.test_cases_file' must be a non-empty string")
+        if not requirements_file:
+            raise RequirementBundleError("bundle.yaml field 'links.requirements_file' must be a non-empty string")
+        if not test_cases_file:
+            raise RequirementBundleError("bundle.yaml field 'links.test_cases_file' must be a non-empty string")
 
-    logger.debug("Resolve bundle links success | requirements_file=%s test_cases_file=%s", requirements_file, test_cases_file)
-    return requirements_file, test_cases_file
+        logger.debug("Resolve bundle links success | requirements_file=%s test_cases_file=%s", requirements_file, test_cases_file)
+        return requirements_file, test_cases_file
+    except RequirementBundleError as exc:
+        _log_bundle_asset_failure("resolve_bundle_links", exc)
+        raise
 
 
 def resolve_target_bundle_ref(input_ref: BundleRef, manifest: Dict[str, Any]) -> BundleRef:
@@ -242,14 +315,18 @@ async def write_bundle_yaml(ref: BundleRef, relative_file: str, payload: Dict[st
     stream = io.StringIO()
     _yaml.dump(payload, stream)
     file_path = f"{ref.path}/{relative_file}".strip("/")
-    result = await github_channel.create_or_update_file(
-        ref.owner,
-        ref.repo,
-        file_path,
-        stream.getvalue(),
-        commit_message,
-        branch=ref.branch,
-    )
+    try:
+        result = await github_channel.create_or_update_file(
+            ref.owner,
+            ref.repo,
+            file_path,
+            stream.getvalue(),
+            commit_message,
+            branch=ref.branch,
+        )
+    except Exception as exc:
+        _log_bundle_asset_failure("write_bundle_yaml", exc, ref=ref, relative_file=relative_file)
+        raise
     commit_sha = ((result.get("commit") or {}).get("sha")) if isinstance(result, dict) else None
     logger.info(
         "Write bundle YAML done | repo=%s path=%s branch=%s relative_file=%s has_commit_sha=%s",
@@ -277,12 +354,31 @@ async def write_requirements_doc_for_ref(
         ref.branch,
         requirements_file,
     )
-    return await write_bundle_yaml(
-        ref,
-        requirements_file,
-        payload,
-        f"chore(requirement-bundle): update {requirements_file} for {ref.path}",
-    )
+    try:
+        result = await write_bundle_yaml(
+            ref,
+            requirements_file,
+            payload,
+            f"chore(requirement-bundle): update {requirements_file} for {ref.path}",
+        )
+        commit_sha = ((result.get("commit") or {}).get("sha")) if isinstance(result, dict) else None
+        logger.info(
+            "Write requirements doc done | repo=%s path=%s branch=%s requirements_file=%s has_commit_sha=%s",
+            ref.repo_full_name,
+            ref.path,
+            ref.branch,
+            requirements_file,
+            bool(commit_sha),
+        )
+        return result
+    except Exception as exc:
+        _log_bundle_asset_failure(
+            "write_requirements_doc_for_ref",
+            exc,
+            ref=ref,
+            relative_file=requirements_file,
+        )
+        raise
 
 
 async def write_test_cases_doc(bundle_ref: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:

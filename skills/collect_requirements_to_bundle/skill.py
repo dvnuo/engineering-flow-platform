@@ -19,6 +19,7 @@ from src.runtime.requirement_bundle_assets import (
     resolve_target_bundle_ref,
     write_requirements_doc_for_ref,
 )
+from src.utils.redaction import sanitize_exception_message
 
 
 JSON_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL | re.IGNORECASE)
@@ -219,8 +220,16 @@ async def collect_requirements_to_bundle(
             },
         )
     except RequirementBundleError as exc:
-        logger.warning("Collect requirements skill failed | error_class=%s", exc.__class__.__name__)
+        logger.warning(
+            "Collect requirements skill failed | action=collect_requirements_to_bundle error_class=%s error=%s",
+            exc.__class__.__name__,
+            sanitize_exception_message(exc),
+        )
         return SkillResult(success=False, error=str(exc))
     except Exception as exc:
-        logger.warning("Collect requirements skill failed | error_class=%s", exc.__class__.__name__)
+        logger.warning(
+            "Collect requirements skill failed | action=collect_requirements_to_bundle error_class=%s error=%s",
+            exc.__class__.__name__,
+            sanitize_exception_message(exc),
+        )
         return SkillResult(success=False, error=f"collect_requirements_to_bundle failed: {exc}")
