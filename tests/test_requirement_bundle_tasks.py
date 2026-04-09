@@ -8,6 +8,7 @@ from skills.design_test_cases_from_bundle.skill import design_test_cases_from_bu
 from src.runtime.requirement_bundle_assets import (
     RequirementBundleError,
     build_test_design_context,
+    parse_github_doc_ref,
     parse_bundle_ref,
 )
 
@@ -66,19 +67,19 @@ async def test_collect_skill_reads_manifest_and_writes_requirements(monkeypatch)
             )
         }
 
-    async def _fake_jira_issue(issue_key):
-        return {"key": issue_key, "fields": {"summary": "Jira item"}}
+    async def _fake_jira_issue(issue_key, **kwargs):
+        return f"jira:{issue_key}"
 
-    async def _fake_confluence_page(page_id):
-        return {"id": page_id, "title": "Confluence page"}
+    async def _fake_confluence_page(page_id, **kwargs):
+        return f"confluence:{page_id}"
 
     monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.github_channel.is_configured", lambda: True)
     monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.github_channel.get_file", _fake_get_file)
     monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
     monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
     monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
-    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_channel.get_issue", _fake_jira_issue)
-    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_channel.get_page", _fake_confluence_page)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue", _fake_jira_issue)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page", _fake_confluence_page)
 
     result = await collect_requirements_skill.execute(
         bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
@@ -91,6 +92,126 @@ async def test_collect_skill_reads_manifest_and_writes_requirements(monkeypatch)
     assert "figma sources are ignored in MVP" in result.data.get("warnings", [])
     assert "docs/spec.md" in observed_paths
     assert "requirement-bundles/payments/maker/docs/spec.md" not in observed_paths
+
+
+@pytest.mark.asyncio
+async def test_collect_skill_supports_jira_browse_url(monkeypatch):
+    calls = {"by_url": []}
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        if path.endswith("bundle.yaml"):
+            return {"content": _b64(_valid_manifest_yaml("rb-jira-url"))}
+        if path == "docs/spec.md":
+            return {"content": _b64("# Spec")}
+        raise AssertionError(path)
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        return {"commit": {"sha": "sha"}}
+
+    async def _fake_jira_get_issue(_issue_key, **kwargs):
+        return "jira-key"
+
+    async def _fake_jira_get_issue_by_url(url, **kwargs):
+        calls["by_url"].append(url)
+        return "jira-url"
+
+    async def _fake_chat(self, **kwargs):
+        return {"content": "{\"summary\":{},\"functional_requirements\":[\"a\"],\"business_rules\":[],\"acceptance_criteria\":[],\"edge_cases\":[],\"quality_flags\":{\"ambiguities\":[],\"conflicts\":[],\"missing_information\":[]}}"}
+
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.github_channel.is_configured", lambda: True)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue", _fake_jira_get_issue)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue_by_url", _fake_jira_get_issue_by_url)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page", _fake_jira_get_issue)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page_by_url", _fake_jira_get_issue_by_url)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+
+    result = await collect_requirements_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
+        sources={"jira": ["https://jira.example.com/browse/PAY-101"], "github_docs": ["docs/spec.md"]},
+    )
+    assert result.success is True
+    assert calls["by_url"] == ["https://jira.example.com/browse/PAY-101"]
+
+
+@pytest.mark.asyncio
+async def test_collect_skill_supports_confluence_page_url(monkeypatch):
+    calls = {"by_url": []}
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        if path.endswith("bundle.yaml"):
+            return {"content": _b64(_valid_manifest_yaml("rb-cf-url"))}
+        if path == "docs/spec.md":
+            return {"content": _b64("# Spec")}
+        raise AssertionError(path)
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        return {"commit": {"sha": "sha"}}
+
+    async def _fake_confluence_get_page(_page_id, **kwargs):
+        return "confluence-id"
+
+    async def _fake_confluence_get_page_by_url(url, **kwargs):
+        calls["by_url"].append(url)
+        return "confluence-url"
+
+    async def _fake_chat(self, **kwargs):
+        return {"content": "{\"summary\":{},\"functional_requirements\":[\"a\"],\"business_rules\":[],\"acceptance_criteria\":[],\"edge_cases\":[],\"quality_flags\":{\"ambiguities\":[],\"conflicts\":[],\"missing_information\":[]}}"}
+
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.github_channel.is_configured", lambda: True)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page", _fake_confluence_get_page)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page_by_url", _fake_confluence_get_page_by_url)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue", _fake_confluence_get_page)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue_by_url", _fake_confluence_get_page_by_url)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+
+    result = await collect_requirements_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
+        sources={"confluence": ["https://wiki.example.com/pages/viewpage.action?pageId=987654"], "github_docs": ["docs/spec.md"]},
+    )
+    assert result.success is True
+    assert calls["by_url"] == ["https://wiki.example.com/pages/viewpage.action?pageId=987654"]
+
+
+@pytest.mark.asyncio
+async def test_collect_skill_supports_github_blob_url_cross_repo(monkeypatch):
+    observed = []
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        observed.append((owner, repo, path, ref))
+        if path.endswith("bundle.yaml"):
+            return {"content": _b64(_valid_manifest_yaml("rb-gh-url"))}
+        if owner == "org" and repo == "repo" and path == "docs/spec.md" and ref == "main":
+            return {"content": _b64("# External Spec")}
+        raise AssertionError((owner, repo, path, ref))
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        return {"commit": {"sha": "sha"}}
+
+    async def _fake_chat(self, **kwargs):
+        return {"content": "{\"summary\":{},\"functional_requirements\":[\"a\"],\"business_rules\":[],\"acceptance_criteria\":[],\"edge_cases\":[],\"quality_flags\":{\"ambiguities\":[],\"conflicts\":[],\"missing_information\":[]}}"}
+
+    async def _fake_text(*args, **kwargs):
+        return "ok"
+
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.github_channel.is_configured", lambda: True)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue", _fake_text)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue_by_url", _fake_text)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page", _fake_text)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page_by_url", _fake_text)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+
+    result = await collect_requirements_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
+        sources={"github_docs": ["https://github.com/org/repo/blob/main/docs/spec.md"]},
+    )
+    assert result.success is True
+    assert ("org", "repo", "docs/spec.md", "main") in observed
 
 
 @pytest.mark.asyncio
@@ -224,6 +345,15 @@ async def test_design_skill_empty_requirements_rejected_without_llm(monkeypatch)
 def test_parse_bundle_ref_invalid_raises():
     with pytest.raises(RequirementBundleError):
         parse_bundle_ref({"repo": "missing", "path": "x", "branch": "b"})
+
+
+def test_parse_github_doc_ref_blob_url():
+    default_ref = parse_bundle_ref({"repo": "acme/assets", "path": "x", "branch": "bundle/1"})
+    parsed = parse_github_doc_ref("https://github.com/org/repo/blob/main/docs/spec.md", default_ref)
+    assert parsed.owner == "org"
+    assert parsed.repo == "repo"
+    assert parsed.branch == "main"
+    assert parsed.path == "docs/spec.md"
 
 
 def test_build_test_design_context_is_trimmed():

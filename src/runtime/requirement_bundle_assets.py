@@ -4,6 +4,7 @@ import base64
 import io
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
+from urllib.parse import urlparse
 
 from ruamel.yaml import YAML
 
@@ -27,6 +28,14 @@ class BundleRef:
 
 class RequirementBundleError(ValueError):
     """Validation or IO error for requirement bundle assets."""
+
+
+@dataclass(frozen=True)
+class GitHubDocRef:
+    owner: str
+    repo: str
+    branch: str
+    path: str
 
 
 def parse_bundle_ref(bundle_ref: Dict[str, Any]) -> BundleRef:
@@ -67,6 +76,50 @@ async def read_repo_text(ref: BundleRef, repo_relative_file: str) -> str:
         return base64.b64decode(content).decode("utf-8")
     except Exception as exc:  # pragma: no cover - defensive
         raise RequirementBundleError(f"Failed to decode file content: {file_path}") from exc
+
+
+def parse_github_doc_ref(raw: str, default_ref: BundleRef) -> GitHubDocRef:
+    normalized = str(raw or "").strip()
+    if not normalized:
+        raise RequirementBundleError("github_doc_ref is required")
+
+    if normalized.startswith("http://") or normalized.startswith("https://"):
+        parsed = urlparse(normalized)
+        if parsed.netloc.lower() != "github.com":
+            raise RequirementBundleError(f"Unsupported GitHub doc URL host: {parsed.netloc}")
+        parts = [part for part in parsed.path.split("/") if part]
+        # /owner/repo/blob/branch/path/to/file
+        if len(parts) < 5 or parts[2] != "blob":
+            raise RequirementBundleError("GitHub doc URL must be in /owner/repo/blob/<branch>/<path> format")
+        owner = parts[0]
+        repo = parts[1]
+        branch = parts[3]
+        path = "/".join(parts[4:]).strip("/")
+        if not owner or not repo or not branch or not path:
+            raise RequirementBundleError("GitHub doc URL is missing owner/repo/branch/path")
+        return GitHubDocRef(owner=owner, repo=repo, branch=branch, path=path)
+
+    return GitHubDocRef(
+        owner=default_ref.owner,
+        repo=default_ref.repo,
+        branch=default_ref.branch,
+        path=normalized.strip("/"),
+    )
+
+
+async def read_github_doc_text(raw: str, default_ref: BundleRef) -> tuple[GitHubDocRef, str]:
+    doc_ref = parse_github_doc_ref(raw, default_ref)
+    file_data = await github_channel.get_file(doc_ref.owner, doc_ref.repo, doc_ref.path, doc_ref.branch)
+    content = file_data.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise RequirementBundleError(f"File not found or empty: {doc_ref.owner}/{doc_ref.repo}/{doc_ref.path}@{doc_ref.branch}")
+    try:
+        decoded = base64.b64decode(content).decode("utf-8")
+    except Exception as exc:  # pragma: no cover - defensive
+        raise RequirementBundleError(
+            f"Failed to decode file content: {doc_ref.owner}/{doc_ref.repo}/{doc_ref.path}@{doc_ref.branch}"
+        ) from exc
+    return doc_ref, decoded
 
 
 async def read_bundle_yaml(ref: BundleRef, relative_file: str) -> Dict[str, Any]:

@@ -6,13 +6,14 @@ from typing import Any, Dict, List
 
 from src.agents.executor import SkillResult, skill
 from src.agents.llm import LLMClient
-from src.channels import confluence_channel, jira_channel
 from src.github import github_channel
+from src.jira import jira_get_issue, jira_get_issue_by_url
+from src.confluence import confluence_get_page, confluence_get_page_by_url
 from src.runtime.requirement_bundle_assets import (
     RequirementBundleError,
     load_bundle_manifest,
     parse_bundle_ref,
-    read_repo_text,
+    read_github_doc_text,
     write_requirements_doc,
 )
 
@@ -35,17 +36,19 @@ def _extract_json_dict(raw: str) -> Dict[str, Any]:
 
 async def _load_jira_sources(issue_keys: List[str]) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
-    for issue_key in issue_keys:
-        issue = await jira_channel.get_issue(issue_key)
-        items.append({"issue_key": issue_key, "issue": issue})
+    for source in issue_keys:
+        is_url = "://" in source and "/browse/" in source.lower()
+        rendered = await (jira_get_issue_by_url(source) if is_url else jira_get_issue(source))
+        items.append({"input": source, "kind": "url" if is_url else "issue_key", "content": str(rendered or "")})
     return items
 
 
 async def _load_confluence_sources(page_ids: List[str]) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
-    for page_id in page_ids:
-        page = await confluence_channel.get_page(page_id)
-        items.append({"page_id": page_id, "page": page})
+    for source in page_ids:
+        is_url = "://" in source
+        rendered = await (confluence_get_page_by_url(source) if is_url else confluence_get_page(source))
+        items.append({"input": source, "kind": "url" if is_url else "page_id", "content": str(rendered or "")})
     return items
 
 
@@ -53,8 +56,21 @@ async def _load_github_doc_sources(bundle_ref: Dict[str, Any], doc_paths: List[s
     parsed_ref = parse_bundle_ref(bundle_ref)
     items: List[Dict[str, Any]] = []
     for doc_path in doc_paths:
-        raw = await read_repo_text(parsed_ref, doc_path)
-        items.append({"path": doc_path, "content": raw})
+        doc_ref, raw = await read_github_doc_text(doc_path, parsed_ref)
+        kind = "url" if "://" in doc_path else "repo_relative_path"
+        items.append(
+            {
+                "input": doc_path,
+                "kind": kind,
+                "resolved": {
+                    "owner": doc_ref.owner,
+                    "repo": doc_ref.repo,
+                    "branch": doc_ref.branch,
+                    "path": doc_ref.path,
+                },
+                "content": raw,
+            }
+        )
     return items
 
 
