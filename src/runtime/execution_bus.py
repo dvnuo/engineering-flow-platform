@@ -1046,7 +1046,7 @@ def build_default_execution_bus(
         skill_name = str(request.input_payload.get("skill_name") or default_skill_name).strip() or default_skill_name
         skill_kwargs = dict(request.input_payload.get("skill_kwargs") or {})
 
-        for passthrough_key in ("bundle_ref", "sources"):
+        for passthrough_key in ("bundle_ref", "manifest_ref", "sources"):
             if passthrough_key in request.input_payload and passthrough_key not in skill_kwargs:
                 skill_kwargs[passthrough_key] = request.input_payload.get(passthrough_key)
 

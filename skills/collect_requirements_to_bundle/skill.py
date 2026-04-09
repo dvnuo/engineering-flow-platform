@@ -80,13 +80,17 @@ async def _load_github_doc_sources(bundle_ref: Dict[str, Any], doc_paths: List[s
     name="collect_requirements_to_bundle",
     description="Collect requirements from sources and write requirements.yaml in RequirementBundle.",
 )
-async def collect_requirements_to_bundle(bundle_ref: Dict[str, Any], sources: Dict[str, Any] | None = None) -> SkillResult:
+async def collect_requirements_to_bundle(
+    bundle_ref: Dict[str, Any],
+    sources: Dict[str, Any] | None = None,
+    manifest_ref: Dict[str, Any] | None = None,
+) -> SkillResult:
     try:
         if not github_channel.is_configured():
             return SkillResult(success=False, error="GitHub integration is not configured")
 
-        input_ref, manifest = await load_bundle_manifest(bundle_ref)
-        target_ref = resolve_target_bundle_ref(input_ref, manifest)
+        manifest_source_ref, manifest = await load_bundle_manifest(bundle_ref, manifest_ref=manifest_ref)
+        target_ref = resolve_target_bundle_ref(manifest_source_ref, manifest)
         requirements_file, _ = resolve_bundle_links(manifest)
         normalized_sources = dict(sources or {})
         jira_ids = [str(item).strip() for item in normalized_sources.get("jira", []) if str(item).strip()]

@@ -36,10 +36,13 @@ def _extract_json_dict(raw: str) -> Dict[str, Any]:
     name="design_test_cases_from_bundle",
     description="Generate test-cases.yaml from RequirementBundle requirements.yaml",
 )
-async def design_test_cases_from_bundle(bundle_ref: Dict[str, Any]) -> SkillResult:
+async def design_test_cases_from_bundle(
+    bundle_ref: Dict[str, Any],
+    manifest_ref: Dict[str, Any] | None = None,
+) -> SkillResult:
     try:
-        input_ref, manifest = await load_bundle_manifest(bundle_ref)
-        target_ref = resolve_target_bundle_ref(input_ref, manifest)
+        manifest_source_ref, manifest = await load_bundle_manifest(bundle_ref, manifest_ref=manifest_ref)
+        target_ref = resolve_target_bundle_ref(manifest_source_ref, manifest)
         requirements_file, test_cases_file = resolve_bundle_links(manifest)
         requirements_doc = await load_requirements_doc_for_ref(target_ref, requirements_file=requirements_file)
         designable_fields = (

@@ -149,8 +149,11 @@ async def read_bundle_yaml(ref: BundleRef, relative_file: str) -> Dict[str, Any]
     return dict(parsed)
 
 
-async def load_bundle_manifest(bundle_ref: Dict[str, Any]) -> Tuple[BundleRef, Dict[str, Any]]:
-    ref = parse_bundle_ref(bundle_ref)
+async def load_bundle_manifest(
+    bundle_ref: Dict[str, Any],
+    manifest_ref: Dict[str, Any] | None = None,
+) -> Tuple[BundleRef, Dict[str, Any]]:
+    ref = parse_bundle_ref(manifest_ref or bundle_ref)
     manifest = await read_bundle_yaml(ref, "bundle.yaml")
     validate_bundle_manifest(manifest)
     return ref, manifest
