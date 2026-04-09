@@ -38,6 +38,23 @@ class GitHubDocRef:
     path: str
 
 
+def _allowed_github_hosts() -> set[str]:
+    hosts = {"github.com"}
+
+    hostname = str(getattr(github_channel, "hostname", "") or "").strip().lower()
+    if hostname:
+        hosts.add(hostname)
+
+    base_url = str(getattr(github_channel, "base_url", "") or "").strip()
+    if base_url:
+        normalized_base_url = base_url if "://" in base_url else f"https://{base_url.lstrip('/')}"
+        parsed_base_url = urlparse(normalized_base_url)
+        if parsed_base_url.netloc:
+            hosts.add(parsed_base_url.netloc.lower())
+
+    return hosts
+
+
 def parse_bundle_ref(bundle_ref: Dict[str, Any]) -> BundleRef:
     if not isinstance(bundle_ref, dict):
         raise RequirementBundleError("bundle_ref must be an object")
@@ -85,7 +102,7 @@ def parse_github_doc_ref(raw: str, default_ref: BundleRef) -> GitHubDocRef:
 
     if normalized.startswith("http://") or normalized.startswith("https://"):
         parsed = urlparse(normalized)
-        if parsed.netloc.lower() != "github.com":
+        if parsed.netloc.lower() not in _allowed_github_hosts():
             raise RequirementBundleError(f"Unsupported GitHub doc URL host: {parsed.netloc}")
         parts = [part for part in parsed.path.split("/") if part]
         # /owner/repo/blob/branch/path/to/file
@@ -139,10 +156,45 @@ async def load_bundle_manifest(bundle_ref: Dict[str, Any]) -> Tuple[BundleRef, D
     return ref, manifest
 
 
+def resolve_bundle_links(manifest: Dict[str, Any]) -> tuple[str, str]:
+    links = manifest.get("links")
+    if not isinstance(links, dict):
+        raise RequirementBundleError("bundle.yaml field 'links' must be an object")
+
+    requirements_file = str(links.get("requirements_file") or "").strip().strip("/")
+    test_cases_file = str(links.get("test_cases_file") or "").strip().strip("/")
+
+    if not requirements_file:
+        raise RequirementBundleError("bundle.yaml field 'links.requirements_file' must be a non-empty string")
+    if not test_cases_file:
+        raise RequirementBundleError("bundle.yaml field 'links.test_cases_file' must be a non-empty string")
+
+    return requirements_file, test_cases_file
+
+
+def resolve_target_bundle_ref(input_ref: BundleRef, manifest: Dict[str, Any]) -> BundleRef:
+    storage = manifest.get("storage")
+    if storage is None:
+        storage = {}
+    if not isinstance(storage, dict):
+        raise RequirementBundleError("bundle.yaml field 'storage' must be an object")
+
+    repo_full = str(storage.get("repo") or input_ref.repo_full_name).strip()
+    path = str(storage.get("path") or input_ref.path).strip().strip("/")
+    branch = str(storage.get("working_branch") or input_ref.branch).strip()
+
+    return parse_bundle_ref({"repo": repo_full, "path": path, "branch": branch})
+
+
+async def load_requirements_doc_for_ref(ref: BundleRef, requirements_file: str = "requirements.yaml") -> Dict[str, Any]:
+    requirements = await read_bundle_yaml(ref, requirements_file)
+    validate_requirements_doc(requirements)
+    return requirements
+
+
 async def load_requirements_doc(bundle_ref: Dict[str, Any]) -> Tuple[BundleRef, Dict[str, Any]]:
     ref = parse_bundle_ref(bundle_ref)
-    requirements = await read_bundle_yaml(ref, "requirements.yaml")
-    validate_requirements_doc(requirements)
+    requirements = await load_requirements_doc_for_ref(ref)
     return ref, requirements
 
 
@@ -162,21 +214,33 @@ async def write_bundle_yaml(ref: BundleRef, relative_file: str, payload: Dict[st
 
 async def write_requirements_doc(bundle_ref: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     ref = parse_bundle_ref(bundle_ref)
+    return await write_requirements_doc_for_ref(ref, payload)
+
+
+async def write_requirements_doc_for_ref(
+    ref: BundleRef, payload: Dict[str, Any], requirements_file: str = "requirements.yaml"
+) -> Dict[str, Any]:
     return await write_bundle_yaml(
         ref,
-        "requirements.yaml",
+        requirements_file,
         payload,
-        f"chore(requirement-bundle): update requirements.yaml for {ref.path}",
+        f"chore(requirement-bundle): update {requirements_file} for {ref.path}",
     )
 
 
 async def write_test_cases_doc(bundle_ref: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     ref = parse_bundle_ref(bundle_ref)
+    return await write_test_cases_doc_for_ref(ref, payload)
+
+
+async def write_test_cases_doc_for_ref(
+    ref: BundleRef, payload: Dict[str, Any], test_cases_file: str = "test-cases.yaml"
+) -> Dict[str, Any]:
     return await write_bundle_yaml(
         ref,
-        "test-cases.yaml",
+        test_cases_file,
         payload,
-        f"chore(requirement-bundle): update test-cases.yaml for {ref.path}",
+        f"chore(requirement-bundle): update {test_cases_file} for {ref.path}",
     )
 
 
@@ -205,6 +269,10 @@ def validate_bundle_manifest(manifest: Dict[str, Any]) -> None:
     for key in required_top_level:
         if key not in manifest:
             raise RequirementBundleError(f"bundle.yaml missing required field: {key}")
+    for key in ("bundle_id", "title", "status"):
+        value = manifest.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise RequirementBundleError(f"bundle.yaml field '{key}' must be a non-empty string")
 
     scope = manifest.get("scope")
     if not isinstance(scope, dict):
@@ -212,6 +280,9 @@ def validate_bundle_manifest(manifest: Dict[str, Any]) -> None:
     for key in ("domain", "summary"):
         if key not in scope:
             raise RequirementBundleError(f"bundle.yaml missing required field: scope.{key}")
+        value = scope.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise RequirementBundleError(f"bundle.yaml field 'scope.{key}' must be a non-empty string")
 
     storage = manifest.get("storage")
     if not isinstance(storage, dict):
@@ -219,6 +290,15 @@ def validate_bundle_manifest(manifest: Dict[str, Any]) -> None:
     for key in ("repo", "path", "base_branch", "working_branch"):
         if key not in storage:
             raise RequirementBundleError(f"bundle.yaml missing required field: storage.{key}")
+        value = storage.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise RequirementBundleError(f"bundle.yaml field 'storage.{key}' must be a non-empty string")
+    repo_full = str(storage.get("repo") or "").strip()
+    if "/" not in repo_full:
+        raise RequirementBundleError("bundle.yaml field 'storage.repo' must be in 'owner/repo' format")
+    owner, repo = repo_full.split("/", 1)
+    if not owner or not repo:
+        raise RequirementBundleError("bundle.yaml field 'storage.repo' must be in 'owner/repo' format")
 
     links = manifest.get("links")
     if not isinstance(links, dict):
@@ -226,6 +306,9 @@ def validate_bundle_manifest(manifest: Dict[str, Any]) -> None:
     for key in ("requirements_file", "test_cases_file"):
         if key not in links:
             raise RequirementBundleError(f"bundle.yaml missing required field: links.{key}")
+        value = links.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise RequirementBundleError(f"bundle.yaml field 'links.{key}' must be a non-empty string")
 
 
 def validate_requirements_doc(requirements_doc: Dict[str, Any]) -> None:

@@ -14,7 +14,9 @@ from src.runtime.requirement_bundle_assets import (
     load_bundle_manifest,
     parse_bundle_ref,
     read_github_doc_text,
-    write_requirements_doc,
+    resolve_bundle_links,
+    resolve_target_bundle_ref,
+    write_requirements_doc_for_ref,
 )
 
 
@@ -83,7 +85,9 @@ async def collect_requirements_to_bundle(bundle_ref: Dict[str, Any], sources: Di
         if not github_channel.is_configured():
             return SkillResult(success=False, error="GitHub integration is not configured")
 
-        parsed_ref, manifest = await load_bundle_manifest(bundle_ref)
+        input_ref, manifest = await load_bundle_manifest(bundle_ref)
+        target_ref = resolve_target_bundle_ref(input_ref, manifest)
+        requirements_file, _ = resolve_bundle_links(manifest)
         normalized_sources = dict(sources or {})
         jira_ids = [str(item).strip() for item in normalized_sources.get("jira", []) if str(item).strip()]
         confluence_ids = [str(item).strip() for item in normalized_sources.get("confluence", []) if str(item).strip()]
@@ -98,13 +102,24 @@ async def collect_requirements_to_bundle(bundle_ref: Dict[str, Any], sources: Di
 
         jira_payload = await _load_jira_sources(jira_ids) if jira_ids else []
         confluence_payload = await _load_confluence_sources(confluence_ids) if confluence_ids else []
-        github_payload = await _load_github_doc_sources(bundle_ref, github_docs) if github_docs else []
+        github_payload = (
+            await _load_github_doc_sources(
+                {
+                    "repo": target_ref.repo_full_name,
+                    "path": target_ref.path,
+                    "branch": target_ref.branch,
+                },
+                github_docs,
+            )
+            if github_docs
+            else []
+        )
 
         prompt_context = {
             "bundle": {
-                "bundle_id": manifest.get("bundle_id") or manifest.get("id") or parsed_ref.path,
+                "bundle_id": manifest.get("bundle_id") or manifest.get("id") or target_ref.path,
                 "scope": manifest.get("scope", {}),
-                "summary": manifest.get("summary", {}),
+                "summary": (manifest.get("scope", {}) or {}).get("summary", ""),
             },
             "sources": {
                 "jira": jira_payload,
@@ -126,7 +141,7 @@ async def collect_requirements_to_bundle(bundle_ref: Dict[str, Any], sources: Di
         structured = _extract_json_dict(str(llm_response.get("content") or ""))
 
         requirements_doc = {
-            "bundle_id": manifest.get("bundle_id") or manifest.get("id") or parsed_ref.path,
+            "bundle_id": manifest.get("bundle_id") or manifest.get("id") or target_ref.path,
             "sources": {
                 "jira": jira_ids,
                 "confluence": confluence_ids,
@@ -144,7 +159,9 @@ async def collect_requirements_to_bundle(bundle_ref: Dict[str, Any], sources: Di
             ),
         }
 
-        write_result = await write_requirements_doc(bundle_ref, requirements_doc)
+        write_result = await write_requirements_doc_for_ref(
+            target_ref, requirements_doc, requirements_file=requirements_file
+        )
         commit_sha = ((write_result.get("commit") or {}).get("sha")) if isinstance(write_result, dict) else None
         warnings: List[str] = []
         if figma_refs:
@@ -155,11 +172,11 @@ async def collect_requirements_to_bundle(bundle_ref: Dict[str, Any], sources: Di
             output="requirements.yaml updated",
             data={
                 "bundle_ref": {
-                    "repo": parsed_ref.repo_full_name,
-                    "path": parsed_ref.path,
-                    "branch": parsed_ref.branch,
+                    "repo": target_ref.repo_full_name,
+                    "path": target_ref.path,
+                    "branch": target_ref.branch,
                 },
-                "updated_files": [f"{parsed_ref.path}/requirements.yaml"],
+                "updated_files": [f"{target_ref.path}/{requirements_file}"],
                 "commit_sha": commit_sha,
                 "summary": "Collected bundle requirements from configured sources",
                 "warnings": warnings,
