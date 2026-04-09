@@ -170,3 +170,27 @@ def test_execution_bus_resolve_task_capability_plan_delegates_to_canonical_contr
     plan = resolve_task_capability_plan("adapter_action_task", {"action_id": "adapter:github:add_comment"})
 
     assert plan is sentinel
+
+
+def test_resolve_task_capability_contract_requirement_bundle_collect_task():
+    plan = resolve_task_capability_contract(
+        "requirement_bundle_collect_task",
+        {"bundle_ref": {"repo": "acme/demo", "path": "bundles/a", "branch": "feat/a"}},
+    )
+
+    assert plan["primary_capability_id"] == "skill:collect_requirements_to_bundle"
+    assert plan["capability_id"] == "skill:collect_requirements_to_bundle"
+    assert plan["capability_type"] == "skill"
+    assert plan["involved_capability_ids"] == ["skill:collect_requirements_to_bundle"]
+
+
+def test_resolve_task_capability_contract_requirement_bundle_design_test_cases_task():
+    plan = resolve_task_capability_contract(
+        "requirement_bundle_design_test_cases_task",
+        {"bundle_ref": {"repo": "acme/demo", "path": "bundles/a", "branch": "feat/a"}},
+    )
+
+    assert plan["primary_capability_id"] == "skill:design_test_cases_from_bundle"
+    assert plan["capability_id"] == "skill:design_test_cases_from_bundle"
+    assert plan["capability_type"] == "skill"
+    assert plan["involved_capability_ids"] == ["skill:design_test_cases_from_bundle"]

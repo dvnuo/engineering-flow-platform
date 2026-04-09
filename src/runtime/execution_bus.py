@@ -1034,6 +1034,92 @@ def build_default_execution_bus(
             result.output_payload["task_type"] = task_type_override
         return result
 
+    async def _execute_skill_backed_task(
+        request: ExecutionRequest,
+        *,
+        task_id: Optional[str],
+        task_type: str,
+        default_skill_name: str,
+        event_prefix: str,
+    ) -> ExecutionResult:
+        capability = resolve_task_capability_plan(task_type, request.input_payload)
+        skill_name = str(request.input_payload.get("skill_name") or default_skill_name).strip() or default_skill_name
+        skill_kwargs = dict(request.input_payload.get("skill_kwargs") or {})
+
+        for passthrough_key in ("bundle_ref", "sources"):
+            if passthrough_key in request.input_payload and passthrough_key not in skill_kwargs:
+                skill_kwargs[passthrough_key] = request.input_payload.get(passthrough_key)
+
+        skill_kwargs.setdefault("session_id", request.session_id)
+        try:
+            skill_result = await run_skill_execution(skill_name, _via_execution_bus=True, **skill_kwargs)
+            normalized_skill = bus._normalize_result(request, skill_result)
+        except Exception as exc:
+            normalized_skill = make_execution_result(
+                request_id=request.request_id,
+                status="error",
+                output_payload={"error": str(exc)},
+            )
+
+        skill_data = normalized_skill.output_payload.get("data") if isinstance(normalized_skill.output_payload, dict) else {}
+        if not isinstance(skill_data, dict):
+            skill_data = {}
+        bundle_ref = skill_data.get("bundle_ref") or request.input_payload.get("bundle_ref")
+        updated_files = skill_data.get("updated_files") if isinstance(skill_data.get("updated_files"), list) else []
+        commit_sha = skill_data.get("commit_sha")
+        summary_text = skill_data.get("summary") or normalized_skill.output_payload.get("output") or f"{task_type} completed"
+
+        runtime_events = list(normalized_skill.runtime_events or [])
+        runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+        skill_success = normalized_skill.status not in {"error", "blocked"}
+        runtime_events.append(
+            build_runtime_event(
+                event_type=f"{event_prefix}.completed" if skill_success else f"{event_prefix}.failed",
+                execution_type=request.execution_type,
+                state="completed" if skill_success else "failed",
+                session_id=request.session_id,
+                request_id=request.request_id,
+                agent_id=request.agent_id,
+                summary=f"{task_type} task",
+                task_id=task_id,
+                detail_payload={
+                    "task_type": task_type,
+                    "skill_name": skill_name,
+                    "success": skill_success,
+                    "capability_id": capability.get("capability_id"),
+                    "capability_type": capability.get("capability_type"),
+                    "capability_resolution": capability.get("capability_resolution"),
+                    "bundle_ref": bundle_ref,
+                    "updated_files": updated_files,
+                    "commit_sha": commit_sha,
+                },
+                legacy_payload={"legacy_type": "task_skill"},
+            )
+        )
+        return make_execution_result(
+            request_id=request.request_id,
+            status="success" if skill_success else normalized_skill.status,
+            output_payload={
+                "task_type": task_type,
+                "success": skill_success,
+                "bundle_ref": bundle_ref,
+                "updated_files": updated_files,
+                "commit_sha": commit_sha,
+                "summary": summary_text,
+                "error": normalized_skill.output_payload.get("error") if isinstance(normalized_skill.output_payload, dict) else None,
+                "task_boundary": True,
+                "capability_id": capability.get("capability_id"),
+                "capability_type": capability.get("capability_type"),
+                "policy_tags": capability.get("policy_tags"),
+                "requires_identity_binding": capability.get("requires_identity_binding"),
+                "capability_resolution": capability.get("capability_resolution"),
+                "involved_capability_ids": capability.get("involved_capability_ids") or [f"skill:{skill_name}"],
+                "resolved_skill_capability_id": f"skill:{skill_name}",
+                "result": normalized_skill.output_payload,
+            },
+            runtime_events=runtime_events,
+        )
+
     async def task_handler(request: ExecutionRequest) -> ExecutionResult:
         task_id = bus._resolve_task_id(request)
         task_type = request.input_payload.get("task_type")
@@ -1845,6 +1931,24 @@ def build_default_execution_bus(
                     "result": review_result.get("result"),
                 },
                 runtime_events=runtime_events,
+            )
+
+        if task_type == "requirement_bundle_collect_task":
+            return await _execute_skill_backed_task(
+                request,
+                task_id=task_id,
+                task_type=task_type,
+                default_skill_name="collect_requirements_to_bundle",
+                event_prefix="task.requirement_bundle_collect",
+            )
+
+        if task_type == "requirement_bundle_design_test_cases_task":
+            return await _execute_skill_backed_task(
+                request,
+                task_id=task_id,
+                task_type=task_type,
+                default_skill_name="design_test_cases_from_bundle",
+                event_prefix="task.requirement_bundle_design_test_cases",
             )
 
         if task_type != "tool_task":

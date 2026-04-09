@@ -110,6 +110,56 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
             "capability_resolution": "resolved",
         }
 
+
+    if normalized_task_type == "requirement_bundle_collect_task":
+        primary_capability_id = "skill:collect_requirements_to_bundle"
+        descriptor = registry.get(primary_capability_id)
+        involved = [primary_capability_id]
+        if descriptor is None:
+            return {
+                **fallback,
+                "primary_capability_id": primary_capability_id,
+                "capability_id": primary_capability_id,
+                "action_id": primary_capability_id,
+                "capability_type": "skill",
+                "involved_capability_ids": involved,
+            }
+        return {
+            **fallback,
+            "primary_capability_id": descriptor.capability_id,
+            "capability_id": descriptor.capability_id,
+            "capability_type": descriptor.type,
+            "action_id": descriptor.capability_id,
+            "involved_capability_ids": involved,
+            "policy_tags": list(descriptor.policy_tags or []),
+            "requires_identity_binding": bool(descriptor.requires_identity_binding),
+            "capability_resolution": "resolved",
+        }
+
+    if normalized_task_type == "requirement_bundle_design_test_cases_task":
+        primary_capability_id = "skill:design_test_cases_from_bundle"
+        descriptor = registry.get(primary_capability_id)
+        involved = [primary_capability_id]
+        if descriptor is None:
+            return {
+                **fallback,
+                "primary_capability_id": primary_capability_id,
+                "capability_id": primary_capability_id,
+                "action_id": primary_capability_id,
+                "capability_type": "skill",
+                "involved_capability_ids": involved,
+            }
+        return {
+            **fallback,
+            "primary_capability_id": descriptor.capability_id,
+            "capability_id": descriptor.capability_id,
+            "capability_type": descriptor.type,
+            "action_id": descriptor.capability_id,
+            "involved_capability_ids": involved,
+            "policy_tags": list(descriptor.policy_tags or []),
+            "requires_identity_binding": bool(descriptor.requires_identity_binding),
+            "capability_resolution": "resolved",
+        }
     if normalized_task_type == "delegation_task":
         skill_name = str(normalized_payload.get("skill_name") or "").strip().lower()
         if not skill_name:
