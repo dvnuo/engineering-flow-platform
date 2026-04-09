@@ -1017,6 +1017,29 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
             portal_task_id=metadata.get("portal_task_id"),
         )
+
+        background_coro = _run_task_execution_in_background(
+            task_id=parsed["task_id"],
+            request_id=request_id,
+            task_type=parsed["task_type"],
+            session_id=parsed["session_id"],
+            source=parsed["source"] or "portal",
+            runtime_agent_id=runtime_agent_id,
+            context_ref=parsed["context_ref"] or None,
+            merged_input_payload=merged_input_payload,
+            metadata=metadata,
+            trace_headers=trace_headers,
+        )
+        try:
+            background_task = _spawn_runtime_background_task(background_coro)
+        except Exception as exc:
+            background_coro.close()
+            runtime_task_tracker.remove(parsed["task_id"])
+            logger.error("Task execute scheduling failed | task_id=%s", parsed["task_id"], exc_info=True)
+            logger.debug("Task execute scheduling error detail: %s", sanitize_exception_message(exc))
+            return web.json_response({"error": "Internal server error"}, status=500)
+
+        runtime_task_tracker.set_background_task(parsed["task_id"], background_task)
         await _emit_task_lifecycle_event(
             "task.accepted",
             task_id=parsed["task_id"],
@@ -1026,21 +1049,6 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             trace_id=trace_headers.get("trace_id"),
             portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
         )
-        background_task = _spawn_runtime_background_task(
-            _run_task_execution_in_background(
-                task_id=parsed["task_id"],
-                request_id=request_id,
-                task_type=parsed["task_type"],
-                session_id=parsed["session_id"],
-                source=parsed["source"] or "portal",
-                runtime_agent_id=runtime_agent_id,
-                context_ref=parsed["context_ref"] or None,
-                merged_input_payload=merged_input_payload,
-                metadata=metadata,
-                trace_headers=trace_headers,
-            )
-        )
-        runtime_task_tracker.set_background_task(parsed["task_id"], background_task)
         return web.json_response(
             {
                 "ok": True,

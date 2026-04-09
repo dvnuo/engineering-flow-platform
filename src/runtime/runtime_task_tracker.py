@@ -115,13 +115,19 @@ class RuntimeTaskTracker:
     def get(self, task_id: str) -> Optional[RuntimeTaskRecord]:
         return self._records.get(task_id)
 
+    def remove(self, task_id: str) -> None:
+        self._records.pop(task_id, None)
+
     def prune(self) -> None:
         while len(self._records) > self._max_records:
-            oldest_task_id, oldest = next(iter(self._records.items()))
-            if oldest.status in _TASK_TERMINAL_STATUSES:
-                self._records.pop(oldest_task_id, None)
-                continue
-            break
+            removable_task_id: Optional[str] = None
+            for task_id, record in self._records.items():
+                if record.status in _TASK_TERMINAL_STATUSES:
+                    removable_task_id = task_id
+                    break
+            if removable_task_id is None:
+                break
+            self._records.pop(removable_task_id, None)
 
     def reset(self) -> None:
         self._records.clear()

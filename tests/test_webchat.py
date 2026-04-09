@@ -1803,3 +1803,80 @@ async def test_api_task_status_returns_error_payload_when_background_crashes(mon
     assert payload["status"] == "error"
     assert payload["ok"] is False
     assert payload["error"] == "runtime boom"
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_execute_spawn_failure_removes_pending_record(monkeypatch):
+    from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    webchat.runtime_task_tracker.reset()
+
+    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda _coro: (_ for _ in ()).throw(RuntimeError("spawn failed")))
+    emitted = []
+
+    async def _fake_emit_task_lifecycle_event(event_type, **kwargs):
+        emitted.append((event_type, kwargs))
+
+    monkeypatch.setattr(webchat, "_emit_task_lifecycle_event", _fake_emit_task_lifecycle_event)
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+
+        async def json(self):
+            return {"task_id": "task-spawn-fail-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
+
+    response = await webchat.api_tasks_execute(_Request())
+    body = json.loads(response.body)
+    assert response.status == 500
+    assert body["error"] == "Internal server error"
+    assert webchat.runtime_task_tracker.get("task-spawn-fail-1") is None
+    assert emitted == []
+
+
+def test_runtime_task_tracker_prune_removes_terminal_records_even_if_oldest_is_running():
+    from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+
+    tracker = RuntimeTaskTracker(max_records=2)
+    tracker.create_pending(
+        task_id="task-running",
+        request_id="task-running",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id=None,
+        agent_id=None,
+        trace_id=None,
+        portal_dispatch_id=None,
+        portal_task_id="task-running",
+    )
+    tracker.mark_running("task-running")
+
+    tracker.create_pending(
+        task_id="task-success",
+        request_id="task-success",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id=None,
+        agent_id=None,
+        trace_id=None,
+        portal_dispatch_id=None,
+        portal_task_id="task-success",
+    )
+    tracker.mark_terminal("task-success", status="success", payload={"ok": True})
+
+    tracker.create_pending(
+        task_id="task-error",
+        request_id="task-error",
+        task_type="adapter_action_task",
+        source="portal",
+        session_id=None,
+        agent_id=None,
+        trace_id=None,
+        portal_dispatch_id=None,
+        portal_task_id="task-error",
+    )
+    tracker.mark_terminal("task-error", status="error", payload={"ok": False})
+    tracker.prune()
+
+    assert tracker.get("task-running") is not None
+    remaining_terminal = [task_id for task_id in ("task-success", "task-error") if tracker.get(task_id) is not None]
+    assert len(remaining_terminal) == 1
