@@ -3229,3 +3229,93 @@ async def test_run_skill_execution_legacy_direct_opt_in(monkeypatch):
     result = await run_skill_execution("demo_skill", input="hello")
     assert result.success is True
     assert result.output == "legacy:demo_skill"
+
+
+@pytest.mark.asyncio
+async def test_requirement_bundle_collect_task_routes_to_default_skill(monkeypatch):
+    observed = {}
+
+    async def _fake_run_skill_execution(skill_name, **kwargs):
+        observed["skill_name"] = skill_name
+        observed["kwargs"] = kwargs
+        return SkillResult(
+            success=True,
+            output="ok",
+            data={
+                "bundle_ref": kwargs.get("bundle_ref"),
+                "updated_files": ["bundles/a/requirements.yaml"],
+                "commit_sha": "abc123",
+                "summary": "done",
+            },
+        )
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
+
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        session_id="s-bundle",
+        input_payload={
+            "task_type": "requirement_bundle_collect_task",
+            "bundle_ref": {"repo": "acme/demo", "path": "bundles/a", "branch": "feat/a"},
+            "sources": {"jira": ["PAY-101"]},
+        },
+    )
+    result = await build_default_execution_bus().execute(req)
+
+    assert observed["skill_name"] == "collect_requirements_to_bundle"
+    assert observed["kwargs"]["bundle_ref"]["path"] == "bundles/a"
+    assert observed["kwargs"]["sources"]["jira"] == ["PAY-101"]
+    assert result.output_payload["task_boundary"] is True
+    assert result.output_payload["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_requirement_bundle_design_test_cases_task_routes_to_default_skill(monkeypatch):
+    observed = {}
+
+    async def _fake_run_skill_execution(skill_name, **kwargs):
+        observed["skill_name"] = skill_name
+        observed["kwargs"] = kwargs
+        return SkillResult(
+            success=True,
+            output="ok",
+            data={
+                "bundle_ref": kwargs.get("bundle_ref"),
+                "updated_files": ["bundles/a/test-cases.yaml"],
+                "commit_sha": "def456",
+                "summary": "done",
+            },
+        )
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
+
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        session_id="s-bundle",
+        input_payload={
+            "task_type": "requirement_bundle_design_test_cases_task",
+            "bundle_ref": {"repo": "acme/demo", "path": "bundles/a", "branch": "feat/a"},
+        },
+    )
+    result = await build_default_execution_bus().execute(req)
+
+    assert observed["skill_name"] == "design_test_cases_from_bundle"
+    assert observed["kwargs"]["bundle_ref"]["repo"] == "acme/demo"
+    assert result.output_payload["task_boundary"] is True
+    assert result.output_payload["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_unknown_task_type_still_returns_unsupported_blocked():
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "unknown_task_type_x"},
+    )
+
+    result = await build_default_execution_bus().execute(req)
+
+    assert result.status == "blocked"
+    assert "Unsupported task_type" in result.output_payload["error"]
