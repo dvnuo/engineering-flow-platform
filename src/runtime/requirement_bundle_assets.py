@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from urllib.parse import urlparse
@@ -12,6 +13,7 @@ from src.github import github_channel
 
 _yaml = YAML()
 _yaml.default_flow_style = False
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -125,18 +127,35 @@ def parse_github_doc_ref(raw: str, default_ref: BundleRef) -> GitHubDocRef:
 
 
 async def read_github_doc_text(raw: str, default_ref: BundleRef) -> tuple[GitHubDocRef, str]:
-    doc_ref = parse_github_doc_ref(raw, default_ref)
-    file_data = await github_channel.get_file(doc_ref.owner, doc_ref.repo, doc_ref.path, doc_ref.branch)
-    content = file_data.get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise RequirementBundleError(f"File not found or empty: {doc_ref.owner}/{doc_ref.repo}/{doc_ref.path}@{doc_ref.branch}")
+    logger.debug("Read GitHub doc start | input_kind=%s", "url" if "://" in str(raw or "") else "repo_relative_path")
     try:
-        decoded = base64.b64decode(content).decode("utf-8")
-    except Exception as exc:  # pragma: no cover - defensive
-        raise RequirementBundleError(
-            f"Failed to decode file content: {doc_ref.owner}/{doc_ref.repo}/{doc_ref.path}@{doc_ref.branch}"
-        ) from exc
-    return doc_ref, decoded
+        doc_ref = parse_github_doc_ref(raw, default_ref)
+        logger.debug(
+            "Read GitHub doc resolved | owner=%s repo=%s branch=%s path=%s",
+            doc_ref.owner,
+            doc_ref.repo,
+            doc_ref.branch,
+            doc_ref.path,
+        )
+        file_data = await github_channel.get_file(doc_ref.owner, doc_ref.repo, doc_ref.path, doc_ref.branch)
+        content = file_data.get("content")
+        if not isinstance(content, str) or not content.strip():
+            logger.warning("Read GitHub doc missing content | owner=%s repo=%s branch=%s path=%s", doc_ref.owner, doc_ref.repo, doc_ref.branch, doc_ref.path)
+            raise RequirementBundleError(f"File not found or empty: {doc_ref.owner}/{doc_ref.repo}/{doc_ref.path}@{doc_ref.branch}")
+        try:
+            decoded = base64.b64decode(content).decode("utf-8")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Read GitHub doc decode failed | owner=%s repo=%s branch=%s path=%s error=%s", doc_ref.owner, doc_ref.repo, doc_ref.branch, doc_ref.path, exc.__class__.__name__)
+            raise RequirementBundleError(
+                f"Failed to decode file content: {doc_ref.owner}/{doc_ref.repo}/{doc_ref.path}@{doc_ref.branch}"
+            ) from exc
+        logger.info("Read GitHub doc success | owner=%s repo=%s branch=%s path=%s", doc_ref.owner, doc_ref.repo, doc_ref.branch, doc_ref.path)
+        return doc_ref, decoded
+    except RequirementBundleError:
+        raise
+    except Exception as exc:
+        logger.warning("Read GitHub doc unexpected failure | error_class=%s", exc.__class__.__name__)
+        raise
 
 
 async def read_bundle_yaml(ref: BundleRef, relative_file: str) -> Dict[str, Any]:
@@ -153,13 +172,22 @@ async def load_bundle_manifest(
     bundle_ref: Dict[str, Any],
     manifest_ref: Dict[str, Any] | None = None,
 ) -> Tuple[BundleRef, Dict[str, Any]]:
-    ref = parse_bundle_ref(manifest_ref or bundle_ref)
-    manifest = await read_bundle_yaml(ref, "bundle.yaml")
-    validate_bundle_manifest(manifest)
-    return ref, manifest
+    try:
+        ref = parse_bundle_ref(manifest_ref or bundle_ref)
+        logger.info("Load bundle manifest start | repo=%s path=%s branch=%s", ref.repo_full_name, ref.path, ref.branch)
+        manifest = await read_bundle_yaml(ref, "bundle.yaml")
+        validate_bundle_manifest(manifest)
+        logger.info("Load bundle manifest success | repo=%s path=%s branch=%s", ref.repo_full_name, ref.path, ref.branch)
+        return ref, manifest
+    except RequirementBundleError:
+        raise
+    except Exception as exc:
+        logger.warning("Load bundle manifest failure | error_class=%s", exc.__class__.__name__)
+        raise
 
 
 def resolve_bundle_links(manifest: Dict[str, Any]) -> tuple[str, str]:
+    logger.debug("Resolve bundle links start")
     links = manifest.get("links")
     if not isinstance(links, dict):
         raise RequirementBundleError("bundle.yaml field 'links' must be an object")
@@ -172,6 +200,7 @@ def resolve_bundle_links(manifest: Dict[str, Any]) -> tuple[str, str]:
     if not test_cases_file:
         raise RequirementBundleError("bundle.yaml field 'links.test_cases_file' must be a non-empty string")
 
+    logger.debug("Resolve bundle links success | requirements_file=%s test_cases_file=%s", requirements_file, test_cases_file)
     return requirements_file, test_cases_file
 
 
@@ -202,10 +231,18 @@ async def load_requirements_doc(bundle_ref: Dict[str, Any]) -> Tuple[BundleRef, 
 
 
 async def write_bundle_yaml(ref: BundleRef, relative_file: str, payload: Dict[str, Any], commit_message: str) -> Dict[str, Any]:
+    logger.info(
+        "Write bundle YAML start | repo=%s path=%s branch=%s relative_file=%s commit_type=%s",
+        ref.repo_full_name,
+        ref.path,
+        ref.branch,
+        relative_file,
+        commit_message.split(":")[0] if ":" in commit_message else "generic",
+    )
     stream = io.StringIO()
     _yaml.dump(payload, stream)
     file_path = f"{ref.path}/{relative_file}".strip("/")
-    return await github_channel.create_or_update_file(
+    result = await github_channel.create_or_update_file(
         ref.owner,
         ref.repo,
         file_path,
@@ -213,6 +250,16 @@ async def write_bundle_yaml(ref: BundleRef, relative_file: str, payload: Dict[st
         commit_message,
         branch=ref.branch,
     )
+    commit_sha = ((result.get("commit") or {}).get("sha")) if isinstance(result, dict) else None
+    logger.info(
+        "Write bundle YAML done | repo=%s path=%s branch=%s relative_file=%s has_commit_sha=%s",
+        ref.repo_full_name,
+        ref.path,
+        ref.branch,
+        relative_file,
+        bool(commit_sha),
+    )
+    return result
 
 
 async def write_requirements_doc(bundle_ref: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -223,6 +270,13 @@ async def write_requirements_doc(bundle_ref: Dict[str, Any], payload: Dict[str, 
 async def write_requirements_doc_for_ref(
     ref: BundleRef, payload: Dict[str, Any], requirements_file: str = "requirements.yaml"
 ) -> Dict[str, Any]:
+    logger.debug(
+        "Write requirements doc start | repo=%s path=%s branch=%s requirements_file=%s",
+        ref.repo_full_name,
+        ref.path,
+        ref.branch,
+        requirements_file,
+    )
     return await write_bundle_yaml(
         ref,
         requirements_file,

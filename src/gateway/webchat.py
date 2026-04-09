@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import uuid
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -24,6 +25,7 @@ from src.utils.file_parser import parse_file
 from src.utils.truncate import truncate
 from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception_message
 from src.utils.internal_api_keys import get_portal_internal_api_key, get_runtime_internal_api_key
+from src.utils.logger import clear_log_context, set_log_context
 
 
 from ruamel.yaml import YAML
@@ -199,6 +201,31 @@ def _build_internal_auth_error_response(status_code: int, message: str) -> web.R
     return web.json_response({"error": message}, status=status_code)
 
 
+def _sanitize_trace_value(value: Any, max_len: int = 128) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = re.sub(r"[\x00-\x1f\x7f]+", "", str(value)).strip()
+    if not cleaned:
+        return None
+    return cleaned[:max_len]
+
+
+def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]]:
+    headers = getattr(request, "headers", {}) or {}
+    trace = {
+        "trace_id": _sanitize_trace_value(headers.get("X-Trace-Id")),
+        "span_id": _sanitize_trace_value(headers.get("X-Span-Id")),
+        "parent_span_id": _sanitize_trace_value(headers.get("X-Parent-Span-Id")),
+        "portal_task_id": _sanitize_trace_value(headers.get("X-Portal-Task-Id")),
+        "portal_dispatch_id": _sanitize_trace_value(headers.get("X-Portal-Dispatch-Id")),
+    }
+    if not trace["trace_id"]:
+        trace["trace_id"] = f"rt-{uuid.uuid4().hex}"
+    if not trace["span_id"]:
+        trace["span_id"] = uuid.uuid4().hex[:16]
+    return trace
+
+
 def _authorize_internal_runtime_request(request: web.Request) -> Optional[web.Response]:
     expected_key = get_runtime_internal_api_key()
     if not expected_key:
@@ -300,7 +327,7 @@ def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str]
     runtime_agent_id: Optional[str] = None
     runtime_agent_name: Optional[str] = None
 
-    app = request.app
+    app = getattr(request, "app", {}) or {}
 
     try:
         global_config.reload()
@@ -902,12 +929,48 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
 
     POST /api/tasks/execute
     """
+    clear_log_context()
+    trace_headers = _extract_task_trace_headers(request)
+    set_log_context(
+        trace_id=trace_headers.get("trace_id"),
+        span_id=trace_headers.get("span_id"),
+        parent_span_id=trace_headers.get("parent_span_id"),
+        portal_task_id=trace_headers.get("portal_task_id"),
+        portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+        path="/api/tasks/execute",
+    )
     try:
         auth_error = _authorize_internal_runtime_request(request)
         if auth_error is not None:
+            expected_key = get_runtime_internal_api_key()
+            headers = getattr(request, "headers", {}) or {}
+            provided_key = str(headers.get("X-Internal-Api-Key") or "").strip()
+            logger.warning(
+                "Task execute auth rejected | expected_key_configured=%s provided_key_present=%s status_code=%s",
+                bool(expected_key),
+                bool(provided_key),
+                getattr(auth_error, "status", 401),
+            )
             return auth_error
         data = await request.json()
         parsed = _parse_task_execute_request(data)
+        set_log_context(
+            request_id=f"task-{parsed['task_id']}",
+            task_id=parsed["task_id"],
+            portal_task_id=trace_headers.get("portal_task_id") or parsed["task_id"],
+        )
+        logger.debug(
+            "Task execute request parsed | task_id=%s task_type=%s source=%s has_session_id=%s shared_context_ref=%s has_context_ref=%s metadata_keys=%s input_payload_keys=%s",
+            parsed["task_id"],
+            parsed["task_type"],
+            parsed["source"] or "portal",
+            bool(parsed["session_id"]),
+            parsed["shared_context_ref"] or "-",
+            bool(parsed["context_ref"]),
+            sorted(parsed["metadata"].keys()),
+            sorted(parsed["input_payload"].keys()),
+        )
+        execution_started_at = time.perf_counter()
 
         merged_input_payload = dict(parsed["input_payload"])
         merged_input_payload["task_type"] = parsed["task_type"]
@@ -917,7 +980,11 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
 
         metadata = dict(parsed["metadata"])
         metadata["task_id"] = parsed["task_id"]
-        metadata["portal_task_id"] = parsed["task_id"]
+        metadata["trace_id"] = trace_headers.get("trace_id")
+        metadata["span_id"] = trace_headers.get("span_id")
+        metadata["parent_span_id"] = trace_headers.get("parent_span_id")
+        metadata["portal_dispatch_id"] = trace_headers.get("portal_dispatch_id")
+        metadata["portal_task_id"] = metadata.get("portal_task_id") or trace_headers.get("portal_task_id") or parsed["task_id"]
         metadata["path"] = "/api/tasks/execute"
         metadata["external_triggered"] = True
         metadata["auto_run"] = True
@@ -929,6 +996,14 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
         if parsed["shared_context_ref"]:
             metadata["shared_context_ref"] = parsed["shared_context_ref"]
         runtime_agent_id, _runtime_agent_name = _resolve_runtime_agent_identity(request)
+        set_log_context(agent_id=runtime_agent_id)
+        logger.info(
+            "Task execute dispatch start | task_id=%s task_type=%s request_id=%s runtime_agent_id=%s",
+            parsed["task_id"],
+            parsed["task_type"],
+            f"task-{parsed['task_id']}",
+            runtime_agent_id or "-",
+        )
 
         execution_result = await execute_runtime_task_request(
             request_id=f"task-{parsed['task_id']}",
@@ -972,6 +1047,8 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             "runtime_events": _json_compatible(execution_result.runtime_events),
             "next_action_hint": execution_result.next_action_hint,
             "audit_ref": execution_result.audit_ref,
+            "trace_id": trace_headers.get("trace_id"),
+            "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
         }
         if status in {"error", "blocked"}:
             if isinstance(output_payload, dict):
@@ -979,6 +1056,14 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
             else:
                 response_payload["error"] = str(output_payload)
 
+        logger.info(
+            "Task execute dispatch end | status=%s runtime_events_count=%s artifacts_type=%s has_next_action_hint=%s duration_ms=%s",
+            status,
+            len(execution_result.runtime_events or []),
+            type(execution_result.artifacts).__name__,
+            bool(execution_result.next_action_hint),
+            int((time.perf_counter() - execution_started_at) * 1000),
+        )
         return web.json_response(response_payload)
     except (json.JSONDecodeError, ContentTypeError):
         return web.json_response({"error": "Invalid JSON"}, status=400)
@@ -987,6 +1072,8 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.error("Task execution API error: %s", sanitize_exception_message(exc), exc_info=True)
         return web.json_response({"error": "Internal server error"}, status=500)
+    finally:
+        clear_log_context()
 
 
 def _parse_bool_query(value: Optional[str]) -> Optional[bool]:

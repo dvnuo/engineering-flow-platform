@@ -42,7 +42,7 @@ def _valid_manifest_yaml(
 
 
 @pytest.mark.asyncio
-async def test_collect_skill_reads_manifest_and_writes_requirements(monkeypatch):
+async def test_collect_skill_reads_manifest_and_writes_requirements(monkeypatch, caplog):
     writes = []
     observed_paths = []
 
@@ -86,10 +86,11 @@ async def test_collect_skill_reads_manifest_and_writes_requirements(monkeypatch)
     monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue", _fake_jira_issue)
     monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page", _fake_confluence_page)
 
-    result = await collect_requirements_skill.execute(
-        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
-        sources={"jira": ["PAY-101"], "confluence": ["9876"], "github_docs": ["docs/spec.md"], "figma": ["fig-1"]},
-    )
+    with caplog.at_level("INFO"):
+        result = await collect_requirements_skill.execute(
+            bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
+            sources={"jira": ["PAY-101"], "confluence": ["9876"], "github_docs": ["docs/spec.md"], "figma": ["fig-1"]},
+        )
 
     assert result.success is True
     assert writes and writes[0]["branch"] == "bundle/1"
@@ -97,6 +98,8 @@ async def test_collect_skill_reads_manifest_and_writes_requirements(monkeypatch)
     assert "figma sources are ignored in MVP" in result.data.get("warnings", [])
     assert "docs/spec.md" in observed_paths
     assert "requirement-bundles/payments/maker/docs/spec.md" not in observed_paths
+    assert "Collect requirements skill start" in caplog.text
+    assert "Collect requirements skill finish" in caplog.text
 
 
 @pytest.mark.asyncio

@@ -1230,6 +1230,29 @@ async def test_api_tasks_execute_requires_internal_api_key_not_configured(monkey
 
 
 @pytest.mark.asyncio
+async def test_api_tasks_execute_not_configured_logs_auth_summary(monkeypatch, caplog):
+    from src.gateway import webchat
+
+    monkeypatch.delenv("RUNTIME_INTERNAL_API_KEY", raising=False)
+    monkeypatch.setattr(webchat.global_config, "get", lambda *_args, **_kwargs: "")
+
+    class _Request:
+        headers = {"X-Trace-Id": "trace-auth-503", "X-Portal-Dispatch-Id": "dispatch-1"}
+
+        async def json(self):
+            raise AssertionError("json() should not be called when auth fails")
+
+    with caplog.at_level("WARNING"):
+        response = await webchat.api_tasks_execute(_Request())
+
+    body = json.loads(response.body)
+    assert response.status == 503
+    assert body == {"error": "Runtime internal api key is not configured"}
+    assert "expected_key_configured=False" in caplog.text
+    assert "provided_key_present=False" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_api_tasks_execute_requires_internal_api_key_missing_header(monkeypatch):
     from src.gateway import webchat
 
@@ -1532,3 +1555,59 @@ async def test_api_tasks_execute_blocked_result_returns_ok_false(monkeypatch):
     assert body["ok"] is False
     assert body["status"] == "blocked"
     assert body["error"] == "blocked by policy"
+
+
+@pytest.mark.asyncio
+async def test_api_tasks_execute_tracing_headers_merge_to_metadata_and_response(monkeypatch):
+    from src.gateway import webchat
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+
+    captured = {}
+
+    async def _fake_execute_runtime_task_request(**kwargs):
+        captured.update(kwargs)
+        return type(
+            "R",
+            (),
+            {
+                "request_id": kwargs["request_id"],
+                "status": "success",
+                "output_payload": {"success": True},
+                "artifacts": {},
+                "runtime_events": [],
+                "next_action_hint": None,
+                "audit_ref": None,
+            },
+        )()
+
+    monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
+
+    class _Request:
+        headers = {
+            **INTERNAL_HEADERS,
+            "X-Trace-Id": "trace-200",
+            "X-Span-Id": "span-200",
+            "X-Parent-Span-Id": "parent-200",
+            "X-Portal-Task-Id": "portal-task-200",
+            "X-Portal-Dispatch-Id": "dispatch-200",
+        }
+
+        async def json(self):
+            return {
+                "task_id": "task-200",
+                "task_type": "adapter_action_task",
+                "input_payload": {"action_id": "jira.transition"},
+                "metadata": {"custom": "value"},
+            }
+
+    response = await webchat.api_tasks_execute(_Request())
+    body = json.loads(response.body)
+
+    assert response.status == 200
+    assert captured["metadata"]["trace_id"] == "trace-200"
+    assert captured["metadata"]["span_id"] == "span-200"
+    assert captured["metadata"]["parent_span_id"] == "parent-200"
+    assert captured["metadata"]["portal_dispatch_id"] == "dispatch-200"
+    assert captured["metadata"]["portal_task_id"] == "portal-task-200"
+    assert body["trace_id"] == "trace-200"
+    assert body["portal_dispatch_id"] == "dispatch-200"

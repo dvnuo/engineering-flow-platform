@@ -11,6 +11,7 @@ This module provides comprehensive logging setup with:
 import logging
 import sys
 import os
+import contextvars
 from datetime import datetime
 from pathlib import Path
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
@@ -22,10 +23,62 @@ from src.utils.redaction import redact_text, redact_value, safe_preview, safe_lo
 
 
 # Custom log format with detailed info
-DEFAULT_FORMAT = "%(asctime)s | %(levelname)-8s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s"
+DEFAULT_FORMAT = (
+    "%(asctime)s | %(levelname)-8s | %(filename)s:%(lineno)d | %(funcName)s | "
+    "trace=%(trace_id)s span=%(span_id)s parent=%(parent_span_id)s "
+    "request=%(request_id)s task=%(task_id)s portal_task=%(portal_task_id)s "
+    "dispatch=%(portal_dispatch_id)s agent=%(agent_id)s path=%(path)s | %(message)s"
+)
 
 # Structured log format (JSON)
 STRUCTURED_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s"
+
+_LOG_CONTEXT_FIELDS = (
+    "trace_id",
+    "span_id",
+    "parent_span_id",
+    "request_id",
+    "task_id",
+    "portal_task_id",
+    "portal_dispatch_id",
+    "agent_id",
+    "path",
+)
+_LOG_CONTEXT_DEFAULTS = {field: "-" for field in _LOG_CONTEXT_FIELDS}
+_log_context_var: contextvars.ContextVar[Dict[str, str]] = contextvars.ContextVar(
+    "efp_log_context",
+    default=dict(_LOG_CONTEXT_DEFAULTS),
+)
+
+
+def get_log_context() -> Dict[str, str]:
+    context = _log_context_var.get()
+    if not isinstance(context, dict):
+        return dict(_LOG_CONTEXT_DEFAULTS)
+    merged = dict(_LOG_CONTEXT_DEFAULTS)
+    for field in _LOG_CONTEXT_FIELDS:
+        value = context.get(field)
+        if isinstance(value, str) and value.strip():
+            merged[field] = value.strip()
+    return merged
+
+
+def set_log_context(**fields: Any) -> contextvars.Token:
+    existing = get_log_context()
+    for key, value in fields.items():
+        if key not in _LOG_CONTEXT_DEFAULTS:
+            continue
+        text = str(value).strip() if value is not None else ""
+        existing[key] = text or "-"
+    return _log_context_var.set(existing)
+
+
+def clear_log_context() -> None:
+    _log_context_var.set(dict(_LOG_CONTEXT_DEFAULTS))
+
+
+def reset_log_context(token: contextvars.Token) -> None:
+    _log_context_var.reset(token)
 
 
 
@@ -55,6 +108,8 @@ class RedactingFilter(logging.Filter):
                 fallback = f"{fallback} | args={sanitize_log_line(sanitized_args)}"
             record.msg = fallback
             record.args = ()
+        for key, value in get_log_context().items():
+            setattr(record, key, value)
         return True
 
 
