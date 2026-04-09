@@ -11,6 +11,7 @@ from src.runtime.requirement_bundle_assets import (
     parse_github_doc_ref,
     parse_bundle_ref,
     resolve_target_bundle_ref,
+    validate_bundle_manifest,
 )
 
 
@@ -213,6 +214,78 @@ async def test_collect_skill_supports_github_blob_url_cross_repo(monkeypatch):
     )
     assert result.success is True
     assert ("org", "repo", "docs/spec.md", "main") in observed
+
+
+@pytest.mark.asyncio
+async def test_collect_skill_supports_enterprise_github_blob_url(monkeypatch):
+    observed = []
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        observed.append((owner, repo, path, ref))
+        if path.endswith("bundle.yaml"):
+            return {"content": _b64(_valid_manifest_yaml("rb-gh-enterprise"))}
+        if owner == "org" and repo == "repo" and path == "docs/spec.md" and ref == "main":
+            return {"content": _b64("# Enterprise Spec")}
+        raise AssertionError((owner, repo, path, ref))
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        return {"commit": {"sha": "sha"}}
+
+    async def _fake_chat(self, **kwargs):
+        return {"content": "{\"summary\":{},\"functional_requirements\":[\"a\"],\"business_rules\":[],\"acceptance_criteria\":[],\"edge_cases\":[],\"quality_flags\":{\"ambiguities\":[],\"conflicts\":[],\"missing_information\":[]}}"}
+
+    async def _fake_text(*args, **kwargs):
+        return "ok"
+
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.github_channel.is_configured", lambda: True)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue", _fake_text)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.jira_get_issue_by_url", _fake_text)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page", _fake_text)
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page_by_url", _fake_text)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.hostname", "github.company.com")
+
+    result = await collect_requirements_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
+        sources={"github_docs": ["https://github.company.com/org/repo/blob/main/docs/spec.md"]},
+    )
+    assert result.success is True
+    assert ("org", "repo", "docs/spec.md", "main") in observed
+
+
+@pytest.mark.asyncio
+async def test_collect_prompt_uses_scope_summary_from_manifest(monkeypatch):
+    seen_prompt = {"payload": None}
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        if path.endswith("bundle.yaml"):
+            return {"content": _b64(_valid_manifest_yaml("rb-summary"))}
+        if path == "docs/spec.md":
+            return {"content": _b64("# Spec")}
+        raise AssertionError((owner, repo, path, ref))
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        return {"commit": {"sha": "sha"}}
+
+    async def _fake_chat(self, **kwargs):
+        seen_prompt["payload"] = json.loads(kwargs["messages"][0]["content"])
+        return {"content": "{\"summary\":{},\"functional_requirements\":[\"a\"],\"business_rules\":[],\"acceptance_criteria\":[],\"edge_cases\":[],\"quality_flags\":{\"ambiguities\":[],\"conflicts\":[],\"missing_information\":[]}}"}
+
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.github_channel.is_configured", lambda: True)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+
+    result = await collect_requirements_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
+        sources={"github_docs": ["docs/spec.md"]},
+    )
+
+    assert result.success is True
+    assert seen_prompt["payload"] is not None
+    assert seen_prompt["payload"]["bundle"]["summary"] == "maker checker"
 
 
 @pytest.mark.asyncio
@@ -438,6 +511,40 @@ def test_parse_github_doc_ref_blob_url():
     assert parsed.repo == "repo"
     assert parsed.branch == "main"
     assert parsed.path == "docs/spec.md"
+
+
+def test_validate_bundle_manifest_rejects_blank_required_fields():
+    blank_scope_summary = {
+        "bundle_id": "rb-1",
+        "title": "Maker Checker",
+        "status": "draft",
+        "scope": {"domain": "payments", "summary": "   "},
+        "storage": {
+            "repo": "acme/assets",
+            "path": "requirement-bundles/payments/maker",
+            "base_branch": "main",
+            "working_branch": "bundle/1",
+        },
+        "links": {"requirements_file": "requirements.yaml", "test_cases_file": "test-cases.yaml"},
+    }
+    with pytest.raises(RequirementBundleError, match="scope.summary"):
+        validate_bundle_manifest(blank_scope_summary)
+
+    blank_working_branch = {
+        "bundle_id": "rb-1",
+        "title": "Maker Checker",
+        "status": "draft",
+        "scope": {"domain": "payments", "summary": "maker checker"},
+        "storage": {
+            "repo": "acme/assets",
+            "path": "requirement-bundles/payments/maker",
+            "base_branch": "main",
+            "working_branch": "   ",
+        },
+        "links": {"requirements_file": "requirements.yaml", "test_cases_file": "test-cases.yaml"},
+    }
+    with pytest.raises(RequirementBundleError, match="storage.working_branch"):
+        validate_bundle_manifest(blank_working_branch)
 
 
 def test_build_test_design_context_is_trimmed():

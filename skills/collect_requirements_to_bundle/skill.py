@@ -117,7 +117,7 @@ async def collect_requirements_to_bundle(bundle_ref: Dict[str, Any], sources: Di
             "bundle": {
                 "bundle_id": manifest.get("bundle_id") or manifest.get("id") or target_ref.path,
                 "scope": manifest.get("scope", {}),
-                "summary": manifest.get("summary", {}),
+                "summary": (manifest.get("scope", {}) or {}).get("summary", ""),
             },
             "sources": {
                 "jira": jira_payload,
