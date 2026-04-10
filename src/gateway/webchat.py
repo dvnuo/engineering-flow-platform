@@ -6,11 +6,13 @@ UNIQUE_MARKER_12345
 """
 
 import asyncio
+import hmac
 import json
 import logging
 import os
 import re
 import uuid
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -22,6 +24,8 @@ init_storage()
 from src.utils.file_parser import parse_file
 from src.utils.truncate import truncate
 from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception_message
+from src.utils.internal_api_keys import get_portal_internal_api_key, get_runtime_internal_api_key
+from src.utils.logger import clear_log_context, set_log_context
 
 
 from ruamel.yaml import YAML
@@ -39,18 +43,42 @@ from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.config import config as global_config
-from src.runtime import build_default_execution_bus, make_execution_request
+from src.runtime.chat_orchestration_adapter import execute_chat_orchestration, execute_runtime_task_request
+from src.runtime.runtime_task_tracker import RuntimeTaskTracker
+from src.runtime.portal_session_metadata_client import (
+    extract_session_metadata_publish_fields,
+    publish_session_metadata,
+)
+from src.runtime.capability_registry import get_capability_registry
+from src.gateway.event_bus import emit_agent_event
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
 from src.sessions.usage import usage_tracker
 
 logger = logging.getLogger(__name__)
+runtime_task_tracker = RuntimeTaskTracker()
 
 
 # Get template and static paths
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_PORTAL_IDENTITY_LENGTH = 256
+_DERIVED_RUNTIME_RULE_KEYS = {
+    "allowed_capability_ids",
+    "allowed_capability_types",
+    "denied_capability_ids",
+    "denied_capability_types",
+    "allowed_external_systems",
+    "allowed_webhook_triggers",
+    "allowed_actions",
+    "allowed_adapter_actions",
+    "denied_actions",
+    "denied_adapter_actions",
+    "governance_require_explicit_allow",
+    "governance_allow_auto_run",
+    "governance_external_allowlist",
+    "governance_external_blocklist",
+}
 
 
 def _sanitize_portal_identity_value(value: Any) -> str:
@@ -63,20 +91,161 @@ def _extract_portal_identity(request: web.Request, data: Dict[str, Any]) -> tupl
     headers = getattr(request, "headers", {}) or {}
     header_user_id = _sanitize_portal_identity_value(headers.get("X-Portal-User-Id"))
     header_user_name = _sanitize_portal_identity_value(headers.get("X-Portal-User-Name"))
-    body_user_id = _sanitize_portal_identity_value(data.get("portal_user_id"))
-    body_user_name = _sanitize_portal_identity_value(data.get("portal_user_name"))
 
-    resolved_user_id = header_user_id or body_user_id or None
-    resolved_user_name = header_user_name or body_user_name or None
+    if not _is_trusted_portal_request(request):
+        logger.debug("[portal_identity] resolved_source=untrusted has_user_id=False has_user_name=False")
+        return None, None
+
+    resolved_user_id = header_user_id or None
+    resolved_user_name = header_user_name or None
 
     if header_user_id or header_user_name:
-        source = "headers"
-    elif body_user_id or body_user_name:
-        source = "body"
+        source = "trusted_headers"
     else:
-        source = "none"
+        source = "trusted_none"
     logger.debug("[portal_identity] resolved_source=%s has_user_id=%s has_user_name=%s", source, bool(resolved_user_id), bool(resolved_user_name))
     return resolved_user_id, resolved_user_name
+
+
+def _is_trusted_portal_request(request: web.Request) -> bool:
+    headers = getattr(request, "headers", {}) or {}
+    portal_source = str(headers.get("X-Portal-Author-Source") or "").strip().lower()
+    if portal_source != "portal":
+        return False
+    expected_internal_key = get_portal_internal_api_key()
+    if not expected_internal_key:
+        return True
+    provided_internal_key = str(headers.get("X-Portal-Internal-Api-Key") or "").strip()
+    return hmac.compare_digest(provided_internal_key, expected_internal_key)
+
+
+def _resolve_chat_display_user_name(data: Dict[str, Any], portal_user_name: Optional[str]) -> str:
+    direct_user_name = _sanitize_portal_identity_value(data.get("user_name")) or None
+    return portal_user_name or direct_user_name or "webchat-user"
+
+
+def _parse_optional_execution_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
+    if "metadata" not in data or data.get("metadata") is None:
+        return {}
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be a JSON object")
+    return dict(metadata)
+
+
+def _extract_trusted_control_plane_metadata(request: web.Request, data: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = _parse_optional_execution_metadata(data)
+    if not _is_trusted_portal_request(request):
+        return {}
+    trusted_metadata = dict(metadata)
+    policy_context = trusted_metadata.get("policy_context")
+    if isinstance(policy_context, dict):
+        derived_rules = policy_context.get("derived_runtime_rules")
+        if isinstance(derived_rules, dict):
+            for key, value in derived_rules.items():
+                if key in _DERIVED_RUNTIME_RULE_KEYS:
+                    trusted_metadata[key] = value
+    return trusted_metadata
+
+
+def _require_non_empty_string(data: Dict[str, Any], key: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{key} is required and must be a non-empty string")
+    return value.strip()
+
+
+def _optional_string(data: Dict[str, Any], key: str) -> Optional[str]:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    stripped = value.strip()
+    return stripped or None
+
+
+def _parse_task_execute_request(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse and validate /api/tasks/execute request payload."""
+    if not isinstance(data, dict):
+        raise ValueError("Request body must be a JSON object")
+
+    task_id = _require_non_empty_string(data, "task_id")
+    task_type = _require_non_empty_string(data, "task_type")
+
+    input_payload = data.get("input_payload")
+    if not isinstance(input_payload, dict):
+        raise ValueError("input_payload is required and must be a JSON object")
+
+    metadata = data.get("metadata", {})
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be a JSON object")
+
+    context_ref = data.get("context_ref")
+    if context_ref is not None and not isinstance(context_ref, dict):
+        raise ValueError("context_ref must be a JSON object")
+
+    return {
+        "task_id": task_id,
+        "task_type": task_type,
+        "input_payload": dict(input_payload),
+        "session_id": _optional_string(data, "session_id"),
+        "source": _optional_string(data, "source"),
+        "workflow_rule_id": _optional_string(data, "workflow_rule_id"),
+        "shared_context_ref": _optional_string(data, "shared_context_ref"),
+        "context_ref": dict(context_ref or {}),
+        "metadata": dict(metadata),
+    }
+
+
+def _build_internal_auth_error_response(status_code: int, message: str) -> web.Response:
+    return web.json_response({"error": message}, status=status_code)
+
+
+def _sanitize_trace_value(value: Any, max_len: int = 128) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = re.sub(r"[\x00-\x1f\x7f]+", "", str(value)).strip()
+    if not cleaned:
+        return None
+    return cleaned[:max_len]
+
+
+def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]]:
+    headers = getattr(request, "headers", {}) or {}
+    trace = {
+        "trace_id": _sanitize_trace_value(headers.get("X-Trace-Id")),
+        "span_id": _sanitize_trace_value(headers.get("X-Span-Id")),
+        "parent_span_id": _sanitize_trace_value(headers.get("X-Parent-Span-Id")),
+        "portal_task_id": _sanitize_trace_value(headers.get("X-Portal-Task-Id")),
+        "portal_dispatch_id": _sanitize_trace_value(headers.get("X-Portal-Dispatch-Id")),
+    }
+    if not trace["trace_id"]:
+        trace["trace_id"] = f"rt-{uuid.uuid4().hex}"
+    if not trace["span_id"]:
+        trace["span_id"] = uuid.uuid4().hex[:16]
+    return trace
+
+
+def _authorize_internal_runtime_request(request: web.Request) -> Optional[web.Response]:
+    expected_key = get_runtime_internal_api_key()
+    if not expected_key:
+        return _build_internal_auth_error_response(503, "Runtime internal api key is not configured")
+    headers = getattr(request, "headers", {}) or {}
+    provided_key = str(headers.get("X-Internal-Api-Key") or "").strip()
+    if not provided_key or not hmac.compare_digest(provided_key, expected_key):
+        return _build_internal_auth_error_response(401, "Invalid internal api key")
+    return None
+
+
+def _json_compatible(value: Any) -> Any:
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        return str(value)
 
 
 async def _run_chat_via_execution_bus(
@@ -92,6 +261,8 @@ async def _run_chat_via_execution_bus(
     reasoning_replay: Optional[bool] = None,
     stream_callback: Optional[Any] = None,
     request_path: str = "/api/chat",
+    execution_metadata: Optional[Dict[str, Any]] = None,
+    agent_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     async def _chat_handler(execution_request):
         payload = execution_request.input_payload
@@ -109,13 +280,13 @@ async def _run_chat_via_execution_bus(
             stream_callback=payload.get("stream_callback"),
         )
 
-    bus = build_default_execution_bus(chat_handler=_chat_handler)
-    execution_request = make_execution_request(
+    merged_metadata = dict(execution_metadata or {})
+    merged_metadata.pop("path", None)
+    execution_result = await execute_chat_orchestration(
         request_id=f"chat-{uuid.uuid4()}",
-        source_type="chat",
-        source_ref="webchat",
-        execution_type="chat",
         session_id=session_id,
+        source_ref="webchat",
+        agent_id=agent_id,
         input_payload={
             "message": message,
             "user_name": user_name,
@@ -127,10 +298,16 @@ async def _run_chat_via_execution_bus(
             "reasoning_replay": reasoning_replay,
             "stream_callback": stream_callback,
         },
-        metadata={"path": request_path, "persist_last_execution_id": True},
+        metadata={
+            "path": request_path,
+            "persist_last_execution_id": True,
+            **merged_metadata,
+        },
+        chat_handler=_chat_handler,
     )
-    execution_result = await bus.execute(execution_request)
-    output_payload = execution_result.output_payload if isinstance(execution_result.output_payload, dict) else {}
+    original_output_payload = execution_result.output_payload
+    output_payload = dict(original_output_payload) if isinstance(original_output_payload, dict) else {}
+    output_payload["_execution_result"] = execution_result
     if execution_result.status == "error" or output_payload.get("error"):
         error_value = output_payload.get("error", "Execution bus error")
         if isinstance(error_value, dict):
@@ -153,7 +330,7 @@ def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str]
     runtime_agent_id: Optional[str] = None
     runtime_agent_name: Optional[str] = None
 
-    app = request.app
+    app = getattr(request, "app", {}) or {}
 
     try:
         global_config.reload()
@@ -308,7 +485,8 @@ async def api_chat(request: web.Request) -> web.Response:
         # Get attachments from new field
         attachments = data.get('attachments', [])
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
-        effective_user_name = portal_user_name or "webchat-user"
+        execution_metadata = _extract_trusted_control_plane_metadata(request, data)
+        effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
         logger.debug(
             "[api_chat] Request summary: session_id=%s, has_message=%s, attachment_count=%d, portal_user_id_present=%s",
             session_id,
@@ -459,7 +637,25 @@ async def api_chat(request: web.Request) -> web.Response:
             attached_images=attached_images if attached_images else None,
             attachments=attachments if attachments else None,
             request_path="/api/chat",
+            execution_metadata=execution_metadata,
+            agent_id=runtime_agent_id,
         )
+        execution_result = result.get("_execution_result")
+        if runtime_agent_id and execution_result is not None:
+            publish_fields = extract_session_metadata_publish_fields(
+                execution_result,
+                metadata=execution_metadata,
+                default_event_type="chat.completed",
+                default_state="success",
+            )
+            try:
+                await publish_session_metadata(
+                    agent_id=runtime_agent_id,
+                    session_id=session_id,
+                    **publish_fields,
+                )
+            except Exception:
+                logger.warning("Best-effort session metadata publish failed for chat path", exc_info=True)
         
         # Force save session to persistence
         session = await session_manager.get_session(session_id)
@@ -549,6 +745,8 @@ async def api_chat(request: web.Request) -> web.Response:
         
     except json.JSONDecodeError:
         return web.json_response({'error': 'Invalid JSON'}, status=400)
+    except ValueError as e:
+        return web.json_response({'error': str(e)}, status=400)
     except web.HTTPException:
         raise
     except Exception as e:
@@ -590,23 +788,26 @@ async def api_chat(request: web.Request) -> web.Response:
 
 async def api_chat_stream(request: web.Request) -> web.StreamResponse:
     """Handle streaming chat API requests (Server-Sent Events).
-    
+
     POST /api/chat/stream
     Body: {"message": "...", "session_id": "optional"}
-    
+
     Returns: text/event-stream with chunks of the response
     """
+    response: Optional[web.StreamResponse] = None
+    run_task: Optional[asyncio.Task] = None
     try:
         data = await request.json()
         message = (data.get('message') or '').strip()
         session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
-        effective_user_name = portal_user_name or "webchat-user"
-        
+        execution_metadata = _extract_trusted_control_plane_metadata(request, data)
+        effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
+
         if not message:
             response = web.json_response({'error': 'Empty message'}, status=400)
             return response
-        
+
         # Create streaming response
         response = web.StreamResponse(
             status=200,
@@ -617,19 +818,17 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 'X-Accel-Buffering': 'no',  # Disable nginx buffering
             }
         )
-        
+
         await response.prepare(request)
-        
+
         # Send start event
         await response.write(f"event: start\ndata: {json.dumps({'session_id': session_id})}\n\n".encode())
-        
-        # Create an async queue for streaming events
-        import asyncio
+
         event_queue = asyncio.Queue()
-        
+
         # Get model from config
         model = global_config.llm.get('model', 'gpt-5-mini')
-        
+
         # Run agent and stream response
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
         agent = AgentCore(
@@ -638,33 +837,50 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             agent_id=runtime_agent_id,
             agent_name=runtime_agent_name,
         )
-        
-        # Pass the queue to the agent for real-time events
-        result = await _run_chat_via_execution_bus(
-            agent=agent,
-            message=message,
-            session_id=session_id,
-            user_name=effective_user_name,
-            portal_user_id=portal_user_id,
-            portal_user_name=portal_user_name,
-            stream_callback=event_queue,
-            request_path="/api/chat/stream",
+
+        run_task = asyncio.create_task(
+            _run_chat_via_execution_bus(
+                agent=agent,
+                message=message,
+                session_id=session_id,
+                user_name=effective_user_name,
+                portal_user_id=portal_user_id,
+                portal_user_name=portal_user_name,
+                stream_callback=event_queue,
+                request_path="/api/chat/stream",
+                execution_metadata=execution_metadata,
+                agent_id=runtime_agent_id,
+            )
         )
-        
-        # Stream events from queue while agent is running
-        while not event_queue.empty():
+
+        while not run_task.done() or not event_queue.empty():
             try:
-                event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
-                escaped = event.replace('\n', '\\n').replace('\r', '\\r')
+                event = await asyncio.wait_for(event_queue.get(), timeout=0.15)
+                escaped = str(event).replace('\n', '\\n').replace('\r', '\\r')
                 await response.write(f"event: progress\ndata: {escaped}\n\n".encode())
             except asyncio.TimeoutError:
-                break
-            except Exception as e:
-                logger.error(f"Error streaming event: {e}")
-        
-        response_text = result.get("response", "") if result else ""
+                continue
+
+        result = await run_task
+        execution_result = result.get("_execution_result")
+        if runtime_agent_id and execution_result is not None:
+            publish_fields = extract_session_metadata_publish_fields(
+                execution_result,
+                metadata=execution_metadata,
+                default_event_type="chat.completed",
+                default_state="success",
+            )
+            try:
+                await publish_session_metadata(
+                    agent_id=runtime_agent_id,
+                    session_id=session_id,
+                    **publish_fields,
+                )
+            except Exception:
+                logger.warning("Best-effort session metadata publish failed for streaming chat path", exc_info=True)
+
         usage = result.get("usage", {}) if result else {}
-        
+
         # Record usage
         if usage:
             provider = global_config.llm.get('provider', 'openai')
@@ -677,32 +893,456 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 session_id=session_id,
                 task_type="chat"
             )
-        
+
         # Send usage data
         usage_data = json.dumps({
             'usage': usage,
             'session_id': session_id,
         })
         await response.write(f"event: usage\ndata: {usage_data}\n\n".encode())
-        
+
         # Send done event
         await response.write(f"event: done\ndata: \n\n".encode())
-        
+
         return response
-        
+
     except json.JSONDecodeError:
         response = web.json_response({'error': 'Invalid JSON'}, status=400)
+        return response
+    except ValueError as e:
+        response = web.json_response({'error': str(e)}, status=400)
         return response
     except web.HTTPException:
         raise
     except Exception as e:
         logger.error(f"Stream error: {e}")
-        error_data = json.dumps({'error': str(e)})
-        try:
-            await response.write(f"event: error\ndata: {error_data}\n\n".encode())
-        except Exception:
-            pass
+        if response is not None and run_task is not None:
+            error_data = json.dumps({'error': str(e)})
+            try:
+                await response.write(f"event: error\ndata: {error_data}\n\n".encode())
+                await response.write(f"event: done\ndata: \n\n".encode())
+            except Exception:
+                pass
+            return response
         return web.Response(status=500, text=str(e))
+
+
+async def api_tasks_execute(request: web.Request) -> web.Response:
+    """Handle runtime task execution requests.
+
+    POST /api/tasks/execute
+    """
+    clear_log_context()
+    trace_headers = _extract_task_trace_headers(request)
+    set_log_context(
+        trace_id=trace_headers.get("trace_id"),
+        span_id=trace_headers.get("span_id"),
+        parent_span_id=trace_headers.get("parent_span_id"),
+        portal_task_id=trace_headers.get("portal_task_id"),
+        portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+        path="/api/tasks/execute",
+    )
+    try:
+        auth_error = _authorize_internal_runtime_request(request)
+        if auth_error is not None:
+            expected_key = get_runtime_internal_api_key()
+            headers = getattr(request, "headers", {}) or {}
+            provided_key = str(headers.get("X-Internal-Api-Key") or "").strip()
+            logger.warning(
+                "Task execute auth rejected | expected_key_configured=%s provided_key_present=%s status_code=%s",
+                bool(expected_key),
+                bool(provided_key),
+                getattr(auth_error, "status", 401),
+            )
+            return auth_error
+        data = await request.json()
+        parsed = _parse_task_execute_request(data)
+        set_log_context(
+            request_id=f"task-{parsed['task_id']}",
+            task_id=parsed["task_id"],
+            portal_task_id=trace_headers.get("portal_task_id") or parsed["task_id"],
+        )
+        logger.debug(
+            "Task execute request parsed | task_id=%s task_type=%s source=%s has_session_id=%s shared_context_ref=%s has_context_ref=%s metadata_keys=%s input_payload_keys=%s",
+            parsed["task_id"],
+            parsed["task_type"],
+            parsed["source"] or "portal",
+            bool(parsed["session_id"]),
+            parsed["shared_context_ref"] or "-",
+            bool(parsed["context_ref"]),
+            sorted(parsed["metadata"].keys()),
+            sorted(parsed["input_payload"].keys()),
+        )
+        merged_input_payload = dict(parsed["input_payload"])
+        merged_input_payload["task_type"] = parsed["task_type"]
+        # shared_context_ref is transported top-level and mirrored into input_payload for canonical task handler consumption.
+        if parsed["shared_context_ref"]:
+            merged_input_payload["shared_context_ref"] = parsed["shared_context_ref"]
+
+        metadata = dict(parsed["metadata"])
+        metadata["task_id"] = parsed["task_id"]
+        metadata["trace_id"] = trace_headers.get("trace_id")
+        metadata["span_id"] = trace_headers.get("span_id")
+        metadata["parent_span_id"] = trace_headers.get("parent_span_id")
+        metadata["portal_dispatch_id"] = trace_headers.get("portal_dispatch_id")
+        metadata["portal_task_id"] = metadata.get("portal_task_id") or trace_headers.get("portal_task_id") or parsed["task_id"]
+        metadata["path"] = "/api/tasks/execute"
+        metadata["external_triggered"] = True
+        metadata["auto_run"] = True
+        metadata["governance_target"] = parsed["task_type"]
+        if parsed["source"]:
+            metadata["portal_task_source"] = parsed["source"]
+        if parsed["workflow_rule_id"]:
+            metadata["portal_workflow_rule_id"] = parsed["workflow_rule_id"]
+        if parsed["shared_context_ref"]:
+            metadata["shared_context_ref"] = parsed["shared_context_ref"]
+        runtime_agent_id, _runtime_agent_name = _resolve_runtime_agent_identity(request)
+        set_log_context(agent_id=runtime_agent_id)
+        logger.info(
+            "Task execute dispatch start | task_id=%s task_type=%s request_id=%s runtime_agent_id=%s",
+            parsed["task_id"],
+            parsed["task_type"],
+            f"task-{parsed['task_id']}",
+            runtime_agent_id or "-",
+        )
+        request_id = f"task-{parsed['task_id']}"
+        runtime_task_tracker.create_pending(
+            task_id=parsed["task_id"],
+            request_id=request_id,
+            task_type=parsed["task_type"],
+            source=parsed["source"] or "portal",
+            session_id=parsed["session_id"],
+            agent_id=runtime_agent_id,
+            trace_id=trace_headers.get("trace_id"),
+            portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+            portal_task_id=metadata.get("portal_task_id"),
+        )
+
+        background_coro = _run_task_execution_in_background(
+            task_id=parsed["task_id"],
+            request_id=request_id,
+            task_type=parsed["task_type"],
+            session_id=parsed["session_id"],
+            source=parsed["source"] or "portal",
+            runtime_agent_id=runtime_agent_id,
+            context_ref=parsed["context_ref"] or None,
+            merged_input_payload=merged_input_payload,
+            metadata=metadata,
+            trace_headers=trace_headers,
+        )
+        try:
+            background_task = _spawn_runtime_background_task(background_coro)
+        except Exception as exc:
+            background_coro.close()
+            runtime_task_tracker.remove(parsed["task_id"])
+            logger.error("Task execute scheduling failed | task_id=%s", parsed["task_id"], exc_info=True)
+            logger.debug("Task execute scheduling error detail: %s", sanitize_exception_message(exc))
+            return web.json_response({"error": "Internal server error"}, status=500)
+
+        runtime_task_tracker.set_background_task(parsed["task_id"], background_task)
+        await _emit_task_lifecycle_event(
+            "task.accepted",
+            task_id=parsed["task_id"],
+            portal_task_id=metadata.get("portal_task_id"),
+            agent_id=runtime_agent_id,
+            session_id=parsed["session_id"],
+            trace_id=trace_headers.get("trace_id"),
+            portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+        )
+        return web.json_response(
+            {
+                "ok": True,
+                "accepted": True,
+                "task_id": parsed["task_id"],
+                "execution_type": "task",
+                "request_id": request_id,
+                "status": "accepted",
+                "trace_id": trace_headers.get("trace_id"),
+                "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
+            },
+            status=202,
+        )
+    except (json.JSONDecodeError, ContentTypeError):
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.error("Task execution API error: %s", sanitize_exception_message(exc), exc_info=True)
+        return web.json_response({"error": "Internal server error"}, status=500)
+    finally:
+        clear_log_context()
+
+
+def _spawn_runtime_background_task(coro: Any) -> asyncio.Task:
+    return asyncio.create_task(coro)
+
+
+async def _emit_task_lifecycle_event(
+    event_type: str,
+    *,
+    task_id: str,
+    portal_task_id: Optional[str],
+    agent_id: Optional[str],
+    session_id: Optional[str],
+    trace_id: Optional[str],
+    portal_dispatch_id: Optional[str],
+) -> None:
+    await emit_agent_event(
+        event_type,
+        {
+            "task_id": task_id,
+            "portal_task_id": portal_task_id,
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "trace_id": trace_id,
+            "portal_dispatch_id": portal_dispatch_id,
+        },
+    )
+
+
+def _build_runtime_task_terminal_payload(
+    *,
+    task_id: str,
+    execution_result: Any,
+    trace_headers: Dict[str, Optional[str]],
+) -> Dict[str, Any]:
+    status = execution_result.status
+    output_payload = execution_result.output_payload
+    response_payload: Dict[str, Any] = {
+        "ok": status == "success",
+        "task_id": task_id,
+        "execution_type": "task",
+        "request_id": execution_result.request_id,
+        "status": status,
+        "output_payload": _json_compatible(output_payload),
+        "artifacts": _json_compatible(execution_result.artifacts),
+        "runtime_events": _json_compatible(execution_result.runtime_events),
+        "next_action_hint": execution_result.next_action_hint,
+        "audit_ref": execution_result.audit_ref,
+        "trace_id": trace_headers.get("trace_id"),
+        "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
+    }
+    if status in {"error", "blocked"}:
+        if isinstance(output_payload, dict):
+            response_payload["error"] = output_payload.get("error") or output_payload
+        else:
+            response_payload["error"] = str(output_payload)
+    return response_payload
+
+
+async def _run_task_execution_in_background(
+    *,
+    task_id: str,
+    request_id: str,
+    task_type: str,
+    session_id: Optional[str],
+    source: str,
+    runtime_agent_id: Optional[str],
+    context_ref: Optional[Dict[str, Any]],
+    merged_input_payload: Dict[str, Any],
+    metadata: Dict[str, Any],
+    trace_headers: Dict[str, Optional[str]],
+) -> None:
+    execution_started_at = time.perf_counter()
+    runtime_task_tracker.mark_running(task_id)
+    await _emit_task_lifecycle_event(
+        "task.started",
+        task_id=task_id,
+        portal_task_id=metadata.get("portal_task_id"),
+        agent_id=runtime_agent_id,
+        session_id=session_id,
+        trace_id=trace_headers.get("trace_id"),
+        portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+    )
+    try:
+        execution_result = await execute_runtime_task_request(
+            request_id=request_id,
+            source_type="task",
+            source_ref=source,
+            execution_type="task",
+            session_id=session_id,
+            agent_id=runtime_agent_id,
+            context_ref=context_ref,
+            input_payload=merged_input_payload,
+            metadata=metadata,
+        )
+        if runtime_agent_id and session_id:
+            publish_fields = extract_session_metadata_publish_fields(
+                execution_result,
+                metadata=metadata,
+                default_event_type="task.completed" if execution_result.status == "success" else "task.failed",
+                default_state="success" if execution_result.status == "success" else "error",
+            )
+            try:
+                await publish_session_metadata(
+                    agent_id=runtime_agent_id,
+                    session_id=session_id,
+                    **publish_fields,
+                )
+            except Exception:
+                logger.warning("Best-effort session metadata publish failed for task execution path", exc_info=True)
+
+        response_payload = _build_runtime_task_terminal_payload(
+            task_id=task_id,
+            execution_result=execution_result,
+            trace_headers=trace_headers,
+        )
+        status = str(execution_result.status or "error")
+        runtime_task_tracker.mark_terminal(
+            task_id,
+            status=status,
+            payload=response_payload,
+            error_message=str(response_payload.get("error") or "") or None,
+        )
+        await _emit_task_lifecycle_event(
+            "task.completed" if status == "success" else "task.failed",
+            task_id=task_id,
+            portal_task_id=metadata.get("portal_task_id"),
+            agent_id=runtime_agent_id,
+            session_id=session_id,
+            trace_id=trace_headers.get("trace_id"),
+            portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+        )
+        logger.info(
+            "Task execute dispatch end | status=%s task_type=%s runtime_events_count=%s artifacts_type=%s has_next_action_hint=%s duration_ms=%s",
+            status,
+            task_type,
+            len(execution_result.runtime_events or []),
+            type(execution_result.artifacts).__name__,
+            bool(execution_result.next_action_hint),
+            int((time.perf_counter() - execution_started_at) * 1000),
+        )
+    except Exception as exc:
+        sanitized_message = sanitize_exception_message(exc)
+        logger.error("Task execution background error: %s", sanitized_message, exc_info=True)
+        failure_payload = {
+            "ok": False,
+            "task_id": task_id,
+            "execution_type": "task",
+            "request_id": request_id,
+            "status": "error",
+            "trace_id": trace_headers.get("trace_id"),
+            "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
+            "error": sanitized_message,
+        }
+        runtime_task_tracker.mark_internal_failure(
+            task_id,
+            payload=failure_payload,
+            error_message=sanitized_message,
+        )
+        await _emit_task_lifecycle_event(
+            "task.failed",
+            task_id=task_id,
+            portal_task_id=metadata.get("portal_task_id"),
+            agent_id=runtime_agent_id,
+            session_id=session_id,
+            trace_id=trace_headers.get("trace_id"),
+            portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+        )
+
+
+async def api_task_status(request: web.Request) -> web.Response:
+    clear_log_context()
+    trace_headers = _extract_task_trace_headers(request)
+    set_log_context(
+        trace_id=trace_headers.get("trace_id"),
+        span_id=trace_headers.get("span_id"),
+        parent_span_id=trace_headers.get("parent_span_id"),
+        portal_task_id=trace_headers.get("portal_task_id"),
+        portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+        path="/api/tasks/{task_id}",
+    )
+    try:
+        auth_error = _authorize_internal_runtime_request(request)
+        if auth_error is not None:
+            return auth_error
+        task_id = str(request.match_info.get("task_id") or "").strip()
+        if not task_id:
+            return web.json_response({"error": "task_id is required"}, status=400)
+        record = runtime_task_tracker.get(task_id)
+        if record is None:
+            return web.json_response({"error": "Task not found"}, status=404)
+        if record.status in {"accepted", "running"}:
+            payload = {
+                "ok": True,
+                "task_id": record.task_id,
+                "execution_type": "task",
+                "request_id": record.request_id,
+                "status": record.status,
+                "trace_id": record.trace_id,
+                "portal_dispatch_id": record.portal_dispatch_id,
+                "accepted_at": record.accepted_at,
+                "started_at": record.started_at,
+                "finished_at": record.finished_at,
+            }
+            return web.json_response(payload)
+        payload = dict(record.payload)
+        payload["accepted_at"] = record.accepted_at
+        payload["started_at"] = record.started_at
+        payload["finished_at"] = record.finished_at
+        return web.json_response(payload)
+    finally:
+        clear_log_context()
+
+
+def _parse_bool_query(value: Optional[str]) -> Optional[bool]:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes"}:
+        return True
+    if normalized in {"0", "false", "no"}:
+        return False
+    return None
+
+
+async def api_capabilities(request: web.Request) -> web.Response:
+    """List runtime capability catalog.
+
+    GET /api/capabilities?type=...&enabled=true|false&capability_id=...
+    """
+    try:
+        auth_error = _authorize_internal_runtime_request(request)
+        if auth_error is not None:
+            return auth_error
+        registry = get_capability_registry()
+        snapshot = (
+            registry.export_catalog_snapshot()
+            if hasattr(registry, "export_catalog_snapshot")
+            else {
+                "capabilities": registry.export_catalog(),
+                "count": len(registry.export_catalog()),
+                "catalog_version": "legacy",
+                "generated_at": datetime.utcnow().isoformat() + "Z",
+            }
+        )
+        catalog = list(snapshot.get("capabilities") or [])
+
+        capability_id = str(request.query.get("capability_id") or "").strip().lower()
+        if capability_id:
+            catalog = [item for item in catalog if str(item.get("capability_id") or "").lower() == capability_id]
+
+        capability_type = str(request.query.get("type") or "").strip().lower()
+        if capability_type:
+            catalog = [item for item in catalog if str(item.get("type") or "").lower() == capability_type]
+
+        enabled_filter = _parse_bool_query(request.query.get("enabled"))
+        if enabled_filter is not None:
+            catalog = [item for item in catalog if bool(item.get("enabled")) is enabled_filter]
+
+        return web.json_response(
+            {
+                "capabilities": catalog,
+                "count": len(catalog),
+                "catalog_version": snapshot.get("catalog_version"),
+                "generated_at": snapshot.get("generated_at"),
+                "supports_snapshot_contract": True,
+                "runtime_contract_version": "phase4-capability-surface-v1",
+            }
+        )
+    except Exception as exc:
+        logger.error("Capabilities API error: %s", sanitize_exception_message(exc), exc_info=True)
+        return web.json_response({"error": "Internal server error"}, status=500)
 
 
 async def api_sessions(request: web.Request) -> web.Response:
@@ -2380,6 +3020,8 @@ def setup_webchat_routes(app: web.Application):
         GET  /static/*     - Static files (CSS, JS)
         POST /api/chat     - Send message
         POST /api/chat/stream - Send message (streaming SSE)
+        POST /api/tasks/execute - Accept and execute structured runtime task
+        GET  /api/tasks/{task_id} - Runtime task status for portal polling
         GET  /api/sessions - List recent sessions
         GET  /api/sessions/{session_id} - Load session messages
         GET  /api/files    - Browse files
@@ -2392,6 +3034,9 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/static/{path:.*}', serve_static)
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/chat/stream', api_chat_stream)
+    app.router.add_post('/api/tasks/execute', api_tasks_execute)
+    app.router.add_get('/api/tasks/{task_id}', api_task_status)
+    app.router.add_get('/api/capabilities', api_capabilities)
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/sessions/{session_id}', api_load_session)
     app.router.add_get('/api/sessions/{session_id}/chatlog', api_session_chatlog)
@@ -2436,6 +3081,8 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  GET  /static/*     - Static files (CSS, JS)")
     logger.info("  POST /api/chat     - Send message")
     logger.info("  POST /api/chat/stream - Send message (streaming SSE)")
+    logger.info("  POST /api/tasks/execute - Accept and execute structured runtime task")
+    logger.info("  GET  /api/tasks/{task_id} - Runtime task status for portal polling")
     logger.info("  GET  /api/sessions - List recent sessions")
     logger.info("  GET  /api/sessions/{id} - Load session messages")
     logger.info("  GET  /api/files    - Browse files")

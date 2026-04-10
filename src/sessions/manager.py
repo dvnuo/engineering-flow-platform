@@ -1,6 +1,7 @@
 """Session management for Engineering Flow Platform with persistence and TTL support."""
 
 import asyncio
+from copy import deepcopy
 import json
 import logging
 import uuid
@@ -435,8 +436,9 @@ class SessionManager:
     async def set_last_execution_id(self, session_id: str, request_id: Optional[str]) -> None:
         """Record latest runtime execution request id in session metadata.
 
-        This updates in-memory session metadata; persistence is deferred to
-        normal session save paths (e.g. add_message autosave, save_all, shutdown).
+        This updates in-memory session metadata and schedules asynchronous
+        metadata persistence without blocking the current request path. This
+        pattern is used for lightweight metadata-only state transitions.
         """
         if not session_id or not request_id:
             return
@@ -444,8 +446,98 @@ class SessionManager:
         metadata = session.setdefault("metadata", {})
         metadata["last_execution_id"] = request_id
         session["updated_at"] = datetime.now().isoformat()
-        # Metadata-only execution id updates are intentionally deferred to the
-        # next normal persistence path (e.g. add_message autosave, save_all, shutdown).
+        self._schedule_metadata_persist(session_id, session)
+
+    async def add_pending_delegation(self, session_id: str, delegation_record: Dict[str, Any]) -> None:
+        """Add a lightweight pending delegation record to session metadata."""
+        if not session_id or not isinstance(delegation_record, dict):
+            return
+        session = await self.get_session(session_id)
+        metadata = session.setdefault("metadata", {})
+        pending = metadata.get("pending_delegations")
+        pending_list = list(pending) if isinstance(pending, list) else []
+        pending_dicts = [item for item in pending_list if isinstance(item, dict)]
+        delegation_id = delegation_record.get("delegation_id")
+        if delegation_id:
+            pending_dicts = [item for item in pending_dicts if item.get("delegation_id") != delegation_id]
+        pending_dicts.append(dict(delegation_record))
+        metadata["pending_delegations"] = pending_dicts
+        session["updated_at"] = datetime.now().isoformat()
+        self._schedule_metadata_persist(session_id, session)
+
+    async def complete_pending_delegation(
+        self,
+        session_id: str,
+        delegation_id: str,
+        *,
+        status: str,
+    ) -> None:
+        """Mark pending delegation as completed and remove from pending list."""
+        if not session_id or not delegation_id:
+            return
+        session = await self.get_session(session_id)
+        metadata = session.setdefault("metadata", {})
+        pending = metadata.get("pending_delegations")
+        pending_list = list(pending) if isinstance(pending, list) else []
+        matched: Optional[Dict[str, Any]] = None
+        remaining: List[Dict[str, Any]] = []
+        for item in pending_list:
+            if not isinstance(item, dict):
+                continue
+            if item.get("delegation_id") == delegation_id:
+                matched = dict(item)
+                continue
+            remaining.append(item)
+        metadata["pending_delegations"] = remaining
+        if matched is not None:
+            completed = metadata.get("completed_delegations")
+            completed_list = list(completed) if isinstance(completed, list) else []
+            matched["status"] = status
+            matched["completed_at"] = datetime.now().isoformat()
+            completed_list.append(matched)
+            metadata["completed_delegations"] = completed_list[-50:]
+        session["updated_at"] = datetime.now().isoformat()
+        self._schedule_metadata_persist(session_id, session)
+
+    def _schedule_metadata_persist(self, session_id: str, session: Dict[str, Any]) -> None:
+        """Persist metadata-only state transitions without blocking request flow."""
+        if not self.auto_save or not self.persistence_enabled:
+            return
+        channel_snapshot = str(session.get("channel", ""))
+        messages_snapshot = deepcopy(session.get("history", []))
+        metadata_snapshot = deepcopy(session.get("metadata", {}))
+
+        async def _persist_metadata_snapshot() -> None:
+            try:
+                await session_persistence.save_session(
+                    session_id=session_id,
+                    channel=channel_snapshot,
+                    messages=messages_snapshot,
+                    metadata=metadata_snapshot,
+                )
+            except Exception:
+                logger.exception("Failed to persist metadata-only session update", extra={"session_id": session_id})
+
+        asyncio.create_task(_persist_metadata_snapshot())
+
+    async def recover_session_state(self, session_id: str) -> Dict[str, Any]:
+        """Recover runtime-facing session state through the runtime recovery pipeline."""
+        from src.runtime.recovery_pipeline import get_recovery_pipeline
+
+        pipeline = get_recovery_pipeline()
+        hydration = await pipeline.hydrate_session_state(session_id)
+        return {
+            "session_id": hydration.session_id,
+            "recovered": hydration.recovered,
+            "snapshot_version": hydration.snapshot_version,
+            "active_skill_session": hydration.active_skill_session,
+            "last_execution_id": hydration.last_execution_id,
+            "runtime_state": dict(hydration.runtime_state),
+            "reconstructed_state": dict(hydration.reconstructed_state),
+            "warnings": list(hydration.warnings),
+            "runtime_events": list(hydration.runtime_events),
+            "metadata": dict(hydration.metadata),
+        }
 
     async def clear_history(self, session_id: str) -> None:
         """Clear session history."""

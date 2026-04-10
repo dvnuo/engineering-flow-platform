@@ -45,9 +45,7 @@ from src.agents.executor import (
     execute_tool_by_name,  # compatibility export for tests and legacy patch points
     ToolResult,
 )
-from src.agents.tool_result_policy import should_passthrough_tool_result
 from src.agents.skill_runtime import (
-    apply_skill_hooks,
     build_skill_runtime_event_payload,
     build_skill_tool_denied_result,
     get_effective_skill_runtime_prompt,
@@ -55,9 +53,54 @@ from src.agents.skill_runtime import (
     resolve_prompt_execution_boundary,
 )
 from src.skills.runtime import SkillRuntimeConfig
-from src.runtime import build_default_execution_bus, make_execution_request
+from src.runtime.chat_orchestration_adapter import execute_tool_or_task_orchestration
 
 logger = logging.getLogger(__name__)
+
+
+def _run_pre_tool_hooks_via_governance(**kwargs):
+    from src.runtime.governance_bus import run_pre_tool_hooks
+
+    return run_pre_tool_hooks(**kwargs)
+
+
+def _run_post_tool_hooks_via_governance(**kwargs):
+    from src.runtime.governance_bus import run_post_tool_hooks
+
+    return run_post_tool_hooks(**kwargs)
+
+
+
+def _enrich_runtime_event_context(
+    data: Dict[str, Any],
+    *,
+    session_id: str,
+    agent_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+    group_id: Optional[str] = None,
+    coordination_run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fill runtime event context fields when absent, preserving explicit payload values."""
+    merged: Dict[str, Any] = dict(data or {})
+    context_fields = {
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "task_id": task_id,
+        "group_id": group_id,
+        "coordination_run_id": coordination_run_id,
+    }
+    for key, value in context_fields.items():
+        existing = merged.get(key)
+        if existing is not None and (not isinstance(existing, str) or existing.strip()):
+            continue
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                continue
+        merged[key] = value
+    return merged
 
 # Context variable for skill workdir - async-safe
 _skill_workdir: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar('skill_workdir', default=None)
@@ -80,6 +123,7 @@ def get_skill_workdir() -> Optional[str]:
 # When DEBUG, complete input/output is logged (no truncation)
 
 _DEBUG_ENABLED = None  # Lazy initialization
+_TOOL_RESULT_GOVERNANCE_ATTR = "_governance"
 
 
 def _is_debug_enabled() -> bool:
@@ -152,6 +196,29 @@ def _is_lookup_only_skill(skill: Any, skill_session: SkillSession, message: str)
     return any(word in tokens for word in lookup_words)
 
 
+def _attach_governance_hint(tool_result: ToolResult, governance_payload: Dict[str, Any]) -> ToolResult:
+    # Phase 2 compatibility bridge:
+    # GovernanceBus remains the policy decision source.
+    # This metadata on ToolResult is only a transitional carrier for legacy
+    # agent-loop hint consumption; avoid direct getattr/setattr usage elsewhere.
+    """Attach governance metadata onto ToolResult in one explicit bridge helper."""
+    payload = governance_payload if isinstance(governance_payload, dict) else {}
+    setattr(tool_result, _TOOL_RESULT_GOVERNANCE_ATTR, dict(payload))
+    return tool_result
+
+
+def _read_governance_hint(tool_result: ToolResult) -> Dict[str, Any]:
+    # Phase 2 compatibility bridge:
+    # GovernanceBus computes policy hints; this accessor only reads the
+    # transitional ToolResult metadata shape for legacy loop decisions.
+    # Keep access centralized to avoid implicit contract drift.
+    """Read governance metadata from ToolResult and always return a dict."""
+    payload = getattr(tool_result, _TOOL_RESULT_GOVERNANCE_ATTR, {})
+    if isinstance(payload, dict):
+        return dict(payload)
+    return {}
+
+
 async def _execute_tool_via_runtime_bus(
     *,
     session_id: str,
@@ -178,16 +245,15 @@ async def _execute_tool_via_runtime_bus(
     else:
         input_payload = {"tool_name": tool_name, "kwargs": dict(args)}
 
-    bus = build_default_execution_bus(execute_tool_func=execute_tool_by_name)
-    request = make_execution_request(
+    result = await execute_tool_or_task_orchestration(
         source_type="agent",
         source_ref=source_ref,
         execution_type=execution_type,
         session_id=session_id,
         input_payload=input_payload,
         metadata={"tool_name": tool_name, "task_boundary": use_task_boundary},
+        execute_tool_func=execute_tool_by_name,
     )
-    result = await bus.execute(request)
     payload: Dict[str, Any] = result.output_payload if isinstance(result.output_payload, dict) else {"value": result.output_payload}
     explicit_success = payload.get("success")
     if isinstance(explicit_success, bool):
@@ -211,11 +277,14 @@ async def _execute_tool_via_runtime_bus(
     error = payload.get("error")
     if error is None and result.status == "blocked":
         error = "Execution blocked"
-    return ToolResult(
+    tool_result = ToolResult(
         success=success,
         content=str(content),
         error=error,
     )
+    governance_artifacts = result.artifacts if isinstance(result.artifacts, dict) else {}
+    governance_payload = governance_artifacts.get("governance") if isinstance(governance_artifacts.get("governance"), dict) else {}
+    return _attach_governance_hint(tool_result, governance_payload)
 
 
 @dataclass
@@ -757,28 +826,36 @@ You have access to the following tools. When a user asks you to do something tha
         # Supports both simple callbacks and asyncio.Queue
         def send_event(event_type: str, data: dict):
             """Send event via stream_callback and event bus."""
+            event_data = _enrich_runtime_event_context(
+                data,
+                session_id=session_id,
+                agent_id=self.agent_id,
+                task_id=data.get("task_id"),
+                group_id=data.get("group_id") or data.get("portal_group_id"),
+                coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
+            )
             # Also log to tracer for persistence
             if event_type == 'llm_thinking':
                 try:
                     from src.skills import get_tracer
                     tracer_instance = get_tracer()
-                    message = data.get('message', '')
+                    message = event_data.get('message', '')
                     if message:
                         tracer_instance.log_thinking(message)
                 except Exception:
                     pass  # Tracer may not be initialized
-            
+
             # Emit to event bus for WebSocket clients
             try:
                 from src.gateway.event_bus import emit_agent_event_sync
-                emit_agent_event_sync(event_type, data)
+                emit_agent_event_sync(event_type, event_data)
             except Exception as e:
                 logger.info(f"Event bus emit error: {e}")
-            
+
             # Also send via callback if provided
             if stream_callback:
                 import json
-                event = json.dumps({"type": event_type, **data})
+                event = json.dumps({"type": event_type, **event_data})
                 try:
                     # Check if it's an asyncio.Queue
                     if hasattr(stream_callback, 'put'):
@@ -1414,9 +1491,8 @@ You have access to the following tools. When a user asks you to do something tha
                             }
                         )
                         executed_tool_results.append((tool_name, deny_result))
-                        apply_skill_hooks(
+                        _run_post_tool_hooks_via_governance(
                             runtime_config=active_skill_runtime,
-                            stage="post_tool",
                             session_id=session_id,
                             tool_name=tool_name,
                             payload={"denied": True, "result": safe_preview(deny_result, 500)},
@@ -1424,9 +1500,8 @@ You have access to the following tools. When a user asks you to do something tha
                         )
                         continue
 
-                pre_hook_effects = apply_skill_hooks(
+                pre_hook_effects = _run_pre_tool_hooks_via_governance(
                     runtime_config=active_skill_runtime,
-                    stage="pre_tool",
                     session_id=session_id,
                     tool_name=tool_name,
                     payload={"args": args},
@@ -1457,9 +1532,8 @@ You have access to the following tools. When a user asks you to do something tha
                         "success": short_result.success
                     })
                     executed_tool_results.append((tool_name, short_result))
-                    apply_skill_hooks(
+                    _run_post_tool_hooks_via_governance(
                         runtime_config=active_skill_runtime,
-                        stage="post_tool",
                         session_id=session_id,
                         tool_name=tool_name,
                         payload={"short_circuit": True, "result": str(short_result)},
@@ -1494,9 +1568,8 @@ You have access to the following tools. When a user asks you to do something tha
                     source_ref="agents.core.tool_loop",
                 )
                 result_preview = safe_preview(tool_result, 200)
-                post_hook_effects = apply_skill_hooks(
+                post_hook_effects = _run_post_tool_hooks_via_governance(
                     runtime_config=active_skill_runtime,
-                    stage="post_tool",
                     session_id=session_id,
                     tool_name=tool_name,
                     payload={"success": tool_result.success, "result_preview": result_preview},
@@ -1552,13 +1625,13 @@ You have access to the following tools. When a user asks you to do something tha
 
             # Narrow passthrough shortcut for direct Jira detail retrieval requests.
             if len(executed_tool_results) == 1:
-                single_tool_name, single_tool_result = executed_tool_results[0]
-                if should_passthrough_tool_result(
-                    latest_user_message=message,
-                    tool_name=single_tool_name,
-                    tool_result=single_tool_result,
-                    tool_calls_count=len(function_calls),
-                ):
+                _single_tool_name, single_tool_result = executed_tool_results[0]
+                governance_hint = _read_governance_hint(single_tool_result)
+                passthrough_recommended = bool(
+                    isinstance(governance_hint, dict)
+                    and governance_hint.get("tool_result_passthrough_recommended") is True
+                )
+                if passthrough_recommended:
                     passthrough_content = str(single_tool_result.content)
                     await session_manager.add_message(session_id, "assistant", passthrough_content, extra=self._build_agent_author_extra())
                     send_event("complete", {
@@ -1624,8 +1697,16 @@ You have access to the following tools. When a user asks you to do something tha
         def send_skill_event(event_type: str, data: dict):
             """Send skill event via stream_callback if available, and also emit to event_bus for WebSocket."""
             import json
-            event = json.dumps({"type": event_type, "data": data})
-            
+            event_data = _enrich_runtime_event_context(
+                data,
+                session_id=session_id,
+                agent_id=self.agent_id,
+                task_id=data.get("task_id"),
+                group_id=data.get("group_id") or data.get("portal_group_id"),
+                coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
+            )
+            event = json.dumps({"type": event_type, "data": event_data})
+
             # Send via stream_callback (for SSE)
             if stream_callback:
                 try:
@@ -1635,11 +1716,11 @@ You have access to the following tools. When a user asks you to do something tha
                         stream_callback(event)
                 except Exception:
                     pass  # Ignore callback errors
-            
+
             # Also emit to event_bus for WebSocket listeners
             try:
                 from src.gateway.event_bus import event_bus
-                event_bus.emit_sync(event_type, data)
+                event_bus.emit_sync(event_type, event_data)
             except Exception:
                 pass  # Ignore if event_bus not available
 
@@ -1714,9 +1795,17 @@ You have access to the following tools. When a user asks you to do something tha
         def send_skill_event(event_type: str, data: dict):
             """Send skill event via stream_callback if available, and also emit to event_bus for WebSocket."""
             import json
-            event = json.dumps({"type": event_type, "data": data})
-            logger.debug(f"[SkillMode] [EVENT] type={event_type}, data={safe_preview(data, 200)}")
-            
+            event_data = _enrich_runtime_event_context(
+                data,
+                session_id=session_id,
+                agent_id=self.agent_id,
+                task_id=data.get("task_id"),
+                group_id=data.get("group_id") or data.get("portal_group_id"),
+                coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
+            )
+            event = json.dumps({"type": event_type, "data": event_data})
+            logger.debug(f"[SkillMode] [EVENT] type={event_type}, data={safe_preview(event_data, 200)}")
+
             # Send via stream_callback (for SSE)
             if stream_callback:
                 try:
@@ -1726,11 +1815,11 @@ You have access to the following tools. When a user asks you to do something tha
                         stream_callback(event)
                 except Exception:
                     pass  # Ignore callback errors
-            
+
             # Also emit to event_bus for WebSocket listeners
             try:
                 from src.gateway.event_bus import event_bus
-                event_bus.emit_sync(event_type, data)
+                event_bus.emit_sync(event_type, event_data)
             except Exception:
                 pass  # Ignore if event_bus not available
 

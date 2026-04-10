@@ -15,6 +15,7 @@ from .api import (
     github_get_pr_diff,
     github_get_pr_comments,
     github_add_pr_review_comment,
+    github_submit_pr_review,
     github_list_pr_reviews,
     github_list_branches,
     github_get_default_branch,
@@ -36,6 +37,7 @@ __all__ = [
     "github_get_pr_diff",
     "github_get_pr_comments",
     "github_add_pr_review_comment",
+    "github_submit_pr_review",
     "github_list_pr_reviews",
     "github_list_branches",
     "github_get_default_branch",
@@ -176,13 +178,27 @@ async def github_add_pr_review_comment(
     body: str,
     commit_id: Optional[str] = None,
     path: Optional[str] = None,
-    line: Optional[int] = None
+    line: Optional[int] = None,
+    *,
+    event: str = "COMMENT",
 ) -> str:
     """Add a review comment to a PR."""
     try:
+        normalized_event = str(event or "COMMENT").strip().upper()
         result = await github_channel.add_pr_review_comment(
-            owner, repo, pull_number, body, commit_id, path, line
+            owner=owner,
+            repo=repo,
+            pull_number=pull_number,
+            body=body,
+            commit_id=commit_id,
+            path=path,
+            line=line,
+            event=normalized_event,
         )
+        if normalized_event == "APPROVE":
+            return f"Review approved on PR #{pull_number}"
+        if normalized_event == "REQUEST_CHANGES":
+            return f"Changes requested on PR #{pull_number}"
         return f"Review comment added to PR #{pull_number}"
     except Exception as e:
         return f"Error adding review comment: {e}"
@@ -440,7 +456,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "github_add_pr_review_comment",
-                "description": "Add a review comment to a PR (can specify file path and line number)",
+                "description": "Add a PR review comment or submit a review event. Inline file comments require both path and line; APPROVE/REQUEST_CHANGES are submitted as review events (non-inline).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -450,7 +466,13 @@ def get_tools_schemas() -> list:
                         "body": {"type": "string", "description": "Comment text"},
                         "commit_id": {"type": "string", "description": "Commit SHA (optional)"},
                         "path": {"type": "string", "description": "File path for line comment (optional)"},
-                        "line": {"type": "integer", "description": "Line number for line comment (optional)"}
+                        "line": {"type": "integer", "description": "Line number for line comment (optional)"},
+                        "event": {
+                            "type": "string",
+                            "description": "Review event. Use COMMENT for a normal review comment, APPROVE to approve the PR, REQUEST_CHANGES to request changes.",
+                            "enum": ["COMMENT", "APPROVE", "REQUEST_CHANGES"],
+                            "default": "COMMENT",
+                        },
                     },
                     "required": ["owner", "repo", "pull_number", "body"]
                 }

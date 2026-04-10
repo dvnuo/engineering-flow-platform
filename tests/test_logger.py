@@ -38,6 +38,8 @@ from src.utils.logger import (
     STRUCTURED_FORMAT,
     RedactingFilter,
     RedactingFormatter,
+    set_log_context,
+    clear_log_context,
 )
 
 
@@ -309,6 +311,47 @@ class TestRedactionIntegration:
         assert "supersecret" not in out
         assert "hunter2" not in out
         assert "***REDACTED***" in out
+
+    def test_default_format_includes_trace_fields_with_bound_context(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("trace_context_bound")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter(DEFAULT_FORMAT))
+        handler.addFilter(RedactingFilter())
+        logger.addHandler(handler)
+
+        set_log_context(trace_id="trace-1", request_id="req-1", task_id="task-1", path="/api/tasks/execute")
+        try:
+            logger.info("hello")
+        finally:
+            clear_log_context()
+
+        output = stream.getvalue()
+        assert "trace=trace-1" in output
+        assert "request=req-1" in output
+        assert "task=task-1" in output
+        assert "path=/api/tasks/execute" in output
+
+    def test_default_format_uses_dash_without_context(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("trace_context_empty")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter(DEFAULT_FORMAT))
+        handler.addFilter(RedactingFilter())
+        logger.addHandler(handler)
+
+        clear_log_context()
+        logger.info("hello")
+        output = stream.getvalue()
+        assert "trace=-" in output
+        assert "request=-" in output
+        assert "path=-" in output
 
     def test_exception_traceback_is_redacted(self):
         stream = io.StringIO()

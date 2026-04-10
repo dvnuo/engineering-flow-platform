@@ -28,6 +28,7 @@ from src.sessions.persistence import session_persistence
 from src.sessions.manager import session_manager
 from src.sessions.usage import usage_tracker
 from src.cron.mention_poller import start_polling, stop_polling, is_enabled
+from src.cron.jira_reconciliation import start_reconciliation, stop_reconciliation, is_enabled as is_jira_reconciliation_enabled
 from src.git.api import setup_ssh_key, setup_git_user, setup_gh_config
 from src.utils.logger import setup_logging, get_logger
 
@@ -70,6 +71,22 @@ def check_config() -> tuple[bool, list[str]]:
         # can_start = False  # Disabled: allow startup without api_key
     
     return can_start, warnings
+
+
+async def _shutdown_jira_reconciliation_task(
+    jira_reconciliation_task: asyncio.Task | None,
+    logger: logging.Logger,
+) -> None:
+    if not jira_reconciliation_task or jira_reconciliation_task.done():
+        return
+    logger.info("Stopping Jira reconciliation...")
+    await stop_reconciliation()
+    jira_reconciliation_task.cancel()
+    try:
+        await jira_reconciliation_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("Jira reconciliation stopped")
 
 
 async def main() -> None:
@@ -170,6 +187,7 @@ async def main() -> None:
 
     # Initialize polling_task before gateway start
     polling_task = None
+    jira_reconciliation_task = None
     
     try:
         await gateway.start()
@@ -182,6 +200,13 @@ async def main() -> None:
             logger.info("Mention polling started")
         else:
             logger.debug("Mention polling is disabled")
+
+        if is_jira_reconciliation_enabled():
+            logger.info("Starting Jira reconciliation...")
+            jira_reconciliation_task = asyncio.create_task(start_reconciliation())
+            logger.info("Jira reconciliation started")
+        else:
+            logger.debug("Jira reconciliation is disabled")
         
         logger.info("=" * 60)
         logger.info("Engineering Flow Platform is running")
@@ -203,6 +228,8 @@ async def main() -> None:
             await stop_polling()
             await polling_task
             logger.info("Mention polling stopped")
+
+        await _shutdown_jira_reconciliation_task(jira_reconciliation_task, logger)
         
         try:
             await gateway.stop()

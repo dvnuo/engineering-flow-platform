@@ -104,6 +104,7 @@ def _register_subagent_session(
     thinking: Optional[str],
     cleanup: str,
     disable_tools: bool,
+    parent_session_id: Optional[str] = None,
 ) -> SubAgent:
     existing = _subagent_sessions.get(session_key)
     if existing and isinstance(existing.get("agent"), SubAgent):
@@ -122,11 +123,43 @@ def _register_subagent_session(
         "model": model,
         "thinking": thinking,
         "cleanup": cleanup,
+        "parent_session_id": parent_session_id,
         "created_at": subagent.created_at,
         "status": "started",
         "agent": subagent,
     }
     return subagent
+
+
+def list_active_subagent_summaries(
+    *,
+    session_key_prefix: Optional[str] = None,
+    parent_session_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return serializable summaries for active sub-agent sessions."""
+    active_statuses = {"started", "running"}
+    summaries: List[Dict[str, Any]] = []
+    for session_key, state in _subagent_sessions.items():
+        if session_key_prefix and not session_key.startswith(session_key_prefix):
+            continue
+        if parent_session_id is not None and state.get("parent_session_id") != parent_session_id:
+            continue
+        status = state.get("status")
+        if status not in active_statuses:
+            continue
+        summaries.append(
+            {
+                "session_key": session_key,
+                "task": state.get("task"),
+                "status": status,
+                "model": state.get("model"),
+                "thinking": state.get("thinking"),
+                "created_at": state.get("created_at"),
+                "parent_session_id": state.get("parent_session_id"),
+            }
+        )
+    summaries.sort(key=lambda item: (item.get("created_at") or "", item.get("session_key") or ""))
+    return summaries
 
 
 def _log_background_task_exception(task: asyncio.Task, session_key: str) -> None:
@@ -149,6 +182,7 @@ async def run_subagent_execution(
     thinking: Optional[str] = None,
     disable_tools: bool = False,
     cleanup: str = "delete",
+    parent_session_id: Optional[str] = None,
     start_immediately: bool = False,
     wait_for_completion: bool = False,
 ) -> Dict[str, Any]:
@@ -160,6 +194,7 @@ async def run_subagent_execution(
         thinking=thinking,
         cleanup=cleanup,
         disable_tools=disable_tools,
+        parent_session_id=parent_session_id,
     )
 
     if start_immediately:
@@ -351,13 +386,10 @@ def sessions_spawn(
     logger.info(f"Spawn subagent: session={session_key}, think_level={thinking}, model={model}")
 
     async def _spawn_via_bus() -> Dict[str, Any]:
-        from src.runtime import build_default_execution_bus, make_execution_request
+        from src.runtime.chat_orchestration_adapter import execute_subagent_orchestration
 
-        bus = build_default_execution_bus()
-        request = make_execution_request(
-            source_type="agent",
+        result = await execute_subagent_orchestration(
             source_ref="sessions_spawn",
-            execution_type="subagent",
             session_id=session_key,
             input_payload={
                 "task": task,
@@ -371,7 +403,6 @@ def sessions_spawn(
             },
             metadata={"entrypoint": "sessions_spawn"},
         )
-        result = await bus.execute(request)
         return result.output_payload
 
     try:
@@ -389,6 +420,7 @@ def sessions_spawn(
             thinking=thinking,
             cleanup=cleanup,
             disable_tools=disable_tools,
+            parent_session_id=None,
         )
         # Existing behavior is sync "started"; preserve by scheduling when loop exists.
         background_task = running_loop.create_task(_spawn_via_bus())
