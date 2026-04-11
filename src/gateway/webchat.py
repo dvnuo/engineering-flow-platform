@@ -6,7 +6,6 @@ UNIQUE_MARKER_12345
 """
 
 import asyncio
-import hmac
 import json
 import logging
 import os
@@ -24,7 +23,6 @@ init_storage()
 from src.utils.file_parser import parse_file
 from src.utils.truncate import truncate
 from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception_message
-from src.utils.internal_api_keys import get_portal_internal_api_key, get_runtime_internal_api_key
 from src.utils.logger import clear_log_context, set_log_context
 
 
@@ -110,13 +108,7 @@ def _extract_portal_identity(request: web.Request, data: Dict[str, Any]) -> tupl
 def _is_trusted_portal_request(request: web.Request) -> bool:
     headers = getattr(request, "headers", {}) or {}
     portal_source = str(headers.get("X-Portal-Author-Source") or "").strip().lower()
-    if portal_source != "portal":
-        return False
-    expected_internal_key = get_portal_internal_api_key()
-    if not expected_internal_key:
-        return True
-    provided_internal_key = str(headers.get("X-Portal-Internal-Api-Key") or "").strip()
-    return hmac.compare_digest(provided_internal_key, expected_internal_key)
+    return portal_source == "portal"
 
 
 def _resolve_chat_display_user_name(data: Dict[str, Any], portal_user_name: Optional[str]) -> str:
@@ -230,13 +222,9 @@ def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]
 
 
 def _authorize_internal_runtime_request(request: web.Request) -> Optional[web.Response]:
-    expected_key = get_runtime_internal_api_key()
-    if not expected_key:
-        return _build_internal_auth_error_response(503, "Runtime internal api key is not configured")
-    headers = getattr(request, "headers", {}) or {}
-    provided_key = str(headers.get("X-Internal-Api-Key") or "").strip()
-    if not provided_key or not hmac.compare_digest(provided_key, expected_key):
-        return _build_internal_auth_error_response(401, "Invalid internal api key")
+    # Internal API-key enforcement is intentionally disabled for the current
+    # Portal-only deployment topology (internal VPC + Portal proxy path).
+    # Keep this helper as a no-op so existing call sites remain stable.
     return None
 
 
@@ -945,15 +933,6 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
     try:
         auth_error = _authorize_internal_runtime_request(request)
         if auth_error is not None:
-            expected_key = get_runtime_internal_api_key()
-            headers = getattr(request, "headers", {}) or {}
-            provided_key = str(headers.get("X-Internal-Api-Key") or "").strip()
-            logger.warning(
-                "Task execute auth rejected | expected_key_configured=%s provided_key_present=%s status_code=%s",
-                bool(expected_key),
-                bool(provided_key),
-                getattr(auth_error, "status", 401),
-            )
             return auth_error
         data = await request.json()
         parsed = _parse_task_execute_request(data)

@@ -47,7 +47,4 @@ def build_portal_internal_api_headers(include_content_type: bool = True) -> Dict
     token = get_portal_internal_auth_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    api_key = get_portal_internal_api_key()
-    if api_key:
-        headers["X-Internal-Api-Key"] = api_key
     return headers
