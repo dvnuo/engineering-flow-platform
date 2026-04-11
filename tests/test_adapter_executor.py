@@ -415,6 +415,23 @@ def test_build_portal_internal_api_headers_auth_token_env_precedence(monkeypatch
     assert headers["Authorization"] == "Bearer tok-env"
 
 
+def test_build_portal_internal_api_headers_contract_with_and_without_auth_token(monkeypatch):
+    monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
+
+    headers_without_token = build_portal_internal_api_headers(include_content_type=True)
+    assert headers_without_token["Content-Type"] == "application/json"
+    assert "Authorization" not in headers_without_token
+    assert "X-Internal-Api-Key" not in headers_without_token
+    assert "X-Portal-Internal-Api-Key" not in headers_without_token
+
+    monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "token-123")
+    headers_with_token = build_portal_internal_api_headers(include_content_type=True)
+    assert headers_with_token["Content-Type"] == "application/json"
+    assert headers_with_token["Authorization"] == "Bearer token-123"
+    assert "X-Internal-Api-Key" not in headers_with_token
+    assert "X-Portal-Internal-Api-Key" not in headers_with_token
+
+
 @pytest.mark.asyncio
 async def test_create_portal_delegation_from_runtime_normalizes_result(monkeypatch):
     async def _fake_execute_adapter_action(action_id, kwargs):

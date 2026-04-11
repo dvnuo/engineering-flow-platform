@@ -166,6 +166,71 @@ def test_edit_delete_routes_registered():
     assert '/api/sessions/{session_id}/messages/{message_id}/delete-from-here' in routes
 
 
+class _HeaderOnlyRequest:
+    def __init__(self, headers=None):
+        self.headers = headers or {}
+
+
+def test_authorize_internal_runtime_request_noop_when_key_unset_and_header_missing(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.delenv("RUNTIME_INTERNAL_API_KEY", raising=False)
+    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest()) is None
+
+
+def test_authorize_internal_runtime_request_noop_when_key_set_and_header_missing(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest()) is None
+
+
+def test_authorize_internal_runtime_request_noop_when_key_set_and_header_wrong(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Internal-Api-Key": "wrong"})) is None
+
+
+def test_authorize_internal_runtime_request_noop_when_key_set_and_header_valid(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Internal-Api-Key": INTERNAL_API_KEY})) is None
+
+
+def test_is_trusted_portal_request_true_for_portal_source():
+    from src.gateway import webchat
+
+    assert webchat._is_trusted_portal_request(_HeaderOnlyRequest({"X-Portal-Author-Source": "portal"})) is True
+
+
+def test_is_trusted_portal_request_false_when_missing_source():
+    from src.gateway import webchat
+
+    assert webchat._is_trusted_portal_request(_HeaderOnlyRequest({})) is False
+
+
+def test_is_trusted_portal_request_false_for_non_portal_source():
+    from src.gateway import webchat
+
+    assert webchat._is_trusted_portal_request(_HeaderOnlyRequest({"X-Portal-Author-Source": "runtime"})) is False
+
+
+def test_is_trusted_portal_request_ignores_internal_key_env_and_headers(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setenv("PORTAL_INTERNAL_API_KEY", "portal-secret")
+    trusted = webchat._is_trusted_portal_request(
+        _HeaderOnlyRequest({"X-Portal-Author-Source": "portal", "X-Portal-Internal-Api-Key": "wrong"})
+    )
+    untrusted = webchat._is_trusted_portal_request(
+        _HeaderOnlyRequest({"X-Portal-Author-Source": "runtime", "X-Portal-Internal-Api-Key": "portal-secret"})
+    )
+    assert trusted is True
+    assert untrusted is False
+
+
 @pytest.mark.asyncio
 async def test_chat_execution_bus_adapter_non_stream(monkeypatch):
     from src.gateway import webchat
@@ -561,7 +626,6 @@ async def test_api_chat_untrusted_request_ignores_governance_metadata(monkeypatc
         captured.update(kwargs)
         return {"response": "ok", "usage": {}}
 
-    monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
@@ -595,7 +659,6 @@ async def test_api_chat_flattens_policy_context_derived_runtime_rules(monkeypatc
         captured.update(kwargs)
         return {"response": "ok", "usage": {}}
 
-    monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
     monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
@@ -976,7 +1039,6 @@ async def test_api_chat_stream_trusted_request_does_not_accept_body_portal_ident
         async def write(self, data):
             self.writes.append(data)
 
-    monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
     monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
     monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
 
@@ -1045,7 +1107,6 @@ def test_routes_include_tasks_execute_and_existing_chat_route():
 @pytest.mark.asyncio
 async def test_api_capabilities_returns_catalog_and_filters(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     class _Registry:
         def export_catalog_snapshot(self):
@@ -1079,7 +1140,6 @@ async def test_api_capabilities_returns_catalog_and_filters(monkeypatch):
 @pytest.mark.asyncio
 async def test_api_capabilities_capability_id_not_found_returns_empty(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     class _Registry:
         def export_catalog_snapshot(self):
@@ -1107,7 +1167,6 @@ async def test_api_capabilities_capability_id_not_found_returns_empty(monkeypatc
 @pytest.mark.asyncio
 async def test_api_capabilities_filters_by_capability_id_and_type(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     class _Registry:
         def export_catalog_snapshot(self):
@@ -1171,7 +1230,6 @@ async def test_api_capabilities_does_not_require_runtime_internal_api_key(monkey
 async def test_api_capabilities_ignores_bad_internal_api_key_header(monkeypatch):
     from src.gateway import webchat
 
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     class _Registry:
         def export_catalog_snapshot(self):
@@ -1291,7 +1349,6 @@ async def test_api_tasks_execute_not_configured_does_not_log_auth_rejection(monk
 async def test_api_tasks_execute_ignores_missing_internal_api_key_header(monkeypatch):
     from src.gateway import webchat
 
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
     webchat.runtime_task_tracker.reset()
 
     class _Request:
@@ -1328,7 +1385,6 @@ async def test_api_tasks_execute_ignores_missing_internal_api_key_header(monkeyp
 async def test_api_tasks_execute_ignores_wrong_internal_api_key_header(monkeypatch):
     from src.gateway import webchat
 
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
     webchat.runtime_task_tracker.reset()
 
     class _Request:
@@ -1364,7 +1420,6 @@ async def test_api_tasks_execute_ignores_wrong_internal_api_key_header(monkeypat
 @pytest.mark.asyncio
 async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
     webchat.runtime_task_tracker.reset()
 
     captured = {}
@@ -1457,7 +1512,6 @@ async def test_api_tasks_execute_adapter_action_task_success(monkeypatch):
 @pytest.mark.asyncio
 async def test_api_tasks_execute_jira_workflow_review_task_success(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
     webchat.runtime_task_tracker.reset()
     spawned = []
 
@@ -1509,7 +1563,6 @@ async def test_api_tasks_execute_jira_workflow_review_task_success(monkeypatch):
 @pytest.mark.asyncio
 async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
     webchat.runtime_task_tracker.reset()
     spawned = []
 
@@ -1577,7 +1630,6 @@ async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkey
 @pytest.mark.asyncio
 async def test_api_tasks_execute_missing_task_type_returns_400(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     class _Request:
         headers = INTERNAL_HEADERS
@@ -1596,7 +1648,6 @@ async def test_api_tasks_execute_missing_task_type_returns_400(monkeypatch):
 @pytest.mark.asyncio
 async def test_api_tasks_execute_non_object_input_payload_returns_400(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     class _Request:
         headers = INTERNAL_HEADERS
@@ -1616,7 +1667,6 @@ async def test_api_tasks_execute_non_object_input_payload_returns_400(monkeypatc
 @pytest.mark.asyncio
 async def test_api_tasks_execute_non_object_context_ref_returns_400(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
 
     class _Request:
         headers = INTERNAL_HEADERS
@@ -1637,7 +1687,6 @@ async def test_api_tasks_execute_non_object_context_ref_returns_400(monkeypatch)
 @pytest.mark.asyncio
 async def test_api_tasks_execute_blocked_result_returns_ok_false(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
     webchat.runtime_task_tracker.reset()
     spawned = []
 
@@ -1688,7 +1737,6 @@ async def test_api_tasks_execute_blocked_result_returns_ok_false(monkeypatch):
 @pytest.mark.asyncio
 async def test_api_tasks_execute_tracing_headers_merge_to_metadata_and_response(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
     webchat.runtime_task_tracker.reset()
 
     captured = {}
@@ -1757,7 +1805,6 @@ async def test_api_tasks_execute_tracing_headers_merge_to_metadata_and_response(
 @pytest.mark.asyncio
 async def test_api_tasks_execute_accepts_without_waiting_for_terminal_result(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
     webchat.runtime_task_tracker.reset()
 
     started = asyncio.Event()
@@ -1846,7 +1893,6 @@ async def test_api_task_status_pending_and_auth(monkeypatch):
 @pytest.mark.asyncio
 async def test_api_task_status_returns_error_payload_when_background_crashes(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
     webchat.runtime_task_tracker.reset()
     spawned = []
 
@@ -1879,7 +1925,6 @@ async def test_api_task_status_returns_error_payload_when_background_crashes(mon
 @pytest.mark.asyncio
 async def test_api_tasks_execute_spawn_failure_removes_pending_record(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
     webchat.runtime_task_tracker.reset()
 
     monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda _coro: (_ for _ in ()).throw(RuntimeError("spawn failed")))
