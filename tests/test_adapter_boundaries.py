@@ -115,7 +115,6 @@ def test_subagent_sessions_spawn_uses_execute_subagent_orchestration(monkeypatch
 @pytest.mark.asyncio
 async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypatch):
     from src.gateway import webchat
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", "runtime-internal-key")
     webchat.runtime_task_tracker.reset()
 
     captured = {}
@@ -141,7 +140,7 @@ async def test_webchat_tasks_execute_uses_execute_runtime_task_request(monkeypat
     monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
     class _Request:
-        headers = {"X-Internal-Api-Key": "runtime-internal-key"}
+        headers = {}
         async def json(self):
             return {
                 "task_id": "task-rt-1",

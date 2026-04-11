@@ -179,7 +179,6 @@ async def test_execute_adapter_action_portal_create_delegation_normalizes_struct
         return {"success": True, "error": None, "result": {"delegation_id": "d-1"}}
 
     monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.internal")
-    monkeypatch.setenv("PORTAL_INTERNAL_API_KEY", "tok-1")
     monkeypatch.setattr("src.runtime.adapter_executor._post_portal_json", _fake_post)
 
     result = await execute_adapter_action(
@@ -201,7 +200,7 @@ async def test_execute_adapter_action_portal_create_delegation_normalizes_struct
     assert result["success"] is True
     assert result["system"] == "portal"
     assert captured["url"] == "https://portal.internal/api/internal/agent-delegations"
-    assert captured["headers"]["X-Internal-Api-Key"] == "tok-1"
+    assert "X-Internal-Api-Key" not in captured["headers"]
     assert "X-Portal-Internal-Api-Key" not in captured["headers"]
     assert isinstance(captured["payload"]["scoped_context_payload_json"], str)
     assert isinstance(captured["payload"]["input_artifacts_json"], str)
@@ -219,7 +218,6 @@ async def test_execute_adapter_action_portal_read_actions_use_get(monkeypatch):
         return {"success": True, "error": None, "result": {"items": []}}
 
     monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.internal")
-    monkeypatch.setenv("PORTAL_INTERNAL_API_KEY", "k-1")
     monkeypatch.setattr("src.runtime.adapter_executor._get_portal_json", _fake_get)
 
     result_a = await execute_adapter_action("adapter:portal:list_group_delegations", {"group_id": "group-1"})
@@ -238,7 +236,7 @@ async def test_execute_adapter_action_portal_read_actions_use_get(monkeypatch):
     assert captured[2][0] == "https://portal.internal/api/internal/agent-groups/group-1/coordination-runs"
     assert captured[3][0] == "https://portal.internal/api/internal/coordination-runs/coord-1"
     assert captured[4][0] == "https://portal.internal/api/internal/agent-groups/group-1/specialist-pool"
-    assert captured[0][1]["X-Internal-Api-Key"] == "k-1"
+    assert "X-Internal-Api-Key" not in captured[0][1]
 
 
 @pytest.mark.asyncio
@@ -252,7 +250,6 @@ async def test_execute_adapter_action_portal_create_task_agent_uses_post_and_nor
         return {"success": True, "error": None, "result": {"agent_id": "ta-1"}}
 
     monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.internal")
-    monkeypatch.setenv("PORTAL_INTERNAL_API_KEY", "k-1")
     monkeypatch.setattr("src.runtime.adapter_executor._post_portal_json", _fake_post)
 
     result = await execute_adapter_action(
@@ -271,7 +268,7 @@ async def test_execute_adapter_action_portal_create_task_agent_uses_post_and_nor
     assert captured["url"] == "https://portal.internal/api/internal/agent-groups/group-1/task-agents"
     assert isinstance(captured["payload"]["metadata"], str)
     assert isinstance(captured["payload"]["tags"], str)
-    assert captured["headers"]["X-Internal-Api-Key"] == "k-1"
+    assert "X-Internal-Api-Key" not in captured["headers"]
 
 
 @pytest.mark.asyncio
@@ -299,7 +296,6 @@ async def test_execute_adapter_action_portal_delete_task_agent_uses_delete(monke
         return {"success": True, "error": None, "result": {"deleted": True}}
 
     monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.internal")
-    monkeypatch.setenv("PORTAL_INTERNAL_API_KEY", "k-1")
     monkeypatch.setattr("src.runtime.adapter_executor._delete_portal_json", _fake_delete)
 
     result = await execute_adapter_action(
@@ -309,11 +305,10 @@ async def test_execute_adapter_action_portal_delete_task_agent_uses_delete(monke
 
     assert result["success"] is True
     assert captured["url"] == "https://portal.internal/api/internal/agent-groups/group-1/task-agents/ta-1"
-    assert captured["headers"]["X-Internal-Api-Key"] == "k-1"
+    assert "X-Internal-Api-Key" not in captured["headers"]
 
 
-def test_build_portal_headers_uses_config_fallback_api_key(monkeypatch):
-    monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
+def test_build_portal_headers_no_longer_emits_config_fallback_api_key(monkeypatch):
     monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
     monkeypatch.setattr(
         "src.utils.internal_api_keys.global_config.get",
@@ -323,12 +318,11 @@ def test_build_portal_headers_uses_config_fallback_api_key(monkeypatch):
     headers = _build_portal_headers()
 
     assert headers["Content-Type"] == "application/json"
-    assert headers["X-Internal-Api-Key"] == "cfg-key"
+    assert "X-Internal-Api-Key" not in headers
     assert "Authorization" not in headers
 
 
-def test_build_portal_headers_keeps_auth_token_and_config_fallback_api_key(monkeypatch):
-    monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
+def test_build_portal_headers_keeps_auth_token_without_internal_api_key(monkeypatch):
     monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "legacy-token")
     monkeypatch.setattr(
         "src.utils.internal_api_keys.global_config.get",
@@ -338,7 +332,7 @@ def test_build_portal_headers_keeps_auth_token_and_config_fallback_api_key(monke
     headers = _build_portal_headers()
 
     assert headers["Authorization"] == "Bearer legacy-token"
-    assert headers["X-Internal-Api-Key"] == "cfg-key-2"
+    assert "X-Internal-Api-Key" not in headers
 
 
 @pytest.mark.asyncio
@@ -417,6 +411,23 @@ def test_build_portal_internal_api_headers_auth_token_env_precedence(monkeypatch
     headers = build_portal_internal_api_headers()
 
     assert headers["Authorization"] == "Bearer tok-env"
+
+
+def test_build_portal_internal_api_headers_contract_with_and_without_auth_token(monkeypatch):
+    monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
+
+    headers_without_token = build_portal_internal_api_headers(include_content_type=True)
+    assert headers_without_token["Content-Type"] == "application/json"
+    assert "Authorization" not in headers_without_token
+    assert "X-Internal-Api-Key" not in headers_without_token
+    assert "X-Portal-Internal-Api-Key" not in headers_without_token
+
+    monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "token-123")
+    headers_with_token = build_portal_internal_api_headers(include_content_type=True)
+    assert headers_with_token["Content-Type"] == "application/json"
+    assert headers_with_token["Authorization"] == "Bearer token-123"
+    assert "X-Internal-Api-Key" not in headers_with_token
+    assert "X-Portal-Internal-Api-Key" not in headers_with_token
 
 
 @pytest.mark.asyncio

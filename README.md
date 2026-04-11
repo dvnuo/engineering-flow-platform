@@ -82,8 +82,8 @@ llm:
 
 ```yaml
 server:
-  runtime_internal_api_key: "change-me"  # Portal -> EFP (/api/tasks/execute, /api/capabilities)
-  portal_internal_api_key: "change-me"   # Portal -> EFP trusted chat metadata/identity
+  runtime_internal_api_key: "change-me"  # Reserved for future re-enable; not currently enforced by runtime endpoints
+  portal_internal_api_key: "change-me"   # Reserved for future re-enable; not currently enforced for portal trust
   jira_reconciliation_enabled: false     # Runtime scheduled Jira reconciliation loop
   jira_reconciliation_interval_seconds: 300
 ```
@@ -91,6 +91,8 @@ server:
 Environment variables override config values:
 - `RUNTIME_INTERNAL_API_KEY`
 - `PORTAL_INTERNAL_API_KEY`
+  
+> Note: runtime currently does not enforce these internal API keys in the Portal-only internal-VPC topology.
 
 Reconciliation/session contract notes:
 - Jira reconciliation fallback publishes to Portal via `/api/internal/external-events/ingest` using Portal `ExternalEventIngressRequest`-compatible fields (`workflow_review_requested`, `payload_json`, `project_key`, `issue_key`, etc.).
@@ -205,17 +207,15 @@ engineering-flow-platform/
 
 | Endpoint | Method | Description | Required Header |
 |----------|--------|-------------|-----------------|
-| `/api/tasks/execute` | POST | Runtime task execution bridge | `X-Internal-Api-Key` |
-| `/api/capabilities` | GET | Runtime capability snapshot/filter API | `X-Internal-Api-Key` |
+| `/api/tasks/execute` | POST | Runtime task execution bridge | none (internal network / Portal proxy topology) |
+| `/api/capabilities` | GET | Runtime capability snapshot/filter API | none (internal network / Portal proxy topology) |
 
 ### Phase 5 Trust Contract (Portal ↔ Runtime)
 
 - `/api/chat` and `/api/chat/stream` remain usable for direct runtime chat.
 - Governance/capability metadata is only applied for **trusted Portal requests**.
 - Trusted chat request requires:
-  - `X-Portal-Author-Source: portal`
-  - and, when `PORTAL_INTERNAL_API_KEY` (or `server.portal_internal_api_key`) is configured,
-    `X-Portal-Internal-Api-Key`.
+  - `X-Portal-Author-Source: portal`.
 - `portal_user_id` / `portal_user_name` are trusted identity headers only (`X-Portal-User-Id`, `X-Portal-User-Name`).
 
 For complete control-plane contract details, see `docs/control_plane_contract.md`.
@@ -223,16 +223,13 @@ For complete control-plane contract details, see `docs/control_plane_contract.md
 ### Portal Control-Plane Integration (Operator Minimum)
 
 1. **Portal -> EFP trusted chat**  
-   Headers: `X-Portal-Author-Source: portal` and (when configured) `X-Portal-Internal-Api-Key`  
-   Key source on EFP: `PORTAL_INTERNAL_API_KEY` (env) or `server.portal_internal_api_key`.
+   Header: `X-Portal-Author-Source: portal`.
 
 2. **Portal -> EFP internal runtime endpoints** (`/api/tasks/execute`, `/api/capabilities`)  
-   Header: `X-Internal-Api-Key`  
-   Key source on EFP: `RUNTIME_INTERNAL_API_KEY` (env) or `server.runtime_internal_api_key`.
+   No internal API-key header required in current deployment mode.
 
 3. **EFP adapter -> Portal internal APIs** (`adapter:portal:*`)  
    Requires `PORTAL_INTERNAL_BASE_URL` (env) or `server.portal_internal_base_url`.  
-   Uses `X-Internal-Api-Key` from `PORTAL_INTERNAL_API_KEY` (env) or `server.portal_internal_api_key`.  
    Optional legacy token: `PORTAL_INTERNAL_AUTH_TOKEN` (env) or `server.portal_internal_auth_token`.
 
 ### Sessions
