@@ -1246,7 +1246,7 @@ async def test_api_capabilities_ignores_bad_internal_api_key_header(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_api_capabilities_allows_config_based_internal_api_key(monkeypatch):
+async def test_api_capabilities_ignores_configured_runtime_internal_api_key(monkeypatch):
     from src.gateway import webchat
 
     monkeypatch.delenv("RUNTIME_INTERNAL_API_KEY", raising=False)
@@ -1308,7 +1308,6 @@ async def test_api_tasks_execute_does_not_require_internal_api_key_not_configure
 async def test_api_tasks_execute_not_configured_does_not_log_auth_rejection(monkeypatch, caplog):
     from src.gateway import webchat
 
-    monkeypatch.delenv("RUNTIME_INTERNAL_API_KEY", raising=False)
     monkeypatch.setattr(webchat.global_config, "get", lambda *_args, **_kwargs: "")
     webchat.runtime_task_tracker.reset()
 
