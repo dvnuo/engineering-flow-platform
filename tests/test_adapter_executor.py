@@ -309,7 +309,6 @@ async def test_execute_adapter_action_portal_delete_task_agent_uses_delete(monke
 
 
 def test_build_portal_headers_no_longer_emits_config_fallback_api_key(monkeypatch):
-    monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
     monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
     monkeypatch.setattr(
         "src.utils.internal_api_keys.global_config.get",
@@ -324,7 +323,6 @@ def test_build_portal_headers_no_longer_emits_config_fallback_api_key(monkeypatc
 
 
 def test_build_portal_headers_keeps_auth_token_without_internal_api_key(monkeypatch):
-    monkeypatch.delenv("PORTAL_INTERNAL_API_KEY", raising=False)
     monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "legacy-token")
     monkeypatch.setattr(
         "src.utils.internal_api_keys.global_config.get",
