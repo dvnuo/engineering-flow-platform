@@ -1,8 +1,8 @@
 """Git Integration - Single source of truth for Git operations."""
 
-from .api import GitClient, setup_git_user, setup_gh_config
+from .api import GitClient, setup_git_user
 
-__all__ = ["GitClient", "setup_git_user", "setup_gh_config"]
+__all__ = ["GitClient", "setup_git_user"]
 
 
 # ========== Tool Functions ==========

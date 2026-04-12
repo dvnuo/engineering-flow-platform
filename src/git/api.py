@@ -93,14 +93,17 @@ class GitClient:
             return f"https://{host}/{path}"
 
         parsed = urlsplit(repo_url)
+        host = parsed.hostname
+        if host and parsed.port:
+            host = f"{host}:{parsed.port}"
 
-        if parsed.scheme == "ssh" and parsed.hostname:
+        if parsed.scheme == "ssh" and host:
             path = parsed.path.lstrip("/")
-            return urlunsplit(("https", parsed.hostname, f"/{path}", "", ""))
+            return urlunsplit(("https", host, f"/{path}", "", ""))
 
-        if parsed.scheme == "https" and parsed.hostname:
+        if parsed.scheme == "https" and host:
             path = parsed.path
-            return urlunsplit(("https", parsed.hostname, path, "", ""))
+            return urlunsplit(("https", host, path, "", ""))
 
         return repo_url
 
@@ -208,10 +211,4 @@ async def setup_git_user() -> bool:
     return True
 
 
-async def setup_gh_config() -> bool:
-    """Deprecated no-op. GitHub CLI config is no longer managed at startup."""
-    logger.debug("setup_gh_config is deprecated and intentionally disabled")
-    return False
-
-
-__all__ = ["GitClient", "setup_git_user", "setup_gh_config"]
+__all__ = ["GitClient", "setup_git_user"]

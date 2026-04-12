@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+import src.git as git_module
 from src.git.api import GitClient
 from src.gateway.webchat import _remove_legacy_ssh_config
 
@@ -12,6 +13,12 @@ from src.gateway.webchat import _remove_legacy_ssh_config
         ("git@github.com:owner/repo.git", "https://github.com/owner/repo.git"),
         ("ssh://git@github.com/owner/repo", "https://github.com/owner/repo"),
         ("https://user:token@github.com/owner/repo.git", "https://github.com/owner/repo.git"),
+        ("ssh://git@github.company.com:8443/owner/repo.git", "https://github.company.com:8443/owner/repo.git"),
+        ("https://github.company.com:8443/owner/repo.git", "https://github.company.com:8443/owner/repo.git"),
+        (
+            "https://user:token@github.company.com:8443/owner/repo.git",
+            "https://github.company.com:8443/owner/repo.git",
+        ),
     ],
 )
 def test_normalize_repo_url(input_url, expected):
@@ -72,3 +79,10 @@ def test_remove_legacy_ssh_config_removes_top_level_ssh():
     _remove_legacy_ssh_config(config)
 
     assert "ssh" not in config
+
+
+def test_git_module_public_surface_includes_expected_tools():
+    assert callable(git_module.git_status)
+    assert callable(git_module.git_commit)
+    assert callable(git_module.git_push)
+    assert callable(git_module.git_clone)
