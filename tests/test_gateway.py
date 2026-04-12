@@ -113,6 +113,13 @@ class TestGatewayInit:
         assert hasattr(gateway, 'host')
         assert hasattr(gateway, 'port')
 
+    def test_runtime_workspace_root_uses_home_directory(self, monkeypatch, tmp_path):
+        """Workspace root helper should derive from the runtime user's home path."""
+        from src.gateway import server as gateway_server
+
+        monkeypatch.setattr(gateway_server.Path, "home", classmethod(lambda cls: tmp_path))
+        assert gateway_server._runtime_workspace_root() == (tmp_path / ".efp" / "workspace").resolve()
+
 
 class TestGatewayRoutes:
     """Gateway route tests."""

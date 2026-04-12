@@ -3035,7 +3035,8 @@ def setup_webchat_routes(app: web.Application):
         GET  /api/tasks/{task_id} - Runtime task status for portal polling
         GET  /api/sessions - List recent sessions
         GET  /api/sessions/{session_id} - Load session messages
-        GET  /api/files    - Browse files
+        GET  /api/server-files - Browse workspace files (primary API)
+        GET  /api/files    - Legacy compatibility alias for server file browse
         GET  /api/usage   - Get usage stats
         POST /api/clear   - Clear session
         GET  /api/skills  - Get available skills
@@ -3051,13 +3052,16 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/sessions/{session_id}', api_load_session)
     app.router.add_get('/api/sessions/{session_id}/chatlog', api_session_chatlog)
-    app.router.add_get('/api/files', api_browse_files)
-    app.router.add_get('/api/files/read', api_read_file)
+    # Primary workspace path-based API
     app.router.add_get('/api/server-files', api_server_files_browse)
     app.router.add_get('/api/server-files/read', api_server_files_read)
     app.router.add_get('/api/server-files/content', api_server_files_content)
     app.router.add_post('/api/server-files/upload', api_server_files_upload)
     app.router.add_get('/api/server-files/download', api_server_files_download)
+
+    # Legacy compatibility aliases for older clients (path-based)
+    app.router.add_get('/api/files', api_browse_files)
+    app.router.add_get('/api/files/read', api_read_file)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/edit', api_edit_message)
@@ -3101,13 +3105,13 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  GET  /api/tasks/{task_id} - Runtime task status for portal polling")
     logger.info("  GET  /api/sessions - List recent sessions")
     logger.info("  GET  /api/sessions/{id} - Load session messages")
-    logger.info("  GET  /api/files    - Browse files")
-    logger.info("  GET  /api/files/read - Read file content")
     logger.info("  GET  /api/server-files - Browse workspace files")
     logger.info("  GET  /api/server-files/read - Read text file content")
     logger.info("  GET  /api/server-files/content - Inline file content")
     logger.info("  POST /api/server-files/upload - Upload/extract files into workspace")
     logger.info("  GET  /api/server-files/download - Download file(s) from workspace")
+    logger.info("  GET  /api/files (legacy alias) - Compatibility browse route")
+    logger.info("  GET  /api/files/read (legacy alias) - Compatibility text-read route")
     logger.info("  GET  /api/usage   - Get usage stats")
     logger.info("  POST /api/clear   - Clear session")
     logger.info("  GET  /api/skills  - Get available skills")
