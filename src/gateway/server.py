@@ -34,6 +34,11 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _runtime_workspace_root() -> Path:
+    """Canonical runtime workspace root."""
+    return (Path.home() / ".efp" / "workspace").resolve()
+
+
 def verify_discord_signature(payload: bytes, signature: str, secret: str) -> bool:
     """Verify Discord webhook signature using HMAC SHA-256.
 
@@ -459,7 +464,7 @@ class Gateway:
         # Get file path (fixed path) - not applicable for daily_notes
         content = ""
         if name != "daily_notes":
-            workspace = Path.home() / ".efp" / "workspace"
+            workspace = _runtime_workspace_root()
             file_path = workspace / f"{name.upper()}.md"
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
@@ -490,7 +495,7 @@ class Gateway:
             
             # Update file content if provided
             if "content" in data:
-                workspace = Path.home() / ".efp" / "workspace"
+                workspace = _runtime_workspace_root()
                 workspace.mkdir(parents=True, exist_ok=True)
                 file_path = workspace / f"{name.upper()}.md"
                 file_path.write_text(data["content"], encoding="utf-8")
@@ -793,7 +798,7 @@ class Gateway:
 
             logger.info("[Memory] Starting background bootstrap...")
 
-            workspace = runtime_config.session.get("workspace", "/root/.efp/workspace")
+            workspace = runtime_config.session.get("workspace", str(_runtime_workspace_root()))
 
             # Create daily memories (without LLM for now)
             created_daily = await ensure_daily_memories(
