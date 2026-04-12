@@ -1653,39 +1653,67 @@ async def api_server_files_upload(request: web.Request) -> web.Response:
         payload = await upload_field.read(decode=False)
 
         if filename.lower().endswith('.zip'):
+            payload_size = len(payload)
+            starts_with_zip_signature = payload.startswith(b'PK')
+            is_zip_payload = zipfile.is_zipfile(io.BytesIO(payload)) if payload else False
+            logger.info(
+                "[server-files] zip upload diagnostics target=%s filename=%s content_type=%s payload_size=%s starts_with_pk=%s is_zipfile=%s",
+                target_dir,
+                filename,
+                getattr(upload_field, 'content_type', None),
+                payload_size,
+                starts_with_zip_signature,
+                is_zip_payload,
+            )
+
+            if payload_size == 0:
+                return web.json_response({'success': False, 'error': 'Uploaded ZIP file is empty'}, status=400)
+            if not is_zip_payload:
+                return web.json_response({'success': False, 'error': 'Uploaded file is not a valid ZIP archive'}, status=400)
+
             try:
                 archive = zipfile.ZipFile(io.BytesIO(payload))
+                items: List[str] = []
+                extracted_count = 0
+                with archive:
+                    for member in archive.infolist():
+                        member_path = PurePosixPath(member.filename)
+                        if not member.filename or member.filename.endswith('/'):
+                            continue
+                        if member_path.is_absolute() or '..' in member_path.parts:
+                            return web.json_response({'success': False, 'error': f'Unsafe ZIP entry: {member.filename}'}, status=400)
+
+                        destination = (target_dir / Path(*member_path.parts)).resolve(strict=False)
+                        if not _is_within_root(destination, target_dir):
+                            return web.json_response({'success': False, 'error': f'Unsafe ZIP entry: {member.filename}'}, status=400)
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        with archive.open(member, 'r') as source, open(destination, 'wb') as sink:
+                            shutil.copyfileobj(source, sink)
+                        items.append(str(destination))
+                        extracted_count += 1
+
+                logger.info(
+                    "[server-files] zip extract success target=%s filename=%s extracted_count=%s",
+                    target_dir,
+                    filename,
+                    extracted_count,
+                )
+                return web.json_response({
+                    'success': True,
+                    'mode': 'zip_extract',
+                    'target_path': str(target_dir),
+                    'uploaded_filename': filename,
+                    'extracted_count': extracted_count,
+                    'items': items,
+                })
             except zipfile.BadZipFile:
-                return web.json_response({'success': False, 'error': 'Invalid ZIP archive'}, status=400)
-
-            items: List[str] = []
-            extracted_count = 0
-            with archive:
-                for member in archive.infolist():
-                    member_path = PurePosixPath(member.filename)
-                    if not member.filename or member.filename.endswith('/'):
-                        continue
-                    if member_path.is_absolute() or '..' in member_path.parts:
-                        return web.json_response({'success': False, 'error': f'Unsafe ZIP entry: {member.filename}'}, status=400)
-
-                    destination = (target_dir / Path(*member_path.parts)).resolve(strict=False)
-                    if not _is_within_root(destination, target_dir):
-                        return web.json_response({'success': False, 'error': f'Unsafe ZIP entry: {member.filename}'}, status=400)
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    with archive.open(member, 'r') as source, open(destination, 'wb') as sink:
-                        shutil.copyfileobj(source, sink)
-                    items.append(str(destination))
-                    extracted_count += 1
-
-            logger.info("[server-files] zip extract target=%s count=%s", target_dir, extracted_count)
-            return web.json_response({
-                'success': True,
-                'mode': 'zip_extract',
-                'target_path': str(target_dir),
-                'uploaded_filename': filename,
-                'extracted_count': extracted_count,
-                'items': items,
-            })
+                return web.json_response({'success': False, 'error': 'Uploaded ZIP archive is malformed'}, status=400)
+            except RuntimeError as exc:
+                return web.json_response({'success': False, 'error': 'Failed to extract ZIP archive', 'detail': str(exc)}, status=400)
+            except ValueError as exc:
+                return web.json_response({'success': False, 'error': 'Invalid ZIP archive parameters', 'detail': str(exc)}, status=400)
+            except NotImplementedError as exc:
+                return web.json_response({'success': False, 'error': 'ZIP archive uses an unsupported feature', 'detail': str(exc)}, status=400)
 
         destination = (target_dir / filename).resolve(strict=False)
         if not _is_within_root(destination, target_dir):
@@ -1704,6 +1732,47 @@ async def api_server_files_upload(request: web.Request) -> web.Response:
         return web.json_response({'success': False, **json.loads(exc.text)}, status=400)
     except Exception as e:
         logger.error(f"Error uploading server file: {e}")
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
+
+async def api_server_files_delete(request: web.Request) -> web.Response:
+    """Delete one or more files/directories rooted under workspace."""
+    try:
+        body = await request.json()
+        raw_paths = body.get('paths')
+        if not isinstance(raw_paths, list) or len(raw_paths) == 0:
+            return web.json_response({'success': False, 'error': 'paths is required and must be a non-empty list'}, status=400)
+        if not all(isinstance(raw, str) for raw in raw_paths):
+            return web.json_response({'success': False, 'error': 'paths must be a list of strings'}, status=400)
+
+        root = _workspace_root()
+        resolved_paths = [_resolve_server_file_path(raw) for raw in raw_paths]
+        for resolved in resolved_paths:
+            if resolved == root:
+                return web.json_response({'success': False, 'error': 'Deleting workspace root is not allowed'}, status=400)
+
+        deleted = []
+        for resolved in resolved_paths:
+            if not resolved.exists() and not resolved.is_symlink():
+                return web.json_response({'success': False, 'error': 'Path not found', 'path': str(resolved)}, status=404)
+
+            if resolved.is_symlink() or resolved.is_file():
+                resolved.unlink()
+                deleted.append({'path': str(resolved), 'type': 'file'})
+            elif resolved.is_dir():
+                shutil.rmtree(resolved)
+                deleted.append({'path': str(resolved), 'type': 'directory'})
+            else:
+                return web.json_response({'success': False, 'error': 'Unsupported path type', 'path': str(resolved)}, status=400)
+
+        logger.info("[server-files] delete count=%s", len(deleted))
+        return web.json_response({'success': True, 'deleted': deleted})
+    except web.HTTPBadRequest as exc:
+        return web.json_response({'success': False, **json.loads(exc.text)}, status=400)
+    except json.JSONDecodeError:
+        return web.json_response({'success': False, 'error': 'Invalid JSON body'}, status=400)
+    except Exception as e:
+        logger.error(f"Error deleting server files: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 
@@ -3058,6 +3127,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/server-files/read', api_server_files_read)
     app.router.add_get('/api/server-files/content', api_server_files_content)
     app.router.add_post('/api/server-files/upload', api_server_files_upload)
+    app.router.add_post('/api/server-files/delete', api_server_files_delete)
     app.router.add_get('/api/server-files/download', api_server_files_download)
 
     # Legacy compatibility aliases for older clients (path-based)
@@ -3110,6 +3180,7 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  GET  /api/server-files/read - Read text file content")
     logger.info("  GET  /api/server-files/content - Inline file content")
     logger.info("  POST /api/server-files/upload - Upload/extract files into workspace")
+    logger.info("  POST /api/server-files/delete - Delete files/directories from workspace")
     logger.info("  GET  /api/server-files/download - Download file(s) from workspace")
     logger.info("  GET  /api/files (legacy alias) - Compatibility browse route")
     logger.info("  GET  /api/files/read (legacy alias) - Compatibility text-read route")
