@@ -85,21 +85,8 @@ class MarkdownConverter:
             flags=re.DOTALL | re.IGNORECASE
         )
         
-        # Handle images with attachments
-        md = re.sub(
-            r'<ac:image[^>]*><ri:attachment[^>]*ri:filename="([^"]*)"[^/]*/></ac:image>',
-            r'![\1](attachment:\1)',
-            md,
-            flags=re.IGNORECASE
-        )
-        
-        # Handle images with URL
-        md = re.sub(
-            r'<ac:image[^>]*><ri:url[^>]*ri:value="([^"]*)"[^/]*/></ac:image>',
-            r'![](\1)',
-            md,
-            flags=re.IGNORECASE
-        )
+        # Handle Confluence image nodes before tag cleanup
+        md = self._replace_confluence_images(md)
         
         # Handle links
         md = re.sub(
@@ -159,6 +146,37 @@ class MarkdownConverter:
         md = re.sub(r'\n{3,}', '\n\n', md)
         
         return md.strip()
+
+    def _replace_confluence_images(self, text: str) -> str:
+        """Replace <ac:image> blocks with markdown image placeholders."""
+        image_pattern = re.compile(
+            r"<ac:image\b[^>]*>(.*?)</ac:image>",
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+
+        def replace_image(match: re.Match) -> str:
+            image_body = match.group(1) or ""
+
+            filename_match = re.search(
+                r'ri:filename="([^"]+)"',
+                image_body,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if filename_match:
+                filename = filename_match.group(1).strip()
+                return f"![{filename}](attachment:{filename})"
+
+            url_match = re.search(
+                r'ri:value="([^"]+)"',
+                image_body,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if url_match:
+                return f"![]({url_match.group(1).strip()})"
+
+            return "![confluence-image](embedded-image)"
+
+        return image_pattern.sub(replace_image, text)
     
     def _convert_tables(self, md: str) -> str:
         """Convert HTML tables to Markdown."""

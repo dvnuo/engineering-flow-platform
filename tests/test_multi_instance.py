@@ -81,8 +81,10 @@ class TestConfluenceGetPageByUrl:
     @pytest.mark.asyncio
     async def test_confluence_get_page_by_url_invalid_url(self):
         """Test confluence_get_page_by_url returns error for invalid URL"""
-        from src.confluence import confluence_get_page_by_url
-        result = await confluence_get_page_by_url("https://invalid.com/")
+        with patch('src.confluence.confluence_channel') as mock_channel:
+            mock_channel.is_configured.return_value = True
+            from src.confluence import confluence_get_page_by_url
+            result = await confluence_get_page_by_url("https://invalid.com/")
         
         # Should return error about extracting page ID
         assert "Could not extract page ID" in result

@@ -7,6 +7,7 @@ Provides:
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from ..utils.truncate import truncate
@@ -14,6 +15,26 @@ from .api import ConfluenceChannel
 from .converter import converter
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_page_id_from_url(url: str) -> Optional[str]:
+    """Extract Confluence page ID from URL."""
+    # Format 1: /pages/ID/title
+    match = re.search(r"/pages/(\d+)/", url)
+    if match:
+        return match.group(1)
+
+    # Format 2: ?pageId=ID
+    match = re.search(r"[?&]pageId=(\d+)", url)
+    if match:
+        return match.group(1)
+
+    # Format 3: /pages/ID (no title)
+    match = re.search(r"/pages/(\d+)(?:\?|$)", url)
+    if match:
+        return match.group(1)
+
+    return None
 
 
 class ConfluenceFormatAdapter:
@@ -82,29 +103,8 @@ class ConfluenceFormatAdapter:
         Returns:
             Page content in requested format
         """
-        import re
-        
         # Extract page ID from URL
-        # Format: /spaces/KEY/pages/ID/title or ?pageId=ID
-        page_id = None
-        
-        # Format 1: /pages/ID/title
-        match = re.search(r'/pages/(\d+)/', url)
-        if match:
-            page_id = match.group(1)
-        
-        # Format 2: ?pageId=ID
-        if not page_id:
-            match = re.search(r'[?&]pageId=(\d+)', url)
-            if match:
-                page_id = match.group(1)
-        
-        # Format 3: /pages/ID (no title)
-        if not page_id:
-            match = re.search(r'/pages/(\d+)(?:\?|$)', url)
-            if match:
-                page_id = match.group(1)
-        
+        page_id = _extract_page_id_from_url(url)
         if not page_id:
             return f"Could not extract page ID from URL: {url}"
         
