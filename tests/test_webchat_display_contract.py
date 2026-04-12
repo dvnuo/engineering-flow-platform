@@ -171,6 +171,7 @@ console.log(html);
 """
     result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
     assert "print(1)" in result.stdout
+    assert "language-python" in result.stdout
 
 
 def test_has_final_assistant_ignores_shell_display_blocks():
