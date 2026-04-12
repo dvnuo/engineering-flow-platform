@@ -10,6 +10,7 @@ from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, r
 from src.agents.subagent import run_subagent_execution
 from src.agents.tasks import task_manager
 from src.runtime.adapter_executor import execute_adapter_action
+from src.runtime.bundle_template_registry import get_bundle_action
 from src.runtime.capability_registry import get_capability_registry
 from src.runtime.contracts import (
     DelegationResult,
@@ -1114,9 +1115,11 @@ def build_default_execution_bus(
         task_type: str,
         default_skill_name: str,
         event_prefix: str,
+        allow_payload_skill_name: bool = True,
     ) -> ExecutionResult:
         capability = resolve_task_capability_plan(task_type, request.input_payload)
-        skill_name = str(request.input_payload.get("skill_name") or default_skill_name).strip() or default_skill_name
+        payload_skill_name = request.input_payload.get("skill_name") if allow_payload_skill_name else None
+        skill_name = str(payload_skill_name or default_skill_name).strip() or default_skill_name
         skill_kwargs = dict(request.input_payload.get("skill_kwargs") or {})
         logger.debug(
             "Skill-backed task resolved | task_id=%s task_type=%s skill_name=%s capability_id=%s capability_type=%s",
@@ -2085,6 +2088,32 @@ def build_default_execution_bus(
                 task_type=task_type,
                 default_skill_name="design_test_cases_from_bundle",
                 event_prefix="task.requirement_bundle_design_test_cases",
+            )
+
+        if task_type == "bundle_action_task":
+            template_id = str(request.input_payload.get("template_id") or "").strip().lower()
+            action_id = str(request.input_payload.get("action_id") or "").strip().lower()
+            action = get_bundle_action(template_id, action_id)
+            if action is None:
+                return make_execution_result(
+                    request_id=request.request_id,
+                    status="blocked",
+                    output_payload={
+                        "task_type": task_type,
+                        "template_id": template_id,
+                        "action_id": action_id,
+                        "success": False,
+                        "error": f"Unsupported bundle action '{action_id}' for template '{template_id}'",
+                        "task_boundary": True,
+                    },
+                )
+            return await _execute_skill_backed_task(
+                request,
+                task_id=task_id,
+                task_type=task_type,
+                default_skill_name=action.skill_name,
+                event_prefix="task.bundle_action",
+                allow_payload_skill_name=False,
             )
 
         if task_type != "tool_task":

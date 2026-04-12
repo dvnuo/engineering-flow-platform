@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from ruamel.yaml import YAML
 
 from src.github import github_channel
+from src.runtime.bundle_template_registry import resolve_bundle_template_id_from_manifest
 from src.utils.redaction import safe_preview, sanitize_exception_message
 
 _yaml = YAML()
@@ -258,15 +259,14 @@ async def load_bundle_manifest(
 def resolve_bundle_links(manifest: Dict[str, Any]) -> tuple[str, str]:
     logger.debug("Resolve bundle links start")
     try:
-        links = manifest.get("links")
-        if not isinstance(links, dict):
-            raise RequirementBundleError("bundle.yaml field 'links' must be an object")
-
-        requirements_file = str(links.get("requirements_file") or "").strip().strip("/")
-        test_cases_file = str(links.get("test_cases_file") or "").strip().strip("/")
+        artifacts = resolve_bundle_artifacts(manifest)
+        requirements_file = str(artifacts.get("requirements") or "").strip().strip("/")
+        test_cases_file = str(artifacts.get("test_cases") or "").strip().strip("/")
 
         if not requirements_file:
-            raise RequirementBundleError("bundle.yaml field 'links.requirements_file' must be a non-empty string")
+            raise RequirementBundleError(
+                "bundle.yaml field 'links.requirements_file' must be a non-empty string"
+            )
         if not test_cases_file:
             raise RequirementBundleError("bundle.yaml field 'links.test_cases_file' must be a non-empty string")
 
@@ -275,6 +275,39 @@ def resolve_bundle_links(manifest: Dict[str, Any]) -> tuple[str, str]:
     except RequirementBundleError as exc:
         _log_bundle_asset_failure("resolve_bundle_links", exc)
         raise
+
+
+def resolve_bundle_artifacts(manifest: Dict[str, Any]) -> dict[str, str]:
+    artifacts = manifest.get("artifacts")
+    if isinstance(artifacts, dict) and artifacts:
+        normalized: dict[str, str] = {}
+        for key, value in artifacts.items():
+            artifact_key = str(key or "").strip()
+            artifact_path = str(value or "").strip().strip("/")
+            if not artifact_key or not artifact_path:
+                raise RequirementBundleError("bundle.yaml field 'artifacts' values must be non-empty strings")
+            normalized[artifact_key] = artifact_path
+        if normalized:
+            return normalized
+
+    links = manifest.get("links")
+    if not isinstance(links, dict):
+        raise RequirementBundleError("bundle.yaml field 'artifacts' or legacy 'links' must be an object")
+
+    requirements_file = str(links.get("requirements_file") or "").strip().strip("/")
+    test_cases_file = str(links.get("test_cases_file") or "").strip().strip("/")
+    resolved: dict[str, str] = {}
+    if requirements_file:
+        resolved["requirements"] = requirements_file
+    if test_cases_file:
+        resolved["test_cases"] = test_cases_file
+    if not resolved:
+        raise RequirementBundleError("bundle.yaml requires non-empty 'artifacts' or legacy 'links' file entries")
+    return resolved
+
+
+def resolve_bundle_template_id(manifest: Dict[str, Any]) -> str:
+    return resolve_bundle_template_id_from_manifest(manifest)
 
 
 def resolve_target_bundle_ref(input_ref: BundleRef, manifest: Dict[str, Any]) -> BundleRef:
@@ -418,7 +451,7 @@ def validate_bundle_manifest(manifest: Dict[str, Any]) -> None:
     if not isinstance(manifest, dict):
         raise RequirementBundleError("bundle.yaml must be an object")
 
-    required_top_level = ("bundle_id", "title", "status", "scope", "storage", "links")
+    required_top_level = ("bundle_id", "title", "status", "scope", "storage")
     for key in required_top_level:
         if key not in manifest:
             raise RequirementBundleError(f"bundle.yaml missing required field: {key}")
@@ -453,15 +486,47 @@ def validate_bundle_manifest(manifest: Dict[str, Any]) -> None:
     if not owner or not repo:
         raise RequirementBundleError("bundle.yaml field 'storage.repo' must be in 'owner/repo' format")
 
+    template_id = manifest.get("template_id")
+    has_template_id = isinstance(template_id, str) and bool(template_id.strip())
+    if template_id is not None and not has_template_id:
+        raise RequirementBundleError("bundle.yaml field 'template_id' must be a non-empty string")
+
+    template_version = manifest.get("template_version")
+    if template_version is not None and (not isinstance(template_version, int) or template_version < 1):
+        raise RequirementBundleError("bundle.yaml field 'template_version' must be an integer >= 1")
+
+    artifacts = manifest.get("artifacts")
     links = manifest.get("links")
-    if not isinstance(links, dict):
-        raise RequirementBundleError("bundle.yaml field 'links' must be an object")
-    for key in ("requirements_file", "test_cases_file"):
-        if key not in links:
-            raise RequirementBundleError(f"bundle.yaml missing required field: links.{key}")
-        value = links.get(key)
-        if not isinstance(value, str) or not value.strip():
-            raise RequirementBundleError(f"bundle.yaml field 'links.{key}' must be a non-empty string")
+
+    if artifacts is None and links is None:
+        raise RequirementBundleError("bundle.yaml requires 'artifacts' or legacy 'links'")
+
+    if artifacts is not None:
+        if not isinstance(artifacts, dict):
+            raise RequirementBundleError("bundle.yaml field 'artifacts' must be an object")
+        if not artifacts:
+            raise RequirementBundleError("bundle.yaml field 'artifacts' must include at least one artifact")
+        for key, value in artifacts.items():
+            if not isinstance(key, str) or not key.strip():
+                raise RequirementBundleError("bundle.yaml field 'artifacts' keys must be non-empty strings")
+            normalized_value = str(value or "").strip().strip("/")
+            if not normalized_value:
+                raise RequirementBundleError(
+                    f"bundle.yaml field 'artifacts.{key}' must be a non-empty string"
+                )
+
+    if links is not None:
+        if not isinstance(links, dict):
+            raise RequirementBundleError("bundle.yaml field 'links' must be an object")
+        for key in ("requirements_file", "test_cases_file"):
+            value = links.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, str) or not value.strip().strip("/"):
+                raise RequirementBundleError(f"bundle.yaml field 'links.{key}' must be a non-empty string")
+
+    if has_template_id and artifacts is None:
+        raise RequirementBundleError("bundle.yaml field 'artifacts' is required when 'template_id' is set")
 
 
 def validate_requirements_doc(requirements_doc: Dict[str, Any]) -> None:
