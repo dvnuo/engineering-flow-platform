@@ -12,8 +12,13 @@ import os
 import re
 import uuid
 import time
+import io
+import mimetypes
+import shutil
+import zipfile
 from datetime import datetime
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 from aiohttp import web, ContentTypeError
 import sys
@@ -1463,92 +1468,289 @@ async def api_session_chatlog(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e)}, status=500)
 
 
-async def api_browse_files(request: web.Request) -> web.Response:
-    """Browse file directory.
-    
-    GET /api/files?path=/workspace
-    Returns: List of files and directories
-    """
+def _workspace_root() -> Path:
+    return (Path.home() / ".efp" / "workspace").resolve()
+
+
+def _is_within_root(path: Path, root: Path) -> bool:
     try:
-        # Default to /root for file browser
-        path = request.query.get('path', '/root')
-        base_path = Path(path)
-        
+        return path == root or root in path.parents
+    except Exception:
+        return False
+
+
+def _resolve_server_file_path(raw_path: Optional[str]) -> Path:
+    """Resolve user-supplied path against workspace root and enforce boundary."""
+    root = _workspace_root()
+    value = (raw_path or "").strip()
+    if not value:
+        candidate = root
+    else:
+        supplied = Path(value)
+        if supplied.is_absolute():
+            candidate = supplied.resolve(strict=False)
+        else:
+            candidate = (root / supplied).resolve(strict=False)
+
+    if not _is_within_root(candidate, root):
+        raise web.HTTPBadRequest(text=json.dumps({"error": "Path must be within workspace root"}), content_type="application/json")
+    return candidate
+
+
+def _server_file_language(path: Path) -> str:
+    language_map = {
+        '.py': 'python',
+        '.js': 'javascript',
+        '.ts': 'typescript',
+        '.html': 'html',
+        '.css': 'css',
+        '.json': 'json',
+        '.md': 'markdown',
+        '.yaml': 'yaml',
+        '.yml': 'yaml',
+        '.sh': 'bash',
+        '.sql': 'sql',
+        '.xml': 'xml',
+        '.csv': 'csv',
+    }
+    return language_map.get(path.suffix.lower(), 'text')
+
+
+def _server_file_content_type(path: Path) -> str:
+    return mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+
+
+def _create_server_files_zip(paths: List[Path]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for entry in paths:
+            if entry.is_dir():
+                for root, _, files in os.walk(entry):
+                    for file_name in files:
+                        file_path = Path(root) / file_name
+                        arcname = file_path.relative_to(entry.parent)
+                        zf.write(file_path, str(arcname))
+            elif entry.is_file():
+                zf.write(entry, entry.name)
+    return buffer.getvalue()
+
+
+async def api_server_files_browse(request: web.Request) -> web.Response:
+    """Browse workspace files rooted at ~/.efp/workspace."""
+    try:
+        base_path = _resolve_server_file_path(request.query.get('path'))
+        logger.debug("[server-files] browse path=%s", base_path)
+
         if not base_path.exists():
-            return web.json_response({'error': 'Path not found', 'path': path}, status=404)
-        
+            return web.json_response({'error': 'Path not found', 'path': str(base_path)}, status=404)
+        if not base_path.is_dir():
+            return web.json_response({'error': 'Path is not a directory', 'path': str(base_path)}, status=400)
+
         items = []
-        for item in sorted(base_path.iterdir()):
-            items.append({
+        for item in sorted(base_path.iterdir(), key=lambda value: (not value.is_dir(), value.name.lower())):
+            data = {
                 'name': item.name,
                 'path': str(item.resolve()),
                 'is_dir': item.is_dir(),
                 'is_file': item.is_file(),
-            })
-        
-        return web.json_response({'path': str(base_path.resolve()), 'items': items})
+            }
+            if item.is_file():
+                data['size'] = item.stat().st_size
+            items.append(data)
+
+        return web.json_response({
+            'root_path': str(_workspace_root()),
+            'path': str(base_path.resolve()),
+            'items': items,
+        })
+    except web.HTTPBadRequest as exc:
+        return web.json_response(json.loads(exc.text), status=400)
     except Exception as e:
-        logger.error(f"Error browsing files: {e}")
+        logger.error(f"Error browsing server files: {e}")
         return web.json_response({'error': str(e)}, status=500)
 
 
-async def api_read_file(request: web.Request) -> web.Response:
-    """Read file content.
-    
-    GET /api/files/read?path=/path/to/file
-    Returns: File content and metadata
-    """
+async def api_server_files_read(request: web.Request) -> web.Response:
+    """Read UTF-8 text files under workspace root."""
     try:
-        path = request.query.get('path', '')
-        if not path:
-            return web.json_response({'error': 'Path required'}, status=400)
-        
-        file_path = Path(path)
-        
+        file_path = _resolve_server_file_path(request.query.get('path'))
         if not file_path.exists():
-            return web.json_response({'error': 'File not found', 'path': path}, status=404)
-        
+            return web.json_response({'error': 'File not found', 'path': str(file_path)}, status=404)
         if not file_path.is_file():
-            return web.json_response({'error': 'Not a file', 'path': path}, status=400)
-        
-        # Read file content
-        content = file_path.read_text(encoding='utf-8')
-        
-        # Determine language for syntax highlighting
-        ext = file_path.suffix.lower()
-        language_map = {
-            '.py': 'python',
-            '.js': 'javascript',
-            '.ts': 'typescript',
-            '.html': 'html',
-            '.css': 'css',
-            '.json': 'json',
-            '.md': 'markdown',
-            '.yaml': 'yaml',
-            '.yml': 'yaml',
-            '.sh': 'bash',
-            '.sql': 'sql',
-            '.xml': 'xml',
-            '.csv': 'csv',
-        }
-        language = language_map.get(ext, 'text')
-        
+            return web.json_response({'error': 'Not a file', 'path': str(file_path)}, status=400)
+
+        try:
+            content = file_path.read_text(encoding='utf-8')
+        except UnicodeDecodeError:
+            return web.json_response({
+                'error': 'Cannot read binary file; use /api/server-files/content for inline preview',
+                'path': str(file_path),
+            }, status=400)
+
         return web.json_response({
             'path': str(file_path.resolve()),
             'name': file_path.name,
             'size': file_path.stat().st_size,
             'content': content,
-            'language': language,
+            'language': _server_file_language(file_path),
+            'content_type': _server_file_content_type(file_path),
         })
-    except UnicodeDecodeError:
-        # Binary file
-        return web.json_response({
-            'error': 'Cannot read binary file',
-            'path': path,
-        }, status=400)
+    except web.HTTPBadRequest as exc:
+        return web.json_response(json.loads(exc.text), status=400)
     except Exception as e:
-        logger.error(f"Error reading file: {e}")
+        logger.error(f"Error reading server file: {e}")
         return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_server_files_content(request: web.Request) -> web.Response:
+    """Serve file bytes for inline browser preview."""
+    try:
+        file_path = _resolve_server_file_path(request.query.get('path'))
+        logger.debug("[server-files] content path=%s", file_path)
+        if not file_path.exists():
+            return web.json_response({'error': 'File not found', 'path': str(file_path)}, status=404)
+        if not file_path.is_file():
+            return web.json_response({'error': 'Not a file', 'path': str(file_path)}, status=400)
+
+        response = web.FileResponse(file_path)
+        response.content_type = _server_file_content_type(file_path)
+        response.headers['Content-Disposition'] = f'inline; filename="{file_path.name}"'
+        return response
+    except web.HTTPBadRequest as exc:
+        return web.json_response(json.loads(exc.text), status=400)
+    except Exception as e:
+        logger.error(f"Error serving server file content: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_server_files_upload(request: web.Request) -> web.Response:
+    """Upload files to workspace root (with optional ZIP extraction)."""
+    try:
+        reader = await request.multipart()
+        upload_field = None
+        target_path_raw: Optional[str] = None
+
+        while True:
+            field = await reader.next()
+            if field is None:
+                break
+            if field.name == 'path':
+                target_path_raw = await field.text()
+            elif field.name == 'file' and upload_field is None:
+                upload_field = field
+
+        if upload_field is None:
+            return web.json_response({'success': False, 'error': 'file is required'}, status=400)
+
+        target_dir = _resolve_server_file_path(target_path_raw)
+        if not target_dir.exists():
+            return web.json_response({'success': False, 'error': 'Target path not found'}, status=404)
+        if not target_dir.is_dir():
+            return web.json_response({'success': False, 'error': 'Target path must be a directory'}, status=400)
+
+        filename = Path(upload_field.filename or 'upload.bin').name
+        logger.info("[server-files] upload target=%s filename=%s", target_dir, filename)
+        payload = await upload_field.read(decode=False)
+
+        if filename.lower().endswith('.zip'):
+            try:
+                archive = zipfile.ZipFile(io.BytesIO(payload))
+            except zipfile.BadZipFile:
+                return web.json_response({'success': False, 'error': 'Invalid ZIP archive'}, status=400)
+
+            items: List[str] = []
+            extracted_count = 0
+            with archive:
+                for member in archive.infolist():
+                    member_path = PurePosixPath(member.filename)
+                    if not member.filename or member.filename.endswith('/'):
+                        continue
+                    if member_path.is_absolute() or '..' in member_path.parts:
+                        return web.json_response({'success': False, 'error': f'Unsafe ZIP entry: {member.filename}'}, status=400)
+
+                    destination = (target_dir / Path(*member_path.parts)).resolve(strict=False)
+                    if not _is_within_root(destination, target_dir):
+                        return web.json_response({'success': False, 'error': f'Unsafe ZIP entry: {member.filename}'}, status=400)
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.open(member, 'r') as source, open(destination, 'wb') as sink:
+                        shutil.copyfileobj(source, sink)
+                    items.append(str(destination))
+                    extracted_count += 1
+
+            logger.info("[server-files] zip extract target=%s count=%s", target_dir, extracted_count)
+            return web.json_response({
+                'success': True,
+                'mode': 'zip_extract',
+                'target_path': str(target_dir),
+                'uploaded_filename': filename,
+                'extracted_count': extracted_count,
+                'items': items,
+            })
+
+        destination = (target_dir / filename).resolve(strict=False)
+        if not _is_within_root(destination, target_dir):
+            return web.json_response({'success': False, 'error': 'Invalid target filename'}, status=400)
+        with open(destination, 'wb') as output:
+            output.write(payload)
+
+        return web.json_response({
+            'success': True,
+            'mode': 'file_save',
+            'target_path': str(target_dir),
+            'uploaded_filename': filename,
+            'saved_path': str(destination),
+        })
+    except web.HTTPBadRequest as exc:
+        return web.json_response({'success': False, **json.loads(exc.text)}, status=400)
+    except Exception as e:
+        logger.error(f"Error uploading server file: {e}")
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
+
+async def api_server_files_download(request: web.Request) -> web.Response:
+    """Download one or more files/directories rooted under workspace."""
+    try:
+        raw_paths = list(request.query.getall('paths', []))
+        if not raw_paths and request.query.get('path'):
+            raw_paths.append(request.query.get('path', ''))
+        if not raw_paths:
+            return web.json_response({'success': False, 'error': 'path is required'}, status=400)
+
+        resolved_paths = [_resolve_server_file_path(raw) for raw in raw_paths if raw is not None]
+        for resolved in resolved_paths:
+            if not resolved.exists():
+                return web.json_response({'success': False, 'error': 'File not found', 'path': str(resolved)}, status=404)
+
+        logger.debug("[server-files] download paths=%s", ",".join(str(path) for path in resolved_paths))
+        if len(resolved_paths) == 1 and resolved_paths[0].is_file():
+            file_path = resolved_paths[0]
+            response = web.FileResponse(file_path)
+            response.content_type = _server_file_content_type(file_path)
+            response.headers['Content-Disposition'] = f'attachment; filename="{file_path.name}"'
+            return response
+
+        archive = await asyncio.to_thread(_create_server_files_zip, resolved_paths)
+        archive_name = f"{resolved_paths[0].name}.zip" if len(resolved_paths) == 1 else "files.zip"
+        return web.Response(
+            body=archive,
+            content_type='application/zip',
+            headers={'Content-Disposition': f'attachment; filename="{archive_name}"'},
+        )
+    except web.HTTPBadRequest as exc:
+        return web.json_response({'success': False, **json.loads(exc.text)}, status=400)
+    except Exception as e:
+        logger.error(f"Error downloading server files: {e}")
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
+
+async def api_browse_files(request: web.Request) -> web.Response:
+    """Backward-compatible alias for legacy file browsing endpoint."""
+    return await api_server_files_browse(request)
+
+
+async def api_read_file(request: web.Request) -> web.Response:
+    """Backward-compatible alias for legacy text file reader endpoint."""
+    return await api_server_files_read(request)
 
 
 async def api_usage(request: web.Request) -> web.Response:
@@ -2778,178 +2980,8 @@ async def api_files_get(request: web.Request) -> web.Response:
 
 
 async def api_files_download(request: web.Request) -> web.Response:
-    """Download files.
-    
-    GET /api/files/download?paths=<file_path>
-    GET /api/files/download?paths=<file1>&paths=<file2>&...  (multiple)
-    
-    Returns:
-        200: File or ZIP archive
-        404: File not found
-    """
-    try:
-        import io
-        import os
-        import zipfile
-        from pathlib import Path
-        from typing import List
-        
-        # Get file paths from query param (support multiple 'paths')
-        # Collect all 'paths' and 'path' values from query string
-        file_paths = []
-        for key, value in request.query.items():
-            if key == 'paths' or key == 'path':
-                if value:
-                    file_paths.append(value)
-        
-        if not file_paths:
-            return web.json_response({
-                'success': False,
-                'error': 'path is required'
-            }, status=400)
-        
-        # Security: restrict paths to workspace directory
-        workspace_root = Path.home() / ".efp" / "workspace"
-        
-        def is_safe_path(path: str) -> bool:
-            """Check if path is within workspace directory."""
-            try:
-                resolved = Path(path).resolve()
-                # Check if resolved path is within workspace
-                return str(resolved).startswith(str(workspace_root))
-            except Exception:
-                return False
-        
-        # Validate all paths are within workspace
-        for fp in file_paths:
-            if not is_safe_path(fp):
-                return web.json_response({
-                    'success': False,
-                    'error': 'Path must be within workspace directory'
-                }, status=400)
-        
-        # Handle single file or directory
-        if len(file_paths) == 1:
-            file_path = file_paths[0]
-            try:
-                resolved_path = Path(file_path).resolve()
-            except Exception:
-                return web.json_response({
-                    'success': False,
-                    'error': 'Invalid path'
-                }, status=400)
-            
-            if not resolved_path.exists():
-                return web.json_response({
-                    'success': False,
-                    'error': 'File not found'
-                }, status=404)
-            
-            # If it's a directory, create a ZIP of the entire directory
-            if resolved_path.is_dir():
-                def create_dir_zip():
-                    buffer = io.BytesIO()
-                    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                        for root, dirs, files in os.walk(resolved_path):
-                            for file in files:
-                                file_path = os.path.join(root, file)
-                                arcname = os.path.relpath(file_path, resolved_path.parent)
-                                zf.write(file_path, arcname)
-                    return buffer.getvalue()
-                
-                content = await asyncio.to_thread(create_dir_zip)
-                
-                response = web.Response(
-                    body=content,
-                    content_type='application/zip',
-                    headers={
-                        'Content-Disposition': f'attachment; filename="{resolved_path.name}.zip"'
-                    }
-                )
-                return response
-            
-            # Single file download
-            if not resolved_path.is_file():
-                return web.json_response({
-                    'success': False,
-                    'error': 'File not found'
-                }, status=404)
-            
-            # Determine content type
-            content_type = 'application/octet-stream'
-            suffix = resolved_path.suffix.lower()
-            if suffix == '.md':
-                content_type = 'text/markdown'
-            elif suffix == '.txt':
-                content_type = 'text/plain'
-            elif suffix == '.json':
-                content_type = 'application/json'
-            elif suffix == '.py':
-                content_type = 'text/x-python'
-            elif suffix in ['.jpg', '.jpeg']:
-                content_type = 'image/jpeg'
-            elif suffix == '.png':
-                content_type = 'image/png'
-            elif suffix == '.pdf':
-                content_type = 'application/pdf'
-            
-            # Read file synchronously
-            def read_file():
-                with open(resolved_path, 'rb') as f:
-                    return f.read()
-            
-            content = await asyncio.to_thread(read_file)
-            
-            # Return single file
-            response = web.Response(
-                body=content,
-                content_type=content_type,
-                headers={
-                    'Content-Disposition': f'attachment; filename="{resolved_path.name}"'
-                }
-            )
-            return response
-        
-        # Handle multiple files - create ZIP (including directories)
-        def create_zip():
-            buffer = io.BytesIO()
-            with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for file_path in file_paths:
-                    try:
-                        resolved_path = Path(file_path).resolve()
-                        if not resolved_path.exists():
-                            continue
-                        if resolved_path.is_dir():
-                            # Add entire directory
-                            for root, dirs, files in os.walk(resolved_path):
-                                for file in files:
-                                    full_path = os.path.join(root, file)
-                                    arcname = os.path.relpath(full_path, resolved_path.parent)
-                                    zf.write(full_path, arcname)
-                        elif resolved_path.is_file():
-                            zf.write(resolved_path, resolved_path.name)
-                    except Exception:
-                        continue
-            return buffer.getvalue()
-        
-        content = await asyncio.to_thread(create_zip)
-        
-        # Return ZIP file
-        response = web.Response(
-            body=content,
-            content_type='application/zip',
-            headers={
-                'Content-Disposition': 'attachment; filename="files.zip"'
-            }
-        )
-        return response
-        
-    except Exception as e:
-        logger.error(f"Error downloading file: {e}")
-        return web.json_response({
-            'success': False,
-            'error': str(e)
-        }, status=500)
+    """Backward-compatible alias for legacy file download endpoint."""
+    return await api_server_files_download(request)
 
 
 async def api_files_delete(request: web.Request) -> web.Response:
@@ -3021,6 +3053,11 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/sessions/{session_id}/chatlog', api_session_chatlog)
     app.router.add_get('/api/files', api_browse_files)
     app.router.add_get('/api/files/read', api_read_file)
+    app.router.add_get('/api/server-files', api_server_files_browse)
+    app.router.add_get('/api/server-files/read', api_server_files_read)
+    app.router.add_get('/api/server-files/content', api_server_files_content)
+    app.router.add_post('/api/server-files/upload', api_server_files_upload)
+    app.router.add_get('/api/server-files/download', api_server_files_download)
     app.router.add_get('/api/usage', api_usage)
     app.router.add_post('/api/clear', api_clear)
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/edit', api_edit_message)
@@ -3066,6 +3103,11 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  GET  /api/sessions/{id} - Load session messages")
     logger.info("  GET  /api/files    - Browse files")
     logger.info("  GET  /api/files/read - Read file content")
+    logger.info("  GET  /api/server-files - Browse workspace files")
+    logger.info("  GET  /api/server-files/read - Read text file content")
+    logger.info("  GET  /api/server-files/content - Inline file content")
+    logger.info("  POST /api/server-files/upload - Upload/extract files into workspace")
+    logger.info("  GET  /api/server-files/download - Download file(s) from workspace")
     logger.info("  GET  /api/usage   - Get usage stats")
     logger.info("  POST /api/clear   - Clear session")
     logger.info("  GET  /api/skills  - Get available skills")
