@@ -2,9 +2,35 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import importlib.util
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional
 
-from src.runtime.display_blocks import normalize_display_blocks
+_normalize_display_blocks_fn: Optional[Callable[[Optional[Any], str], list[dict[str, Any]]]] = None
+
+
+def _get_normalize_display_blocks() -> Callable[[Optional[Any], str], list[dict[str, Any]]]:
+    """Resolve ``normalize_display_blocks`` with an import-light fallback."""
+    global _normalize_display_blocks_fn
+    if _normalize_display_blocks_fn is not None:
+        return _normalize_display_blocks_fn
+
+    try:
+        from src.runtime.display_blocks import normalize_display_blocks as runtime_normalize_display_blocks
+        _normalize_display_blocks_fn = runtime_normalize_display_blocks
+        return _normalize_display_blocks_fn
+    except Exception:
+        module_path = Path(__file__).resolve().parent.parent / "runtime" / "display_blocks.py"
+        spec = importlib.util.spec_from_file_location("runtime_display_blocks_fallback", module_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Failed to load display_blocks module from {module_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        normalize_display_blocks = getattr(module, "normalize_display_blocks", None)
+        if normalize_display_blocks is None or not callable(normalize_display_blocks):
+            raise ImportError("normalize_display_blocks not found in fallback module")
+        _normalize_display_blocks_fn = normalize_display_blocks
+        return _normalize_display_blocks_fn
 
 
 def build_webchat_response_payload(result: Optional[Dict[str, Any]], session_id: str) -> Dict[str, Any]:
@@ -12,6 +38,7 @@ def build_webchat_response_payload(result: Optional[Dict[str, Any]], session_id:
     payload_result = result if isinstance(result, dict) else {}
     response_text = payload_result.get("response") or payload_result.get("content") or ""
     usage = payload_result.get("usage", {}) or {}
+    normalize_display_blocks = _get_normalize_display_blocks()
 
     response_payload: Dict[str, Any] = {
         "response": response_text,
@@ -32,6 +59,7 @@ def normalize_assistant_history_message(message: Dict[str, Any]) -> Dict[str, An
     normalized_message = dict(message)
     if normalized_message.get("role") != "assistant":
         return normalized_message
+    normalize_display_blocks = _get_normalize_display_blocks()
     normalized_message["display_blocks"] = normalize_display_blocks(
         message.get("display_blocks"),
         message.get("content", "") or "",
