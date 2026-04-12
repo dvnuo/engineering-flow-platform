@@ -1960,14 +1960,15 @@
         await refreshFileList();
     }
 
-    async function showFileExplorer(path = '/root') {
+    async function showFileExplorer(path = '') {
         fileExplorerPanel.classList.add('show');
         fileExplorerContent.innerHTML = '<div class="loading">Loading...</div>';
         const feTitle = document.getElementById('fileExplorerTitle');
         if (feTitle) feTitle.textContent = 'Server Files';
 
         try {
-            const response = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
+            const browseUrl = path ? `/api/server-files?path=${encodeURIComponent(path)}` : '/api/server-files';
+            const response = await fetch(browseUrl);
             const data = await response.json();
 
             if (data.error) {
@@ -1975,17 +1976,22 @@
                 return;
             }
 
-            const pathParts = data.path.split('/').filter(p => p);
+            const rootPath = data.root_path || '';
+            const activePath = data.path || rootPath;
+            let pathParts = [];
+            if (rootPath && activePath.startsWith(rootPath)) {
+                const relativePath = activePath.slice(rootPath.length).replace(/^\/+/, '');
+                pathParts = relativePath ? relativePath.split('/') : [];
+            } else {
+                pathParts = activePath.split('/').filter(p => p);
+            }
+
             let pathHtml = '<div class="file-explorer-path">';
-            pathHtml += '<button data-path="/">🏠</button>';
-            let currentPath = '';
-            let isFirst = true;
+            pathHtml += '<button data-path="">workspace</button>';
+            let currentPath = rootPath;
             pathParts.forEach(part => {
-                currentPath += '/' + part;
-                if (!isFirst) {
-                    pathHtml += '<span class="separator">/</span>';
-                }
-                isFirst = false;
+                currentPath = currentPath ? `${currentPath}/${part}` : part;
+                pathHtml += '<span class="separator">/</span>';
                 pathHtml += '<button data-path="' + currentPath + '">' + escapeHtml(part) + '</button>';
             });
             pathHtml += '</div>';
@@ -2063,15 +2069,67 @@
     const fileViewerTitleText = document.getElementById('fileViewerTitleText');
     const fileViewerContent = document.getElementById('fileViewerContent');
 
+    function getFileNameFromPath(path) {
+        const parts = (path || '').split('/').filter(Boolean);
+        return parts.length ? parts[parts.length - 1] : 'workspace-file';
+    }
+
+    function shouldInlinePreview(path) {
+        const lowerPath = (path || '').toLowerCase();
+        const imageExt = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
+        const pdfExt = ['.pdf'];
+        const audioExt = ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac'];
+        const videoExt = ['.mp4', '.webm', '.mov', '.mkv', '.avi'];
+        return [...imageExt, ...pdfExt, ...audioExt, ...videoExt].some(ext => lowerPath.endsWith(ext));
+    }
+
+    function renderInlinePreview(path) {
+        const encodedPath = encodeURIComponent(path);
+        const contentUrl = `/api/server-files/content?path=${encodedPath}`;
+        const lowerPath = (path || '').toLowerCase();
+        const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].some(ext => lowerPath.endsWith(ext));
+        const isPdf = lowerPath.endsWith('.pdf');
+        const isAudio = ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac'].some(ext => lowerPath.endsWith(ext));
+        const isVideo = ['.mp4', '.webm', '.mov', '.mkv', '.avi'].some(ext => lowerPath.endsWith(ext));
+
+        let viewer = `<div class="file-explorer-error">Preview not available</div>`;
+        if (isImage) {
+            viewer = `<img src="${contentUrl}" alt="${escapeHtml(getFileNameFromPath(path))}" style="max-width:100%;max-height:70vh;object-fit:contain;" />`;
+        } else if (isPdf) {
+            viewer = `<iframe src="${contentUrl}" style="width:100%;height:70vh;border:0;" title="${escapeHtml(getFileNameFromPath(path))}"></iframe>`;
+        } else if (isAudio) {
+            viewer = `<audio controls src="${contentUrl}" style="width:100%;"></audio>`;
+        } else if (isVideo) {
+            viewer = `<video controls src="${contentUrl}" style="max-width:100%;max-height:70vh;"></video>`;
+        }
+
+        fileViewerContent.innerHTML = `
+            <div class="file-viewer-info">
+                <span>${escapeHtml(path)}</span>
+            </div>
+            <div class="file-viewer-media">${viewer}</div>
+        `;
+    }
+
     async function showFileViewer(path) {
         fileViewerPanel.classList.add('show');
         fileViewerContent.innerHTML = '<div class="loading">Loading...</div>';
+        fileViewerTitleText.textContent = getFileNameFromPath(path);
 
         try {
-            const response = await fetch(`/api/files/read?path=${encodeURIComponent(path)}`);
+            if (shouldInlinePreview(path)) {
+                renderInlinePreview(path);
+                return;
+            }
+
+            const response = await fetch(`/api/server-files/read?path=${encodeURIComponent(path)}`);
             const data = await response.json();
 
             if (data.error) {
+                if ((data.error || '').includes('/api/server-files/content')) {
+                    renderInlinePreview(path);
+                    return;
+                }
                 fileViewerContent.innerHTML = `<div class="file-explorer-error">${escapeHtml(data.error)}</div>`;
                 return;
             }
