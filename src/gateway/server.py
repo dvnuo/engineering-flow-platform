@@ -464,7 +464,7 @@ class Gateway:
         # Get file path (fixed path) - not applicable for daily_notes
         content = ""
         if name != "daily_notes":
-            workspace = Path.home() / ".efp" / "workspace"
+            workspace = _runtime_workspace_root()
             file_path = workspace / f"{name.upper()}.md"
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
@@ -495,7 +495,7 @@ class Gateway:
             
             # Update file content if provided
             if "content" in data:
-                workspace = Path.home() / ".efp" / "workspace"
+                workspace = _runtime_workspace_root()
                 workspace.mkdir(parents=True, exist_ok=True)
                 file_path = workspace / f"{name.upper()}.md"
                 file_path.write_text(data["content"], encoding="utf-8")
