@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from ruamel.yaml import YAML
 
 from src.github import github_channel
-from src.runtime.bundle_template_registry import resolve_bundle_template_id_from_manifest
+from src.runtime.bundle_template_registry import require_bundle_template, resolve_bundle_template_id_from_manifest
 from src.utils.redaction import safe_preview, sanitize_exception_message
 
 _yaml = YAML()
@@ -490,6 +490,9 @@ def validate_bundle_manifest(manifest: Dict[str, Any]) -> None:
     has_template_id = isinstance(template_id, str) and bool(template_id.strip())
     if template_id is not None and not has_template_id:
         raise RequirementBundleError("bundle.yaml field 'template_id' must be a non-empty string")
+    if has_template_id:
+        normalized_template_id = str(template_id).strip().lower()
+        require_bundle_template(normalized_template_id)
 
     template_version = manifest.get("template_version")
     if template_version is not None and (not isinstance(template_version, int) or template_version < 1):

@@ -1021,6 +1021,31 @@ def test_resolve_bundle_template_id_legacy_defaults_requirement_v1():
     assert resolve_bundle_template_id(manifest) == "requirement.v1"
 
 
+def test_validate_bundle_manifest_rejects_unknown_template_id():
+    manifest = {
+        "bundle_id": "rb-unknown-template",
+        "template_id": "foo.v1",
+        "template_version": 1,
+        "title": "Unknown Template",
+        "status": "draft",
+        "scope": {"domain": "payments", "summary": "unknown template"},
+        "storage": {
+            "repo": "acme/assets",
+            "path": "requirement-bundles/payments/unknown",
+            "base_branch": "main",
+            "working_branch": "bundle/unknown",
+        },
+        "artifacts": {"requirements": "requirements.yaml"},
+    }
+    with pytest.raises(RequirementBundleError, match="Unsupported bundle template_id"):
+        validate_bundle_manifest(manifest)
+
+
+def test_resolve_bundle_template_id_unknown_template_raises():
+    with pytest.raises(RequirementBundleError, match="Unsupported bundle template_id"):
+        resolve_bundle_template_id({"template_id": "foo.v1"})
+
+
 def test_build_test_design_context_is_trimmed():
     context = build_test_design_context(
         {"bundle_id": "rb-9", "title": "T", "scope": {"a": 1}, "other": "x"},

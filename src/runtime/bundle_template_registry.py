@@ -124,7 +124,7 @@ def require_bundle_action(template_id: str, action_id: str) -> BundleActionDefin
 def resolve_bundle_template_id_from_manifest(manifest: Dict[str, Any]) -> str:
     template_id = str((manifest or {}).get("template_id") or "").strip().lower()
     if template_id:
-        return template_id
+        return require_bundle_template(template_id).template_id
 
     links = (manifest or {}).get("links")
     if isinstance(links, dict) and bool(links):
