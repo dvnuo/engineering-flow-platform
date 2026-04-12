@@ -44,11 +44,16 @@ class _Field:
         self.filename = filename
         self._data = data or b""
         self.content_type = content_type
+        self._was_read = False
+        self._drained = False
 
     async def text(self):
         return self._value or ""
 
     async def read(self, decode=False):
+        self._was_read = True
+        if self._drained:
+            return b""
         return self._data
 
 
@@ -56,12 +61,20 @@ class _Multipart:
     def __init__(self, fields):
         self._fields = list(fields)
         self._idx = 0
+        self._previous_field = None
 
     async def next(self):
+        if (
+            self._previous_field is not None
+            and self._previous_field.name == "file"
+            and not self._previous_field._was_read
+        ):
+            self._previous_field._drained = True
         if self._idx >= len(self._fields):
             return None
         field = self._fields[self._idx]
         self._idx += 1
+        self._previous_field = field
         return field
 
 
@@ -136,8 +149,8 @@ async def test_server_files_upload_regular_file(monkeypatch, tmp_path):
     target_dir.mkdir(parents=True)
 
     multipart = _Multipart([
-        _Field("path", value=str(target_dir)),
         _Field("file", filename="hello.txt", data=b"hello"),
+        _Field("path", value=str(target_dir)),
     ])
     response = await webchat.api_server_files_upload(_Request(multipart_reader=multipart))
     body = json.loads(response.body)
@@ -157,8 +170,8 @@ async def test_server_files_zip_upload_extracts(monkeypatch, tmp_path):
     with zipfile.ZipFile(good_zip, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("nested/ok.txt", "ok")
     multipart = _Multipart([
-        _Field("path", value=str(target_dir)),
         _Field("file", filename="ok.zip", data=good_zip.getvalue()),
+        _Field("path", value=str(target_dir)),
     ])
     ok_response = await webchat.api_server_files_upload(_Request(multipart_reader=multipart))
     ok_body = json.loads(ok_response.body)
@@ -173,8 +186,8 @@ async def test_server_files_zip_upload_rejects_empty_payload(monkeypatch, tmp_pa
     target_dir.mkdir(parents=True)
 
     multipart = _Multipart([
-        _Field("path", value=str(target_dir)),
         _Field("file", filename="empty.zip", data=b""),
+        _Field("path", value=str(target_dir)),
     ])
 
     response = await webchat.api_server_files_upload(_Request(multipart_reader=multipart))
@@ -191,8 +204,8 @@ async def test_server_files_zip_upload_rejects_non_zip_payload(monkeypatch, tmp_
     target_dir.mkdir(parents=True)
 
     multipart = _Multipart([
-        _Field("path", value=str(target_dir)),
         _Field("file", filename="invalid.zip", data=b"not-a-zip"),
+        _Field("path", value=str(target_dir)),
     ])
 
     response = await webchat.api_server_files_upload(_Request(multipart_reader=multipart))
@@ -212,8 +225,8 @@ async def test_server_files_zip_upload_blocks_zip_slip(monkeypatch, tmp_path):
     with zipfile.ZipFile(bad_zip, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("../escape.txt", "escape")
     bad_multipart = _Multipart([
-        _Field("path", value=str(target_dir)),
         _Field("file", filename="bad.zip", data=bad_zip.getvalue()),
+        _Field("path", value=str(target_dir)),
     ])
 
     bad_response = await webchat.api_server_files_upload(_Request(multipart_reader=bad_multipart))

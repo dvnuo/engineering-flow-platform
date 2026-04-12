@@ -1627,8 +1627,10 @@ async def api_server_files_upload(request: web.Request) -> web.Response:
     """Upload files to workspace root (with optional ZIP extraction)."""
     try:
         reader = await request.multipart()
-        upload_field = None
         target_path_raw: Optional[str] = None
+        upload_filename: Optional[str] = None
+        upload_content_type: Optional[str] = None
+        upload_payload: Optional[bytes] = None
 
         while True:
             field = await reader.next()
@@ -1636,10 +1638,14 @@ async def api_server_files_upload(request: web.Request) -> web.Response:
                 break
             if field.name == 'path':
                 target_path_raw = await field.text()
-            elif field.name == 'file' and upload_field is None:
-                upload_field = field
+            elif field.name == 'file' and upload_payload is None:
+                upload_filename = Path(field.filename or 'upload.bin').name
+                upload_content_type = getattr(field, 'content_type', None)
+                # Consume upload bytes immediately so multipart iteration cannot
+                # drain/discard the file payload before we process it.
+                upload_payload = await field.read(decode=False)
 
-        if upload_field is None:
+        if upload_payload is None:
             return web.json_response({'success': False, 'error': 'file is required'}, status=400)
 
         target_dir = _resolve_server_file_path(target_path_raw)
@@ -1648,9 +1654,9 @@ async def api_server_files_upload(request: web.Request) -> web.Response:
         if not target_dir.is_dir():
             return web.json_response({'success': False, 'error': 'Target path must be a directory'}, status=400)
 
-        filename = Path(upload_field.filename or 'upload.bin').name
+        filename = upload_filename or 'upload.bin'
         logger.info("[server-files] upload target=%s filename=%s", target_dir, filename)
-        payload = await upload_field.read(decode=False)
+        payload = upload_payload
 
         if filename.lower().endswith('.zip'):
             payload_size = len(payload)
@@ -1660,7 +1666,7 @@ async def api_server_files_upload(request: web.Request) -> web.Response:
                 "[server-files] zip upload diagnostics target=%s filename=%s content_type=%s payload_size=%s starts_with_pk=%s is_zipfile=%s",
                 target_dir,
                 filename,
-                getattr(upload_field, 'content_type', None),
+                upload_content_type,
                 payload_size,
                 starts_with_zip_signature,
                 is_zip_payload,
@@ -1718,6 +1724,7 @@ async def api_server_files_upload(request: web.Request) -> web.Response:
         destination = (target_dir / filename).resolve(strict=False)
         if not _is_within_root(destination, target_dir):
             return web.json_response({'success': False, 'error': 'Invalid target filename'}, status=400)
+        # Intentionally allow explicit zero-byte regular file uploads.
         with open(destination, 'wb') as output:
             output.write(payload)
 
