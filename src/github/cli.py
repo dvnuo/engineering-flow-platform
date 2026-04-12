@@ -1,8 +1,8 @@
 """
-GitHub CLI Wrapper - gh command wrapper.
+GitHub CLI Wrapper - optional legacy/helper gh command wrapper.
 
-Provides functionality equivalent to GitHub REST API,
-but executes using gh CLI (supports Enterprise).
+Provides helper functionality for environments that still prefer gh CLI,
+but this is not the primary runtime authentication/integration path.
 """
 
 import asyncio

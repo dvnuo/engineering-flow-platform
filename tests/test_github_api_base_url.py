@@ -1,0 +1,70 @@
+import importlib
+from pathlib import Path
+
+import pytest
+
+from src.github.url_utils import normalize_github_api_base_url
+
+
+@pytest.fixture(autouse=True)
+def _isolated_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (Path(tmp_path) / ".efp").mkdir(parents=True, exist_ok=True)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("", "https://api.github.com"),
+        ("https://api.github.com/", "https://api.github.com"),
+        ("https://github.com", "https://api.github.com"),
+        ("github.company.com", "https://github.company.com/api/v3"),
+        ("https://github.company.com", "https://github.company.com/api/v3"),
+        ("https://github.company.com/api/v3/", "https://github.company.com/api/v3"),
+    ],
+)
+def test_normalize_github_api_base_url(raw, expected):
+    assert normalize_github_api_base_url(raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_github_channel_request_uses_normalized_base_url(monkeypatch, tmp_path):
+    config_path = Path(tmp_path) / ".efp" / "config.yaml"
+    config_path.write_text("{}\n", encoding="utf-8")
+
+    config_module = importlib.import_module("src.config")
+    config_module = importlib.reload(config_module)
+    monkeypatch.setattr(config_module.config, "config_path", config_path, raising=False)
+    monkeypatch.setattr(
+        config_module.config,
+        "_config",
+        {"github": {"base_url": "https://github.com", "enabled": True, "api_token": ""}},
+        raising=False,
+    )
+
+    github_api = importlib.import_module("src.github.api")
+    github_api = importlib.reload(github_api)
+
+    channel = github_api.GitHubChannel()
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+        text = "{}"
+
+        def json(self):
+            return {"ok": True}
+
+    async def fake_request(method, url, headers=None, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        return FakeResponse()
+
+    monkeypatch.setattr(channel.client, "request", fake_request)
+
+    result = await channel._request("GET", "/repos/acme/repo")
+
+    assert captured["method"] == "GET"
+    assert captured["url"] == "https://api.github.com/repos/acme/repo"
+    assert result == {"ok": True}

@@ -9,6 +9,7 @@ The GitHub module provides **GitHub REST API** integrations for repository and c
 - Active GitHub API authentication key: `github.api_token`.
 - Git repository transport authentication (clone/push/pull) is handled by the **Git module** (`src/git/api.py`) using HTTPS + askpass with `github.api_token`.
 - EFP startup/runtime does **not** depend on writing `gh` CLI auth config as the primary authentication path.
+- `github.base_url` is an optional **GitHub API base URL**; blank means `https://api.github.com`.
 
 ## Structure
 
@@ -29,7 +30,13 @@ github/
 github:
   enabled: true
   api_token: "${GITHUB_TOKEN}"
-  base_url: ""          # Optional GitHub Enterprise hostname/root configuration
+  base_url: ""          # Optional API base URL; blank => https://api.github.com
+
+# Enterprise example:
+# github:
+#   enabled: true
+#   api_token: "${GITHUB_TOKEN}"
+#   base_url: "https://github.company.com/api/v3"
 ```
 
 ## Best Practices

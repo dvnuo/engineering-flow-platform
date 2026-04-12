@@ -221,7 +221,8 @@ confluence:
 github:
   enabled: false  # Set to true to enable GitHub integration
   api_token: "${GITHUB_TOKEN}"  # Used for GitHub REST API tools and Git-over-HTTPS auth (clone/push/pull)
-  # Enterprise GitHub instance hostname (e.g., "github.company.com")
+  # Optional GitHub API base URL (leave blank to use https://api.github.com)
+  # Enterprise example: https://github.company.com/api/v3
   base_url: ""
 
 # ============================================
