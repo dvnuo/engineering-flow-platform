@@ -87,6 +87,24 @@ def test_build_webchat_response_payload_treats_whitespace_response_as_empty():
     assert payload["display_blocks"] == []
 
 
+def test_build_webchat_response_payload_preserves_raw_markdown_newlines():
+    mod = _load_chat_payloads_module()
+    raw_markdown = "\n# Title\n\nBody\n"
+    payload = mod.build_webchat_response_payload({"response": raw_markdown}, "s-raw")
+
+    assert payload["response"] == raw_markdown
+    assert payload["display_blocks"] == [{"type": "markdown", "content": raw_markdown}]
+
+
+def test_build_webchat_response_payload_preserves_indented_markdown_whitespace():
+    mod = _load_chat_payloads_module()
+    raw_markdown = "    indented code line\n    second\n"
+    payload = mod.build_webchat_response_payload({"response": raw_markdown}, "s-indent")
+
+    assert payload["response"] == raw_markdown
+    assert payload["display_blocks"] == [{"type": "markdown", "content": raw_markdown}]
+
+
 def test_normalize_assistant_history_message_treats_whitespace_content_as_empty():
     mod = _load_chat_payloads_module()
     message = mod.normalize_assistant_history_message(

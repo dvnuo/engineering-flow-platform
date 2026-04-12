@@ -152,3 +152,21 @@ def test_normalize_code_prefers_non_blank_text_when_code_blank():
     assert blocks[0]["type"] == "code"
     assert blocks[0]["content"] == "print(1)"
     assert blocks[0]["lang"] == "python"
+
+
+def test_normalize_fallback_markdown_preserves_leading_and_trailing_newlines():
+    mod = _load_display_blocks_module()
+
+    raw_markdown = "\n# Title\n\nBody\n"
+    blocks = mod.normalize_display_blocks(None, raw_markdown)
+
+    assert blocks == [{"type": "markdown", "content": raw_markdown}]
+
+
+def test_normalize_fallback_markdown_preserves_indented_code_whitespace():
+    mod = _load_display_blocks_module()
+
+    raw_markdown = "    indented code line\n    second\n"
+    blocks = mod.normalize_display_blocks(None, raw_markdown)
+
+    assert blocks == [{"type": "markdown", "content": raw_markdown}]
