@@ -3427,3 +3427,61 @@ async def test_requirement_bundle_collect_task_skill_failure_keeps_task_boundary
     assert result.status == "error"
     assert result.output_payload["task_boundary"] is True
     assert result.output_payload["success"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("template_id", "action_id", "expected_skill"),
+    [
+        ("requirement.v1", "collect_requirements", "collect_requirements_to_bundle"),
+        ("requirement.v1", "design_test_cases", "design_test_cases_from_bundle"),
+        ("research.v1", "collect_research_notes", "collect_research_notes_to_bundle"),
+        ("development.v1", "generate_implementation_plan", "generate_implementation_plan_from_bundle"),
+        ("operations.v1", "generate_runbook", "generate_runbook_from_bundle"),
+    ],
+)
+async def test_bundle_action_task_routes_to_registry_skill(monkeypatch, template_id, action_id, expected_skill):
+    observed = {}
+
+    async def _fake_run_skill_execution(skill_name, **kwargs):
+        observed["skill_name"] = skill_name
+        observed["kwargs"] = kwargs
+        return SkillResult(success=True, output="ok", data={"bundle_ref": kwargs.get("bundle_ref"), "updated_files": []})
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={
+            "task_type": "bundle_action_task",
+            "template_id": template_id,
+            "action_id": action_id,
+            "bundle_ref": {"repo": "acme/demo", "path": "bundles/a", "branch": "feat/a"},
+            "skill_name": "should_not_override",
+        },
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert observed["skill_name"] == expected_skill
+    assert result.status == "success"
+    assert result.output_payload["task_boundary"] is True
+    assert result.output_payload["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_bundle_action_task_unknown_template_action_blocked(monkeypatch):
+    called = {"value": False}
+
+    async def _fake_run_skill_execution(_skill_name, **_kwargs):
+        called["value"] = True
+        return SkillResult(success=True)
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "bundle_action_task", "template_id": "unknown.v1", "action_id": "x"},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["task_boundary"] is True
+    assert called["value"] is False

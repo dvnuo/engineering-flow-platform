@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from src.runtime.bundle_template_registry import get_bundle_action
 from src.runtime.capability_registry import get_capability_registry
 
 
@@ -89,6 +90,36 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
         primary_capability_id = f"skill:{skill_name}"
         descriptor = registry.get(primary_capability_id)
         involved = _resolve_involved_capability_ids_for_task(normalized_task_type, normalized_payload)
+        if descriptor is None:
+            return {
+                **fallback,
+                "primary_capability_id": primary_capability_id,
+                "capability_id": primary_capability_id,
+                "action_id": primary_capability_id,
+                "capability_type": "skill",
+                "involved_capability_ids": involved,
+            }
+        return {
+            **fallback,
+            "primary_capability_id": descriptor.capability_id,
+            "capability_id": descriptor.capability_id,
+            "capability_type": descriptor.type,
+            "action_id": descriptor.capability_id,
+            "involved_capability_ids": involved,
+            "policy_tags": list(descriptor.policy_tags or []),
+            "requires_identity_binding": bool(descriptor.requires_identity_binding),
+            "capability_resolution": "resolved",
+        }
+
+    if normalized_task_type == "bundle_action_task":
+        template_id = str(normalized_payload.get("template_id") or "").strip().lower()
+        action_id = str(normalized_payload.get("action_id") or "").strip().lower()
+        action = get_bundle_action(template_id, action_id)
+        if action is None:
+            return fallback
+        primary_capability_id = f"skill:{action.skill_name}"
+        descriptor = registry.get(primary_capability_id)
+        involved = [primary_capability_id]
         if descriptor is None:
             return {
                 **fallback,

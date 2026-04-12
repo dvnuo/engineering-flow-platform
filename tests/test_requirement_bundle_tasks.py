@@ -4,16 +4,23 @@ import json
 import pytest
 
 from skills.collect_requirements_to_bundle.skill import collect_requirements_to_bundle as collect_requirements_skill
+from skills.collect_research_notes_to_bundle.skill import collect_research_notes_to_bundle as collect_research_notes_skill
 from skills.design_test_cases_from_bundle.skill import design_test_cases_from_bundle as design_test_cases_skill
+from skills.generate_implementation_plan_from_bundle.skill import (
+    generate_implementation_plan_from_bundle as generate_implementation_plan_skill,
+)
+from skills.generate_runbook_from_bundle.skill import generate_runbook_from_bundle as generate_runbook_skill
 from src.runtime.requirement_bundle_assets import (
     RequirementBundleError,
     BundleRef,
     build_test_design_context,
     load_bundle_manifest,
+    resolve_bundle_artifacts,
     parse_github_doc_ref,
     parse_bundle_ref,
     read_github_doc_text,
     resolve_bundle_links,
+    resolve_bundle_template_id,
     resolve_target_bundle_ref,
     validate_bundle_manifest,
     write_requirements_doc_for_ref,
@@ -42,6 +49,31 @@ def _valid_manifest_yaml(
         "links:\n"
         f"  requirements_file: {requirements_file}\n"
         f"  test_cases_file: {test_cases_file}\n"
+    )
+
+
+def _valid_template_manifest_yaml(
+    template_id: str = "requirement.v1",
+    artifacts_yaml: str = "  requirements: requirements.yaml\n  test_cases: test-cases.yaml\n",
+    bundle_id: str = "rb-template-1",
+) -> str:
+    return (
+        f"bundle_id: {bundle_id}\n"
+        f"template_id: {template_id}\n"
+        "template_version: 1\n"
+        "title: Maker Checker\n"
+        "status: draft\n"
+        "scope:\n"
+        "  domain: payments\n"
+        "  summary: maker checker\n"
+        "storage:\n"
+        "  repo: acme/assets\n"
+        "  path: requirement-bundles/payments/maker\n"
+        "  base_branch: main\n"
+        "  working_branch: bundle/1\n"
+        "artifacts:\n"
+        f"{artifacts_yaml}"
+        "metadata: {}\n"
     )
 
 
@@ -415,6 +447,44 @@ async def test_collect_skill_writes_custom_requirements_file_from_manifest_links
 
 
 @pytest.mark.asyncio
+async def test_collect_requirements_skill_reads_template_artifacts_manifest(monkeypatch):
+    writes = []
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        if path.endswith("bundle.yaml"):
+            return {
+                "content": _b64(
+                    _valid_template_manifest_yaml(
+                        template_id="requirement.v1",
+                        artifacts_yaml="  requirements: docs/reqs.yaml\n  test_cases: outputs/tc.yaml\n",
+                        bundle_id="rb-template-collect",
+                    )
+                )
+            }
+        if path == "docs/spec.md":
+            return {"content": _b64("# Spec")}
+        raise AssertionError((owner, repo, path, ref))
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        writes.append(path)
+        return {"commit": {"sha": "sha-template-collect"}}
+
+    async def _fake_chat(self, **kwargs):
+        return {"content": "{\"summary\":{},\"functional_requirements\":[\"a\"],\"business_rules\":[],\"acceptance_criteria\":[],\"edge_cases\":[],\"quality_flags\":{\"ambiguities\":[],\"conflicts\":[],\"missing_information\":[]}}"}
+
+    monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.github_channel.is_configured", lambda: True)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+    result = await collect_requirements_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
+        sources={"github_docs": ["docs/spec.md"]},
+    )
+    assert result.success is True
+    assert writes == ["requirement-bundles/payments/maker/docs/reqs.yaml"]
+
+
+@pytest.mark.asyncio
 async def test_design_skill_reads_requirements_and_writes_test_cases(monkeypatch):
     writes = []
 
@@ -449,6 +519,117 @@ async def test_design_skill_reads_requirements_and_writes_test_cases(monkeypatch
     assert result.success is True
     assert writes and writes[0]["path"].endswith("test-cases.yaml")
     assert writes[0]["branch"] == "bundle/1"
+
+
+@pytest.mark.asyncio
+async def test_collect_research_notes_skill_writes_research_notes_yaml(monkeypatch):
+    writes = []
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        if path.endswith("bundle.yaml"):
+            return {
+                "content": _b64(
+                    _valid_template_manifest_yaml(
+                        template_id="research.v1",
+                        artifacts_yaml="  research_notes: research-notes.yaml\n",
+                        bundle_id="rb-research",
+                    )
+                )
+            }
+        if path == "docs/spec.md":
+            return {"content": _b64("# Spec")}
+        raise AssertionError((owner, repo, path, ref))
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        writes.append(path)
+        return {"commit": {"sha": "sha-research"}}
+
+    async def _fake_chat(self, **_kwargs):
+        return {"content": "{\"summary\":{},\"findings\":[],\"open_questions\":[],\"references\":[]}"}
+
+    monkeypatch.setattr("skills.collect_research_notes_to_bundle.skill.github_channel.is_configured", lambda: True)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+
+    result = await collect_research_notes_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},
+        sources={"github_docs": ["docs/spec.md"]},
+    )
+    assert result.success is True
+    assert writes == ["requirement-bundles/payments/maker/research-notes.yaml"]
+
+
+@pytest.mark.asyncio
+async def test_generate_implementation_plan_skill_writes_implementation_plan_yaml(monkeypatch):
+    writes = []
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        if path.endswith("bundle.yaml"):
+            return {
+                "content": _b64(
+                    _valid_template_manifest_yaml(
+                        template_id="development.v1",
+                        artifacts_yaml="  implementation_plan: implementation-plan.yaml\n",
+                        bundle_id="rb-dev",
+                    )
+                )
+            }
+        raise AssertionError((owner, repo, path, ref))
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        writes.append(path)
+        return {"commit": {"sha": "sha-dev"}}
+
+    async def _fake_chat(self, **_kwargs):
+        return {"content": "{\"summary\":{},\"workstreams\":[],\"tasks\":[],\"risks\":[],\"validation_checks\":[]}"}
+
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+
+    result = await generate_implementation_plan_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"}
+    )
+    assert result.success is True
+    assert writes == ["requirement-bundles/payments/maker/implementation-plan.yaml"]
+
+
+@pytest.mark.asyncio
+async def test_generate_runbook_skill_writes_runbook_yaml(monkeypatch):
+    writes = []
+
+    async def _fake_get_file(owner, repo, path, ref=""):
+        if path.endswith("bundle.yaml"):
+            return {
+                "content": _b64(
+                    _valid_template_manifest_yaml(
+                        template_id="operations.v1",
+                        artifacts_yaml="  runbook: runbook.yaml\n",
+                        bundle_id="rb-ops",
+                    )
+                )
+            }
+        raise AssertionError((owner, repo, path, ref))
+
+    async def _fake_put_file(owner, repo, path, content, message, sha=None, branch=""):
+        writes.append(path)
+        return {"commit": {"sha": "sha-ops"}}
+
+    async def _fake_chat(self, **_kwargs):
+        return {
+            "content": "{\"service_summary\":{},\"rollout_steps\":[],\"rollback_steps\":[],\"monitoring_checks\":[],\"alerts\":[],\"operational_risks\":[]}"
+        }
+
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.get_file", _fake_get_file)
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.create_or_update_file", _fake_put_file)
+    monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
+
+    result = await generate_runbook_skill.execute(
+        bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"}
+    )
+    assert result.success is True
+    assert writes == ["requirement-bundles/payments/maker/runbook.yaml"]
 
 
 @pytest.mark.asyncio
@@ -821,6 +1002,48 @@ def test_resolve_bundle_links_uses_manifest_links():
 
     assert requirements_file == "docs/reqs.yaml"
     assert test_cases_file == "outputs/tc.yaml"
+
+
+def test_resolve_bundle_artifacts_supports_template_artifacts():
+    manifest = {
+        "artifacts": {
+            "requirements": " requirements.yaml ",
+            "test_cases": "/test-cases.yaml/",
+        }
+    }
+    artifacts = resolve_bundle_artifacts(manifest)
+    assert artifacts["requirements"] == "requirements.yaml"
+    assert artifacts["test_cases"] == "test-cases.yaml"
+
+
+def test_resolve_bundle_template_id_legacy_defaults_requirement_v1():
+    manifest = {"links": {"requirements_file": "requirements.yaml", "test_cases_file": "test-cases.yaml"}}
+    assert resolve_bundle_template_id(manifest) == "requirement.v1"
+
+
+def test_validate_bundle_manifest_rejects_unknown_template_id():
+    manifest = {
+        "bundle_id": "rb-unknown-template",
+        "template_id": "foo.v1",
+        "template_version": 1,
+        "title": "Unknown Template",
+        "status": "draft",
+        "scope": {"domain": "payments", "summary": "unknown template"},
+        "storage": {
+            "repo": "acme/assets",
+            "path": "requirement-bundles/payments/unknown",
+            "base_branch": "main",
+            "working_branch": "bundle/unknown",
+        },
+        "artifacts": {"requirements": "requirements.yaml"},
+    }
+    with pytest.raises(RequirementBundleError, match="Unsupported bundle template_id"):
+        validate_bundle_manifest(manifest)
+
+
+def test_resolve_bundle_template_id_unknown_template_raises():
+    with pytest.raises(RequirementBundleError, match="Unsupported bundle template_id"):
+        resolve_bundle_template_id({"template_id": "foo.v1"})
 
 
 def test_build_test_design_context_is_trimmed():
