@@ -2,6 +2,7 @@
 
 import logging
 import io
+from pathlib import Path
 import pytest
 
 
@@ -522,3 +523,18 @@ class TestConstants:
         """Test STRUCTURED_FORMAT constant."""
         assert isinstance(STRUCTURED_FORMAT, str)
         assert "%(asctime)s" in STRUCTURED_FORMAT
+
+
+def test_file_parser_modules_do_not_use_root_logging_calls_for_runtime_messages():
+    repo_root = Path(__file__).resolve().parents[1]
+    target_files = [
+        repo_root / "src/utils/file_parser/pdf.py",
+        repo_root / "src/utils/file_parser/image.py",
+    ]
+    forbidden_patterns = ("logging.warning(", "logging.error(", "logging.debug(")
+
+    for file_path in target_files:
+        content = file_path.read_text(encoding="utf-8")
+        assert "logger = logging.getLogger(__name__)" in content
+        for pattern in forbidden_patterns:
+            assert pattern not in content

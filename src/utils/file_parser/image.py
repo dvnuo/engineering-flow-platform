@@ -5,6 +5,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import base64
 import io
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,8 @@ _paddleocr = None
 
 from .models import Block, ParseResult, ImageConstraints
 from .validators import validate_image_for_llm, get_mime_type
+
+logger = logging.getLogger(__name__)
 
 
 def _get_pil():
@@ -80,11 +83,9 @@ async def parse_image(
                     result.parse_time_ms = int((time.time() - start_time) * 1000)
                     return result
             except Exception as e:
-                import logging
-                logging.warning(f"Vision parsing failed, falling back to OCR: {e}")
+                logger.warning("Vision parsing failed, falling back to OCR: %s", e)
         else:
-            import logging
-            logging.debug(f"Image validation failed: {error}")
+            logger.debug("Image validation failed: %s", error)
     
     # OCR fallback (no LLM-specific constraints needed)
     try:

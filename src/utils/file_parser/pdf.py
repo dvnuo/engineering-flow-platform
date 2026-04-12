@@ -1,6 +1,7 @@
 """PDF parser implementation."""
 
 import io
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,9 @@ fitz = None
 _paddleocr = None
 
 from .models import Block, ParseResult
+
+
+logger = logging.getLogger(__name__)
 
 
 def _get_fitz():
@@ -222,8 +226,7 @@ async def extract_text_with_pymupdf(file_path: str, options: Dict, file_id: str)
                     ))
     
     except Exception as e:
-        import logging
-        logging.warning(f"PDF text extraction failed: {e}")
+        logger.warning("PDF text extraction failed: %s", e)
     
     return blocks
 
@@ -274,8 +277,7 @@ async def extract_tables_with_pdfplumber(file_path: str, options: Dict, file_id:
                     ))
     
     except Exception as e:
-        import logging
-        logging.warning(f"PDF table extraction failed: {e}")
+        logger.warning("PDF table extraction failed: %s", e)
     
     return blocks
 
@@ -317,8 +319,7 @@ async def extract_with_ocr(file_path: str, options: Dict, file_id: str) -> List[
                 blocks.extend(page_blocks)
     
     except Exception as e:
-        import logging
-        logging.error(f"OCR extraction failed for PDF: {e}", exc_info=True)
+        logger.error("OCR extraction failed for PDF: %s", e, exc_info=True)
     
     return blocks
 
