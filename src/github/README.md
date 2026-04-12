@@ -16,13 +16,8 @@ The GitHub module provides **GitHub REST API** integrations for repository and c
 ```
 github/
 ├── api.py      # GitHub REST API client/channel
-├── cli.py      # Optional GitHub CLI helper wrapper
 └── __init__.py # Module exports
 ```
-
-## Notes on `cli.py`
-
-`src/github/cli.py` may still be used as an optional helper wrapper, but it is not the active runtime authentication path.
 
 ## Configuration
 

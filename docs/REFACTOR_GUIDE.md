@@ -19,7 +19,7 @@
 
 说明（当前设计收口）：
 - Git transport 已统一到 `src/git/api.py`，使用 HTTPS + `github.api_token`（askpass）。
-- `src/github/api.py` 是 GitHub runtime 主路径；`src/github/cli.py` 仅可视为 optional helper。
+- `src/github/api.py` 是 GitHub runtime 主路径。
 ```
 
 ---
@@ -40,7 +40,6 @@ engineering-flow-platform/
 │   │   ├── github/               # GitHub 集成
 │   │   │   ├── __init__.py
 │   │   │   ├── api.py            # GitHub REST API 实现
-│   │   │   ├── cli.py            # Optional helper wrapper (非主路径)
 │   │   │   └── types.py          # 类型定义
 │   │   │
 │   │   ├── git/                  # Git 集成
@@ -135,9 +134,7 @@ mv channel/confluence.py src/integrations/confluence/api.py
 """GitHub Integration - Single source of truth for GitHub operations."""
 
 from .api import GitHubClient
-from .cli import GitHubCLI
-
-__all__ = ["GitHubClient", "GitHubCLI"]
+__all__ = ["GitHubClient"]
 ```
 
 #### 2.2 重构 `src/integrations/github/api.py`
@@ -199,79 +196,18 @@ class GitHubClient:
     # ... 其他方法
 ```
 
-#### 2.3 创建 `src/integrations/github/cli.py`
-
-```python
-"""
-GitHub CLI Wrapper - gh 命令封装。
-
-提供与 GitHub REST API 等价的功能，
-可选 helper：若保留仅用于特定场景，不是当前主路径。
-"""
-
-import asyncio
-import shlex
-from pathlib import Path
-from typing import Optional
-
-class GitHubCLI:
-    """GitHub CLI wrapper using 'gh' command."""
-    
-    DEFAULT_HOSTNAME = "github.com"
-    
-    def __init__(self, hostname: str = None):
-        self.hostname = hostname or self.DEFAULT_HOSTNAME
-    
-    async def run(self, args: list, cwd: str = None) -> tuple:
-        """Run gh command, return (success, output)."""
-        cmd = ["gh"] + args
-        
-        if self.hostname != self.DEFAULT_HOSTNAME:
-            cmd = ["--hostname", self.hostname] + cmd
-        
-        result = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=cwd or str(Path.home())
-        )
-        
-        stdout, _ = await result.communicate()
-        return result.returncode == 0, stdout.decode("utf-8").strip()
-    
-    async def issue_list(self, repo: str, state: str = "open") -> str:
-        """List issues in repository."""
-        success, output = await self.run([
-            "issue", "list", 
-            "--repo", repo, 
-            "--state", state,
-            "--limit", "10"
-        ])
-        return output if success else f"Error: {output}"
-    
-    async def pr_list(self, repo: str) -> str:
-        """List PRs in repository."""
-        success, output = await self.run([
-            "pr", "list",
-            "--repo", repo,
-            "--limit", "20"
-        ])
-        return output if success else f"Error: {output}"
-```
-
-#### 2.4 创建 `src/tools/github.py`
+#### 2.3 创建 `src/tools/github.py`
 
 ```python
 """GitHub Tools - Agent 调用入口。
 
-调用 src/integrations/github/api.py 和 cli.py
+调用 src/github/api.py（REST 主路径）
 """
 
-from src.integrations.github import GitHubClient, GitHubCLI
+from src.github import GitHubClient
 
 # 全局实例
 github_client = GitHubClient()
-github_cli = GitHubCLI()
 
 # ========== 工具函数 (OpenAI Functions Schema) ==========
 
@@ -414,7 +350,7 @@ python main.py --test
 ## TODO 清单
 
 - [ ] Phase 1: 创建 src/integrations/ 目录结构
-- [ ] Phase 2: 重构 GitHub (api.py + cli.py)
+- [ ] Phase 2: 重构 GitHub (api.py)
 - [ ] Phase 3: 重构 Jira (api.py)
 - [ ] Phase 4: 重构 Confluence (api.py)
 - [ ] Phase 5: 重构 Git (api.py, HTTPS + github.api_token)

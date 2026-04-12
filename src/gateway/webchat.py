@@ -46,6 +46,7 @@ from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.config import config as global_config
+from src.github.url_utils import normalize_github_api_base_url
 from src.runtime.chat_orchestration_adapter import execute_chat_orchestration, execute_runtime_task_request
 from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 from src.runtime.portal_session_metadata_client import (
@@ -2167,9 +2168,8 @@ async def api_copilot_auth_start(request: web.Request) -> web.Response:
         - interval: Polling interval in seconds
     """
     try:
-        # Get GitHub base URL from config
-        github_base_url = config.get("github.base_url", "https://github.com").replace("https://github.com", "").strip("/")
-        api_base_url = config.get("github.api_base", "https://api.github.com")
+        # Get normalized GitHub API base URL from config
+        api_base_url = normalize_github_api_base_url(global_config.get("github.base_url"))
         
         async with httpx.AsyncClient() as client:
             # Request device authorization from GitHub
@@ -2264,8 +2264,8 @@ async def api_copilot_auth_check(request: web.Request) -> web.Response:
                 'token': token,
             })
         
-        # Get GitHub API base
-        api_base_url = config.get("github.api_base", "https://api.github.com")
+        # Get normalized GitHub API base URL from config
+        api_base_url = normalize_github_api_base_url(global_config.get("github.base_url"))
         
         async with httpx.AsyncClient() as client:
             # Check token status
