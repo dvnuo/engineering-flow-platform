@@ -1227,11 +1227,13 @@
         return parsedBlocks.map(renderSingleDisplayBlock).join('');
     }
 
-    function getBlockText(block) {
+    function getBlockText(block, preferCode = false) {
         if (!block || typeof block !== 'object') {
             return '';
         }
-        const textFields = ['content', 'text', 'message', 'output', 'result', 'value'];
+        const textFields = preferCode
+            ? ['code', 'content', 'text', 'output', 'result', 'value']
+            : ['content', 'text', 'output', 'result', 'value', 'message'];
         for (const field of textFields) {
             const value = block[field];
             if (value === null || value === undefined) {
@@ -1246,14 +1248,6 @@
         return '';
     }
 
-    function getMeaningfulScalar(value) {
-        if (value === null || value === undefined) {
-            return '';
-        }
-        const textValue = String(value);
-        return textValue.trim().length > 0 ? textValue : '';
-    }
-
     function hasMeaningfulDisplayBlocks(blocks) {
         const parsedBlocks = parseDisplayBlocks(blocks);
         if (!parsedBlocks) {
@@ -1264,12 +1258,9 @@
             if (blockType === 'table') {
                 const headers = Array.isArray(block.headers) ? block.headers : (Array.isArray(block.columns) ? block.columns : []);
                 const rows = Array.isArray(block.rows) ? block.rows : [];
-                return headers.length > 0 || rows.length > 0 || getBlockText(block).length > 0;
+                return headers.length > 0 || rows.length > 0 || getBlockText(block, false).length > 0;
             }
-            if (blockType === 'code') {
-                return (getMeaningfulScalar(block.code) || getBlockText(block)).length > 0;
-            }
-            return getBlockText(block).length > 0;
+            return getBlockText(block, blockType === 'code').length > 0;
         });
     }
 
@@ -1284,7 +1275,7 @@
         if (blockType === 'callout') {
             const tone = String(block.tone || 'info').toLowerCase();
             const title = String(block.title || '').trim();
-            const body = renderMarkdown(getBlockText(block));
+            const body = renderMarkdown(getBlockText(block, false));
             return `
                 <div class="message-block">
                     <div class="message-callout is-${escapeHtml(tone)}">
@@ -1297,7 +1288,7 @@
         if (blockType === 'tool_result') {
             const status = String(block.status || 'info').toLowerCase();
             const title = String(block.title || 'Tool result').trim() || 'Tool result';
-            const body = renderMarkdown(getBlockText(block));
+            const body = renderMarkdown(getBlockText(block, false));
             return `
                 <div class="message-block">
                     <div class="message-tool-result is-${escapeHtml(status)}">
@@ -1307,12 +1298,12 @@
                 </div>
             `;
         }
-        return `<div class="message-block">${renderMarkdown(getBlockText(block))}</div>`;
+        return `<div class="message-block">${renderMarkdown(getBlockText(block, false))}</div>`;
     }
 
     function renderCodeBlock(block) {
         const language = String(block.language || block.lang || '').trim();
-        const codeText = getMeaningfulScalar(block.code) || getBlockText(block);
+        const codeText = getBlockText(block, true);
         const escapedLanguage = escapeHtml(language || 'text');
         const escapedCode = escapeHtml(codeText);
         const classLanguage = language.toLowerCase().replace(/[^a-z0-9_+-]/g, '');

@@ -26,7 +26,7 @@ def test_normalize_code_aliases_to_canonical_fields():
     assert len(blocks) == 1
     assert blocks[0]["type"] == "code"
     assert blocks[0]["content"] == "print(1)"
-    assert blocks[0]["lang"] == "python"
+    assert blocks[0]["language"] == "python"
 
 
 def test_normalize_table_columns_to_headers():
@@ -61,7 +61,7 @@ def test_render_code_block_uses_block_text_fallback():
     assert start != -1
     chunk = js[start:start + 500]
 
-    assert "getBlockText(block)" in chunk or "block.text" in chunk
+    assert "getBlockText(block, true)" in chunk or "block.text" in chunk
 
 
 def test_normalize_tool_result_output_alias_to_content():
@@ -151,7 +151,7 @@ def test_normalize_code_prefers_non_blank_text_when_code_blank():
     assert len(blocks) == 1
     assert blocks[0]["type"] == "code"
     assert blocks[0]["content"] == "print(1)"
-    assert blocks[0]["lang"] == "python"
+    assert blocks[0]["language"] == "python"
 
 
 def test_normalize_fallback_markdown_preserves_leading_and_trailing_newlines():

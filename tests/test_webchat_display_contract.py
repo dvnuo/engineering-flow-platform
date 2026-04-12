@@ -76,6 +76,15 @@ def test_normalize_assistant_history_message_leaves_non_assistant_shape():
     assert "display_blocks" not in message
 
 
+def test_webchat_source_includes_display_blocks_final_assistant_checks():
+    repo_root = Path(__file__).parent.parent
+    js_source = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
+
+    assert "function getBlockText(block, preferCode = false)" in js_source
+    assert "lastMsg.display_blocks" in js_source
+    assert "hasMeaningfulDisplayBlocks(lastMsg.display_blocks)" in js_source
+
+
 def test_build_webchat_response_payload_treats_whitespace_response_as_empty():
     mod = _load_chat_payloads_module()
     payload = mod.build_webchat_response_payload(
@@ -119,7 +128,7 @@ def test_render_single_display_block_uses_non_blank_output_text():
     js_path = repo_root / "src" / "gateway" / "static" / "js" / "webchat.js"
     js_source = js_path.read_text(encoding="utf-8")
 
-    get_block_text_start = js_source.find("function getBlockText(block)")
+    get_block_text_start = js_source.find("function getBlockText(block, preferCode = false)")
     render_single_start = js_source.find("function renderSingleDisplayBlock(block)")
     render_code_start = js_source.find("function renderCodeBlock(block)")
     assert get_block_text_start != -1
@@ -146,24 +155,20 @@ def test_render_code_block_ignores_blank_code_and_uses_text_fallback():
     js_path = repo_root / "src" / "gateway" / "static" / "js" / "webchat.js"
     js_source = js_path.read_text(encoding="utf-8")
 
-    get_block_text_start = js_source.find("function getBlockText(block)")
-    get_meaningful_start = js_source.find("function getMeaningfulScalar(value)")
+    get_block_text_start = js_source.find("function getBlockText(block, preferCode = false)")
     render_single_start = js_source.find("function renderSingleDisplayBlock(block)")
     render_code_start = js_source.find("function renderCodeBlock(block)")
     render_table_start = js_source.find("function renderTableBlock(block)")
     assert get_block_text_start != -1
-    assert get_meaningful_start != -1
     assert render_single_start != -1
     assert render_code_start != -1
     assert render_table_start != -1
 
-    get_block_text_fn = js_source[get_block_text_start:get_meaningful_start]
-    get_meaningful_fn = js_source[get_meaningful_start:render_single_start]
+    get_block_text_fn = js_source[get_block_text_start:render_single_start]
     render_code_fn = js_source[render_code_start:render_table_start]
 
     script = f"""
 {get_block_text_fn}
-{get_meaningful_fn}
 function escapeHtml(v) {{ return String(v); }}
 {render_code_fn}
 const html = renderCodeBlock({json.dumps({"type": "code", "code": "   ", "text": "print(1)", "language": "python"})});
@@ -180,23 +185,20 @@ def test_has_final_assistant_ignores_shell_display_blocks():
     js_source = js_path.read_text(encoding="utf-8")
 
     parse_start = js_source.find("function parseDisplayBlocks(raw)")
-    get_block_text_start = js_source.find("function getBlockText(block)")
-    get_meaningful_start = js_source.find("function getMeaningfulScalar(value)")
+    get_block_text_start = js_source.find("function getBlockText(block, preferCode = false)")
     has_meaningful_start = js_source.find("function hasMeaningfulDisplayBlocks(blocks)")
     render_single_start = js_source.find("function renderSingleDisplayBlock(block)")
     has_final_start = js_source.find("function hasFinalAssistant(sessionData)")
     poll_start = js_source.find("async function pollSessionUntilFinal()")
     assert parse_start != -1
     assert get_block_text_start != -1
-    assert get_meaningful_start != -1
     assert has_meaningful_start != -1
     assert render_single_start != -1
     assert has_final_start != -1
     assert poll_start != -1
 
     parse_fn = js_source[parse_start:get_block_text_start]
-    get_block_text_fn = js_source[get_block_text_start:get_meaningful_start]
-    get_meaningful_fn = js_source[get_meaningful_start:has_meaningful_start]
+    get_block_text_fn = js_source[get_block_text_start:has_meaningful_start]
     has_meaningful_fn = js_source[has_meaningful_start:render_single_start]
     has_final_fn = js_source[has_final_start:poll_start]
 
@@ -208,7 +210,6 @@ def test_has_final_assistant_ignores_shell_display_blocks():
     script = f"""
 {parse_fn}
 {get_block_text_fn}
-{get_meaningful_fn}
 {has_meaningful_fn}
 {has_final_fn}
 const result = hasFinalAssistant({json.dumps(session_payload)});
