@@ -10,7 +10,9 @@ services:
       # Config file - required
       - ./config.yaml:/app/config.yaml:ro
       
-      # Workspace directory for memory files - persists across restarts
+      # Workspace directory for memory files - persists across restarts.
+      # This compose setup maps to the container's root-user home workspace path.
+      # It is a local dev-container default, not a universal cross-environment path contract.
       # Contains: SOUL.md, USER.md, AGENTS.md, TOOLS.md, MEMORY.md, memory/
       - ./workspace:/root/.efp/workspace
       

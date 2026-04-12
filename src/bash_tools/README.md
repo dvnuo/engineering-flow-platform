@@ -21,7 +21,7 @@ Two tools for the agent:
 - `run_command` - Execute shell commands with security restrictions
 
 ### Security Features
-- Working directory limited to `~/.efp/workspace`
+- Working directory limited to the runtime user's home workspace path (`~/.efp/workspace`)
 - Dangerous commands blocked (rm, mkfs, dd, fdisk, etc.)
 - Absolute path execution blocked
 - Environment variable allowlist (no PATH override)
@@ -63,7 +63,7 @@ Execute a shell command with security restrictions.
 await run_command(
     cmd="git",
     args=["status"],
-    cwd="/home/<runtime-user>/.efp/workspace",  # Must be in the runtime user's workspace
+    cwd="/home/<runtime-user>/.efp/workspace",  # Example user-home workspace path (not always /root)
     timeout_ms=15000,
 )
 ```

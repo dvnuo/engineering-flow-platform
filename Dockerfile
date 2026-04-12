@@ -22,7 +22,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create workspace directory for memory files
+# Create the workspace directory for this container image's default runtime user (root).
+# Note: the canonical runtime workspace model is user-home-based (`~/.efp/workspace`);
+# in this image, `~` resolves to `/root`.
 RUN mkdir -p /root/.efp/workspace
 
 # Expose port
