@@ -1273,7 +1273,7 @@
 
     function renderCodeBlock(block) {
         const language = String(block.language || block.lang || '').trim();
-        const codeText = String(block.content || block.code || '');
+        const codeText = String(block.code ?? getBlockText(block) ?? '');
         const escapedLanguage = escapeHtml(language || 'text');
         const escapedCode = escapeHtml(codeText);
         const classLanguage = language.toLowerCase().replace(/[^a-z0-9_+-]/g, '');
