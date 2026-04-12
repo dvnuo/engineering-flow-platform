@@ -53,6 +53,7 @@ _TRACE_FIELD_MAPPING = (
     ("agent_id", "agent"),
     ("path", "path"),
 )
+_FIRST_PARTY_LOGGER_PREFIXES = ("src.", "skills.")
 _log_context_var: contextvars.ContextVar[Dict[str, str]] = contextvars.ContextVar(
     "efp_log_context",
     default=dict(_LOG_CONTEXT_DEFAULTS),
@@ -90,7 +91,7 @@ def reset_log_context(token: contextvars.Token) -> None:
 
 
 def _is_first_party_logger(record_name: str) -> bool:
-    return record_name == "main" or record_name.startswith("src.")
+    return record_name == "main" or record_name.startswith(_FIRST_PARTY_LOGGER_PREFIXES)
 
 
 def _build_trace_block(record_name: str, context: Dict[str, str]) -> str:

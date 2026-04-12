@@ -374,6 +374,28 @@ class TestRedactionIntegration:
         output = stream.getvalue()
         assert "trace=" not in output
 
+    def test_default_format_includes_trace_block_for_top_level_skill_logger(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("skills.collect_requirements_to_bundle.skill")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter(DEFAULT_FORMAT))
+        handler.addFilter(RedactingFilter())
+        logger.addHandler(handler)
+
+        set_log_context(trace_id="trace-skill-1", request_id="req-skill-1", path="/api/tasks/execute")
+        try:
+            logger.info("skill started")
+        finally:
+            clear_log_context()
+
+        output = stream.getvalue()
+        assert "trace=trace-skill-1" in output
+        assert "request=req-skill-1" in output
+        assert "path=/api/tasks/execute" in output
+
     def test_exception_traceback_is_redacted(self):
         stream = io.StringIO()
         logger = logging.getLogger("redact_exception")
