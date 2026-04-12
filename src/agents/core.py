@@ -1739,7 +1739,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Send completion event
         send_event("complete", {
-            "response": "Task completed (max iterations reached)",
+            "response": max_iterations_text,
             "total_iterations": max_tool_iterations,
             "note": "max_iterations"
         })
@@ -1752,7 +1752,7 @@ You have access to the following tools. When a user asks you to do something tha
         events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
         
         return self._build_assistant_result_payload(
-            "Task completed (max iterations reached)",
+            max_iterations_text,
             usage=usage_data or {},
             events=events,
             user_message_id=user_message_id,

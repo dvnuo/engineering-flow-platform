@@ -2171,3 +2171,35 @@ def test_agent_assistant_display_helpers_minimal_payload():
     assert payload["response"] == "hello"
     assert payload["display_blocks"][0]["content"] == "hello"
     assert payload["user_message_id"] == "u1"
+
+
+def test_webchat_js_passes_display_blocks_in_both_session_render_paths():
+    repo_root = Path(__file__).parent.parent
+    js = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
+
+    poll_render_anchor = "if (gotFinal && sessionData && sessionData.messages && sessionData.messages.length > 0)"
+    poll_start = js.find(poll_render_anchor)
+    assert poll_start != -1
+    poll_chunk = js[poll_start: poll_start + 1200]
+    assert "msg.display_blocks || null" in poll_chunk
+
+    load_session_anchor = "messages.forEach(msg => {"
+    load_start = js.rfind(load_session_anchor)
+    assert load_start != -1
+    load_chunk = js[load_start: load_start + 700]
+    assert "msg.display_blocks || null" in load_chunk
+
+
+def test_core_max_iterations_response_text_is_consistent():
+    repo_root = Path(__file__).parent.parent
+    core_py = (repo_root / "src" / "agents" / "core.py").read_text(encoding="utf-8")
+
+    max_iter_anchor = "max_iterations_text = \"Task completed after maximum iterations.\""
+    start = core_py.find(max_iter_anchor)
+    assert start != -1
+    chunk = core_py[start: start + 1100]
+
+    assert 'send_event("complete", {' in chunk
+    assert '"response": max_iterations_text' in chunk
+    assert '_build_assistant_result_payload(' in chunk
+    assert '"Task completed (max iterations reached)"' not in chunk

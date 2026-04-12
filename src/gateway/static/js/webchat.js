@@ -1546,7 +1546,13 @@
                     }
                     const content = msg.content || '';
                     const timestamp = msg.timestamp || msg.created_at;
-                    addMessage(role, content, timestamp, msg.tool_calls);
+                    addMessage(
+                        role,
+                        content,
+                        timestamp,
+                        msg.tool_calls,
+                        msg.display_blocks || null
+                    );
                 });
                 scrollToBottom();
                 // Show thinking events from session metadata
