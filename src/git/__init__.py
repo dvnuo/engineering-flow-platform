@@ -1,8 +1,8 @@
 """Git Integration - Single source of truth for Git operations."""
 
-from .api import GitClient, setup_ssh_key, setup_git_user, setup_gh_config
+from .api import GitClient, setup_git_user, setup_gh_config
 
-__all__ = ["GitClient", "setup_ssh_key", "setup_git_user", "setup_gh_config"]
+__all__ = ["GitClient", "setup_git_user", "setup_gh_config"]
 
 
 # ========== Tool Functions ==========
@@ -99,7 +99,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "git_clone",
-                "description": "Clone a repository from URL to workspace",
+                "description": "Clone a repository from URL to workspace (SSH/HTTPS input accepted; runtime normalizes to HTTPS and uses github.api_token over HTTPS authentication)",
                 "parameters": {
                     "type": "object",
                     "properties": {

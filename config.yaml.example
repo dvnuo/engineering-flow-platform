@@ -220,9 +220,8 @@ confluence:
 # ============================================
 github:
   enabled: false  # Set to true to enable GitHub integration
-  api_token: "${GITHUB_TOKEN}"  # GitHub Personal Access Token
+  api_token: "${GITHUB_TOKEN}"  # Used for GitHub REST API tools and Git-over-HTTPS auth (clone/push/pull)
   # Enterprise GitHub instance hostname (e.g., "github.company.com")
-  # Used by gh (GitHub CLI) config - leave empty for github.com
   base_url: ""
 
 # ============================================
@@ -262,22 +261,6 @@ polling:
     spaces:  # Spaces to monitor
       - "DEV"
       - "DOCS"
-
-# ============================================
-# SSH Configuration (OPTIONAL)
-# ============================================
-# Configure SSH key path for git operations (clone, push, pull)
-# The key will be copied to ~/.ssh/ with proper permissions (600)
-# Useful for Docker deployments where SSH key should not be baked in
-
-ssh:
-  enabled: false  # Set to true to enable SSH key setup
-  private_key_path: ""  # Path to private key file (e.g., "/etc/engineering-flow-platform/id_ed25519")
-
-# Example usage:
-# ssh:
-#   enabled: true
-#   private_key_path: "/run/secrets/github_ssh_key"
 
 # ============================================
 # Git Configuration (OPTIONAL)

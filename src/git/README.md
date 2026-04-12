@@ -2,103 +2,52 @@
 
 ## Overview
 
-The Git module provides git operations for repository management, version control, and collaboration workflows. Supports local and remote repository operations.
+The Git module provides core repository operations (status/commit/clone/push/pull) through the Git CLI.
 
 ## Structure
 
 ```
 git/
-├── api.py      # Git operations API
-├── ssh.py      # SSH key management
-└── __init__.py # Module exports
+├── api.py      # Git operations API and HTTPS auth helpers
+└── __init__.py # Module exports and tool schemas
 ```
 
-## Components
+## Authentication Model
 
-### Git API (`api.py`)
-- Repository operations (clone, init)
-- Branch management (create, list, delete)
-- Commit and push operations
-- File operations (add, checkout, restore)
-- Tag management
-
-### SSH Management (`ssh.py`)
-- SSH key configuration
-- Remote URL handling
-- Credential management
+- Remote Git transport uses **HTTPS**.
+- `github.api_token` is the single token source for:
+  - GitHub REST API tools (GitHub module)
+  - Git-over-HTTPS auth for clone/push/pull (Git module)
+- `git.user.name` and `git.user.email` are only for commit identity (`git config --global`).
 
 ## Quick Start
 
 ```python
 from src.git import GitClient
 
-# Initialize
 git = GitClient()
 
-# Clone a repository
-git.clone_repo("https://github.com/owner/repo.git", "/path/to/dir")
-
-# Create and switch to branch
-git.checkout("-b", "feature/new-feature")
-
-# Stage and commit
-git.add(".")
-git.commit("Initial commit message")
-
-# Push to remote
-git.push("origin", "feature/new-feature")
+await git.clone("git@github.com/owner/repo.git")  # SSH-style input accepted, normalized to HTTPS
+await git.status()
+await git.commit("Initial commit")
+await git.push()
 ```
 
 ## Configuration
 
 ```yaml
-# In config.yaml
+github:
+  enabled: true
+  api_token: "${GITHUB_TOKEN}"
+
 git:
-  default_branch: "master"
-  user_name: "Your Name"
-  user_email: "your-email@example.com"
-  ssh_key_path: "~/.ssh/id_rsa"
-
-# SSH known hosts (for private repos)
-ssh:
-  known_hosts:
-    - github.com
-    - gitlab.com
+  user:
+    name: "Engineering Flow Platform Bot"
+    email: "bot@company.com"
 ```
 
-## Dependencies
+## Best Practices
 
-- `GitPython` - Python library for Git operations
-- Standard library: `subprocess`, `pathlib`, `logging`
-- System dependency: `git` CLI installed
-
-## Development Guide
-
-### Common Operations
-
-| Operation | Method | Description |
-|-----------|--------|-------------|
-| Clone | `clone_repo(url, path)` | Clone remote repository |
-| Init | `init(path)` | Initialize new repository |
-| Branch | `checkout(*args)` | Switch/create branches |
-| Commit | `commit(message)` | Create new commit |
-| Push | `push(remote, branch)` | Push to remote |
-| Pull | `pull(remote, branch)` | Pull from remote |
-
-### SSH Setup
-
-```python
-from src.git.ssh import SSHManager
-
-ssh = SSHManager()
-ssh.add_key("~/.ssh/id_rsa")
-ssh.set_known_hosts("github.com", "ssh-rsa ...")
-```
-
-### Best Practices
-
-- Always pull before pushing
-- Use meaningful commit messages
-- Create feature branches for new work
-- Delete merged branches promptly
-- Use SSH for private repositories
+- Keep `github.api_token` scoped minimally (least privilege).
+- Avoid embedding credentials in repository URLs.
+- Keep `git.user.*` configured for clear commit attribution.

@@ -29,7 +29,7 @@ from src.sessions.manager import session_manager
 from src.sessions.usage import usage_tracker
 from src.cron.mention_poller import start_polling, stop_polling, is_enabled
 from src.cron.jira_reconciliation import start_reconciliation, stop_reconciliation, is_enabled as is_jira_reconciliation_enabled
-from src.git.api import setup_ssh_key, setup_git_user, setup_gh_config
+from src.git.api import setup_git_user
 from src.utils.logger import setup_logging, get_logger
 
 
@@ -155,16 +155,6 @@ async def main() -> None:
     except Exception as e:
         logger.error(f"Failed to initialize session/usage tracking | error={e}", exc_info=True)
 
-    # Setup SSH key for git operations (from config)
-    try:
-        ssh_key_configured = await setup_ssh_key()
-        if ssh_key_configured:
-            logger.info("SSH key configured successfully")
-        else:
-            logger.debug("SSH key not configured (ssh.enabled=false or no key path)")
-    except Exception as e:
-        logger.warning(f"Failed to setup SSH key | error={e}", exc_info=True)
-
     # Setup git user configuration (from config)
     try:
         git_user_configured = await setup_git_user()
@@ -174,16 +164,6 @@ async def main() -> None:
             logger.debug("Git user not configured (git.user.name/email not set)")
     except Exception as e:
         logger.warning(f"Failed to setup git user | error={e}", exc_info=True)
-
-    # Setup GitHub CLI (gh) configuration (from github config)
-    try:
-        gh_configured = await setup_gh_config()
-        if gh_configured:
-            logger.info("GitHub CLI (gh) configured successfully")
-        else:
-            logger.debug("GitHub CLI not configured (github.enabled=false or no tokens)")
-    except Exception as e:
-        logger.warning(f"Failed to setup GitHub CLI | error={e}", exc_info=True)
 
     # Initialize polling_task before gateway start
     polling_task = None
