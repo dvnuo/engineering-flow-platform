@@ -2203,3 +2203,74 @@ def test_core_max_iterations_response_text_is_consistent():
     assert '"response": max_iterations_text' in chunk
     assert '_build_assistant_result_payload(' in chunk
     assert '"Task completed (max iterations reached)"' not in chunk
+
+
+def test_webchat_js_block_only_final_assistant_detection_present():
+    repo_root = Path(__file__).parent.parent
+    js = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
+
+    anchor = "function hasFinalAssistant(sessionData)"
+    start = js.find(anchor)
+    assert start != -1
+    chunk = js[start:start + 900]
+
+    assert "find(m => m.role === 'assistant')" in chunk
+    assert "lastMsg.display_blocks" in chunk
+    assert "lastMsg.content" in chunk
+    assert "hasTextContent || hasDisplayBlocks" in chunk
+
+
+def test_webchat_js_table_columns_compatibility_present():
+    repo_root = Path(__file__).parent.parent
+    js = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
+
+    anchor = "function renderTableBlock(block)"
+    start = js.find(anchor)
+    assert start != -1
+    chunk = js[start:start + 700]
+
+    assert "block.headers" in chunk
+    assert "block.columns" in chunk
+
+
+def test_webchat_js_tool_result_richer_renderer_present():
+    repo_root = Path(__file__).parent.parent
+    js = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
+
+    anchor = "if (blockType === 'tool_result')"
+    start = js.find(anchor)
+    assert start != -1
+    chunk = js[start:start + 700]
+
+    assert "message-tool-result" in chunk
+    assert "message-tool-result-title" in chunk
+    assert "is-${" in chunk
+    assert "block.content ?? block.text ?? ''" in js
+
+
+def test_webchat_js_callout_richer_renderer_present():
+    repo_root = Path(__file__).parent.parent
+    js = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
+
+    anchor = "if (blockType === 'callout')"
+    start = js.find(anchor)
+    assert start != -1
+    chunk = js[start:start + 700]
+
+    assert "message-callout" in chunk
+    assert "message-callout-title" in chunk
+    assert "is-${" in chunk
+    assert "block.content ?? block.text ?? ''" in js
+
+
+def test_webchat_css_richer_block_variant_classes_present():
+    repo_root = Path(__file__).parent.parent
+    css = (repo_root / "src" / "gateway" / "static" / "css" / "webchat.css").read_text(encoding="utf-8")
+
+    assert ".message-callout.is-success" in css
+    assert ".message-callout.is-warning" in css
+    assert ".message-callout.is-error" in css
+    assert ".message-tool-result.is-success" in css
+    assert ".message-tool-result.is-warning" in css
+    assert ".message-tool-result.is-error" in css
+    assert ".message-tool-result.is-running" in css

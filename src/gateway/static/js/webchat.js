@@ -1227,6 +1227,13 @@
         return parsedBlocks.map(renderSingleDisplayBlock).join('');
     }
 
+    function getBlockText(block) {
+        if (!block || typeof block !== 'object') {
+            return '';
+        }
+        return String(block.content ?? block.text ?? '');
+    }
+
     function renderSingleDisplayBlock(block) {
         const blockType = String(block.type || '').toLowerCase();
         if (blockType === 'code') {
@@ -1236,12 +1243,32 @@
             return renderTableBlock(block);
         }
         if (blockType === 'callout') {
-            return `<div class="message-block message-callout">${renderMarkdown(String(block.content || block.text || ''))}</div>`;
+            const tone = String(block.tone || 'info').toLowerCase();
+            const title = String(block.title || '').trim();
+            const body = renderMarkdown(getBlockText(block));
+            return `
+                <div class="message-block">
+                    <div class="message-callout is-${escapeHtml(tone)}">
+                        ${title ? `<div class="message-callout-title">${escapeHtml(title)}</div>` : ''}
+                        <div class="message-callout-content">${body}</div>
+                    </div>
+                </div>
+            `;
         }
         if (blockType === 'tool_result') {
-            return `<div class="message-block message-tool-result">${renderMarkdown(String(block.content || block.text || ''))}</div>`;
+            const status = String(block.status || 'info').toLowerCase();
+            const title = String(block.title || 'Tool result').trim() || 'Tool result';
+            const body = renderMarkdown(getBlockText(block));
+            return `
+                <div class="message-block">
+                    <div class="message-tool-result is-${escapeHtml(status)}">
+                        <div class="message-tool-result-title">${escapeHtml(title)}</div>
+                        <div class="message-tool-result-content">${body}</div>
+                    </div>
+                </div>
+            `;
         }
-        return `<div class="message-block">${renderMarkdown(String(block.content || ''))}</div>`;
+        return `<div class="message-block">${renderMarkdown(getBlockText(block))}</div>`;
     }
 
     function renderCodeBlock(block) {
@@ -1262,10 +1289,12 @@
     }
 
     function renderTableBlock(block) {
-        const headers = Array.isArray(block.headers) ? block.headers : [];
+        const headers = Array.isArray(block.headers)
+            ? block.headers
+            : (Array.isArray(block.columns) ? block.columns : []);
         const rows = Array.isArray(block.rows) ? block.rows : [];
         if (!headers.length && !rows.length) {
-            return `<div class="message-block message-table-wrap">${renderMarkdown(String(block.content || ''))}</div>`;
+            return `<div class="message-block message-table-wrap">${renderMarkdown(getBlockText(block))}</div>`;
         }
         const headHtml = headers.length
             ? `<thead><tr>${headers.map((h) => `<th>${escapeHtml(String(h ?? ''))}</th>`).join('')}</tr></thead>`
@@ -1499,8 +1528,9 @@
                 // Find last assistant message
                 const lastMsg = [...sessionData.messages].reverse().find(m => m.role === 'assistant');
                 if (!lastMsg) return false;
-                // Consider non-empty content as final
-                return !!lastMsg.content && lastMsg.content.trim().length > 0;
+                const hasTextContent = typeof lastMsg.content === 'string' && lastMsg.content.trim().length > 0;
+                const hasDisplayBlocks = Array.isArray(lastMsg.display_blocks) && lastMsg.display_blocks.length > 0;
+                return hasTextContent || hasDisplayBlocks;
             }
 
             // Try to fetch session and poll if needed
