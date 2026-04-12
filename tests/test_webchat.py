@@ -2063,3 +2063,111 @@ async def test_api_load_session_backfills_assistant_display_blocks(monkeypatch):
     assert assistant_msg["role"] == "assistant"
     assert assistant_msg["display_blocks"][0]["type"] == "markdown"
     assert assistant_msg["display_blocks"][0]["content"] == "hello from history"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_preserves_structured_display_blocks(monkeypatch):
+    from src.gateway import webchat
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {
+            "response": "fallback text",
+            "display_blocks": [
+                {"type": "code", "lang": "python", "content": "print('hi')"}
+            ],
+            "usage": {},
+            "_execution_result": object(),
+        }
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-structured"}
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["display_blocks"][0]["type"] == "code"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_accepts_legacy_content_payload(monkeypatch):
+    from src.gateway import webchat
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {
+            "content": "hello from content",
+            "role": "assistant",
+            "usage": {},
+            "_execution_result": object(),
+        }
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-legacy"}
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["response"] == "hello from content"
+    assert payload["display_blocks"][0]["content"] == "hello from content"
+
+
+@pytest.mark.asyncio
+async def test_api_load_session_keeps_existing_structured_display_blocks(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+
+    async def _fake_get_session(_session_id):
+        return {
+            "history": [
+                {"role": "assistant", "content": "fallback", "display_blocks": [{"type": "code", "lang": "python", "content": "print('x')"}]},
+            ],
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+
+    class _Request:
+        match_info = {"session_id": "s-keep"}
+
+    resp = await webchat.api_load_session(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["messages"][0]["display_blocks"][0]["type"] == "code"
+
+
+def test_agent_assistant_display_helpers_minimal_payload():
+    from src.agents.core import Agent
+
+    agent = Agent.__new__(Agent)
+    agent.agent_name = "Assistant"
+    agent.agent_id = "agent-1"
+
+    message_extra = agent._build_assistant_message_extra("hello")
+    assert message_extra["display_blocks"][0]["type"] == "markdown"
+
+    payload = agent._build_assistant_result_payload("hello", usage={}, user_message_id="u1")
+    assert payload["response"] == "hello"
+    assert payload["display_blocks"][0]["content"] == "hello"
+    assert payload["user_message_id"] == "u1"

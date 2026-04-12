@@ -679,9 +679,13 @@ async def api_chat(request: web.Request) -> web.Response:
         else:
             logger.warning(f"[api_chat] No session or empty history for {session_id}")
         
-        response = result.get("response", "") if result else ""
-        usage = result.get("usage", {}) if result else {}
-        reasoning = result.get("reasoning", "") if result else ""
+        response = ""
+        usage = {}
+        reasoning = ""
+        if isinstance(result, dict):
+            response = result.get("response") or result.get("content") or ""
+            usage = result.get("usage", {}) or {}
+            reasoning = result.get("reasoning", "") or ""
         
         # Record usage if available
         if usage:
