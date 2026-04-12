@@ -314,7 +314,7 @@ class TestRedactionIntegration:
 
     def test_default_format_includes_trace_fields_with_bound_context(self):
         stream = io.StringIO()
-        logger = logging.getLogger("trace_context_bound")
+        logger = logging.getLogger("src.gateway.webchat")
         logger.handlers = []
         logger.propagate = False
         logger.setLevel(logging.INFO)
@@ -335,9 +335,9 @@ class TestRedactionIntegration:
         assert "task=task-1" in output
         assert "path=/api/tasks/execute" in output
 
-    def test_default_format_uses_dash_without_context(self):
+    def test_default_format_omits_trace_block_without_context(self):
         stream = io.StringIO()
-        logger = logging.getLogger("trace_context_empty")
+        logger = logging.getLogger("src.gateway.webchat")
         logger.handlers = []
         logger.propagate = False
         logger.setLevel(logging.INFO)
@@ -349,9 +349,29 @@ class TestRedactionIntegration:
         clear_log_context()
         logger.info("hello")
         output = stream.getvalue()
-        assert "trace=-" in output
-        assert "request=-" in output
-        assert "path=-" in output
+        assert "trace=" not in output
+        assert "request=" not in output
+        assert "path=" not in output
+
+    def test_default_format_skips_trace_block_for_third_party_logger(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("httpcore.connection")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter(DEFAULT_FORMAT))
+        handler.addFilter(RedactingFilter())
+        logger.addHandler(handler)
+
+        set_log_context(trace_id="trace-3", request_id="req-3", path="/x")
+        try:
+            logger.info("hello")
+        finally:
+            clear_log_context()
+
+        output = stream.getvalue()
+        assert "trace=" not in output
 
     def test_exception_traceback_is_redacted(self):
         stream = io.StringIO()
@@ -496,6 +516,7 @@ class TestConstants:
         """Test DEFAULT_FORMAT constant."""
         assert isinstance(DEFAULT_FORMAT, str)
         assert "%(asctime)s" in DEFAULT_FORMAT
+        assert "%(trace_block)s" in DEFAULT_FORMAT
 
     def test_structured_format(self):
         """Test STRUCTURED_FORMAT constant."""
