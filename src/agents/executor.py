@@ -252,14 +252,14 @@ class SkillsExecutor:
         if any(phrase in request_lower for phrase in [
             "git status", "git commit", "git push", "git pull",
             "git branch", "git checkout", "git log", "git diff",
-            "git add", "git clone", "git ssh",
+            "git add", "git clone",
             "check git", "show git", "run git",
             "update repo", "update the repo", "update repository",
             "sync repo", "sync the repo", "sync repository"
         ]):
             return "git"
         
-        # GitHub skill (for gh CLI interactions)
+        # GitHub skill (for GitHub API and repository workflows)
         if any(phrase in request_lower for phrase in [
             "github clone", "gh clone", "clone repo", "clone repository",
             "github issue", "gh issue", "list issues", "list prs",

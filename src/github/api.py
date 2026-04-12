@@ -66,14 +66,13 @@ def _truncate_json(data: Any, max_length: int = 500) -> str:
 
 
 class GitHubChannel:
-    """GitHub channel adapter with basic REST API support.
-    
-    Supports URL for GitHub configurable base Enterprise instances.
+    """GitHub channel adapter with REST API support.
+
     Configuration:
-        github.api_token: API token for authentication
-        github.enabled: Whether GitHub integration is enabled
-        github.base_url: Base URL for API (default: (enterprise only - must configure base_url))
-        github.hostname: Hostname for gh CLI (defaults to base_url hostname)
+        github.api_token: API token for GitHub REST authentication.
+        github.enabled: Whether GitHub integration is enabled.
+        github.base_url: Base URL/host for GitHub Enterprise or custom GitHub deployment.
+        github.hostname: Optional host hint used for enterprise host matching/compatibility helpers.
     """
     
     def __init__(self):

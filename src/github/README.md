@@ -2,7 +2,7 @@
 
 ## Overview
 
-The GitHub module provides **GitHub REST API** integrations for repository and collaboration workflows (PRs, issues, repo metadata, etc.).
+The GitHub module provides **GitHub REST API** integrations for repository and collaboration workflows (PRs, issues, repo metadata, etc.). REST API is the primary runtime path.
 
 ## Runtime Authentication Model
 
@@ -21,7 +21,7 @@ github/
 
 ## Notes on `cli.py`
 
-`src/github/cli.py` may still be used as an optional helper wrapper, but it is not the active startup auth configuration path.
+`src/github/cli.py` may still be used as an optional helper wrapper, but it is not the active runtime authentication path.
 
 ## Configuration
 
@@ -30,7 +30,6 @@ github:
   enabled: true
   api_token: "${GITHUB_TOKEN}"
   base_url: ""          # Optional GitHub Enterprise hostname/root configuration
-  api_base: ""          # Optional API base override for GitHub Enterprise
 ```
 
 ## Best Practices

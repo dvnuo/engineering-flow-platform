@@ -16,6 +16,10 @@
 2. Git: skills/git/skill.py + 未复用的 Git 工具
 3. Jira: channel/jira.py + tools/integration.py 重复
 4. Confluence: channel/confluence.py + tools/integration.py 重复
+
+说明（当前设计收口）：
+- Git transport 已统一到 `src/git/api.py`，使用 HTTPS + `github.api_token`（askpass）。
+- `src/github/api.py` 是 GitHub runtime 主路径；`src/github/cli.py` 仅可视为 optional helper。
 ```
 
 ---
@@ -36,13 +40,12 @@ engineering-flow-platform/
 │   │   ├── github/               # GitHub 集成
 │   │   │   ├── __init__.py
 │   │   │   ├── api.py            # GitHub REST API 实现
-│   │   │   ├── cli.py            # GitHub CLI (gh) 封装
+│   │   │   ├── cli.py            # Optional helper wrapper (非主路径)
 │   │   │   └── types.py          # 类型定义
 │   │   │
 │   │   ├── git/                  # Git 集成
 │   │   │   ├── __init__.py
 │   │   │   ├── api.py           # Git 命令封装
-│   │   │   └── ssh.py           # SSH 密钥管理
 │   │   │
 │   │   ├── jira/                 # Jira 集成
 │   │   │   ├── __init__.py
@@ -203,7 +206,7 @@ class GitHubClient:
 GitHub CLI Wrapper - gh 命令封装。
 
 提供与 GitHub REST API 等价的功能，
-但使用 gh CLI 执行（支持 Enterprise）。
+可选 helper：若保留仅用于特定场景，不是当前主路径。
 """
 
 import asyncio
@@ -363,10 +366,10 @@ async def github_get_issue(owner: str, repo: str, issue_number: int):
 | `channel/github.py` | `src/integrations/github/api.py` | REST API 实现 |
 | `channel/jira.py` | `src/integrations/jira/api.py` | REST API 实现 |
 | `channel/confluence.py` | `src/integrations/confluence/api.py` | REST API 实现 |
-| `skills/github/skill.py` | `src/integrations/github/cli.py` | gh CLI 封装 |
+| `skills/github/skill.py` | `src/github/api.py` | GitHub REST API 工作流 |
 | `skills/git/skill.py` | `src/integrations/git/api.py` | Git 命令封装 |
 | `tools/integration.py` | `src/tools/*.py` | 拆分为独立文件 |
-| `skills/git/tools.py` | `src/integrations/git/ssh.py` | SSH 密钥管理 |
+| `skills/git/tools.py` | `src/git/api.py` | Git transport（HTTPS + github.api_token） |
 
 ---
 
@@ -414,7 +417,7 @@ python main.py --test
 - [ ] Phase 2: 重构 GitHub (api.py + cli.py)
 - [ ] Phase 3: 重构 Jira (api.py)
 - [ ] Phase 4: 重构 Confluence (api.py)
-- [ ] Phase 5: 重构 Git (api.py + ssh.py)
+- [ ] Phase 5: 重构 Git (api.py, HTTPS + github.api_token)
 - [ ] Phase 6: 更新 tools/integration.py
 - [ ] Phase 7: 更新 channel/* 保持兼容
 - [ ] Phase 8: 更新 skills/* 保持兼容
