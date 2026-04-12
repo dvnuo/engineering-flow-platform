@@ -52,7 +52,10 @@ from src.runtime.portal_session_metadata_client import (
     extract_session_metadata_publish_fields,
     publish_session_metadata,
 )
-from src.runtime.display_blocks import normalize_display_blocks
+from src.gateway.chat_payloads import (
+    build_webchat_response_payload,
+    normalize_assistant_history_message,
+)
 from src.runtime.capability_registry import get_capability_registry
 from src.gateway.event_bus import emit_agent_event
 from src.sessions.manager import session_manager
@@ -385,16 +388,7 @@ def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str]
 
 def _message_with_display_blocks(message: Dict[str, Any]) -> Dict[str, Any]:
     """Return assistant messages with normalized display blocks."""
-    if not isinstance(message, dict):
-        return message
-    if message.get("role") != "assistant":
-        return dict(message)
-    normalized_message = dict(message)
-    normalized_message["display_blocks"] = normalize_display_blocks(
-        message.get("display_blocks"),
-        message.get("content", "") or "",
-    )
-    return normalized_message
+    return normalize_assistant_history_message(message)
 
 
 def load_template(filename: str) -> str:
@@ -679,13 +673,11 @@ async def api_chat(request: web.Request) -> web.Response:
         else:
             logger.warning(f"[api_chat] No session or empty history for {session_id}")
         
-        response = ""
-        usage = {}
-        reasoning = ""
-        if isinstance(result, dict):
-            response = result.get("response") or result.get("content") or ""
-            usage = result.get("usage", {}) or {}
-            reasoning = result.get("reasoning", "") or ""
+        response_data = build_webchat_response_payload(
+            result if isinstance(result, dict) else None,
+            session_id,
+        )
+        usage = response_data.get("usage", {}) or {}
         
         # Record usage if available
         if usage:
@@ -700,26 +692,9 @@ async def api_chat(request: web.Request) -> web.Response:
                 task_type="chat"
             )
         
-        response_data = {
-            'response': response,
-            'session_id': session_id,
-            'usage': usage
-        }
-        response_data["display_blocks"] = normalize_display_blocks(
-            result.get("display_blocks") if isinstance(result, dict) else None,
-            response,
-        )
-        
-        # Include user_message_id for frontend to update optimistic UI
-        if result and isinstance(result, dict):
-            user_msg_id = result.get("user_message_id")
-            if user_msg_id:
-                response_data['user_message_id'] = user_msg_id
-        
         # Include events for thinking process display
-        events = result.get("events", []) if result else []
+        events = response_data.get("events", [])
         if events:
-            response_data['events'] = events
             # Save events to session for persistence
             if 'metadata' not in session:
                 session['metadata'] = {}
@@ -727,9 +702,7 @@ async def api_chat(request: web.Request) -> web.Response:
             logger.info(f"[api_chat] Saved {len(events)} thinking events to session metadata")
         
         # Include LLM debug info for sidebar display
-        llm_debug = result.get("_llm_debug", {}) if result else {}
-        if llm_debug:
-            response_data['_llm_debug'] = llm_debug
+        llm_debug = response_data.get("_llm_debug", {}) or {}
         
         # Always save thinking events to chatlog (even without llm_debug)
         chatlog_dir = os.path.join(session_persistence.storage_dir, "chatlogs")
@@ -752,10 +725,6 @@ async def api_chat(request: web.Request) -> web.Response:
             logger.info(f"[api_chat] Saved chatlog with {len(events)} events to {chatlog_file}")
         except Exception as e:
             logger.warning(f"[api_chat] Failed to save chatlog: {e}")
-        
-        # Include reasoning if available
-        if reasoning:
-            response_data['reasoning'] = reasoning
         
         return web.json_response(response_data)
         
