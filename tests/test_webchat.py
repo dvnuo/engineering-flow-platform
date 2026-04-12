@@ -90,6 +90,47 @@ class TestWebChatStaticFiles:
         assert 'hasMeaningfulDisplayBlocks(lastMsg.display_blocks)' in js
 
 
+def test_webchat_js_final_assistant_detection_respects_renderable_blocks():
+    js_path = Path(__file__).parent.parent / "src" / "gateway" / "static" / "js" / "webchat.js"
+    js = js_path.read_text(encoding='utf-8')
+    parse_start = js.find("function parseDisplayBlocks(raw)")
+    get_block_text_start = js.find("function getBlockText(block, preferCode = false)")
+    has_renderable_start = js.find("function hasRenderableDisplayBlock(block)")
+    has_meaningful_start = js.find("function hasMeaningfulDisplayBlocks(blocks)")
+    render_single_start = js.find("function renderSingleDisplayBlock(block)")
+    has_final_start = js.find("function hasFinalAssistant(sessionData)")
+    poll_start = js.find("async function pollSessionUntilFinal()")
+
+    assert parse_start != -1
+    assert get_block_text_start != -1
+    assert has_renderable_start != -1
+    assert has_meaningful_start != -1
+    assert render_single_start != -1
+    assert has_final_start != -1
+    assert poll_start != -1
+
+    parse_fn = js[parse_start:get_block_text_start]
+    get_block_text_fn = js[get_block_text_start:has_renderable_start]
+    has_renderable_fn = js[has_renderable_start:has_meaningful_start]
+    has_meaningful_fn = js[has_meaningful_start:render_single_start]
+    has_final_fn = js[has_final_start:poll_start]
+
+    empty_payload = {"messages": [{"role": "assistant", "display_blocks": [{"type": "tool_result", "title": "Bash", "content": "   "}]}]}
+    filled_payload = {"messages": [{"role": "assistant", "display_blocks": [{"type": "tool_result", "title": "Bash", "output": "done"}]}]}
+    script = f"""
+{parse_fn}
+{get_block_text_fn}
+{has_renderable_fn}
+{has_meaningful_fn}
+{has_final_fn}
+console.log(String(hasFinalAssistant({json.dumps(empty_payload)})));
+console.log(String(hasFinalAssistant({json.dumps(filled_payload)})));
+"""
+    result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    outputs = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    assert outputs == ["false", "true"]
+
+
 
 class TestWebChatRoutes:
     """Tests for WebChat route registration."""

@@ -26,7 +26,7 @@ def test_normalize_code_aliases_to_canonical_fields():
     assert len(blocks) == 1
     assert blocks[0]["type"] == "code"
     assert blocks[0]["content"] == "print(1)"
-    assert blocks[0]["language"] == "python"
+    assert blocks[0]["lang"] == "python"
 
 
 def test_normalize_table_columns_to_headers():
@@ -86,6 +86,18 @@ def test_normalize_callout_message_alias_to_content():
     assert len(blocks) == 1
     assert blocks[0]["type"] == "callout"
     assert blocks[0]["content"] == "hello"
+
+
+def test_normalize_callout_message_alias_to_content_heads_up():
+    mod = _load_display_blocks_module()
+
+    blocks = mod.normalize_display_blocks([
+        {"type": "callout", "title": "Note", "message": "Heads up"}
+    ])
+
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "callout"
+    assert blocks[0]["content"] == "Heads up"
 
 
 def test_build_markdown_display_blocks_skips_whitespace_only_text():
@@ -151,7 +163,18 @@ def test_normalize_code_prefers_non_blank_text_when_code_blank():
     assert len(blocks) == 1
     assert blocks[0]["type"] == "code"
     assert blocks[0]["content"] == "print(1)"
-    assert blocks[0]["language"] == "python"
+    assert blocks[0]["lang"] == "python"
+
+
+def test_normalize_tool_result_bodyless_block_falls_back_to_markdown():
+    mod = _load_display_blocks_module()
+
+    blocks = mod.normalize_display_blocks(
+        [{"type": "tool_result", "title": "Bash", "content": "   "}],
+        fallback_text="hello",
+    )
+
+    assert blocks == [{"type": "markdown", "content": "hello"}]
 
 
 def test_normalize_fallback_markdown_preserves_leading_and_trailing_newlines():

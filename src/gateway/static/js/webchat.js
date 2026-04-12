@@ -1215,7 +1215,8 @@
         const blocks = raw
             .filter((block) => block && typeof block === 'object' && typeof block.type === 'string')
             .map((block) => ({ ...block, type: block.type.trim() }))
-            .filter((block) => block.type.length > 0);
+            .filter((block) => block.type.length > 0)
+            .filter((block) => hasRenderableDisplayBlock(block));
         return blocks.length > 0 ? blocks : null;
     }
 
@@ -1232,7 +1233,7 @@
             return '';
         }
         const textFields = preferCode
-            ? ['code', 'content', 'text', 'output', 'result', 'value']
+            ? ['code', 'content', 'text', 'message', 'output', 'result', 'value']
             : ['content', 'text', 'output', 'result', 'value', 'message'];
         for (const field of textFields) {
             const value = block[field];
@@ -1248,20 +1249,28 @@
         return '';
     }
 
+    function hasRenderableDisplayBlock(block) {
+        if (!block || typeof block !== 'object') {
+            return false;
+        }
+        const blockType = String(block.type || '').toLowerCase();
+        if (!blockType) {
+            return false;
+        }
+        if (blockType === 'table') {
+            const headers = Array.isArray(block.headers) ? block.headers : (Array.isArray(block.columns) ? block.columns : []);
+            const rows = Array.isArray(block.rows) ? block.rows : [];
+            return headers.length > 0 || rows.length > 0 || getBlockText(block).length > 0;
+        }
+        return getBlockText(block, blockType === 'code').length > 0;
+    }
+
     function hasMeaningfulDisplayBlocks(blocks) {
         const parsedBlocks = parseDisplayBlocks(blocks);
         if (!parsedBlocks) {
             return false;
         }
-        return parsedBlocks.some((block) => {
-            const blockType = String(block.type || '').toLowerCase();
-            if (blockType === 'table') {
-                const headers = Array.isArray(block.headers) ? block.headers : (Array.isArray(block.columns) ? block.columns : []);
-                const rows = Array.isArray(block.rows) ? block.rows : [];
-                return headers.length > 0 || rows.length > 0 || getBlockText(block, false).length > 0;
-            }
-            return getBlockText(block, blockType === 'code').length > 0;
-        });
+        return parsedBlocks.some((block) => hasRenderableDisplayBlock(block));
     }
 
     function renderSingleDisplayBlock(block) {

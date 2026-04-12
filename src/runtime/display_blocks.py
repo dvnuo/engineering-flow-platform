@@ -86,11 +86,11 @@ def _normalize_display_block(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not content:
             return None
         normalized_block = {"type": "code", "content": content}
-        language = block.get("language")
+        language = block.get("lang")
         if language is None:
-            language = block.get("lang")
+            language = block.get("language")
         if isinstance(language, str) and language.strip():
-            normalized_block["language"] = language
+            normalized_block["lang"] = language
         return normalized_block
 
     if normalized_type == "table":
