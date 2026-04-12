@@ -66,6 +66,9 @@ class TestWebChatStaticFiles:
         assert '.message {' in css
         assert '.input-field {' in css
         assert '.send-button {' in css
+        assert '.copy-code-button' in css
+        assert '.message-codeblock-toolbar' in css
+        assert '.message-table-wrap' in css
     
     def test_js_file_exists(self):
         """Test JS file exists and has content."""
@@ -79,6 +82,8 @@ class TestWebChatStaticFiles:
         assert 'function sendMessage()' in js
         assert 'addMessage(' in js
         assert 'escapeHtml(' in js
+        assert 'renderDisplayBlocks(' in js
+        assert 'enhanceRenderedMessage(' in js
 
 
 
@@ -1995,3 +2000,66 @@ def test_runtime_task_tracker_prune_removes_terminal_records_even_if_oldest_is_r
     assert tracker.get("task-running") is not None
     remaining_terminal = [task_id for task_id in ("task-success", "task-error") if tracker.get(task_id) is not None]
     assert len(remaining_terminal) == 1
+
+
+@pytest.mark.asyncio
+async def test_api_chat_returns_display_blocks(monkeypatch):
+    from src.gateway import webchat
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {
+            "response": "## Hello\n\n```python\nprint('hi')\n```",
+            "usage": {},
+            "_execution_result": object(),
+        }
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-display"}
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["response"] == "## Hello\n\n```python\nprint('hi')\n```"
+    assert "display_blocks" in payload
+    assert payload["display_blocks"][0]["type"] == "markdown"
+    assert payload["display_blocks"][0]["content"] == payload["response"]
+
+
+@pytest.mark.asyncio
+async def test_api_load_session_backfills_assistant_display_blocks(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+
+    async def _fake_get_session(_session_id):
+        return {
+            "history": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello from history"},
+            ],
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+
+    class _Request:
+        match_info = {"session_id": "s-load"}
+
+    resp = await webchat.api_load_session(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assistant_msg = payload["messages"][1]
+    assert assistant_msg["role"] == "assistant"
+    assert assistant_msg["display_blocks"][0]["type"] == "markdown"
+    assert assistant_msg["display_blocks"][0]["content"] == "hello from history"

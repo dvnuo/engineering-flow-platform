@@ -999,7 +999,7 @@
      * @param {string} [timestamp] - Optional timestamp
      * @param {Object} [toolCalls] - Optional tool calls array for assistant messages
      */
-    function addMessage(role, content, timestamp, toolCalls = null) {
+    function addMessage(role, content, timestamp, toolCalls = null, displayBlocks = null) {
         // Remove welcome message if present
         const welcome = messagesContainer.querySelector('.welcome-message');
         if (welcome) {
@@ -1050,7 +1050,7 @@
 
         // Render markdown only for non-user, non-error roles; user and error messages are escaped/plain text
         const contentHtml = (role === 'assistant' || role === 'tool')
-            ? renderMarkdown(processedContent)
+            ? renderDisplayBlocks(displayBlocks, processedContent)
             : escapeHtml(processedContent).replace(/\n/g, '<br>');
 
         div.innerHTML = `
@@ -1070,12 +1070,7 @@
             markPendingAssistant(div);
         }
 
-        // Apply syntax highlighting to code blocks
-        if (typeof hljs !== 'undefined') {
-            div.querySelectorAll('pre code').forEach((block) => {
-                hljs.highlightElement(block);
-            });
-        }
+        enhanceRenderedMessage(div);
 
         // Process file references for inline images
         processMessageImages();
@@ -1163,18 +1158,6 @@
             marked.setOptions({
                 breaks: true,        // Convert \n to <br>
                 gfm: true,          // GitHub Flavored Markdown
-                highlight: function(code, lang) {
-                    if (lang && hljs) {
-                        try {
-                            return hljs.highlight(code, { language: lang }).value;
-                        } catch (e) {
-                            // Fallback: escape code to avoid HTML injection
-                            return escapeHtml(code);
-                        }
-                    }
-                    // No language or hljs unavailable: escape code
-                    return escapeHtml(code);
-                }
             });
         } catch (e) {
             console.warn('Failed to configure marked:', e);
@@ -1223,6 +1206,134 @@
             console.warn('Markdown rendering failed:', e);
             return escapeHtml(text).replace(/\n/g, '<br>');
         }
+    }
+
+    function parseDisplayBlocks(raw) {
+        if (!Array.isArray(raw) || raw.length === 0) {
+            return null;
+        }
+        const blocks = raw
+            .filter((block) => block && typeof block === 'object' && typeof block.type === 'string')
+            .map((block) => ({ ...block, type: block.type.trim() }))
+            .filter((block) => block.type.length > 0);
+        return blocks.length > 0 ? blocks : null;
+    }
+
+    function renderDisplayBlocks(blocks, fallbackMarkdown = '') {
+        const parsedBlocks = parseDisplayBlocks(blocks);
+        if (!parsedBlocks) {
+            return renderMarkdown(fallbackMarkdown || '');
+        }
+        return parsedBlocks.map(renderSingleDisplayBlock).join('');
+    }
+
+    function renderSingleDisplayBlock(block) {
+        const blockType = String(block.type || '').toLowerCase();
+        if (blockType === 'code') {
+            return renderCodeBlock(block);
+        }
+        if (blockType === 'table') {
+            return renderTableBlock(block);
+        }
+        if (blockType === 'callout') {
+            return `<div class="message-block message-callout">${renderMarkdown(String(block.content || block.text || ''))}</div>`;
+        }
+        if (blockType === 'tool_result') {
+            return `<div class="message-block message-tool-result">${renderMarkdown(String(block.content || block.text || ''))}</div>`;
+        }
+        return `<div class="message-block">${renderMarkdown(String(block.content || ''))}</div>`;
+    }
+
+    function renderCodeBlock(block) {
+        const language = String(block.language || block.lang || '').trim();
+        const codeText = String(block.content || block.code || '');
+        const escapedLanguage = escapeHtml(language || 'text');
+        const escapedCode = escapeHtml(codeText);
+        const classLanguage = language.toLowerCase().replace(/[^a-z0-9_+-]/g, '');
+        return `
+            <div class="message-block message-codeblock">
+                <div class="message-codeblock-toolbar">
+                    <span class="message-codeblock-lang">${escapedLanguage}</span>
+                    <button type="button" class="copy-code-button">Copy</button>
+                </div>
+                <pre><code class="${classLanguage ? `language-${classLanguage}` : ''}">${escapedCode}</code></pre>
+            </div>
+        `;
+    }
+
+    function renderTableBlock(block) {
+        const headers = Array.isArray(block.headers) ? block.headers : [];
+        const rows = Array.isArray(block.rows) ? block.rows : [];
+        if (!headers.length && !rows.length) {
+            return `<div class="message-block message-table-wrap">${renderMarkdown(String(block.content || ''))}</div>`;
+        }
+        const headHtml = headers.length
+            ? `<thead><tr>${headers.map((h) => `<th>${escapeHtml(String(h ?? ''))}</th>`).join('')}</tr></thead>`
+            : '';
+        const bodyHtml = rows.length
+            ? `<tbody>${rows.map((row) => `<tr>${(Array.isArray(row) ? row : []).map((cell) => `<td>${escapeHtml(String(cell ?? ''))}</td>`).join('')}</tr>`).join('')}</tbody>`
+            : '';
+        return `<div class="message-block message-table-wrap"><table>${headHtml}${bodyHtml}</table></div>`;
+    }
+
+    async function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            return;
+        }
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.setAttribute('readonly', '');
+        area.style.position = 'absolute';
+        area.style.left = '-9999px';
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        document.body.removeChild(area);
+    }
+
+    function enhanceRenderedMessage(root) {
+        if (!root) return;
+        if (typeof hljs !== 'undefined') {
+            root.querySelectorAll('pre code').forEach((block) => {
+                if (!block.classList.contains('hljs')) {
+                    hljs.highlightElement(block);
+                }
+            });
+        }
+        root.querySelectorAll('pre').forEach((pre) => {
+            let toolbar = pre.previousElementSibling;
+            if (!toolbar || !toolbar.classList.contains('message-codeblock-toolbar')) {
+                toolbar = document.createElement('div');
+                toolbar.className = 'message-codeblock-toolbar';
+                toolbar.innerHTML = '<span class="message-codeblock-lang"></span><button type="button" class="copy-code-button">Copy</button>';
+                pre.parentNode.insertBefore(toolbar, pre);
+            }
+            const code = pre.querySelector('code');
+            const langEl = toolbar.querySelector('.message-codeblock-lang');
+            if (langEl && (!langEl.textContent || langEl.textContent === 'text')) {
+                const classMatch = code?.className.match(/language-([a-z0-9_+-]+)/i);
+                langEl.textContent = classMatch ? classMatch[1] : 'text';
+            }
+            const copyButton = toolbar.querySelector('.copy-code-button');
+            if (copyButton && !copyButton.dataset.bound) {
+                copyButton.dataset.bound = 'true';
+                copyButton.addEventListener('click', async function() {
+                    try {
+                        await copyText(code ? code.textContent || '' : pre.textContent || '');
+                        this.textContent = 'Copied!';
+                        this.classList.add('copied');
+                        setTimeout(() => {
+                            this.textContent = 'Copy';
+                            this.classList.remove('copied');
+                        }, 2000);
+                    } catch (error) {
+                        this.textContent = 'Copy failed';
+                        setTimeout(() => { this.textContent = 'Copy'; }, 2000);
+                    }
+                });
+            }
+        });
     }
 
     // Close skill and file selector when clicking outside
@@ -1300,12 +1411,7 @@
         timestamp.textContent = formatSmartDate(new Date());
         bubble.appendChild(timestamp);
 
-        // Apply syntax highlighting to finished message
-        if (typeof hljs !== 'undefined') {
-            div.querySelectorAll('pre code').forEach((block) => {
-                hljs.highlightElement(block);
-            });
-        }
+        enhanceRenderedMessage(div);
     }
 
     /**
@@ -1508,7 +1614,13 @@
                 }
             } else {
                 // Fallback to simple response display
-                addMessage('assistant', data.response || '[No reply received. Please try again later.]');
+                addMessage(
+                    'assistant',
+                    data.response || '[No reply received. Please try again later.]',
+                    null,
+                    null,
+                    data.display_blocks || null
+                );
             }
 
             if (data.usage) {
@@ -1776,7 +1888,13 @@
                     if (!isDebugEnabled() && isToolPlaceholder(msg.content, role)) {
                         return;
                     }
-                    addMessage(role, msg.content || '', msg.timestamp || msg.created_at, msg.tool_calls);
+                    addMessage(
+                        role,
+                        msg.content || '',
+                        msg.timestamp || msg.created_at,
+                        msg.tool_calls,
+                        msg.display_blocks || null
+                    );
                 });
             }
 
@@ -2702,41 +2820,6 @@
             settingsPanel.classList.remove('show');
         });
     }
-
-    // ========== Copy Code Button ==========
-
-    function addCopyButtons() {
-        document.querySelectorAll('pre code').forEach((block) => {
-            if (block.parentElement.querySelector('.copy-code-button')) return;
-
-            const button = document.createElement('button');
-            button.className = 'copy-code-button';
-            button.textContent = 'Copy';
-            button.addEventListener('click', function() {
-                navigator.clipboard.writeText(block.textContent).then(() => {
-                    this.textContent = 'Copied!';
-                    this.classList.add('copied');
-                    setTimeout(() => {
-                        this.textContent = 'Copy';
-                        this.classList.remove('copied');
-                    }, 2000);
-                });
-            });
-            block.parentElement.style.position = 'relative';
-            block.parentElement.appendChild(button);
-        });
-    }
-
-    // Add copy buttons when new messages are added
-    const originalAddMessage = window.webchatAddMessage;
-    window.webchatAddMessage = function(role, content, timestamp) {
-        const result = originalAddMessage(role, content, timestamp);
-        addCopyButtons();
-        return result;
-    };
-
-    // Add copy buttons to existing code blocks
-    addCopyButtons();
 
     // Debug: Expose session functions globally for testing
     window.webchatDebugSession = {

@@ -54,6 +54,7 @@ from src.agents.skill_runtime import (
 )
 from src.skills.runtime import SkillRuntimeConfig
 from src.runtime.chat_orchestration_adapter import execute_tool_or_task_orchestration
+from src.runtime.display_blocks import normalize_display_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -556,6 +557,22 @@ You have access to the following tools. When a user asks you to do something tha
             extra["author_id"] = agent_id
         return extra
 
+    def _build_assistant_message_extra(
+        self,
+        content: str,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        merged_extra: Dict[str, Any] = self._build_agent_author_extra()
+        supplied_extra = dict(extra or {})
+        raw_display_blocks = supplied_extra.get("display_blocks")
+        merged_extra["display_blocks"] = normalize_display_blocks(raw_display_blocks, content)
+        merged_extra.update(supplied_extra)
+        merged_extra["display_blocks"] = normalize_display_blocks(
+            merged_extra.get("display_blocks"),
+            content,
+        )
+        return merged_extra
+
     async def process(
         self,
         message: str,
@@ -630,7 +647,7 @@ You have access to the following tools. When a user asks you to do something tha
         fastlane_response = await process_fastlane_command(message, self)
         if fastlane_response:
             # Fast lane command processed, return the response
-            await session_manager.add_message(session_id, "assistant", fastlane_response, extra=self._build_agent_author_extra())
+            await session_manager.add_message(session_id, "assistant", fastlane_response, extra=self._build_assistant_message_extra(fastlane_response))
             return {"response": fastlane_response, "usage": usage_data, "user_message_id": user_message_id}
         # ===== END FAST LANE =====
 
@@ -1266,7 +1283,7 @@ You have access to the following tools. When a user asks you to do something tha
                     # If still empty, provide a default prompt
                     if not fallback_content.strip():
                         fallback_content = "Operation completed, but no detailed result was returned."
-                await session_manager.add_message(session_id, "assistant", fallback_content, extra=self._build_agent_author_extra())
+                await session_manager.add_message(session_id, "assistant", fallback_content, extra=self._build_assistant_message_extra(fallback_content))
                 result = {"response": fallback_content, "usage": usage_data, "user_message_id": user_message_id}
                 if enable_reasoning:
                     reasoning_content = llm_result.get("reasoning", "")
@@ -1633,7 +1650,7 @@ You have access to the following tools. When a user asks you to do something tha
                 )
                 if passthrough_recommended:
                     passthrough_content = str(single_tool_result.content)
-                    await session_manager.add_message(session_id, "assistant", passthrough_content, extra=self._build_agent_author_extra())
+                    await session_manager.add_message(session_id, "assistant", passthrough_content, extra=self._build_assistant_message_extra(passthrough_content))
                     send_event("complete", {
                         "response": truncate_with_count(passthrough_content, 500),
                         "total_iterations": iteration
@@ -1657,7 +1674,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Safety: max iterations reached
         logger.warning(f"[Tool Loop] Max iterations ({max_tool_iterations}) reached")
-        await session_manager.add_message(session_id, "assistant", "Task completed after maximum iterations.", extra=self._build_agent_author_extra())
+        await session_manager.add_message(session_id, "assistant", "Task completed after maximum iterations.", extra=self._build_assistant_message_extra("Task completed after maximum iterations."))
         
         # Send completion event
         send_event("complete", {
@@ -1839,7 +1856,7 @@ You have access to the following tools. When a user asks you to do something tha
         if not skill:
             await session_manager.set_active_skill_session(session_id, None)
             fallback = "Skill session was cleared because the skill definition is unavailable."
-            await session_manager.add_message(session_id, "assistant", fallback, extra=self._build_agent_author_extra())
+            await session_manager.add_message(session_id, "assistant", fallback, extra=self._build_assistant_message_extra(fallback))
             events = tracer.get_events_for_ui(limit=10, session_id=session_id)
             return {"response": fallback, "usage": usage_data, "events": events, "user_message_id": user_message_id}
 
@@ -2224,7 +2241,7 @@ You have access to the following tools. When a user asks you to do something tha
             tracer.log_skill_mode_step("ASK_USER", "completed", f"Question: {question[:50]}...")
             send_skill_event("skill_step", {"step": "ASK_USER", "status": "completed", "detail": safe_preview(question, 200)})
             await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
-            await session_manager.add_message(session_id, "assistant", question, extra=self._build_agent_author_extra())
+            await session_manager.add_message(session_id, "assistant", question, extra=self._build_assistant_message_extra(question))
             # Get events for UI
             events = tracer.get_events_for_ui(limit=10, session_id=session_id)
             send_skill_event("skill_complete", {"reason": "ask_user", "question": safe_preview(question, 200)})
@@ -2274,8 +2291,10 @@ You have access to the following tools. When a user asks you to do something tha
             send_skill_event("skill_complete", {"reason": "finish", "result": safe_preview(final_text, 200)})
             await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
             await session_manager.set_active_skill_session(session_id, None)
-            finish_extra = self._build_agent_author_extra()
-            finish_extra["terminal_skill_session"] = terminal_snapshot
+            finish_extra = self._build_assistant_message_extra(
+                final_text,
+                {"terminal_skill_session": terminal_snapshot},
+            )
             await session_manager.add_message(
                 session_id,
                 "assistant",
@@ -2320,7 +2339,7 @@ You have access to the following tools. When a user asks you to do something tha
         skill_session.memory_summary = _update_skill_memory_summary(skill_session, message, result_text)
 
         await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
-        await session_manager.add_message(session_id, "assistant", result_text, extra=self._build_agent_author_extra())
+        await session_manager.add_message(session_id, "assistant", result_text, extra=self._build_assistant_message_extra(result_text))
         # Get events for UI
         events = tracer.get_events_for_ui(limit=10, session_id=session_id)
         return {"response": result_text, "usage": usage_data, "events": events, "user_message_id": user_message_id}
