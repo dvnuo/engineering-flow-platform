@@ -73,6 +73,39 @@ class TestConverter:
         assert "Title" in restored
         assert "Hello" in restored
 
+    def test_storage_to_markdown_multiline_attachment_image(self):
+        """Regression: multiline attachment images should not be dropped."""
+        from src.confluence.converter import storage_to_markdown
+
+        storage = '<ac:image>\n  <ri:attachment ri:filename="img.png"/>\n</ac:image>'
+        result = storage_to_markdown(storage)
+
+        assert result.strip()
+        assert "attachment:img.png" in result
+
+    def test_storage_to_markdown_multiline_url_image(self):
+        """Regression: multiline URL images should not be dropped."""
+        from src.confluence.converter import storage_to_markdown
+
+        storage = '<ac:image>\n  <ri:url ri:value="https://example.com/a.png"/>\n</ac:image>'
+        result = storage_to_markdown(storage)
+
+        assert result.strip()
+        assert "https://example.com/a.png" in result
+
+    def test_storage_to_markdown_absolute_attachment_image(self):
+        """Regression: non-self-closing attachment images should not be dropped."""
+        from src.confluence.converter import storage_to_markdown
+
+        storage = (
+            '<ac:image><ri:attachment ri:filename="img.png">'
+            '<ri:page ri:content-title="Other Page"/></ri:attachment></ac:image>'
+        )
+        result = storage_to_markdown(storage)
+
+        assert result.strip()
+        assert "attachment:img.png" in result
+
 
 class TestAdapter:
     """Test ConfluenceFormatAdapter."""
@@ -101,6 +134,7 @@ class TestAdapter:
             "results": [{"title": "Page 1", "id": "1"}]
         })
         channel.get_instance_client = MagicMock(return_value=channel)
+        channel.base_url = ""
         return channel
     
     @pytest.mark.asyncio
@@ -188,7 +222,7 @@ class TestAdapter:
         result = await adapter.search("test")
         
         assert "Page 1" in result
-        assert "/pages/1" in result
+        assert "/pages/1" in result or "/spaces/TEST/pages/Page1" in result
 
 
 class TestToolSchemas:

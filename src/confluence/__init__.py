@@ -9,7 +9,7 @@ from .api import (
     ConfluenceChannel, 
     confluence_channel,
 )
-from .adapter import ConfluenceFormatAdapter
+from .adapter import ConfluenceFormatAdapter, _extract_page_id_from_url
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +53,14 @@ def _get_adapter() -> ConfluenceFormatAdapter:
 
 
 
-async def _process_confluence_attachments(page_id: str) -> str:
+async def _process_confluence_attachments(
+    page_id: str,
+    channel: Optional[ConfluenceChannel] = None,
+) -> str:
     """Process page attachments and return for LLM."""
+    channel = channel or confluence_channel
     try:
-        attachments = await confluence_channel.get_attachments(page_id)
+        attachments = await channel.get_attachments(page_id)
     except Exception as e:
         logger.debug(f"No attachments for page {page_id}: {e}")
         return ""
@@ -73,19 +77,31 @@ async def _process_confluence_attachments(page_id: str) -> str:
         
         link = att.get("_links", {}).get("download", "")
         if link:
-            base_url = confluence_channel.base_url.rstrip("/")
+            base_url = channel.base_url.rstrip("/")
+            auth_header = channel._auth_header if channel.is_configured() else None
             download_url = f"{base_url}{link}"
             
             try:
                 result = await download_and_process_attachment(
                     url=download_url,
                     session_id=f"confluence-{page_id}",
-                    options={"include_image_data": True}
+                    options={
+                        "include_image_data": True,
+                        "prefer_text_for_images": True,
+                        "vision_enabled": False,
+                    },
+                    auth_header=auth_header,
                 )
                 
-                if result.content_format == "base64":
+                is_image = result.content_type.startswith("image/")
+                if is_image:
                     results.append(f"- **{filename}** (image, {size} bytes)")
-                    results.append(f"  {result.content}")
+                    if result.content_format == "text" and result.content:
+                        preview = result.content[:500]
+                        results.append("  Extracted text:")
+                        results.append(f"  {preview}")
+                    else:
+                        results.append("  [image retrieved, but no text could be extracted]")
                 elif result.content_format == "text" and result.content:
                     preview = result.content[:500]
                     results.append(f"- **{filename}** (text, {size} bytes)")
@@ -101,6 +117,20 @@ async def _process_confluence_attachments(page_id: str) -> str:
     if results:
         return "**Attachments:**\n" + "\n".join(results) + "\n"
     return ""
+
+
+async def _render_page_with_attachments(
+    page_id: str,
+    *,
+    channel: ConfluenceChannel,
+    format: str = "markdown",
+    max_chars: Optional[int] = None,
+) -> str:
+    """Render page content plus processed attachments using a specific channel."""
+    adapter = ConfluenceFormatAdapter(channel)
+    page_content = await adapter.get_page(page_id, format=format, max_chars=max_chars)
+    attachment_info = await _process_confluence_attachments(page_id, channel=channel)
+    return page_content + ("\n" + attachment_info if attachment_info else "")
 
 async def confluence_get_page(
     page_id: str,
@@ -118,14 +148,12 @@ async def confluence_get_page(
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
         
-        adapter = _get_adapter()
-        # Get page content
-        page_content = await adapter.get_page(page_id, format=format, max_chars=max_chars)
-        
-        # Process attachments
-        attachment_info = await _process_confluence_attachments(page_id)
-        
-        return page_content + ("\n" + attachment_info if attachment_info else "") if attachment_info else page_content
+        return await _render_page_with_attachments(
+            page_id,
+            channel=confluence_channel,
+            format=format,
+            max_chars=max_chars,
+        )
     except Exception as e:
         return f"Error getting page: {e}"
 
@@ -164,11 +192,23 @@ async def confluence_get_page_by_url(
         max_chars: Maximum characters to return
     """
     try:
-        if not confluence_channel.is_configured():
-            return "Confluence is not configured. Please check your settings."
-        
-        adapter = _get_adapter()
-        return await adapter.get_page_by_url(url, format=format, max_chars=max_chars)
+        page_id = _extract_page_id_from_url(url)
+        if not page_id:
+            return f"Could not extract page ID from URL: {url}"
+
+        instance_channel = confluence_channel.get_instance_client(url=url, strict=True)
+        if instance_channel is None:
+            return f"Confluence instance for URL is not configured: {url}"
+
+        if not instance_channel.is_configured():
+            return f"Confluence instance for URL is not configured: {url}"
+
+        return await _render_page_with_attachments(
+            page_id,
+            channel=instance_channel,
+            format=format,
+            max_chars=max_chars,
+        )
     except Exception as e:
         return f"Error getting page: {e}"
 

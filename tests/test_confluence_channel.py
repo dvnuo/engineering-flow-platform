@@ -104,6 +104,31 @@ class TestConfluenceChannelMultiInstance:
             assert client is not None
             assert client.base_url == 'https://company.atlassian.net/wiki'
 
+    def test_get_instance_client_strict_returns_none_when_url_unmatched(self):
+        """Strict mode should return None instead of default fallback when URL is unmatched."""
+        from src.confluence.api import ConfluenceChannel
+
+        mock_config = MagicMock()
+        mock_config.get_confluence_instances.return_value = [
+            {'name': 'Company Wiki', 'url': 'https://company.atlassian.net/wiki', 'space': 'TEAM', 'username': 'user1', 'password': 'pass1'},
+            {'name': 'Dev Wiki', 'url': 'https://dev.company.atlassian.net/wiki', 'space': 'DEV', 'username': 'user2', 'password': 'pass2'}
+        ]
+        mock_config.find_confluence_instance.return_value = None
+
+        with patch('src.confluence.api.config', mock_config):
+            channel = ConfluenceChannel()
+            client = channel.get_instance_client(
+                url='https://unknown.example/wiki/spaces/X/pages/1',
+                strict=True,
+            )
+
+            assert client is None
+            mock_config.find_confluence_instance.assert_called_once_with(
+                url='https://unknown.example/wiki/spaces/X/pages/1',
+                name=None,
+                strict=True,
+            )
+
 
 class TestConfluenceChannelBasic:
     """Test basic Confluence Channel functionality."""

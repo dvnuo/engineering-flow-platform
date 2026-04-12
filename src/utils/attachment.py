@@ -56,6 +56,9 @@ async def download_and_process_attachment(
     include_image = options.get("include_image_data", True)
     max_image_size = options.get("max_image_size", 1024)
     max_text_chars = options.get("max_text_chars", 5000)
+    prefer_text_for_images = options.get("prefer_text_for_images", False)
+    vision_enabled = options.get("vision_enabled", False)
+    ocr_engine = options.get("ocr_engine", "paddleocr")
     
     # Download file
     content, content_type, filename = await _download_file(url, auth_header=auth_header)
@@ -71,13 +74,35 @@ async def download_and_process_attachment(
     # Process based on type
     file_path = str(get_file_path(metadata.file_id))
     
-    if content_type.startswith("image/") and include_image:
-        # Compress and convert to base64
-        try:
-            content = compress_image_for_llm(file_path, max_dimension=max_image_size)
-            content_format = "base64"
-        except Exception as e:
-            logger.warning(f"Failed to compress image: {e}")
+    if content_type.startswith("image/"):
+        extracted_text = ""
+        if prefer_text_for_images:
+            try:
+                parsed = await parse_file(
+                    metadata.file_id,
+                    options={
+                        "vision_enabled": vision_enabled,
+                        "ocr_engine": ocr_engine,
+                    },
+                )
+                if getattr(parsed, "success", False):
+                    extracted_text = (getattr(parsed, "markdown", "") or "").strip()
+            except Exception as e:
+                logger.warning(f"Failed to OCR image attachment: {e}")
+
+        if extracted_text:
+            content = extracted_text[:max_text_chars]
+            content_format = "text"
+        elif include_image:
+            # Compress and convert to base64
+            try:
+                content = compress_image_for_llm(file_path, max_dimension=max_image_size)
+                content_format = "base64"
+            except Exception as e:
+                logger.warning(f"Failed to compress image: {e}")
+                content = f"[Image: {filename}]"
+                content_format = "text"
+        else:
             content = f"[Image: {filename}]"
             content_format = "text"
     elif content_type.startswith("text/") or _is_text_type(content_type):
