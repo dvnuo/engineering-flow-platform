@@ -3035,8 +3035,9 @@ def setup_webchat_routes(app: web.Application):
         GET  /api/tasks/{task_id} - Runtime task status for portal polling
         GET  /api/sessions - List recent sessions
         GET  /api/sessions/{session_id} - Load session messages
-        GET  /api/server-files - Browse workspace files (primary API)
-        GET  /api/files    - Legacy compatibility alias for server file browse
+        GET  /api/server-files/* - Canonical path-based workspace file API
+        GET  /api/files and /api/files/read - Legacy path-based compatibility aliases
+        /api/files/{file_id}* - File-ID attachment APIs (separate from path-based server files)
         GET  /api/usage   - Get usage stats
         POST /api/clear   - Clear session
         GET  /api/skills  - Get available skills
@@ -3074,7 +3075,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/copilot/auth/start', api_copilot_auth_start)
     app.router.add_post('/api/copilot/auth/check', api_copilot_auth_check)
     
-    # File upload/parse routes
+    # Attachment APIs (file-id based, separate from path-based server-files routes)
     app.router.add_post('/api/files/upload', api_files_upload)
     app.router.add_post('/api/files/parse', api_files_parse)
     app.router.add_get('/api/files/list', api_files_list)
@@ -3112,6 +3113,7 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  GET  /api/server-files/download - Download file(s) from workspace")
     logger.info("  GET  /api/files (legacy alias) - Compatibility browse route")
     logger.info("  GET  /api/files/read (legacy alias) - Compatibility text-read route")
+    logger.info("  /api/files/{file_id}* - Attachment APIs (file-id based, separate namespace)")
     logger.info("  GET  /api/usage   - Get usage stats")
     logger.info("  POST /api/clear   - Clear session")
     logger.info("  GET  /api/skills  - Get available skills")
