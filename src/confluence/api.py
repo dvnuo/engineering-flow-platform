@@ -58,19 +58,31 @@ class ConfluenceChannel:
         self.client = httpx.AsyncClient(timeout=30.0)
         self._auth_header = self._get_auth_header()
     
-    def get_instance_client(self, url: str = None, name: str = None) -> 'ConfluenceChannel':
+    def get_instance_client(
+        self,
+        url: str = None,
+        name: str = None,
+        strict: bool = False,
+    ) -> Optional['ConfluenceChannel']:
         """Get a ConfluenceChannel client for a specific instance.
         
         Args:
             url: URL to match
             name: Instance name to match
+            strict: If False (default), fallback to default channel when no match.
+                If True, return None when no matching instance is found.
             
         Returns:
-            ConfluenceChannel configured for the matched instance
+            ConfluenceChannel configured for the matched instance,
+            or None when strict=True and no match is found.
         """
-        instance = config.find_confluence_instance(url=url, name=name)
+        instance = config.find_confluence_instance(url=url, name=name, strict=strict)
         
         if not instance:
+            if strict:
+                logger.warning(f"No Confluence instance found for url={url}, name={name} (strict mode)")
+                return None
+
             logger.warning(f"No Confluence instance found for url={url}, name={name}, using default")
             return self
         

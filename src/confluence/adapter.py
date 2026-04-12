@@ -109,7 +109,12 @@ class ConfluenceFormatAdapter:
             return f"Could not extract page ID from URL: {url}"
         
         # Get instance-specific channel and fetch page
-        instance_channel = self.channel.get_instance_client(url=url)
+        instance_channel = self.channel.get_instance_client(url=url, strict=True)
+        if instance_channel is None:
+            return f"Confluence instance for URL is not configured: {url}"
+        if not instance_channel.is_configured():
+            return f"Confluence instance for URL is not configured: {url}"
+
         page = await instance_channel.get_page(page_id)
         
         if not isinstance(page, dict):

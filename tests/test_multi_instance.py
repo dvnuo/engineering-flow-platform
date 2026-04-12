@@ -73,7 +73,10 @@ class TestConfluenceGetPageByUrl:
             result = await confluence_get_page_by_url("https://company.atlassian.net/wiki/spaces/SPACE/pages/123456/Page-Title")
             
             # Should have called get_instance_client with the URL
-            mock_channel.get_instance_client.assert_called()
+            mock_channel.get_instance_client.assert_called_with(
+                url="https://company.atlassian.net/wiki/spaces/SPACE/pages/123456/Page-Title",
+                strict=True,
+            )
             
             # Result should contain the page info
             assert "Test Page" in result

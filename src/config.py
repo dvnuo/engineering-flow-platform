@@ -368,7 +368,12 @@ class Config:
         
         return instances
     
-    def find_confluence_instance(self, url: str = None, name: str = None) -> Optional[Dict[str, Any]]:
+    def find_confluence_instance(
+        self,
+        url: str = None,
+        name: str = None,
+        strict: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         """Find Confluence instance by URL or name."""
         instances = self.get_confluence_instances()
         
@@ -388,6 +393,9 @@ class Config:
                 if inst_url and url.startswith(inst_url):
                     return inst
         
+        if strict:
+            return None
+
         # Return first instance as default
         return instances[0] if instances else None
     

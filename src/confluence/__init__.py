@@ -192,14 +192,14 @@ async def confluence_get_page_by_url(
         max_chars: Maximum characters to return
     """
     try:
-        if not confluence_channel.is_configured():
-            return "Confluence is not configured. Please check your settings."
-        
         page_id = _extract_page_id_from_url(url)
         if not page_id:
             return f"Could not extract page ID from URL: {url}"
 
-        instance_channel = confluence_channel.get_instance_client(url=url)
+        instance_channel = confluence_channel.get_instance_client(url=url, strict=True)
+        if instance_channel is None:
+            return f"Confluence instance for URL is not configured: {url}"
+
         if not instance_channel.is_configured():
             return f"Confluence instance for URL is not configured: {url}"
 
