@@ -7,7 +7,9 @@ from typing import Any, Dict, List, Optional
 
 def build_markdown_display_blocks(text: str) -> List[Dict[str, Any]]:
     """Build a single markdown display block from plain text."""
-    if not isinstance(text, str) or not text:
+    if not isinstance(text, str):
+        return []
+    if not text.strip():
         return []
     return [{"type": "markdown", "content": text}]
 
@@ -15,8 +17,12 @@ def build_markdown_display_blocks(text: str) -> List[Dict[str, Any]]:
 def _first_text_value(block: Dict[str, Any], field_order: tuple[str, ...]) -> str:
     for field_name in field_order:
         value = block.get(field_name)
-        if value is not None:
-            return str(value)
+        if value is None:
+            continue
+        text = str(value)
+        if not text.strip():
+            continue
+        return text
     return ""
 
 

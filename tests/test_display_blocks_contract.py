@@ -86,3 +86,34 @@ def test_normalize_callout_message_alias_to_content():
     assert len(blocks) == 1
     assert blocks[0]["type"] == "callout"
     assert blocks[0]["content"] == "hello"
+
+
+def test_build_markdown_display_blocks_skips_whitespace_only_text():
+    mod = _load_display_blocks_module()
+
+    assert mod.build_markdown_display_blocks("   ") == []
+    assert mod.build_markdown_display_blocks("\n\n") == []
+
+
+def test_normalize_tool_result_uses_non_blank_output_when_content_blank():
+    mod = _load_display_blocks_module()
+
+    blocks = mod.normalize_display_blocks([
+        {"type": "tool_result", "content": "   ", "output": "done"}
+    ])
+
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "tool_result"
+    assert blocks[0]["content"] == "done"
+
+
+def test_normalize_code_uses_non_blank_text_when_content_blank():
+    mod = _load_display_blocks_module()
+
+    blocks = mod.normalize_display_blocks([
+        {"type": "code", "content": "  ", "text": "print(1)"}
+    ])
+
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "code"
+    assert blocks[0]["content"] == "print(1)"

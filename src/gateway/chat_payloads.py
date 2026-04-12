@@ -33,10 +33,22 @@ def _get_normalize_display_blocks() -> Callable[[Optional[Any], str], list[dict[
         return _normalize_display_blocks_fn
 
 
+def _meaningful_text(value: Any) -> str:
+    """Return original text when meaningful; otherwise empty string."""
+    if value is None:
+        return ""
+    text = str(value)
+    if not text.strip():
+        return ""
+    return text
+
+
 def build_webchat_response_payload(result: Optional[Dict[str, Any]], session_id: str) -> Dict[str, Any]:
     """Build the stable JSON payload returned by ``/api/chat``."""
     payload_result = result if isinstance(result, dict) else {}
-    response_text = payload_result.get("response") or payload_result.get("content") or ""
+    response_value = _meaningful_text(payload_result.get("response"))
+    content_value = _meaningful_text(payload_result.get("content"))
+    response_text = response_value or content_value
     usage = payload_result.get("usage", {}) or {}
     normalize_display_blocks = _get_normalize_display_blocks()
 
@@ -60,8 +72,9 @@ def normalize_assistant_history_message(message: Dict[str, Any]) -> Dict[str, An
     if normalized_message.get("role") != "assistant":
         return normalized_message
     normalize_display_blocks = _get_normalize_display_blocks()
+    fallback_text = _meaningful_text(message.get("content"))
     normalized_message["display_blocks"] = normalize_display_blocks(
         message.get("display_blocks"),
-        message.get("content", "") or "",
+        fallback_text,
     )
     return normalized_message

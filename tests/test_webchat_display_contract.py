@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+import subprocess
 
 
 def _load_chat_payloads_module():
@@ -72,3 +74,50 @@ def test_normalize_assistant_history_message_leaves_non_assistant_shape():
     assert message["role"] == "user"
     assert message["content"] == "hello"
     assert "display_blocks" not in message
+
+
+def test_build_webchat_response_payload_treats_whitespace_response_as_empty():
+    mod = _load_chat_payloads_module()
+    payload = mod.build_webchat_response_payload(
+        {"response": "   ", "display_blocks": [None, {"type": "   "}]},
+        "s-4",
+    )
+
+    assert payload["response"] == ""
+    assert payload["display_blocks"] == []
+
+
+def test_normalize_assistant_history_message_treats_whitespace_content_as_empty():
+    mod = _load_chat_payloads_module()
+    message = mod.normalize_assistant_history_message(
+        {"role": "assistant", "content": "   ", "display_blocks": [None, {"type": "   "}]}
+    )
+
+    assert message["display_blocks"] == []
+
+
+def test_render_single_display_block_uses_non_blank_output_text():
+    repo_root = Path(__file__).parent.parent
+    js_path = repo_root / "src" / "gateway" / "static" / "js" / "webchat.js"
+    js_source = js_path.read_text(encoding="utf-8")
+
+    get_block_text_start = js_source.find("function getBlockText(block)")
+    render_single_start = js_source.find("function renderSingleDisplayBlock(block)")
+    render_code_start = js_source.find("function renderCodeBlock(block)")
+    assert get_block_text_start != -1
+    assert render_single_start != -1
+    assert render_code_start != -1
+
+    get_block_text_fn = js_source[get_block_text_start:render_single_start]
+    render_single_fn = js_source[render_single_start:render_code_start]
+
+    script = f"""
+{get_block_text_fn}
+function escapeHtml(v) {{ return String(v); }}
+function renderMarkdown(v) {{ return String(v); }}
+{render_single_fn}
+const html = renderSingleDisplayBlock({json.dumps({"type": "tool_result", "content": "   ", "output": "done"})});
+console.log(html);
+"""
+    result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    assert "done" in result.stdout

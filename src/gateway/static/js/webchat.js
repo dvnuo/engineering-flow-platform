@@ -1231,15 +1231,19 @@
         if (!block || typeof block !== 'object') {
             return '';
         }
-        return String(
-            block.content
-            ?? block.text
-            ?? block.message
-            ?? block.output
-            ?? block.result
-            ?? block.value
-            ?? ''
-        );
+        const textFields = ['content', 'text', 'message', 'output', 'result', 'value'];
+        for (const field of textFields) {
+            const value = block[field];
+            if (value === null || value === undefined) {
+                continue;
+            }
+            const textValue = String(value);
+            if (textValue.trim().length === 0) {
+                continue;
+            }
+            return textValue;
+        }
+        return '';
     }
 
     function renderSingleDisplayBlock(block) {
