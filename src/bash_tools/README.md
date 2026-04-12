@@ -63,7 +63,7 @@ Execute a shell command with security restrictions.
 await run_command(
     cmd="git",
     args=["status"],
-    cwd="/root/.efp/workspace",  # Must be in workspace
+    cwd="/home/<runtime-user>/.efp/workspace",  # Must be in the runtime user's workspace
     timeout_ms=15000,
 )
 ```
