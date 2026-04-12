@@ -1943,6 +1943,98 @@
     const fileExplorerPanel = document.getElementById('fileExplorerPanel');
     const closeFileExplorer = document.getElementById('closeFileExplorer');
     const fileExplorerContent = document.getElementById('fileExplorerContent');
+    const serverFilesUploadInput = document.createElement('input');
+    serverFilesUploadInput.type = 'file';
+    serverFilesUploadInput.style.display = 'none';
+    document.body.appendChild(serverFilesUploadInput);
+    let serverFilesCurrentPath = '';
+    let selectedServerFilePaths = new Set();
+
+    async function parseJsonSafe(response) {
+        try {
+            return await response.json();
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function getServerFilesErrorMessage(payload, fallback = 'Request failed') {
+        if (!payload) return fallback;
+        if (payload.error) {
+            return payload.detail ? `${payload.error}: ${payload.detail}` : payload.error;
+        }
+        return fallback;
+    }
+
+    function updateServerFilesToolbarState() {
+        const deleteBtn = fileExplorerContent.querySelector('#serverFilesDeleteBtn');
+        if (!deleteBtn) return;
+        const count = selectedServerFilePaths.size;
+        deleteBtn.disabled = count === 0;
+        deleteBtn.textContent = count > 0 ? `Delete (${count})` : 'Delete';
+    }
+
+    async function uploadServerFile(file) {
+        if (!file) return;
+        setStatus(`Uploading ${file.name}...`, 'uploading');
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('path', serverFilesCurrentPath || '');
+
+        try {
+            const response = await fetch('/api/server-files/upload', {
+                method: 'POST',
+                body: formData
+            });
+            const payload = await parseJsonSafe(response);
+
+            if (!response.ok || (payload && payload.success === false)) {
+                const errorMessage = getServerFilesErrorMessage(payload, `Failed to upload ${file.name}`);
+                setStatus(`Upload failed: ${errorMessage}`, 'error');
+                return;
+            }
+
+            const extractedCount = payload?.mode === 'zip_extract' ? payload.extracted_count || 0 : null;
+            const successMessage = extractedCount !== null
+                ? `Uploaded ${file.name} and extracted ${extractedCount} item(s)`
+                : `Uploaded ${file.name}`;
+            setStatus(successMessage, 'success');
+            await showFileExplorer(serverFilesCurrentPath);
+        } catch (error) {
+            console.error('Server file upload error:', error);
+            setStatus(`Upload failed: ${error.message}`, 'error');
+        }
+    }
+
+    async function deleteServerFiles(paths) {
+        if (!paths.length) return;
+        const confirmed = confirm(`Delete ${paths.length} selected item(s)? This cannot be undone.`);
+        if (!confirmed) return;
+
+        setStatus(`Deleting ${paths.length} item(s)...`, 'uploading');
+        try {
+            const response = await fetch('/api/server-files/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ paths })
+            });
+            const payload = await parseJsonSafe(response);
+
+            if (!response.ok || (payload && payload.success === false)) {
+                const errorMessage = getServerFilesErrorMessage(payload, 'Failed to delete selected items');
+                setStatus(`Delete failed: ${errorMessage}`, 'error');
+                return;
+            }
+
+            setStatus(`Deleted ${paths.length} item(s)`, 'success');
+            selectedServerFilePaths = new Set();
+            await showFileExplorer(serverFilesCurrentPath);
+        } catch (error) {
+            console.error('Server file delete error:', error);
+            setStatus(`Delete failed: ${error.message}`, 'error');
+        }
+    }
 
     // Show My Uploads (user's uploaded files)
     async function showMyUploads() {
@@ -1978,6 +2070,8 @@
 
             const rootPath = data.root_path || '';
             const activePath = data.path || rootPath;
+            serverFilesCurrentPath = activePath;
+            selectedServerFilePaths = new Set();
             let pathParts = [];
             if (rootPath && activePath.startsWith(rootPath)) {
                 const relativePath = activePath.slice(rootPath.length).replace(/^\/+/, '');
@@ -1995,9 +2089,22 @@
                 pathHtml += '<button data-path="' + currentPath + '">' + escapeHtml(part) + '</button>';
             });
             pathHtml += '</div>';
+            pathHtml += `
+                <div class="file-explorer-toolbar" style="display:flex;gap:8px;margin:8px 0 10px 0;">
+                    <button type="button" id="serverFilesUploadBtn">Upload</button>
+                    <button type="button" id="serverFilesDeleteBtn" disabled>Delete</button>
+                </div>
+            `;
 
             if (data.items.length === 0) {
                 fileExplorerContent.innerHTML = pathHtml + '<div class="file-explorer-empty">Empty directory</div>';
+                const uploadBtn = fileExplorerContent.querySelector('#serverFilesUploadBtn');
+                if (uploadBtn) {
+                    uploadBtn.addEventListener('click', () => {
+                        serverFilesUploadInput.value = '';
+                        serverFilesUploadInput.click();
+                    });
+                }
                 return;
             }
 
@@ -2005,6 +2112,7 @@
                 <div class="file-explorer-list">
                     ${data.items.map(item => `
                         <div class="file-explorer-item" data-path="${item.path}" data-is-dir="${item.is_dir}">
+                            <input type="checkbox" class="server-file-select" data-path="${item.path}" title="Select for delete" />
                             ${item.is_dir ?
                                 '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>' :
                                 '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
@@ -2014,6 +2122,33 @@
                     `).join('')}
                 </div>
             `;
+
+            const uploadBtn = fileExplorerContent.querySelector('#serverFilesUploadBtn');
+            if (uploadBtn) {
+                uploadBtn.addEventListener('click', () => {
+                    serverFilesUploadInput.value = '';
+                    serverFilesUploadInput.click();
+                });
+            }
+            const deleteBtn = fileExplorerContent.querySelector('#serverFilesDeleteBtn');
+            if (deleteBtn) {
+                deleteBtn.addEventListener('click', () => {
+                    deleteServerFiles(Array.from(selectedServerFilePaths));
+                });
+            }
+            fileExplorerContent.querySelectorAll('.server-file-select').forEach(checkbox => {
+                checkbox.addEventListener('click', e => e.stopPropagation());
+                checkbox.addEventListener('change', function() {
+                    const selectedPath = this.dataset.path;
+                    if (this.checked) {
+                        selectedServerFilePaths.add(selectedPath);
+                    } else {
+                        selectedServerFilePaths.delete(selectedPath);
+                    }
+                    updateServerFilesToolbarState();
+                });
+            });
+            updateServerFilesToolbarState();
 
             // Add click handlers
             fileExplorerContent.querySelectorAll('.file-explorer-path button').forEach(btn => {
@@ -2025,6 +2160,7 @@
 
             fileExplorerContent.querySelectorAll('.file-explorer-item').forEach(item => {
                 item.addEventListener('click', function(e) {
+                    if (e.target.closest('.server-file-select')) return;
                     e.stopPropagation();
                     const isDir = this.dataset.isDir === 'true';
                     const path = this.dataset.path;
@@ -2055,6 +2191,12 @@
             fileExplorerContent.innerHTML = '<div class="loading">Error loading files</div>';
         }
     }
+
+    serverFilesUploadInput.addEventListener('change', async function() {
+        const file = this.files && this.files[0];
+        if (!file) return;
+        await uploadServerFile(file);
+    });
 
     if (closeFileExplorer) {
         closeFileExplorer.addEventListener('click', function() {

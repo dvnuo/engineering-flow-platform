@@ -18,24 +18,32 @@ def test_server_files_routes_registered():
     assert "/api/server-files/read" in routes
     assert "/api/server-files/content" in routes
     assert "/api/server-files/upload" in routes
+    assert "/api/server-files/delete" in routes
     assert "/api/server-files/download" in routes
 
 
 class _Request:
-    def __init__(self, query=None, multipart_reader=None):
+    def __init__(self, query=None, multipart_reader=None, json_body=None):
         self.query = MultiDictProxy(MultiDict(query or {}))
         self._multipart_reader = multipart_reader
+        self._json_body = json_body
 
     async def multipart(self):
         return self._multipart_reader
 
+    async def json(self):
+        if self._json_body is None:
+            raise json.JSONDecodeError("missing", "", 0)
+        return self._json_body
+
 
 class _Field:
-    def __init__(self, name, value=None, filename=None, data=None):
+    def __init__(self, name, value=None, filename=None, data=None, content_type=None):
         self.name = name
         self._value = value
         self.filename = filename
         self._data = data or b""
+        self.content_type = content_type
 
     async def text(self):
         return self._value or ""
@@ -140,7 +148,7 @@ async def test_server_files_upload_regular_file(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_server_files_zip_upload_extracts_and_blocks_zip_slip(monkeypatch, tmp_path):
+async def test_server_files_zip_upload_extracts(monkeypatch, tmp_path):
     workspace_root = _patch_workspace_home(monkeypatch, tmp_path)
     target_dir = workspace_root / "zips"
     target_dir.mkdir(parents=True)
@@ -158,6 +166,48 @@ async def test_server_files_zip_upload_extracts_and_blocks_zip_slip(monkeypatch,
     assert ok_body["mode"] == "zip_extract"
     assert (target_dir / "nested" / "ok.txt").exists()
 
+@pytest.mark.asyncio
+async def test_server_files_zip_upload_rejects_empty_payload(monkeypatch, tmp_path):
+    workspace_root = _patch_workspace_home(monkeypatch, tmp_path)
+    target_dir = workspace_root / "zips"
+    target_dir.mkdir(parents=True)
+
+    multipart = _Multipart([
+        _Field("path", value=str(target_dir)),
+        _Field("file", filename="empty.zip", data=b""),
+    ])
+
+    response = await webchat.api_server_files_upload(_Request(multipart_reader=multipart))
+    body = json.loads(response.body)
+
+    assert response.status == 400
+    assert body["error"] == "Uploaded ZIP file is empty"
+
+
+@pytest.mark.asyncio
+async def test_server_files_zip_upload_rejects_non_zip_payload(monkeypatch, tmp_path):
+    workspace_root = _patch_workspace_home(monkeypatch, tmp_path)
+    target_dir = workspace_root / "zips"
+    target_dir.mkdir(parents=True)
+
+    multipart = _Multipart([
+        _Field("path", value=str(target_dir)),
+        _Field("file", filename="invalid.zip", data=b"not-a-zip"),
+    ])
+
+    response = await webchat.api_server_files_upload(_Request(multipart_reader=multipart))
+    body = json.loads(response.body)
+
+    assert response.status == 400
+    assert body["error"] == "Uploaded file is not a valid ZIP archive"
+
+
+@pytest.mark.asyncio
+async def test_server_files_zip_upload_blocks_zip_slip(monkeypatch, tmp_path):
+    workspace_root = _patch_workspace_home(monkeypatch, tmp_path)
+    target_dir = workspace_root / "zips"
+    target_dir.mkdir(parents=True)
+
     bad_zip = io.BytesIO()
     with zipfile.ZipFile(bad_zip, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("../escape.txt", "escape")
@@ -165,10 +215,85 @@ async def test_server_files_zip_upload_extracts_and_blocks_zip_slip(monkeypatch,
         _Field("path", value=str(target_dir)),
         _Field("file", filename="bad.zip", data=bad_zip.getvalue()),
     ])
+
     bad_response = await webchat.api_server_files_upload(_Request(multipart_reader=bad_multipart))
     bad_body = json.loads(bad_response.body)
+
     assert bad_response.status == 400
     assert "Unsafe ZIP entry" in bad_body["error"]
+
+
+@pytest.mark.asyncio
+async def test_server_files_delete_single_file(monkeypatch, tmp_path):
+    workspace_root = _patch_workspace_home(monkeypatch, tmp_path)
+    file_path = workspace_root / "delete-me.txt"
+    file_path.write_text("bye", encoding="utf-8")
+
+    response = await webchat.api_server_files_delete(_Request(json_body={"paths": [str(file_path)]}))
+    body = json.loads(response.body)
+
+    assert response.status == 200
+    assert body["success"] is True
+    assert body["deleted"][0]["type"] == "file"
+    assert not file_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_server_files_delete_directory_recursively(monkeypatch, tmp_path):
+    workspace_root = _patch_workspace_home(monkeypatch, tmp_path)
+    dir_path = workspace_root / "delete-dir"
+    (dir_path / "nested").mkdir(parents=True)
+    (dir_path / "nested" / "a.txt").write_text("a", encoding="utf-8")
+
+    response = await webchat.api_server_files_delete(_Request(json_body={"paths": [str(dir_path)]}))
+    body = json.loads(response.body)
+
+    assert response.status == 200
+    assert body["deleted"][0]["type"] == "directory"
+    assert not dir_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_server_files_delete_rejects_workspace_root(monkeypatch, tmp_path):
+    workspace_root = _patch_workspace_home(monkeypatch, tmp_path)
+
+    response = await webchat.api_server_files_delete(_Request(json_body={"paths": [str(workspace_root)]}))
+    body = json.loads(response.body)
+
+    assert response.status == 400
+    assert body["error"] == "Deleting workspace root is not allowed"
+
+
+@pytest.mark.asyncio
+async def test_server_files_delete_rejects_outside_root(monkeypatch, tmp_path):
+    _patch_workspace_home(monkeypatch, tmp_path)
+    outside_path = tmp_path.parent / "outside.txt"
+
+    response = await webchat.api_server_files_delete(_Request(json_body={"paths": [str(outside_path)]}))
+    body = json.loads(response.body)
+
+    assert response.status == 400
+    assert "within workspace root" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_server_files_delete_multiple_paths(monkeypatch, tmp_path):
+    workspace_root = _patch_workspace_home(monkeypatch, tmp_path)
+    file_path = workspace_root / "a.txt"
+    file_path.write_text("a", encoding="utf-8")
+    dir_path = workspace_root / "d"
+    (dir_path / "nested").mkdir(parents=True)
+    (dir_path / "nested" / "b.txt").write_text("b", encoding="utf-8")
+
+    response = await webchat.api_server_files_delete(
+        _Request(json_body={"paths": [str(file_path), str(dir_path)]})
+    )
+    body = json.loads(response.body)
+
+    assert response.status == 200
+    assert len(body["deleted"]) == 2
+    assert not file_path.exists()
+    assert not dir_path.exists()
 
 
 @pytest.mark.asyncio
