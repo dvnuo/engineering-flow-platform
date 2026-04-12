@@ -1979,8 +1979,8 @@
         setStatus(`Uploading ${file.name}...`, 'uploading');
 
         const formData = new FormData();
-        formData.append('file', file);
         formData.append('path', serverFilesCurrentPath || '');
+        formData.append('file', file);
 
         try {
             const response = await fetch('/api/server-files/upload', {
