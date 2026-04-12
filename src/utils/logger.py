@@ -24,10 +24,7 @@ from src.utils.redaction import redact_text, redact_value, safe_preview, safe_lo
 
 # Custom log format with detailed info
 DEFAULT_FORMAT = (
-    "%(asctime)s | %(levelname)-8s | %(filename)s:%(lineno)d | %(funcName)s | "
-    "trace=%(trace_id)s span=%(span_id)s parent=%(parent_span_id)s "
-    "request=%(request_id)s task=%(task_id)s portal_task=%(portal_task_id)s "
-    "dispatch=%(portal_dispatch_id)s agent=%(agent_id)s path=%(path)s | %(message)s"
+    "%(asctime)s | %(levelname)-8s | %(trace_block)s%(filename)s:%(lineno)d | %(funcName)s | %(message)s"
 )
 
 # Structured log format (JSON)
@@ -45,6 +42,18 @@ _LOG_CONTEXT_FIELDS = (
     "path",
 )
 _LOG_CONTEXT_DEFAULTS = {field: "-" for field in _LOG_CONTEXT_FIELDS}
+_TRACE_FIELD_MAPPING = (
+    ("trace_id", "trace"),
+    ("span_id", "span"),
+    ("parent_span_id", "parent"),
+    ("request_id", "request"),
+    ("task_id", "task"),
+    ("portal_task_id", "portal_task"),
+    ("portal_dispatch_id", "dispatch"),
+    ("agent_id", "agent"),
+    ("path", "path"),
+)
+_FIRST_PARTY_LOGGER_PREFIXES = ("src.", "skills.")
 _log_context_var: contextvars.ContextVar[Dict[str, str]] = contextvars.ContextVar(
     "efp_log_context",
     default=dict(_LOG_CONTEXT_DEFAULTS),
@@ -81,6 +90,27 @@ def reset_log_context(token: contextvars.Token) -> None:
     _log_context_var.reset(token)
 
 
+def _is_first_party_logger(record_name: str) -> bool:
+    return record_name == "main" or record_name.startswith(_FIRST_PARTY_LOGGER_PREFIXES)
+
+
+def _build_trace_block(record_name: str, context: Dict[str, str]) -> str:
+    if not _is_first_party_logger(record_name):
+        return ""
+
+    parts = []
+    for context_key, output_key in _TRACE_FIELD_MAPPING:
+        value = context.get(context_key, "")
+        if not value or value == "-":
+            continue
+        parts.append(f"{output_key}={value}")
+
+    if not parts:
+        return ""
+
+    return f"{' '.join(parts)} | "
+
+
 
 
 class RedactingFilter(logging.Filter):
@@ -108,8 +138,10 @@ class RedactingFilter(logging.Filter):
                 fallback = f"{fallback} | args={sanitize_log_line(sanitized_args)}"
             record.msg = fallback
             record.args = ()
-        for key, value in get_log_context().items():
+        context = get_log_context()
+        for key, value in context.items():
             setattr(record, key, value)
+        record.trace_block = _build_trace_block(record.name, context)
         return True
 
 

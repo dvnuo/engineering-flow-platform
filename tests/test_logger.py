@@ -2,6 +2,7 @@
 
 import logging
 import io
+from pathlib import Path
 import pytest
 
 
@@ -314,7 +315,7 @@ class TestRedactionIntegration:
 
     def test_default_format_includes_trace_fields_with_bound_context(self):
         stream = io.StringIO()
-        logger = logging.getLogger("trace_context_bound")
+        logger = logging.getLogger("src.gateway.webchat")
         logger.handlers = []
         logger.propagate = False
         logger.setLevel(logging.INFO)
@@ -335,9 +336,9 @@ class TestRedactionIntegration:
         assert "task=task-1" in output
         assert "path=/api/tasks/execute" in output
 
-    def test_default_format_uses_dash_without_context(self):
+    def test_default_format_omits_trace_block_without_context(self):
         stream = io.StringIO()
-        logger = logging.getLogger("trace_context_empty")
+        logger = logging.getLogger("src.gateway.webchat")
         logger.handlers = []
         logger.propagate = False
         logger.setLevel(logging.INFO)
@@ -349,9 +350,51 @@ class TestRedactionIntegration:
         clear_log_context()
         logger.info("hello")
         output = stream.getvalue()
-        assert "trace=-" in output
-        assert "request=-" in output
-        assert "path=-" in output
+        assert "trace=" not in output
+        assert "request=" not in output
+        assert "path=" not in output
+
+    def test_default_format_skips_trace_block_for_third_party_logger(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("httpcore.connection")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter(DEFAULT_FORMAT))
+        handler.addFilter(RedactingFilter())
+        logger.addHandler(handler)
+
+        set_log_context(trace_id="trace-3", request_id="req-3", path="/x")
+        try:
+            logger.info("hello")
+        finally:
+            clear_log_context()
+
+        output = stream.getvalue()
+        assert "trace=" not in output
+
+    def test_default_format_includes_trace_block_for_top_level_skill_logger(self):
+        stream = io.StringIO()
+        logger = logging.getLogger("skills.collect_requirements_to_bundle.skill")
+        logger.handlers = []
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter(DEFAULT_FORMAT))
+        handler.addFilter(RedactingFilter())
+        logger.addHandler(handler)
+
+        set_log_context(trace_id="trace-skill-1", request_id="req-skill-1", path="/api/tasks/execute")
+        try:
+            logger.info("skill started")
+        finally:
+            clear_log_context()
+
+        output = stream.getvalue()
+        assert "trace=trace-skill-1" in output
+        assert "request=req-skill-1" in output
+        assert "path=/api/tasks/execute" in output
 
     def test_exception_traceback_is_redacted(self):
         stream = io.StringIO()
@@ -496,8 +539,24 @@ class TestConstants:
         """Test DEFAULT_FORMAT constant."""
         assert isinstance(DEFAULT_FORMAT, str)
         assert "%(asctime)s" in DEFAULT_FORMAT
+        assert "%(trace_block)s" in DEFAULT_FORMAT
 
     def test_structured_format(self):
         """Test STRUCTURED_FORMAT constant."""
         assert isinstance(STRUCTURED_FORMAT, str)
         assert "%(asctime)s" in STRUCTURED_FORMAT
+
+
+def test_file_parser_modules_do_not_use_root_logging_calls_for_runtime_messages():
+    repo_root = Path(__file__).resolve().parents[1]
+    target_files = [
+        repo_root / "src/utils/file_parser/pdf.py",
+        repo_root / "src/utils/file_parser/image.py",
+    ]
+    forbidden_patterns = ("logging.warning(", "logging.error(", "logging.debug(")
+
+    for file_path in target_files:
+        content = file_path.read_text(encoding="utf-8")
+        assert "logger = logging.getLogger(__name__)" in content
+        for pattern in forbidden_patterns:
+            assert pattern not in content
