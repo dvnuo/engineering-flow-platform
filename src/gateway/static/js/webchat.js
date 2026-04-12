@@ -1246,6 +1246,33 @@
         return '';
     }
 
+    function getMeaningfulScalar(value) {
+        if (value === null || value === undefined) {
+            return '';
+        }
+        const textValue = String(value);
+        return textValue.trim().length > 0 ? textValue : '';
+    }
+
+    function hasMeaningfulDisplayBlocks(blocks) {
+        const parsedBlocks = parseDisplayBlocks(blocks);
+        if (!parsedBlocks) {
+            return false;
+        }
+        return parsedBlocks.some((block) => {
+            const blockType = String(block.type || '').toLowerCase();
+            if (blockType === 'table') {
+                const headers = Array.isArray(block.headers) ? block.headers : (Array.isArray(block.columns) ? block.columns : []);
+                const rows = Array.isArray(block.rows) ? block.rows : [];
+                return headers.length > 0 || rows.length > 0 || getBlockText(block).length > 0;
+            }
+            if (blockType === 'code') {
+                return (getMeaningfulScalar(block.code) || getBlockText(block)).length > 0;
+            }
+            return getBlockText(block).length > 0;
+        });
+    }
+
     function renderSingleDisplayBlock(block) {
         const blockType = String(block.type || '').toLowerCase();
         if (blockType === 'code') {
@@ -1285,7 +1312,7 @@
 
     function renderCodeBlock(block) {
         const language = String(block.language || block.lang || '').trim();
-        const codeText = String(block.code ?? getBlockText(block) ?? '');
+        const codeText = getMeaningfulScalar(block.code) || getBlockText(block);
         const escapedLanguage = escapeHtml(language || 'text');
         const escapedCode = escapeHtml(codeText);
         const classLanguage = language.toLowerCase().replace(/[^a-z0-9_+-]/g, '');
@@ -1541,7 +1568,7 @@
                 const lastMsg = [...sessionData.messages].reverse().find(m => m.role === 'assistant');
                 if (!lastMsg) return false;
                 const hasTextContent = typeof lastMsg.content === 'string' && lastMsg.content.trim().length > 0;
-                const hasDisplayBlocks = Array.isArray(lastMsg.display_blocks) && lastMsg.display_blocks.length > 0;
+                const hasDisplayBlocks = hasMeaningfulDisplayBlocks(lastMsg.display_blocks);
                 return hasTextContent || hasDisplayBlocks;
             }
 

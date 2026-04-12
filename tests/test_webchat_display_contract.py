@@ -121,3 +121,79 @@ console.log(html);
 """
     result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
     assert "done" in result.stdout
+
+
+def test_render_code_block_ignores_blank_code_and_uses_text_fallback():
+    repo_root = Path(__file__).parent.parent
+    js_path = repo_root / "src" / "gateway" / "static" / "js" / "webchat.js"
+    js_source = js_path.read_text(encoding="utf-8")
+
+    get_block_text_start = js_source.find("function getBlockText(block)")
+    get_meaningful_start = js_source.find("function getMeaningfulScalar(value)")
+    render_single_start = js_source.find("function renderSingleDisplayBlock(block)")
+    render_code_start = js_source.find("function renderCodeBlock(block)")
+    render_table_start = js_source.find("function renderTableBlock(block)")
+    assert get_block_text_start != -1
+    assert get_meaningful_start != -1
+    assert render_single_start != -1
+    assert render_code_start != -1
+    assert render_table_start != -1
+
+    get_block_text_fn = js_source[get_block_text_start:get_meaningful_start]
+    get_meaningful_fn = js_source[get_meaningful_start:render_single_start]
+    render_code_fn = js_source[render_code_start:render_table_start]
+
+    script = f"""
+{get_block_text_fn}
+{get_meaningful_fn}
+function escapeHtml(v) {{ return String(v); }}
+{render_code_fn}
+const html = renderCodeBlock({json.dumps({"type": "code", "code": "   ", "text": "print(1)", "language": "python"})});
+console.log(html);
+"""
+    result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    assert "print(1)" in result.stdout
+
+
+def test_has_final_assistant_ignores_shell_display_blocks():
+    repo_root = Path(__file__).parent.parent
+    js_path = repo_root / "src" / "gateway" / "static" / "js" / "webchat.js"
+    js_source = js_path.read_text(encoding="utf-8")
+
+    parse_start = js_source.find("function parseDisplayBlocks(raw)")
+    get_block_text_start = js_source.find("function getBlockText(block)")
+    get_meaningful_start = js_source.find("function getMeaningfulScalar(value)")
+    has_meaningful_start = js_source.find("function hasMeaningfulDisplayBlocks(blocks)")
+    render_single_start = js_source.find("function renderSingleDisplayBlock(block)")
+    has_final_start = js_source.find("function hasFinalAssistant(sessionData)")
+    poll_start = js_source.find("async function pollSessionUntilFinal()")
+    assert parse_start != -1
+    assert get_block_text_start != -1
+    assert get_meaningful_start != -1
+    assert has_meaningful_start != -1
+    assert render_single_start != -1
+    assert has_final_start != -1
+    assert poll_start != -1
+
+    parse_fn = js_source[parse_start:get_block_text_start]
+    get_block_text_fn = js_source[get_block_text_start:get_meaningful_start]
+    get_meaningful_fn = js_source[get_meaningful_start:has_meaningful_start]
+    has_meaningful_fn = js_source[has_meaningful_start:render_single_start]
+    has_final_fn = js_source[has_final_start:poll_start]
+
+    session_payload = {
+        "messages": [
+            {"role": "assistant", "content": "   ", "display_blocks": [{"type": "tool_result", "content": "   "}]}
+        ]
+    }
+    script = f"""
+{parse_fn}
+{get_block_text_fn}
+{get_meaningful_fn}
+{has_meaningful_fn}
+{has_final_fn}
+const result = hasFinalAssistant({json.dumps(session_payload)});
+console.log(String(result));
+"""
+    result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    assert result.stdout.strip() == "false"

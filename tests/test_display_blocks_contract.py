@@ -117,3 +117,38 @@ def test_normalize_code_uses_non_blank_text_when_content_blank():
     assert len(blocks) == 1
     assert blocks[0]["type"] == "code"
     assert blocks[0]["content"] == "print(1)"
+
+
+def test_normalize_whitespace_tool_result_is_dropped_without_fallback():
+    mod = _load_display_blocks_module()
+
+    blocks = mod.normalize_display_blocks(
+        [{"type": "tool_result", "title": "Bash", "content": "   "}],
+        fallback_text="",
+    )
+
+    assert blocks == []
+
+
+def test_normalize_whitespace_callout_uses_markdown_fallback():
+    mod = _load_display_blocks_module()
+
+    blocks = mod.normalize_display_blocks(
+        [{"type": "callout", "title": "Note", "content": "   "}],
+        fallback_text="fallback",
+    )
+
+    assert blocks == [{"type": "markdown", "content": "fallback"}]
+
+
+def test_normalize_code_prefers_non_blank_text_when_code_blank():
+    mod = _load_display_blocks_module()
+
+    blocks = mod.normalize_display_blocks(
+        [{"type": "code", "code": "   ", "text": "print(1)", "language": "python"}]
+    )
+
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "code"
+    assert blocks[0]["content"] == "print(1)"
+    assert blocks[0]["lang"] == "python"

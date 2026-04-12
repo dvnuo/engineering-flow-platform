@@ -43,18 +43,46 @@ def _normalize_display_block(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not normalized_type:
         return None
 
-    normalized_block: Dict[str, Any] = dict(block)
-    normalized_block["type"] = normalized_type
+    if normalized_type == "markdown":
+        content = _text_value(block)
+        if not content:
+            return None
+        return {"type": "markdown", "content": content}
 
-    if normalized_type in {"markdown", "callout", "tool_result"}:
-        normalized_block["content"] = _text_value(block)
+    if normalized_type == "callout":
+        content = _text_value(block)
+        if not content:
+            return None
+        normalized_block: Dict[str, Any] = {"type": "callout", "content": content}
+        title = _first_text_value(block, ("title",))
+        tone = _first_text_value(block, ("tone",))
+        if title:
+            normalized_block["title"] = title
+        if tone:
+            normalized_block["tone"] = tone
+        return normalized_block
+
+    if normalized_type == "tool_result":
+        content = _text_value(block)
+        if not content:
+            return None
+        normalized_block = {"type": "tool_result", "content": content}
+        title = _first_text_value(block, ("title",))
+        status = _first_text_value(block, ("status",))
+        if title:
+            normalized_block["title"] = title
+        if status:
+            normalized_block["status"] = status
         return normalized_block
 
     if normalized_type == "code":
-        normalized_block["content"] = _first_text_value(
+        content = _first_text_value(
             block,
             ("content", "code", "text", "value", "output"),
         )
+        if not content:
+            return None
+        normalized_block = {"type": "code", "content": content}
         language = block.get("lang")
         if language is None:
             language = block.get("language")
@@ -66,13 +94,25 @@ def _normalize_display_block(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         headers = block.get("headers")
         if not isinstance(headers, list):
             headers = block.get("columns")
-        normalized_block["headers"] = headers if isinstance(headers, list) else []
+        normalized_headers = headers if isinstance(headers, list) else []
         rows = block.get("rows")
-        normalized_block["rows"] = rows if isinstance(rows, list) else []
-        normalized_block["content"] = _text_value(block)
+        normalized_rows = rows if isinstance(rows, list) else []
+        content = _text_value(block)
+        if not normalized_headers and not normalized_rows and not content:
+            return None
+        normalized_block = {
+            "type": "table",
+            "headers": normalized_headers,
+            "rows": normalized_rows,
+        }
+        if content:
+            normalized_block["content"] = content
         return normalized_block
 
-    return normalized_block
+    content = _text_value(block)
+    if not content:
+        return None
+    return {"type": "markdown", "content": content}
 
 
 def normalize_display_blocks(raw_blocks: Optional[Any], fallback_text: str = "") -> List[Dict[str, Any]]:
