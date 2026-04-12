@@ -12,8 +12,19 @@ def build_markdown_display_blocks(text: str) -> List[Dict[str, Any]]:
     return [{"type": "markdown", "content": text}]
 
 
+def _first_text_value(block: Dict[str, Any], field_order: tuple[str, ...]) -> str:
+    for field_name in field_order:
+        value = block.get(field_name)
+        if value is not None:
+            return str(value)
+    return ""
+
+
 def _text_value(block: Dict[str, Any]) -> str:
-    return str(block.get("content") if block.get("content") is not None else (block.get("text") or ""))
+    return _first_text_value(
+        block,
+        ("content", "text", "message", "output", "result", "value"),
+    )
 
 
 def _normalize_display_block(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -34,12 +45,10 @@ def _normalize_display_block(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return normalized_block
 
     if normalized_type == "code":
-        code_text = block.get("content")
-        if code_text is None:
-            code_text = block.get("code")
-        if code_text is None:
-            code_text = block.get("text")
-        normalized_block["content"] = "" if code_text is None else str(code_text)
+        normalized_block["content"] = _first_text_value(
+            block,
+            ("content", "code", "text", "value", "output"),
+        )
         language = block.get("lang")
         if language is None:
             language = block.get("language")

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import subprocess
 import pytest
 from pathlib import Path
 
@@ -2245,7 +2246,7 @@ def test_webchat_js_tool_result_richer_renderer_present():
     assert "message-tool-result" in chunk
     assert "message-tool-result-title" in chunk
     assert "is-${" in chunk
-    assert "block.content ?? block.text ?? ''" in js
+    assert "getBlockText(block)" in chunk or "block.output" in js
 
 
 def test_webchat_js_callout_richer_renderer_present():
@@ -2260,7 +2261,7 @@ def test_webchat_js_callout_richer_renderer_present():
     assert "message-callout" in chunk
     assert "message-callout-title" in chunk
     assert "is-${" in chunk
-    assert "block.content ?? block.text ?? ''" in js
+    assert "getBlockText(block)" in chunk or "block.message" in js
 
 
 def test_webchat_css_richer_block_variant_classes_present():
@@ -2274,3 +2275,90 @@ def test_webchat_css_richer_block_variant_classes_present():
     assert ".message-tool-result.is-warning" in css
     assert ".message-tool-result.is-error" in css
     assert ".message-tool-result.is-running" in css
+
+
+def test_webchat_js_renders_tool_result_output_and_callout_message():
+    repo_root = Path(__file__).parent.parent
+    js_path = repo_root / "src" / "gateway" / "static" / "js" / "webchat.js"
+    js = js_path.read_text(encoding="utf-8")
+
+    start_get = js.find("function getBlockText(block)")
+    start_single = js.find("function renderSingleDisplayBlock(block)")
+    start_code = js.find("function renderCodeBlock(block)")
+    start_table = js.find("function renderTableBlock(block)")
+    assert min(start_get, start_single, start_code, start_table) >= 0
+
+    snippet = "\n".join([
+        js[start_get:start_single],
+        js[start_single:start_code],
+        js[start_code:start_table],
+    ])
+
+    node_script = f"""
+{snippet}
+function renderMarkdown(text) {{
+  return String(text || '');
+}}
+function escapeHtml(text) {{
+  return String(text || '');
+}}
+const toolHtml = renderSingleDisplayBlock({{
+  type: 'tool_result',
+  title: 'Bash',
+  status: 'success',
+  output: 'done'
+}});
+const calloutHtml = renderSingleDisplayBlock({{
+  type: 'callout',
+  title: 'Note',
+  message: 'hello'
+}});
+if (!toolHtml.includes('done')) throw new Error('tool_result output not rendered');
+if (!calloutHtml.includes('hello')) throw new Error('callout message not rendered');
+console.log('ok');
+"""
+    result = subprocess.run(
+        ["node", "-e", node_script],
+        cwd=str(repo_root),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.asyncio
+async def test_assistant_persist_and_result_payload_share_display_blocks(monkeypatch):
+    from src.agents.core import Agent
+    from src.agents import core as core_module
+
+    agent = Agent.__new__(Agent)
+    agent.agent_name = "Assistant"
+    agent.agent_id = "agent-1"
+    supplied_extra = {"display_blocks": [{"type": "code", "text": "print(1)", "language": "python"}]}
+
+    captured = {}
+
+    async def _fake_add_message(session_id, role, content, extra=None):
+        captured["session_id"] = session_id
+        captured["role"] = role
+        captured["content"] = content
+        captured["extra"] = extra or {}
+        return "m-1"
+
+    monkeypatch.setattr(core_module.session_manager, "add_message", _fake_add_message)
+
+    persisted_extra = await agent._persist_assistant_message(
+        "s1",
+        "print(1)",
+        extra=supplied_extra,
+    )
+    payload = agent._build_assistant_result_payload(
+        "print(1)",
+        usage={},
+        user_message_id="u1",
+        extra=supplied_extra,
+    )
+
+    assert captured["role"] == "assistant"
+    assert persisted_extra["display_blocks"] == payload["display_blocks"]

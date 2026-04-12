@@ -62,3 +62,27 @@ def test_render_code_block_uses_block_text_fallback():
     chunk = js[start:start + 500]
 
     assert "getBlockText(block)" in chunk or "block.text" in chunk
+
+
+def test_normalize_tool_result_output_alias_to_content():
+    mod = _load_display_blocks_module()
+
+    blocks = mod.normalize_display_blocks([
+        {"type": "tool_result", "title": "Bash", "status": "success", "output": "done"}
+    ])
+
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "tool_result"
+    assert blocks[0]["content"] == "done"
+
+
+def test_normalize_callout_message_alias_to_content():
+    mod = _load_display_blocks_module()
+
+    blocks = mod.normalize_display_blocks([
+        {"type": "callout", "title": "Note", "message": "hello"}
+    ])
+
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "callout"
+    assert blocks[0]["content"] == "hello"

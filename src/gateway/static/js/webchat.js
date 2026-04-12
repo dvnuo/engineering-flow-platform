@@ -1231,7 +1231,15 @@
         if (!block || typeof block !== 'object') {
             return '';
         }
-        return String(block.content ?? block.text ?? '');
+        return String(
+            block.content
+            ?? block.text
+            ?? block.message
+            ?? block.output
+            ?? block.result
+            ?? block.value
+            ?? ''
+        );
     }
 
     function renderSingleDisplayBlock(block) {

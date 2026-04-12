@@ -622,6 +622,18 @@ You have access to the following tools. When a user asks you to do something tha
         )
         return assistant_extra
 
+    def _assistant_extra_from_payload(
+        self,
+        payload: Optional[Dict[str, Any]],
+        content: str,
+    ) -> Dict[str, Any]:
+        assistant_extra: Dict[str, Any] = {}
+        if isinstance(payload, dict) and "display_blocks" in payload:
+            assistant_extra["display_blocks"] = payload.get("display_blocks")
+        elif payload is not None and hasattr(payload, "display_blocks"):
+            assistant_extra["display_blocks"] = getattr(payload, "display_blocks")
+        return self._build_assistant_message_extra(content, assistant_extra)
+
     async def process(
         self,
         message: str,
@@ -1336,11 +1348,17 @@ You have access to the following tools. When a user asks you to do something tha
                     # If still empty, provide a default prompt
                     if not fallback_content.strip():
                         fallback_content = "Operation completed, but no detailed result was returned."
-                await self._persist_assistant_message(session_id, fallback_content)
+                assistant_extra = self._assistant_extra_from_payload(llm_result, fallback_content)
+                await self._persist_assistant_message(
+                    session_id,
+                    fallback_content,
+                    extra=assistant_extra,
+                )
                 result = self._build_assistant_result_payload(
                     fallback_content,
                     usage=usage_data,
                     user_message_id=user_message_id,
+                    extra=assistant_extra,
                 )
                 if enable_reasoning:
                     reasoning_content = llm_result.get("reasoning", "")
@@ -1710,7 +1728,15 @@ You have access to the following tools. When a user asks you to do something tha
                 )
                 if passthrough_recommended:
                     passthrough_content = str(single_tool_result.content)
-                    await self._persist_assistant_message(session_id, passthrough_content)
+                    assistant_extra = self._assistant_extra_from_payload(
+                        single_tool_result,
+                        passthrough_content,
+                    )
+                    await self._persist_assistant_message(
+                        session_id,
+                        passthrough_content,
+                        extra=assistant_extra,
+                    )
                     send_event("complete", {
                         "response": truncate_with_count(passthrough_content, 500),
                         "total_iterations": iteration
@@ -1724,6 +1750,7 @@ You have access to the following tools. When a user asks you to do something tha
                         usage=usage_data,
                         events=events,
                         user_message_id=user_message_id,
+                        extra=assistant_extra,
                     )
             
             # Send iteration complete event
