@@ -85,6 +85,9 @@ class TestWebChatStaticFiles:
         assert 'escapeHtml(' in js
         assert 'renderDisplayBlocks(' in js
         assert 'enhanceRenderedMessage(' in js
+        assert 'function getBlockText(block, preferCode = false)' in js
+        assert 'hasMeaningfulDisplayBlocks(' in js
+        assert 'hasMeaningfulDisplayBlocks(lastMsg.display_blocks)' in js
 
 
 
@@ -2131,6 +2134,38 @@ async def test_api_chat_accepts_legacy_content_payload(monkeypatch):
     payload = json.loads(resp.text)
     assert payload["response"] == "hello from content"
     assert payload["display_blocks"][0]["content"] == "hello from content"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_treats_whitespace_response_as_empty_and_falls_back_to_content(monkeypatch):
+    from src.gateway import webchat
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {
+            "response": "   ",
+            "content": "hello from content",
+            "usage": {},
+            "_execution_result": object(),
+        }
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-whitespace-fallback"}
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["response"] == "hello from content"
 
 
 @pytest.mark.asyncio
