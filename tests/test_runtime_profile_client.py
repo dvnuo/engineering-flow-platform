@@ -40,6 +40,48 @@ class _FakeClientSession:
         return _RequestContext(self._response)
 
 
+def test_extract_runtime_profile_overlay_structured_shape():
+    payload = {
+        "runtime_profile_id": "rp_1",
+        "runtime_profile_context": {
+            "runtime_profile_id": "rp_1",
+            "name": "Default Runtime",
+            "revision": 3,
+            "managed_sections": ["llm", "proxy", "jira", "confluence", "github", "git", "debug"],
+            "config": {"jira": {"enabled": True}},
+            "source": "portal.runtime_profile",
+        },
+    }
+
+    runtime_profile_id, revision, overlay_config, clear_flag = runtime_profile_client._extract_runtime_profile_overlay(payload)
+    assert runtime_profile_id == "rp_1"
+    assert revision == 3
+    assert overlay_config == {"jira": {"enabled": True}}
+    assert clear_flag is False
+
+
+def test_extract_runtime_profile_overlay_null_context_means_clear():
+    payload = {"runtime_profile_id": None, "runtime_profile_context": None}
+    runtime_profile_id, revision, overlay_config, clear_flag = runtime_profile_client._extract_runtime_profile_overlay(payload)
+    assert runtime_profile_id is None
+    assert revision is None
+    assert overlay_config is None
+    assert clear_flag is True
+
+
+def test_extract_runtime_profile_overlay_malformed_structured_shape_returns_invalid():
+    payload = {
+        "runtime_profile_id": "rp_bad",
+        "runtime_profile_context": {
+            "runtime_profile_id": "rp_bad",
+            "revision": 5,
+            "config": "not-a-dict",
+        },
+    }
+    runtime_profile_id, revision, overlay_config, clear_flag = runtime_profile_client._extract_runtime_profile_overlay(payload)
+    assert (runtime_profile_id, revision, overlay_config, clear_flag) == (None, None, None, False)
+
+
 @pytest.mark.asyncio
 async def test_bootstrap_runtime_profile_apply(monkeypatch):
     monkeypatch.setattr(runtime_profile_client, "get_portal_internal_base_url", lambda: "http://portal")
@@ -164,3 +206,44 @@ async def test_bootstrap_runtime_profile_apply_legacy_direct_config_shape(monkey
         "revision": 2,
         "overlay": {"jira": {"enabled": True}},
     }
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_runtime_profile_malformed_payload_does_not_apply_or_clear(monkeypatch):
+    monkeypatch.setattr(runtime_profile_client, "get_portal_internal_base_url", lambda: "http://portal")
+    monkeypatch.setattr(runtime_profile_client, "get_portal_agent_id", lambda: "agent-1")
+    monkeypatch.setattr(runtime_profile_client, "build_portal_internal_api_headers", lambda include_content_type=False: {})
+    monkeypatch.setattr(
+        runtime_profile_client,
+        "ClientSession",
+        lambda headers=None: _FakeClientSession(
+            _FakeResponse(
+                200,
+                {
+                    "runtime_profile_id": "rp_bad",
+                    "runtime_profile_context": {
+                        "runtime_profile_id": "rp_bad",
+                        "revision": 5,
+                        "config": "not-a-dict",
+                    },
+                },
+            )
+        ),
+    )
+
+    calls = {"apply": 0, "clear": 0}
+    monkeypatch.setattr(
+        runtime_profile_client.config,
+        "set_managed_overlay",
+        lambda *_args, **_kwargs: calls.update({"apply": calls["apply"] + 1}) or [],
+    )
+    monkeypatch.setattr(
+        runtime_profile_client.config,
+        "clear_managed_overlay",
+        lambda: calls.update({"clear": calls["clear"] + 1}),
+    )
+
+    ok = await runtime_profile_client.bootstrap_runtime_profile_from_portal()
+    assert ok is False
+    assert calls["apply"] == 0
+    assert calls["clear"] == 0

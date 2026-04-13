@@ -127,3 +127,4 @@ def test_runtime_profile_overlay_section_removal_includes_proxy_change_and_rolls
     assert "proxy" in second_changed
     assert apply_calls["count"] >= 2
     assert cfg.proxy.get("enabled") is False
+    assert cfg.proxy.get("url") is None

@@ -22,6 +22,16 @@ def _extract_runtime_profile_overlay(
 ) -> Tuple[Optional[str], Optional[int], Optional[Dict[str, Any]], bool]:
     """Extract overlay fields from portal response.
 
+    Expected structured Portal payload:
+    {
+      "runtime_profile_id": "...",
+      "runtime_profile_context": {
+        "runtime_profile_id": "...",
+        "revision": 3,
+        "config": {...}
+      }
+    }
+
     Returns: (runtime_profile_id, revision, overlay_config, clear_flag)
     """
     runtime_profile_id = payload.get("runtime_profile_id")
