@@ -2079,64 +2079,55 @@ async def api_get_config(request: web.Request) -> web.Response:
     GET /api/config
     """
     try:
-        # Try project config first, then fallback to ~/.efp/
-        project_config = Path(__file__).parent.parent.parent / 'config.yaml'
-        efp_config = Path.home() / '.efp' / 'config.yaml'
-        
-        if project_config.exists():
-            config_path = project_config
-        elif efp_config.exists():
-            config_path = efp_config
-        else:
-            return web.json_response({'error': 'config.yaml not found (checked: project dir and ~/.efp/)'}, status=404)
-        
-        # Use module-level YAML instance
-        yaml = _yaml
-        
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = yaml.load(f) or {}
-        except Exception as e:
-            logger.error(f"YAML parse error: {e}")
-            return web.json_response({'error': f'YAML parse error: {e}'}, status=500)
-        
-        # Convert CommentedMap to regular dict for JSON response
-        if hasattr(config, 'to_dict'):
-            config = global_config.to_dict()
-        
-        # Decrypt sensitive fields before returning
-        try:
-            def decrypt_value(val):
-                if isinstance(val, str) and val.startswith("ENC:"):
-                    # Use the global config object's decrypt method
-                    return global_config._decrypt_value(val)
-                return val
-            
-            def decrypt_config(obj):
-                if isinstance(obj, dict):
-                    for key, value in obj.items():
-                        if key in {"api_key", "password", "token", "api_token", "secret"}:
-                            obj[key] = decrypt_value(value)
-                        elif isinstance(value, dict):
-                            decrypt_config(value)
-                        elif isinstance(value, list):
-                            for item in value:
-                                if isinstance(item, dict):
-                                    decrypt_config(item)
-                elif isinstance(obj, list):
-                    for item in obj:
-                        if isinstance(item, dict):
-                            decrypt_config(item)
-            
-            decrypt_config(config)
-        except Exception as e:
-            logger.warning(f"Failed to decrypt config values: {e}")
-
-        _remove_legacy_ssh_config(config)
-        return web.json_response({'config': config})
+        effective_config = global_config.get_effective_config()
+        _remove_legacy_ssh_config(effective_config)
+        return web.json_response(
+            {
+                'config': effective_config,
+                'runtime_profile': global_config.get_managed_overlay_meta(),
+            }
+        )
     except Exception as e:
         logger.error(f"Error reading config: {e}")
         return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_apply_runtime_profile(request: web.Request) -> web.Response:
+    """Apply runtime managed profile overlay from trusted Portal request."""
+    if not _is_trusted_portal_request(request):
+        return _build_internal_auth_error_response(403, "Forbidden")
+
+    try:
+        data = await request.json()
+        runtime_profile_id = data.get("runtime_profile_id")
+        revision = data.get("revision")
+        overlay_config = data.get("config") if isinstance(data.get("config"), dict) else {}
+
+        if runtime_profile_id is None and revision is None and not overlay_config:
+            global_config.clear_managed_overlay()
+            return web.json_response(
+                {
+                    "success": True,
+                    "runtime_profile_id": None,
+                    "revision": None,
+                    "updated_sections": [],
+                    "cleared": True,
+                }
+            )
+
+        updated_sections = global_config.set_managed_overlay(runtime_profile_id, revision, overlay_config)
+        return web.json_response(
+            {
+                "success": True,
+                "runtime_profile_id": runtime_profile_id,
+                "revision": revision,
+                "updated_sections": updated_sections,
+                "cleared": False,
+            }
+        )
+    except Exception as e:
+        logger.error("Error applying runtime profile overlay: %s", e, exc_info=True)
+        return web.json_response({"success": False, "error": str(e)}, status=500)
 
 
 # ========== GitHub Copilot Authorization ==========
@@ -3076,6 +3067,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/delete-from-here', api_delete_conversation_from)
     app.router.add_get('/api/config', api_get_config)
     app.router.add_post('/api/config/save', api_save_config)
+    app.router.add_post('/api/internal/runtime-profile/apply', api_apply_runtime_profile)
     app.router.add_get('/api/skills', api_skills)
     app.router.add_post('/api/copilot/auth/start', api_copilot_auth_start)
     app.router.add_post('/api/copilot/auth/check', api_copilot_auth_check)

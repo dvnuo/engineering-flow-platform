@@ -24,6 +24,14 @@ def get_portal_internal_base_url() -> str:
     return str(config_value or "").strip().rstrip("/")
 
 
+def get_portal_agent_id() -> str:
+    env_value = str(os.getenv("PORTAL_AGENT_ID") or "").strip()
+    if env_value:
+        return env_value
+    config_value = global_config.get("server.portal_agent_id", "")
+    return str(config_value or "").strip()
+
+
 def get_portal_internal_auth_token() -> str:
     env_value = str(os.getenv("PORTAL_INTERNAL_AUTH_TOKEN") or "").strip()
     if env_value:

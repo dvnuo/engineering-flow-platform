@@ -22,6 +22,7 @@ from src.utils.truncate import truncate
 from src.agents.core import agent
 from src.channels.jira import jira_channel
 from src.config import config
+from src.runtime.runtime_profile_client import bootstrap_runtime_profile_sync
 from src.sessions.manager import JIRA_SESSION_PREFIX
 
 
@@ -112,6 +113,7 @@ class Gateway:
     """Simple HTTP/WebSocket gateway for Engineering Flow Platform."""
 
     def __init__(self):
+        bootstrap_runtime_profile_sync()
         self.jira_enabled = config.jira.get("enabled", False)
         self.host = config.server.get("host", "0.0.0.0")
         self.port = config.server.get("port", 8000)
