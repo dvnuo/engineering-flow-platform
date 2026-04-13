@@ -49,6 +49,7 @@ async def test_handle_websocket_passes_query_filters_to_event_bus(monkeypatch):
                 "group_id": "",
                 "coordination_run_id": "coord-1",
                 "agent_id": "agent-1",
+                "request_id": " req-1 ",
             }
         )
     )
@@ -61,5 +62,6 @@ async def test_handle_websocket_passes_query_filters_to_event_bus(monkeypatch):
         "task_id": "t-1",
         "coordination_run_id": "coord-1",
         "agent_id": "agent-1",
+        "request_id": "req-1",
     }
     assert captured.get("removed") is True

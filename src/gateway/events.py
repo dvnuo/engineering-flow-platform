@@ -24,7 +24,7 @@ async def handle_websocket(request: web.Request) -> WebSocketResponse:
     queue = asyncio.Queue()
 
     query = request.rel_url.query
-    filter_keys = ("session_id", "task_id", "group_id", "coordination_run_id", "agent_id")
+    filter_keys = ("session_id", "task_id", "group_id", "coordination_run_id", "agent_id", "request_id")
     filters = {key: str(query.get(key, "")).strip() for key in filter_keys if str(query.get(key, "")).strip()}
 
     # Register this connection as a listener
