@@ -52,6 +52,10 @@ from src.runtime.portal_session_metadata_client import (
     extract_session_metadata_publish_fields,
     publish_session_metadata,
 )
+from src.gateway.chat_payloads import (
+    build_webchat_response_payload,
+    normalize_assistant_history_message,
+)
 from src.runtime.capability_registry import get_capability_registry
 from src.gateway.event_bus import emit_agent_event
 from src.sessions.manager import session_manager
@@ -382,6 +386,11 @@ def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str]
     return runtime_agent_id, runtime_agent_name
 
 
+def _message_with_display_blocks(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Return assistant messages with normalized display blocks."""
+    return normalize_assistant_history_message(message)
+
+
 def load_template(filename: str) -> str:
     """Load HTML template from file."""
     template_path = TEMPLATE_DIR / filename
@@ -664,9 +673,11 @@ async def api_chat(request: web.Request) -> web.Response:
         else:
             logger.warning(f"[api_chat] No session or empty history for {session_id}")
         
-        response = result.get("response", "") if result else ""
-        usage = result.get("usage", {}) if result else {}
-        reasoning = result.get("reasoning", "") if result else ""
+        response_data = build_webchat_response_payload(
+            result if isinstance(result, dict) else None,
+            session_id,
+        )
+        usage = response_data.get("usage", {}) or {}
         
         # Record usage if available
         if usage:
@@ -681,22 +692,9 @@ async def api_chat(request: web.Request) -> web.Response:
                 task_type="chat"
             )
         
-        response_data = {
-            'response': response,
-            'session_id': session_id,
-            'usage': usage
-        }
-        
-        # Include user_message_id for frontend to update optimistic UI
-        if result and isinstance(result, dict):
-            user_msg_id = result.get("user_message_id")
-            if user_msg_id:
-                response_data['user_message_id'] = user_msg_id
-        
         # Include events for thinking process display
-        events = result.get("events", []) if result else []
+        events = response_data.get("events", [])
         if events:
-            response_data['events'] = events
             # Save events to session for persistence
             if 'metadata' not in session:
                 session['metadata'] = {}
@@ -704,9 +702,7 @@ async def api_chat(request: web.Request) -> web.Response:
             logger.info(f"[api_chat] Saved {len(events)} thinking events to session metadata")
         
         # Include LLM debug info for sidebar display
-        llm_debug = result.get("_llm_debug", {}) if result else {}
-        if llm_debug:
-            response_data['_llm_debug'] = llm_debug
+        llm_debug = response_data.get("_llm_debug", {}) or {}
         
         # Always save thinking events to chatlog (even without llm_debug)
         chatlog_dir = os.path.join(session_persistence.storage_dir, "chatlogs")
@@ -729,10 +725,6 @@ async def api_chat(request: web.Request) -> web.Response:
             logger.info(f"[api_chat] Saved chatlog with {len(events)} events to {chatlog_file}")
         except Exception as e:
             logger.warning(f"[api_chat] Failed to save chatlog: {e}")
-        
-        # Include reasoning if available
-        if reasoning:
-            response_data['reasoning'] = reasoning
         
         return web.json_response(response_data)
         
@@ -1420,10 +1412,11 @@ async def api_load_session(request: web.Request) -> web.Response:
             return web.json_response({'error': 'Session not found'}, status=404)
         
         history = session_info.get('history', [])
+        normalized_history = [_message_with_display_blocks(msg) for msg in history]
         
         # Extract session name from first user message
         session_name = 'New Chat'
-        for msg in history:
+        for msg in normalized_history:
             if msg.get('role') == 'user':
                 content = msg.get('content', '') or 'New Chat'
                 session_name = truncate(content, 30)
@@ -1432,7 +1425,7 @@ async def api_load_session(request: web.Request) -> web.Response:
         return web.json_response({
             'session_id': session_id,
             'name': session_name,
-            'messages': history,
+            'messages': normalized_history,
             'metadata': session_info.get('metadata', {}),
         })
     except Exception as e:
