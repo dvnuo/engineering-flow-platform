@@ -1,5 +1,7 @@
 # Engineering Flow Platform 重构指引 - 学习现代 Agent 框架架构
 
+> **Note（历史文档）**：本文件主要是历史性重构草图/设计记录。当前已落地实现请以 `src/git/api.py`、`src/github/api.py`、`config.yaml.example` 为准：Git transport 已收口为 HTTPS + `github.api_token`（askpass），runtime 不依赖 `gh` CLI auth，也不依赖 SSH setup。
+
 ## 现状分析
 
 ### 当前问题

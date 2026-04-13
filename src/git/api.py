@@ -101,7 +101,7 @@ class GitClient:
             path = parsed.path.lstrip("/")
             return urlunsplit(("https", host, f"/{path}", "", ""))
 
-        if parsed.scheme == "https" and host:
+        if parsed.scheme in {"http", "https"} and host:
             path = parsed.path
             return urlunsplit(("https", host, path, "", ""))
 

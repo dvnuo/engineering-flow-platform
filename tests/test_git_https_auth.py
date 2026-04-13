@@ -13,6 +13,15 @@ from src.gateway.webchat import _remove_legacy_ssh_config
         ("git@github.com:owner/repo.git", "https://github.com/owner/repo.git"),
         ("ssh://git@github.com/owner/repo", "https://github.com/owner/repo"),
         ("https://user:token@github.com/owner/repo.git", "https://github.com/owner/repo.git"),
+        ("http://github.com/owner/repo.git", "https://github.com/owner/repo.git"),
+        (
+            "http://user:token@github.company.com:8443/owner/repo.git",
+            "https://github.company.com:8443/owner/repo.git",
+        ),
+        (
+            "http://github.company.com:8443/owner/repo.git",
+            "https://github.company.com:8443/owner/repo.git",
+        ),
         ("ssh://git@github.company.com:8443/owner/repo.git", "https://github.company.com:8443/owner/repo.git"),
         ("https://github.company.com:8443/owner/repo.git", "https://github.company.com:8443/owner/repo.git"),
         (
