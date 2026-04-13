@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import subprocess
 import pytest
 from pathlib import Path
 
@@ -66,6 +67,9 @@ class TestWebChatStaticFiles:
         assert '.message {' in css
         assert '.input-field {' in css
         assert '.send-button {' in css
+        assert '.copy-code-button' in css
+        assert '.message-codeblock-toolbar' in css
+        assert '.message-table-wrap' in css
     
     def test_js_file_exists(self):
         """Test JS file exists and has content."""
@@ -79,6 +83,52 @@ class TestWebChatStaticFiles:
         assert 'function sendMessage()' in js
         assert 'addMessage(' in js
         assert 'escapeHtml(' in js
+        assert 'renderDisplayBlocks(' in js
+        assert 'enhanceRenderedMessage(' in js
+        assert 'function getBlockText(block, preferCode = false)' in js
+        assert 'hasMeaningfulDisplayBlocks(' in js
+        assert 'hasMeaningfulDisplayBlocks(lastMsg.display_blocks)' in js
+
+
+def test_webchat_js_final_assistant_detection_respects_renderable_blocks():
+    js_path = Path(__file__).parent.parent / "src" / "gateway" / "static" / "js" / "webchat.js"
+    js = js_path.read_text(encoding='utf-8')
+    parse_start = js.find("function parseDisplayBlocks(raw)")
+    get_block_text_start = js.find("function getBlockText(block, preferCode = false)")
+    has_renderable_start = js.find("function hasRenderableDisplayBlock(block)")
+    has_meaningful_start = js.find("function hasMeaningfulDisplayBlocks(blocks)")
+    render_single_start = js.find("function renderSingleDisplayBlock(block)")
+    has_final_start = js.find("function hasFinalAssistant(sessionData)")
+    poll_start = js.find("async function pollSessionUntilFinal()")
+
+    assert parse_start != -1
+    assert get_block_text_start != -1
+    assert has_renderable_start != -1
+    assert has_meaningful_start != -1
+    assert render_single_start != -1
+    assert has_final_start != -1
+    assert poll_start != -1
+
+    parse_fn = js[parse_start:get_block_text_start]
+    get_block_text_fn = js[get_block_text_start:has_renderable_start]
+    has_renderable_fn = js[has_renderable_start:has_meaningful_start]
+    has_meaningful_fn = js[has_meaningful_start:render_single_start]
+    has_final_fn = js[has_final_start:poll_start]
+
+    empty_payload = {"messages": [{"role": "assistant", "display_blocks": [{"type": "tool_result", "title": "Bash", "content": "   "}]}]}
+    filled_payload = {"messages": [{"role": "assistant", "display_blocks": [{"type": "tool_result", "title": "Bash", "output": "done"}]}]}
+    script = f"""
+{parse_fn}
+{get_block_text_fn}
+{has_renderable_fn}
+{has_meaningful_fn}
+{has_final_fn}
+console.log(String(hasFinalAssistant({json.dumps(empty_payload)})));
+console.log(String(hasFinalAssistant({json.dumps(filled_payload)})));
+"""
+    result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    outputs = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    assert outputs == ["false", "true"]
 
 
 
@@ -1995,3 +2045,396 @@ def test_runtime_task_tracker_prune_removes_terminal_records_even_if_oldest_is_r
     assert tracker.get("task-running") is not None
     remaining_terminal = [task_id for task_id in ("task-success", "task-error") if tracker.get(task_id) is not None]
     assert len(remaining_terminal) == 1
+
+
+@pytest.mark.asyncio
+async def test_api_chat_returns_display_blocks(monkeypatch):
+    from src.gateway import webchat
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {
+            "response": "## Hello\n\n```python\nprint('hi')\n```",
+            "usage": {},
+            "_execution_result": object(),
+        }
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-display"}
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["response"] == "## Hello\n\n```python\nprint('hi')\n```"
+    assert "display_blocks" in payload
+    assert payload["display_blocks"][0]["type"] == "markdown"
+    assert payload["display_blocks"][0]["content"] == payload["response"]
+
+
+@pytest.mark.asyncio
+async def test_api_load_session_backfills_assistant_display_blocks(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+
+    async def _fake_get_session(_session_id):
+        return {
+            "history": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello from history"},
+            ],
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+
+    class _Request:
+        match_info = {"session_id": "s-load"}
+
+    resp = await webchat.api_load_session(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assistant_msg = payload["messages"][1]
+    assert assistant_msg["role"] == "assistant"
+    assert assistant_msg["display_blocks"][0]["type"] == "markdown"
+    assert assistant_msg["display_blocks"][0]["content"] == "hello from history"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_preserves_structured_display_blocks(monkeypatch):
+    from src.gateway import webchat
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {
+            "response": "fallback text",
+            "display_blocks": [
+                {"type": "code", "lang": "python", "content": "print('hi')"}
+            ],
+            "usage": {},
+            "_execution_result": object(),
+        }
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-structured"}
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["display_blocks"][0]["type"] == "code"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_accepts_legacy_content_payload(monkeypatch):
+    from src.gateway import webchat
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {
+            "content": "hello from content",
+            "role": "assistant",
+            "usage": {},
+            "_execution_result": object(),
+        }
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-legacy"}
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["response"] == "hello from content"
+    assert payload["display_blocks"][0]["content"] == "hello from content"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_treats_whitespace_response_as_empty_and_falls_back_to_content(monkeypatch):
+    from src.gateway import webchat
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {
+            "response": "   ",
+            "content": "hello from content",
+            "usage": {},
+            "_execution_result": object(),
+        }
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-whitespace-fallback"}
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["response"] == "hello from content"
+
+
+@pytest.mark.asyncio
+async def test_api_load_session_keeps_existing_structured_display_blocks(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+
+    async def _fake_get_session(_session_id):
+        return {
+            "history": [
+                {"role": "assistant", "content": "fallback", "display_blocks": [{"type": "code", "lang": "python", "content": "print('x')"}]},
+            ],
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+
+    class _Request:
+        match_info = {"session_id": "s-keep"}
+
+    resp = await webchat.api_load_session(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["messages"][0]["display_blocks"][0]["type"] == "code"
+
+
+def test_agent_assistant_display_helpers_minimal_payload():
+    from src.agents.core import Agent
+
+    agent = Agent.__new__(Agent)
+    agent.agent_name = "Assistant"
+    agent.agent_id = "agent-1"
+
+    message_extra = agent._build_assistant_message_extra("hello")
+    assert message_extra["display_blocks"][0]["type"] == "markdown"
+
+    payload = agent._build_assistant_result_payload("hello", usage={}, user_message_id="u1")
+    assert payload["response"] == "hello"
+    assert payload["display_blocks"][0]["content"] == "hello"
+    assert payload["user_message_id"] == "u1"
+
+
+def test_webchat_js_passes_display_blocks_in_both_session_render_paths():
+    repo_root = Path(__file__).parent.parent
+    js = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
+
+    poll_render_anchor = "if (gotFinal && sessionData && sessionData.messages && sessionData.messages.length > 0)"
+    poll_start = js.find(poll_render_anchor)
+    assert poll_start != -1
+    poll_chunk = js[poll_start: poll_start + 1200]
+    assert "msg.display_blocks || null" in poll_chunk
+
+    load_session_anchor = "messages.forEach(msg => {"
+    load_start = js.rfind(load_session_anchor)
+    assert load_start != -1
+    load_chunk = js[load_start: load_start + 700]
+    assert "msg.display_blocks || null" in load_chunk
+
+
+def test_core_max_iterations_response_text_is_consistent():
+    repo_root = Path(__file__).parent.parent
+    core_py = (repo_root / "src" / "agents" / "core.py").read_text(encoding="utf-8")
+
+    max_iter_anchor = "max_iterations_text = \"Task completed after maximum iterations.\""
+    start = core_py.find(max_iter_anchor)
+    assert start != -1
+    chunk = core_py[start: start + 1100]
+
+    assert 'send_event("complete", {' in chunk
+    assert '"response": max_iterations_text' in chunk
+    assert '_build_assistant_result_payload(' in chunk
+    assert '"Task completed (max iterations reached)"' not in chunk
+
+
+def test_webchat_js_block_only_final_assistant_detection_present():
+    repo_root = Path(__file__).parent.parent
+    js = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
+
+    anchor = "function hasFinalAssistant(sessionData)"
+    start = js.find(anchor)
+    assert start != -1
+    chunk = js[start:start + 900]
+
+    assert "find(m => m.role === 'assistant')" in chunk
+    assert "lastMsg.display_blocks" in chunk
+    assert "lastMsg.content" in chunk
+    assert "hasTextContent || hasDisplayBlocks" in chunk
+
+
+def test_webchat_js_table_columns_compatibility_present():
+    repo_root = Path(__file__).parent.parent
+    js = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
+
+    anchor = "function renderTableBlock(block)"
+    start = js.find(anchor)
+    assert start != -1
+    chunk = js[start:start + 700]
+
+    assert "block.headers" in chunk
+    assert "block.columns" in chunk
+
+
+def test_webchat_js_tool_result_richer_renderer_present():
+    repo_root = Path(__file__).parent.parent
+    js = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
+
+    anchor = "if (blockType === 'tool_result')"
+    start = js.find(anchor)
+    assert start != -1
+    chunk = js[start:start + 700]
+
+    assert "message-tool-result" in chunk
+    assert "message-tool-result-title" in chunk
+    assert "is-${" in chunk
+    assert "getBlockText(block)" in chunk or "block.output" in js
+
+
+def test_webchat_js_callout_richer_renderer_present():
+    repo_root = Path(__file__).parent.parent
+    js = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
+
+    anchor = "if (blockType === 'callout')"
+    start = js.find(anchor)
+    assert start != -1
+    chunk = js[start:start + 700]
+
+    assert "message-callout" in chunk
+    assert "message-callout-title" in chunk
+    assert "is-${" in chunk
+    assert "getBlockText(block)" in chunk or "block.message" in js
+
+
+def test_webchat_css_richer_block_variant_classes_present():
+    repo_root = Path(__file__).parent.parent
+    css = (repo_root / "src" / "gateway" / "static" / "css" / "webchat.css").read_text(encoding="utf-8")
+
+    assert ".message-callout.is-success" in css
+    assert ".message-callout.is-warning" in css
+    assert ".message-callout.is-error" in css
+    assert ".message-tool-result.is-success" in css
+    assert ".message-tool-result.is-warning" in css
+    assert ".message-tool-result.is-error" in css
+    assert ".message-tool-result.is-running" in css
+
+
+def test_webchat_js_renders_tool_result_output_and_callout_message():
+    repo_root = Path(__file__).parent.parent
+    js_path = repo_root / "src" / "gateway" / "static" / "js" / "webchat.js"
+    js = js_path.read_text(encoding="utf-8")
+
+    start_get = js.find("function getBlockText(block)")
+    start_single = js.find("function renderSingleDisplayBlock(block)")
+    start_code = js.find("function renderCodeBlock(block)")
+    start_table = js.find("function renderTableBlock(block)")
+    assert min(start_get, start_single, start_code, start_table) >= 0
+
+    snippet = "\n".join([
+        js[start_get:start_single],
+        js[start_single:start_code],
+        js[start_code:start_table],
+    ])
+
+    node_script = f"""
+{snippet}
+function renderMarkdown(text) {{
+  return String(text || '');
+}}
+function escapeHtml(text) {{
+  return String(text || '');
+}}
+const toolHtml = renderSingleDisplayBlock({{
+  type: 'tool_result',
+  title: 'Bash',
+  status: 'success',
+  output: 'done'
+}});
+const calloutHtml = renderSingleDisplayBlock({{
+  type: 'callout',
+  title: 'Note',
+  message: 'hello'
+}});
+if (!toolHtml.includes('done')) throw new Error('tool_result output not rendered');
+if (!calloutHtml.includes('hello')) throw new Error('callout message not rendered');
+console.log('ok');
+"""
+    result = subprocess.run(
+        ["node", "-e", node_script],
+        cwd=str(repo_root),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.asyncio
+async def test_assistant_persist_and_result_payload_share_display_blocks(monkeypatch):
+    from src.agents.core import Agent
+    from src.agents import core as core_module
+
+    agent = Agent.__new__(Agent)
+    agent.agent_name = "Assistant"
+    agent.agent_id = "agent-1"
+    supplied_extra = {"display_blocks": [{"type": "code", "text": "print(1)", "language": "python"}]}
+
+    captured = {}
+
+    async def _fake_add_message(session_id, role, content, extra=None):
+        captured["session_id"] = session_id
+        captured["role"] = role
+        captured["content"] = content
+        captured["extra"] = extra or {}
+        return "m-1"
+
+    monkeypatch.setattr(core_module.session_manager, "add_message", _fake_add_message)
+
+    persisted_extra = await agent._persist_assistant_message(
+        "s1",
+        "print(1)",
+        extra=supplied_extra,
+    )
+    payload = agent._build_assistant_result_payload(
+        "print(1)",
+        usage={},
+        user_message_id="u1",
+        extra=supplied_extra,
+    )
+
+    assert captured["role"] == "assistant"
+    assert persisted_extra["display_blocks"] == payload["display_blocks"]
