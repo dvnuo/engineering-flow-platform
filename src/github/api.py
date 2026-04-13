@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.utils.truncate import truncate, truncate_json
 
 from src.config import config
+from src.github.url_utils import normalize_github_api_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -66,21 +67,18 @@ def _truncate_json(data: Any, max_length: int = 500) -> str:
 
 
 class GitHubChannel:
-    """GitHub channel adapter with basic REST API support.
-    
-    Supports URL for GitHub configurable base Enterprise instances.
+    """GitHub channel adapter with REST API support.
+
     Configuration:
-        github.api_token: API token for authentication
-        github.enabled: Whether GitHub integration is enabled
-        github.base_url: Base URL for API (default: (enterprise only - must configure base_url))
-        github.hostname: Hostname for gh CLI (defaults to base_url hostname)
+        github.api_token: API token for GitHub REST authentication.
+        github.enabled: Whether GitHub integration is enabled.
+        github.base_url: Base URL/host for GitHub Enterprise or custom GitHub deployment.
     """
     
     def __init__(self):
-        self.base_url = config.get("github.base_url", "(enterprise only)")
+        self.base_url = normalize_github_api_base_url(config.get("github.base_url"))
         self.token = config.get("github.api_token", "")
         self.enabled = config.get("github.enabled", False)
-        self.hostname = config.get("github.hostname", "")
         
         self.client = httpx.AsyncClient(timeout=30.0)
         self._headers = {
@@ -97,11 +95,9 @@ class GitHubChannel:
     def reinit(self):
         """Reinitialize GitHubChannel (called when config changes)."""
         logger.info("Reinitializing GitHubChannel...")
-        github_config = config.github or {}
-        self.base_url = github_config.get("base_url", "(enterprise only)")
-        self.token = github_config.get("api_token", "")
-        self.enabled = github_config.get("enabled", False)
-        self.hostname = github_config.get("hostname", "")
+        self.base_url = normalize_github_api_base_url(config.get("github.base_url"))
+        self.token = config.get("github.api_token", "")
+        self.enabled = config.get("github.enabled", False)
         
         self._headers = {
             "Accept": "application/vnd.github.v3+json",
@@ -119,7 +115,8 @@ class GitHubChannel:
         **kwargs
     ) -> Any:
         """Make an API request with rate limit handling and exponential backoff."""
-        url = f"{self.base_url}{endpoint}"
+        base_url = normalize_github_api_base_url(self.base_url)
+        url = f"{base_url}{endpoint}"
         
         # Debug: Log request
         if _is_debug_enabled():

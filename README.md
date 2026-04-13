@@ -128,10 +128,13 @@ confluence:
 github:
   enabled: true
   api_token: "ghp_xxxx"  # GitHub personal access token
+  base_url: ""           # Optional GitHub API base URL (blank => https://api.github.com)
   repos:
     - "owner/repo1"
     - "owner/repo2"
 ```
+
+`github.api_token` is used by both GitHub REST API tools and Git clone/push/pull over HTTPS.
 
 ### Encryption
 

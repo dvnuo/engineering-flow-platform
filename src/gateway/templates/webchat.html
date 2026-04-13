@@ -413,8 +413,8 @@
                     </div>
                 </div>
                 <div class="setting-row">
-                    <label>Enterprise URL</label>
-                    <input type="text" id="githubBaseUrl" class="settings-input" placeholder="https://github.company.com (leave empty for github.com)">
+                    <label>GitHub API Base URL (optional)</label>
+                    <input type="text" id="githubBaseUrl" class="settings-input" placeholder="Leave empty for https://api.github.com; enterprise example: https://github.company.com/api/v3">
                 </div>
             </div>
             
@@ -436,29 +436,6 @@
                     <input type="email" id="gitEmail" class="settings-input" placeholder="bot@company.com">
                 </div>
             </div>
-            
-            <!-- SSH Settings -->
-            <div class="settings-section">
-                <h3>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="2" y="4" width="20" height="16" rx="2"/>
-                        <path d="M6 8h4M6 12h4M6 16h4"/>
-                    </svg>
-                    SSH
-                </h3>
-                <div class="setting-row-inline">
-                    <label class="toggle">
-                        <input type="checkbox" id="sshEnabled">
-                        <span class="slider"></span>
-                    </label>
-                    <span>Enabled</span>
-                </div>
-                <div class="setting-row">
-                    <label>Private Key Path</label>
-                    <input type="text" id="sshKeyPath" class="settings-input" placeholder="/path/to/private_key">
-                </div>
-            </div>
-            
             <!-- Debug Settings -->
             <div class="settings-section">
                 <h3>

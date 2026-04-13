@@ -46,6 +46,7 @@ from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
 from src.config import config as global_config
+from src.github.url_utils import normalize_github_api_base_url
 from src.runtime.chat_orchestration_adapter import execute_chat_orchestration, execute_runtime_task_request
 from src.runtime.runtime_task_tracker import RuntimeTaskTracker
 from src.runtime.portal_session_metadata_client import (
@@ -1967,6 +1968,12 @@ async def api_delete_conversation_from(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e), 'user_message_id': message_id}, status=500)
 
 
+def _remove_legacy_ssh_config(config_data: Dict[str, Any]) -> None:
+    """Remove deprecated top-level SSH configuration."""
+    if isinstance(config_data, dict):
+        config_data.pop("ssh", None)
+
+
 async def api_save_config(request: web.Request) -> web.Response:
     """Save configuration to config.yaml.
     
@@ -2026,7 +2033,7 @@ async def api_save_config(request: web.Request) -> web.Response:
         
         # Perform partial update - only merge provided sections
         config = existing_config.copy()
-        sections = ['llm', 'jira', 'confluence', 'github', 'git', 'ssh', 'debug', 'proxy']
+        sections = ['llm', 'jira', 'confluence', 'github', 'git', 'debug', 'proxy']
         
         for section in sections:
             if section in data:
@@ -2036,6 +2043,9 @@ async def api_save_config(request: web.Request) -> web.Response:
                 else:
                     config[section] = data[section]
         
+        # Remove deprecated SSH configuration from persisted config
+        _remove_legacy_ssh_config(config)
+
         # Encrypt sensitive fields before saving
         global_config._encrypt_sensitive_fields(config)
         
@@ -2121,88 +2131,12 @@ async def api_get_config(request: web.Request) -> web.Response:
             decrypt_config(config)
         except Exception as e:
             logger.warning(f"Failed to decrypt config values: {e}")
-        
+
+        _remove_legacy_ssh_config(config)
         return web.json_response({'config': config})
     except Exception as e:
         logger.error(f"Error reading config: {e}")
         return web.json_response({'error': str(e)}, status=500)
-
-
-# ========== SSH Key Management ==========
-
-async def api_ssh_generate(request: web.Request) -> web.Response:
-    """Generate SSH key pair.
-    
-    POST /api/ssh/generate
-    Body: {"key_type": "ed25519" | "rsa", "comment": "optional comment"}
-    
-    Returns:
-        - success: boolean
-        - public_key: the public key to add to GitHub/GitLab
-        - key_type: type of key generated
-    """
-    try:
-        data = await request.json() if request.can_read_body else {}
-        key_type = data.get("key_type", "rsa")
-        comment = data.get("comment", "engineering-flow-platform")
-        
-        if key_type not in ["ed25519", "rsa"]:
-            return web.json_response(
-                {"error": "Invalid key_type. Use 'ed25519' or 'rsa'"},
-                status=400
-            )
-        
-        from src.git.api import generate_ssh_key
-        result = await generate_ssh_key(key_type=key_type, comment=comment)
-        
-        if result.get("success"):
-            return web.json_response({
-                "success": True,
-                "message": result.get("message"),
-                "public_key": result.get("public_key"),
-                "key_type": result.get("key_type"),
-                "instructions": "Add the public key to your GitHub/GitLab account settings"
-            })
-        else:
-            return web.json_response({
-                "success": False,
-                "error": result.get("error", "Failed to generate SSH key")
-            }, status=500)
-            
-    except Exception as e:
-        logger.error(f"Error generating SSH key: {e}")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def api_ssh_public_key(request: web.Request) -> web.Response:
-    """Get existing SSH public key.
-    
-    GET /api/ssh/public-key
-    
-    Returns:
-        - success: boolean
-        - public_key: the public key (if exists)
-        - key_type: type of key
-    """
-    try:
-        from src.git.api import get_ssh_public_key
-        result = await get_ssh_public_key()
-        
-        if result.get("success"):
-            return web.json_response({
-                "success": True,
-                "public_key": result.get("public_key"),
-                "key_type": result.get("key_type")
-            })
-        else:
-            return web.json_response({
-                "success": False,
-                "message": result.get("message", "No SSH key found")
-            }, status=404)
-            
-    except Exception as e:
-        logger.error(f"Error getting SSH public key: {e}")
-        return web.json_response({"error": str(e)}, status=500)
 
 
 # ========== GitHub Copilot Authorization ==========
@@ -2212,6 +2146,10 @@ import uuid
 
 # In-memory storage for pending authorizations (in production, use Redis/database)
 _pending_authorizations: Dict[str, Dict[str, Any]] = {}
+
+def _get_github_api_base_url() -> str:
+    """Return normalized GitHub API base URL from github.base_url config."""
+    return normalize_github_api_base_url(global_config.get("github.base_url"))
 
 
 async def api_copilot_auth_start(request: web.Request) -> web.Response:
@@ -2227,9 +2165,8 @@ async def api_copilot_auth_start(request: web.Request) -> web.Response:
         - interval: Polling interval in seconds
     """
     try:
-        # Get GitHub base URL from config
-        github_base_url = config.get("github.base_url", "https://github.com").replace("https://github.com", "").strip("/")
-        api_base_url = config.get("github.api_base", "https://api.github.com")
+        # Get normalized GitHub API base URL from config
+        api_base_url = _get_github_api_base_url()
         
         async with httpx.AsyncClient() as client:
             # Request device authorization from GitHub
@@ -2324,8 +2261,8 @@ async def api_copilot_auth_check(request: web.Request) -> web.Response:
                 'token': token,
             })
         
-        # Get GitHub API base
-        api_base_url = config.get("github.api_base", "https://api.github.com")
+        # Get normalized GitHub API base URL from config
+        api_base_url = _get_github_api_base_url()
         
         async with httpx.AsyncClient() as client:
             # Check token status
@@ -3139,8 +3076,6 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/sessions/{session_id}/messages/{message_id}/delete-from-here', api_delete_conversation_from)
     app.router.add_get('/api/config', api_get_config)
     app.router.add_post('/api/config/save', api_save_config)
-    app.router.add_post('/api/ssh/generate', api_ssh_generate)
-    app.router.add_get('/api/ssh/public-key', api_ssh_public_key)
     app.router.add_get('/api/skills', api_skills)
     app.router.add_post('/api/copilot/auth/start', api_copilot_auth_start)
     app.router.add_post('/api/copilot/auth/check', api_copilot_auth_check)

@@ -2533,8 +2533,6 @@
     const githubBaseUrl = document.getElementById('githubBaseUrl');
     const gitName = document.getElementById('gitName');
     const gitEmail = document.getElementById('gitEmail');
-    const sshEnabled = document.getElementById('sshEnabled');
-    const sshKeyPath = document.getElementById('sshKeyPath');
 
 
     // Provider to Model mapping
@@ -2947,12 +2945,6 @@
                     gitEmail.value = config.git.user.email || '';
                 }
 
-                // SSH settings
-                if (config.ssh) {
-                    sshEnabled.checked = config.ssh.enabled || false;
-                    sshKeyPath.value = config.ssh.private_key_path || '';
-                }
-
                 // Debug settings
                 if (config.debug) {
                     debugEnabled.checked = config.debug.enabled || false;
@@ -3003,10 +2995,6 @@
                         name: gitName.value,
                         email: gitEmail.value,
                     },
-                },
-                ssh: {
-                    enabled: sshEnabled.checked,
-                    private_key_path: sshKeyPath.value,
                 },
                 debug: {
                     enabled: debugEnabled.checked,
