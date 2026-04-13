@@ -2,7 +2,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.gateway import events
+from tests._import_helpers import load_module_from_repo_path
+
+load_module_from_repo_path("src.gateway.event_bus", "src/gateway/event_bus.py")
+events = load_module_from_repo_path("src.gateway.events", "src/gateway/events.py")
 
 
 class _FakeWS:

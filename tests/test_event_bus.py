@@ -3,7 +3,10 @@ import json
 
 import pytest
 
-from src.gateway.event_bus import EventBus
+from tests._import_helpers import load_module_from_repo_path
+
+_event_bus_module = load_module_from_repo_path("src.gateway.event_bus", "src/gateway/event_bus.py")
+EventBus = _event_bus_module.EventBus
 
 
 @pytest.mark.asyncio
