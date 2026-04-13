@@ -2154,6 +2154,10 @@ import uuid
 # In-memory storage for pending authorizations (in production, use Redis/database)
 _pending_authorizations: Dict[str, Dict[str, Any]] = {}
 
+def _get_github_api_base_url() -> str:
+    """Return normalized GitHub API base URL from github.base_url config."""
+    return normalize_github_api_base_url(global_config.get("github.base_url"))
+
 
 async def api_copilot_auth_start(request: web.Request) -> web.Response:
     """Start GitHub Copilot device authorization flow.
@@ -2169,7 +2173,7 @@ async def api_copilot_auth_start(request: web.Request) -> web.Response:
     """
     try:
         # Get normalized GitHub API base URL from config
-        api_base_url = normalize_github_api_base_url(global_config.get("github.base_url"))
+        api_base_url = _get_github_api_base_url()
         
         async with httpx.AsyncClient() as client:
             # Request device authorization from GitHub
@@ -2265,7 +2269,7 @@ async def api_copilot_auth_check(request: web.Request) -> web.Response:
             })
         
         # Get normalized GitHub API base URL from config
-        api_base_url = normalize_github_api_base_url(global_config.get("github.base_url"))
+        api_base_url = _get_github_api_base_url()
         
         async with httpx.AsyncClient() as client:
             # Check token status

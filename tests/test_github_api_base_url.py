@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from src.gateway import webchat
 from src.github.url_utils import normalize_github_api_base_url
 
 
@@ -68,3 +69,15 @@ async def test_github_channel_request_uses_normalized_base_url(monkeypatch, tmp_
     assert captured["method"] == "GET"
     assert captured["url"] == "https://api.github.com/repos/acme/repo"
     assert result == {"ok": True}
+
+
+@pytest.mark.parametrize(
+    "base_url,expected",
+    [
+        ("https://github.com", "https://api.github.com"),
+        ("https://github.company.com", "https://github.company.com/api/v3"),
+    ],
+)
+def test_webchat_helper_uses_github_base_url_normalization(monkeypatch, base_url, expected):
+    monkeypatch.setattr(webchat.global_config, "_config", {"github": {"base_url": base_url}}, raising=False)
+    assert webchat._get_github_api_base_url() == expected
