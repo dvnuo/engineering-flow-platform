@@ -217,6 +217,8 @@ class Config:
         with open(self.runtime_profile_path, "w", encoding="utf-8") as f:
             self._yaml.dump(encrypted_payload, f)
 
+        # Use union so section removals (e.g. proxy removed from overlay) still
+        # trigger reload/apply side effects for the removed section.
         changed_sections = sorted(previous_sections | new_sections)
         self.reload(changed_sections=changed_sections)
         if "proxy" in changed_sections:

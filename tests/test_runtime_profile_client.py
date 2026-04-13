@@ -82,6 +82,38 @@ def test_extract_runtime_profile_overlay_malformed_structured_shape_returns_inva
     assert (runtime_profile_id, revision, overlay_config, clear_flag) == (None, None, None, False)
 
 
+def test_extract_runtime_profile_overlay_uses_nested_profile_id_when_top_level_missing():
+    payload = {
+        "runtime_profile_context": {
+            "runtime_profile_id": "rp_nested",
+            "revision": 4,
+            "config": {"proxy": {"enabled": True}},
+        }
+    }
+    runtime_profile_id, revision, overlay_config, clear_flag = runtime_profile_client._extract_runtime_profile_overlay(payload)
+    assert runtime_profile_id == "rp_nested"
+    assert revision == 4
+    assert overlay_config == {"proxy": {"enabled": True}}
+    assert clear_flag is False
+
+
+def test_extract_runtime_profile_overlay_prefers_nested_revision_over_top_level():
+    payload = {
+        "runtime_profile_id": "rp_1",
+        "revision": 99,
+        "runtime_profile_context": {
+            "runtime_profile_id": "rp_1",
+            "revision": 3,
+            "config": {"jira": {"enabled": True}},
+        },
+    }
+    runtime_profile_id, revision, overlay_config, clear_flag = runtime_profile_client._extract_runtime_profile_overlay(payload)
+    assert runtime_profile_id == "rp_1"
+    assert revision == 3
+    assert overlay_config == {"jira": {"enabled": True}}
+    assert clear_flag is False
+
+
 @pytest.mark.asyncio
 async def test_bootstrap_runtime_profile_apply(monkeypatch):
     monkeypatch.setattr(runtime_profile_client, "get_portal_internal_base_url", lambda: "http://portal")
