@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from ruamel.yaml import YAML
 
 from src.github import github_channel
+from src.github.url_utils import normalize_github_api_base_url
 from src.utils.redaction import safe_preview, sanitize_exception_message
 
 _yaml = YAML()
@@ -85,14 +86,9 @@ class GitHubDocRef:
 def _allowed_github_hosts() -> set[str]:
     hosts = {"github.com"}
 
-    hostname = str(getattr(github_channel, "hostname", "") or "").strip().lower()
-    if hostname:
-        hosts.add(hostname)
-
     base_url = str(getattr(github_channel, "base_url", "") or "").strip()
     if base_url:
-        normalized_base_url = base_url if "://" in base_url else f"https://{base_url.lstrip('/')}"
-        parsed_base_url = urlparse(normalized_base_url)
+        parsed_base_url = urlparse(normalize_github_api_base_url(base_url))
         if parsed_base_url.netloc:
             hosts.add(parsed_base_url.netloc.lower())
 

@@ -332,7 +332,7 @@ async def test_collect_skill_supports_enterprise_github_blob_url(monkeypatch):
     monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page", _fake_text)
     monkeypatch.setattr("skills.collect_requirements_to_bundle.skill.confluence_get_page_by_url", _fake_text)
     monkeypatch.setattr("src.agents.llm.LLMClient.chat", _fake_chat)
-    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.hostname", "github.company.com")
+    monkeypatch.setattr("src.runtime.requirement_bundle_assets.github_channel.base_url", "https://github.company.com/api/v3")
 
     result = await collect_requirements_skill.execute(
         bundle_ref={"repo": "acme/assets", "path": "requirement-bundles/payments/maker", "branch": "bundle/1"},

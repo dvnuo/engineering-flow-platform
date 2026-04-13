@@ -27,7 +27,8 @@ from src.git import GitClient
 
 git = GitClient()
 
-await git.clone("git@github.com/owner/repo.git")  # SSH-style input accepted, normalized to HTTPS
+await git.clone("https://github.com/owner/repo.git")
+# Legacy SSH-style GitHub URLs are still accepted and normalized internally to HTTPS.
 await git.status()
 await git.commit("Initial commit")
 await git.push()

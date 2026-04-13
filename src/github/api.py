@@ -73,14 +73,12 @@ class GitHubChannel:
         github.api_token: API token for GitHub REST authentication.
         github.enabled: Whether GitHub integration is enabled.
         github.base_url: Base URL/host for GitHub Enterprise or custom GitHub deployment.
-        github.hostname: Optional host hint used for enterprise host matching/compatibility helpers.
     """
     
     def __init__(self):
         self.base_url = normalize_github_api_base_url(config.get("github.base_url"))
         self.token = config.get("github.api_token", "")
         self.enabled = config.get("github.enabled", False)
-        self.hostname = config.get("github.hostname", "")
         
         self.client = httpx.AsyncClient(timeout=30.0)
         self._headers = {
@@ -101,7 +99,6 @@ class GitHubChannel:
         self.base_url = normalize_github_api_base_url(github_config.get("base_url"))
         self.token = github_config.get("api_token", "")
         self.enabled = github_config.get("enabled", False)
-        self.hostname = github_config.get("hostname", "")
         
         self._headers = {
             "Accept": "application/vnd.github.v3+json",
