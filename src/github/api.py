@@ -95,10 +95,9 @@ class GitHubChannel:
     def reinit(self):
         """Reinitialize GitHubChannel (called when config changes)."""
         logger.info("Reinitializing GitHubChannel...")
-        github_config = config.github or {}
-        self.base_url = normalize_github_api_base_url(github_config.get("base_url"))
-        self.token = github_config.get("api_token", "")
-        self.enabled = github_config.get("enabled", False)
+        self.base_url = normalize_github_api_base_url(config.get("github.base_url"))
+        self.token = config.get("github.api_token", "")
+        self.enabled = config.get("github.enabled", False)
         
         self._headers = {
             "Accept": "application/vnd.github.v3+json",

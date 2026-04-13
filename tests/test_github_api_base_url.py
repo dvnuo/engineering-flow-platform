@@ -81,3 +81,32 @@ async def test_github_channel_request_uses_normalized_base_url(monkeypatch, tmp_
 def test_webchat_helper_uses_github_base_url_normalization(monkeypatch, base_url, expected):
     monkeypatch.setattr(webchat.global_config, "_config", {"github": {"base_url": base_url}}, raising=False)
     assert webchat._get_github_api_base_url() == expected
+
+
+def test_github_channel_reinit_uses_dot_notation_config(monkeypatch):
+    github_api = importlib.import_module("src.github.api")
+    github_api = importlib.reload(github_api)
+
+    monkeypatch.setattr(
+        github_api.config,
+        "_config",
+        {"github": {"base_url": "https://github.company.com", "enabled": True, "api_token": "abc"}},
+        raising=False,
+    )
+
+    channel = github_api.GitHubChannel()
+    channel.reinit()
+
+    assert channel.base_url == "https://github.company.com/api/v3"
+    assert channel.token == "abc"
+    assert channel.enabled is True
+    assert channel._headers.get("Authorization") == "Bearer abc"
+
+
+def test_channels_github_reuses_canonical_singleton():
+    github_module = importlib.import_module("src.github")
+    github_module = importlib.reload(github_module)
+    channels_github = importlib.import_module("src.channels.github")
+    channels_github = importlib.reload(channels_github)
+
+    assert github_module.github_channel is channels_github.github_channel
