@@ -93,3 +93,37 @@ def test_runtime_profile_overlay_proxy_applies_env(tmp_path, monkeypatch):
 
     assert os.environ["http_proxy"] == "http://proxy.example.com:8080"
     assert os.environ["HTTPS_PROXY"] == "http://proxy.example.com:8080"
+
+
+def test_runtime_profile_overlay_section_removal_includes_proxy_change_and_rolls_back_to_base(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    runtime_profile_path = tmp_path / "runtime_profile.yaml"
+    _write_base_config(config_path)
+
+    cfg = Config(str(config_path))
+    cfg.runtime_profile_path = runtime_profile_path
+
+    apply_calls = {"count": 0}
+    original_apply_proxy = cfg.apply_proxy
+
+    def _count_apply_proxy():
+        apply_calls["count"] += 1
+        original_apply_proxy()
+
+    monkeypatch.setattr(cfg, "apply_proxy", _count_apply_proxy)
+
+    first_changed = cfg.set_managed_overlay(
+        "rp_5",
+        1,
+        {
+            "proxy": {"enabled": True, "url": "http://overlay.proxy.local:8080"},
+            "llm": {"provider": "anthropic"},
+        },
+    )
+    assert "proxy" in first_changed
+    assert cfg.proxy.get("url") == "http://overlay.proxy.local:8080"
+
+    second_changed = cfg.set_managed_overlay("rp_5", 2, {"llm": {"provider": "openai"}})
+    assert "proxy" in second_changed
+    assert apply_calls["count"] >= 2
+    assert cfg.proxy.get("enabled") is False

@@ -53,8 +53,14 @@ async def test_bootstrap_runtime_profile_apply(monkeypatch):
                 200,
                 {
                     "runtime_profile_id": "rp_1",
-                    "revision": 2,
-                    "runtime_profile_context": {"jira": {"enabled": True}},
+                    "runtime_profile_context": {
+                        "runtime_profile_id": "rp_1",
+                        "name": "Default Runtime",
+                        "revision": 3,
+                        "managed_sections": ["llm", "proxy", "jira", "confluence", "github", "git", "debug"],
+                        "config": {"jira": {"enabled": True}},
+                        "source": "portal.runtime_profile",
+                    },
                 },
             )
         ),
@@ -72,7 +78,7 @@ async def test_bootstrap_runtime_profile_apply(monkeypatch):
     ok = await runtime_profile_client.bootstrap_runtime_profile_from_portal()
     assert ok is True
     assert captured["runtime_profile_id"] == "rp_1"
-    assert captured["revision"] == 2
+    assert captured["revision"] == 3
     assert captured["overlay"] == {"jira": {"enabled": True}}
 
 
@@ -120,3 +126,41 @@ async def test_bootstrap_runtime_profile_failure_is_non_fatal(monkeypatch):
 
     ok = await runtime_profile_client.bootstrap_runtime_profile_from_portal()
     assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_runtime_profile_apply_legacy_direct_config_shape(monkeypatch):
+    monkeypatch.setattr(runtime_profile_client, "get_portal_internal_base_url", lambda: "http://portal")
+    monkeypatch.setattr(runtime_profile_client, "get_portal_agent_id", lambda: "agent-1")
+    monkeypatch.setattr(runtime_profile_client, "build_portal_internal_api_headers", lambda include_content_type=False: {})
+    monkeypatch.setattr(
+        runtime_profile_client,
+        "ClientSession",
+        lambda headers=None: _FakeClientSession(
+            _FakeResponse(
+                200,
+                {
+                    "runtime_profile_id": "rp_legacy",
+                    "revision": 2,
+                    "runtime_profile_context": {"jira": {"enabled": True}},
+                },
+            )
+        ),
+    )
+
+    captured = {}
+    monkeypatch.setattr(
+        runtime_profile_client.config,
+        "set_managed_overlay",
+        lambda rp_id, revision, overlay: captured.update(
+            {"runtime_profile_id": rp_id, "revision": revision, "overlay": overlay}
+        ) or ["jira"],
+    )
+
+    ok = await runtime_profile_client.bootstrap_runtime_profile_from_portal()
+    assert ok is True
+    assert captured == {
+        "runtime_profile_id": "rp_legacy",
+        "revision": 2,
+        "overlay": {"jira": {"enabled": True}},
+    }

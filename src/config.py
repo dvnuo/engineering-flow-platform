@@ -202,7 +202,9 @@ class Config:
         overlay_config: Dict[str, Any],
     ) -> List[str]:
         """Set and persist managed overlay config, then reload effective config."""
+        previous_sections = set(self._managed_overlay.keys())
         filtered_overlay = self._filter_managed_overlay_sections(overlay_config or {})
+        new_sections = set(filtered_overlay.keys())
         payload = {
             "runtime_profile_id": runtime_profile_id,
             "revision": revision,
@@ -215,11 +217,11 @@ class Config:
         with open(self.runtime_profile_path, "w", encoding="utf-8") as f:
             self._yaml.dump(encrypted_payload, f)
 
-        updated_sections = sorted(filtered_overlay.keys())
-        self.reload(changed_sections=updated_sections)
-        if "proxy" in updated_sections:
+        changed_sections = sorted(previous_sections | new_sections)
+        self.reload(changed_sections=changed_sections)
+        if "proxy" in changed_sections:
             self.apply_proxy()
-        return updated_sections
+        return changed_sections
 
     def clear_managed_overlay(self) -> None:
         """Clear managed runtime overlay and reload effective config."""
