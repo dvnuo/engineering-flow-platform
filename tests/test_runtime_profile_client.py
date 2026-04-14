@@ -114,6 +114,33 @@ def test_extract_runtime_profile_overlay_prefers_nested_revision_over_top_level(
     assert clear_flag is False
 
 
+def test_extract_runtime_profile_overlay_ignores_control_plane_only_fields():
+    payload = {
+        "runtime_profile_id": "rp_1",
+        "runtime_profile_context": {
+            "runtime_profile_id": "rp_1",
+            "name": "Default",
+            "description": "Per-user runtime profile",
+            "owner_user_id": 42,
+            "is_default": True,
+            "bound_agent_count": 3,
+            "revision": 7,
+            "managed_sections": ["llm", "proxy", "jira", "confluence", "github", "git", "debug"],
+            "config": {"llm": {"provider": "openai", "model": "gpt-4.1"}},
+            "source": "portal.runtime_profile",
+        },
+    }
+
+    runtime_profile_id, revision, overlay_config, clear_flag = runtime_profile_client._extract_runtime_profile_overlay(payload)
+    assert runtime_profile_id == "rp_1"
+    assert revision == 7
+    assert clear_flag is False
+    assert overlay_config == {"llm": {"provider": "openai", "model": "gpt-4.1"}}
+    assert "owner_user_id" not in overlay_config
+    assert "is_default" not in overlay_config
+    assert "name" not in overlay_config
+
+
 @pytest.mark.asyncio
 async def test_bootstrap_runtime_profile_apply(monkeypatch):
     monkeypatch.setattr(runtime_profile_client, "get_portal_internal_base_url", lambda: "http://portal")
