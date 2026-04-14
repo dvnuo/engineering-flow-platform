@@ -16,6 +16,11 @@ except ImportError:
 INTERNAL_API_KEY = "runtime-internal-key"
 INTERNAL_HEADERS = {}
 
+@pytest.fixture(autouse=True)
+def _default_internal_auth_permissive(monkeypatch):
+    from src.gateway import webchat
+    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: "")
+
 
 class TestWebChatTemplate:
     """Tests for WebChat template loading."""
@@ -221,31 +226,35 @@ class _HeaderOnlyRequest:
         self.headers = headers or {}
 
 
-def test_authorize_internal_runtime_request_noop_when_key_unset_and_header_missing(monkeypatch):
+def test_authorize_internal_runtime_request_allows_when_key_unset_and_header_missing(monkeypatch):
     from src.gateway import webchat
 
-    monkeypatch.delenv("RUNTIME_INTERNAL_API_KEY", raising=False)
+    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: "")
     assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest()) is None
 
 
-def test_authorize_internal_runtime_request_noop_when_key_set_and_header_missing(monkeypatch):
+def test_authorize_internal_runtime_request_rejects_when_key_set_and_header_missing(monkeypatch):
     from src.gateway import webchat
 
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
-    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest()) is None
+    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: INTERNAL_API_KEY)
+    response = webchat._authorize_internal_runtime_request(_HeaderOnlyRequest())
+    assert response is not None
+    assert response.status == 403
 
 
-def test_authorize_internal_runtime_request_noop_when_key_set_and_header_wrong(monkeypatch):
+def test_authorize_internal_runtime_request_rejects_when_key_set_and_header_wrong(monkeypatch):
     from src.gateway import webchat
 
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
-    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Internal-Api-Key": "wrong"})) is None
+    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: INTERNAL_API_KEY)
+    response = webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Internal-Api-Key": "wrong"}))
+    assert response is not None
+    assert response.status == 403
 
 
-def test_authorize_internal_runtime_request_noop_when_key_set_and_header_valid(monkeypatch):
+def test_authorize_internal_runtime_request_allows_when_key_set_and_header_valid(monkeypatch):
     from src.gateway import webchat
 
-    monkeypatch.setenv("RUNTIME_INTERNAL_API_KEY", INTERNAL_API_KEY)
+    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: INTERNAL_API_KEY)
     assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Internal-Api-Key": INTERNAL_API_KEY})) is None
 
 
