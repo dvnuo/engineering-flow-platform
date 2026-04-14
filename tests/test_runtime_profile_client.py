@@ -114,6 +114,49 @@ def test_extract_runtime_profile_overlay_prefers_nested_revision_over_top_level(
     assert clear_flag is False
 
 
+def test_extract_runtime_profile_overlay_ignores_owner_and_default_metadata():
+    payload = {
+        "runtime_profile_id": "rp_user_1",
+        "runtime_profile_context": {
+            "runtime_profile_id": "rp_user_1",
+            "name": "Default Runtime",
+            "revision": 7,
+            "owner_user_id": 42,
+            "is_default": True,
+            "bound_agent_count": 3,
+            "managed_sections": ["llm", "proxy", "jira", "confluence", "github", "git", "debug"],
+            "config": {"llm": {"provider": "openai"}},
+            "source": "portal.runtime_profile",
+        },
+    }
+
+    runtime_profile_id, revision, overlay_config, clear_flag = runtime_profile_client._extract_runtime_profile_overlay(payload)
+    assert runtime_profile_id == "rp_user_1"
+    assert revision == 7
+    assert overlay_config == {"llm": {"provider": "openai"}}
+    assert clear_flag is False
+
+
+def test_extract_runtime_profile_overlay_keeps_working_when_portal_adds_more_non_config_fields():
+    payload = {
+        "runtime_profile_id": "rp_future_meta",
+        "runtime_profile_context": {
+            "runtime_profile_id": "rp_future_meta",
+            "revision": 11,
+            "display_label": "Team A / Default",
+            "ui_badges": ["default", "user-scoped"],
+            "description": "Portal UI-only metadata should not affect runtime overlay parsing.",
+            "config": {"github": {"enabled": True}},
+        },
+    }
+
+    runtime_profile_id, revision, overlay_config, clear_flag = runtime_profile_client._extract_runtime_profile_overlay(payload)
+    assert runtime_profile_id == "rp_future_meta"
+    assert revision == 11
+    assert overlay_config == {"github": {"enabled": True}}
+    assert clear_flag is False
+
+
 @pytest.mark.asyncio
 async def test_bootstrap_runtime_profile_apply(monkeypatch):
     monkeypatch.setattr(runtime_profile_client, "get_portal_internal_base_url", lambda: "http://portal")
@@ -154,6 +197,51 @@ async def test_bootstrap_runtime_profile_apply(monkeypatch):
     assert captured["runtime_profile_id"] == "rp_1"
     assert captured["revision"] == 3
     assert captured["overlay"] == {"jira": {"enabled": True}}
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_runtime_profile_apply_ignores_extra_portal_metadata(monkeypatch):
+    monkeypatch.setattr(runtime_profile_client, "get_portal_internal_base_url", lambda: "http://portal")
+    monkeypatch.setattr(runtime_profile_client, "get_portal_agent_id", lambda: "agent-1")
+    monkeypatch.setattr(runtime_profile_client, "build_portal_internal_api_headers", lambda include_content_type=False: {})
+    monkeypatch.setattr(
+        runtime_profile_client,
+        "ClientSession",
+        lambda headers=None: _FakeClientSession(
+            _FakeResponse(
+                200,
+                {
+                    "runtime_profile_id": "rp_user_1",
+                    "runtime_profile_context": {
+                        "runtime_profile_id": "rp_user_1",
+                        "revision": 8,
+                        "owner_user_id": 42,
+                        "is_default": True,
+                        "bound_agent_count": 3,
+                        "managed_sections": ["llm", "proxy", "jira", "confluence", "github", "git", "debug"],
+                        "display_label": "Personal Default",
+                        "ui_badges": ["default", "personal"],
+                        "config": {"llm": {"provider": "openai"}},
+                    },
+                },
+            )
+        ),
+    )
+
+    captured = {}
+    monkeypatch.setattr(
+        runtime_profile_client.config,
+        "set_managed_overlay",
+        lambda rp_id, revision, overlay: captured.update(
+            {"runtime_profile_id": rp_id, "revision": revision, "overlay": overlay}
+        ) or ["llm"],
+    )
+
+    ok = await runtime_profile_client.bootstrap_runtime_profile_from_portal()
+    assert ok is True
+    assert captured["runtime_profile_id"] == "rp_user_1"
+    assert captured["revision"] == 8
+    assert captured["overlay"] == {"llm": {"provider": "openai"}}
 
 
 @pytest.mark.asyncio
