@@ -785,6 +785,87 @@ async def test_api_chat_best_effort_publishes_session_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_api_chat_trusted_client_request_id_forwarded_and_started_metadata_published(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+    publish_calls = []
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {
+            "response": "ok",
+            "usage": {},
+            "request_id": kwargs["request_id"],
+            "_execution_result": type(
+                "R",
+                (),
+                {"request_id": kwargs["request_id"], "status": "success", "runtime_events": [], "artifacts": {}, "output_payload": {}},
+            )(),
+        }
+
+    async def _fake_publish_session_metadata(**kwargs):
+        publish_calls.append(kwargs)
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "publish_session_metadata", _fake_publish_session_metadata)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _request: ("agent-1", "Agent One"))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-trusted-id", "client_request_id": "portal-chat-req-1"}
+
+    resp = await webchat.api_chat(_Request())
+    payload = json.loads(resp.text)
+    assert resp.status == 200
+    assert captured["request_id"] == "portal-chat-req-1"
+    assert len(publish_calls) >= 2
+    assert publish_calls[0]["latest_event_type"] == "chat.started"
+    assert publish_calls[0]["latest_event_state"] == "running"
+    assert publish_calls[0]["last_execution_id"] == "portal-chat-req-1"
+    assert publish_calls[1]["last_execution_id"] == "portal-chat-req-1"
+    assert payload["request_id"] == "portal-chat-req-1"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_untrusted_client_request_id_not_accepted(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-untrusted-id", "client_request_id": "attacker-id"}
+
+    resp = await webchat.api_chat(_Request())
+    assert resp.status == 200
+    assert captured["request_id"] != "attacker-id"
+    assert captured["request_id"].startswith("chat-")
+
+
+@pytest.mark.asyncio
 async def test_api_chat_publish_failure_does_not_break_response(monkeypatch):
     from src.gateway import webchat
 
@@ -911,6 +992,106 @@ async def test_api_chat_stream_trusted_portal_metadata_passed_to_execution_bus(m
     resp = await webchat.api_chat_stream(_Request())
     assert resp.status == 200
     assert captured["execution_metadata"]["allowed_actions"] == ["adapter:portal:get_group_task_board"]
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_start_event_contains_request_id_and_forwards_same_id(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+    publish_calls = []
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {
+            "response": "ok",
+            "usage": {},
+            "_execution_result": type(
+                "R",
+                (),
+                {"request_id": kwargs["request_id"], "status": "success", "runtime_events": [], "artifacts": {}, "output_payload": {}},
+            )(),
+        }
+
+    async def _fake_publish_session_metadata(**kwargs):
+        publish_calls.append(kwargs)
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data.decode())
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "publish_session_metadata", _fake_publish_session_metadata)
+    monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _request: ("agent-stream", "Agent Stream"))
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-stream-req", "client_request_id": "portal-stream-req-1"}
+
+    resp = await webchat.api_chat_stream(_Request())
+    assert resp.status == 200
+    start_chunk = next(chunk for chunk in resp.writes if "event: start" in chunk)
+    start_data = json.loads(start_chunk.split("data: ", 1)[1].strip())
+    assert start_data["session_id"] == "s-stream-req"
+    assert start_data["request_id"] == "portal-stream-req-1"
+    assert captured["request_id"] == "portal-stream-req-1"
+    assert len(publish_calls) >= 2
+    assert publish_calls[0]["latest_event_type"] == "chat.started"
+    assert publish_calls[0]["latest_event_state"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_first_start_event_request_id_matches_execution_request_id(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data.decode())
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-stream-contract", "client_request_id": "portal-stream-req-1"}
+
+    resp = await webchat.api_chat_stream(_Request())
+    assert resp.status == 200
+    assert resp.writes
+    assert resp.writes[0].startswith("event: start")
+    start_data = json.loads(resp.writes[0].split("data: ", 1)[1].strip())
+    assert start_data["session_id"] == "s-stream-contract"
+    assert start_data["request_id"] == "portal-stream-req-1"
+    assert captured["request_id"] == "portal-stream-req-1"
 
 
 @pytest.mark.asyncio

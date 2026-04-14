@@ -114,6 +114,17 @@ def test_build_webchat_response_payload_preserves_indented_markdown_whitespace()
     assert payload["display_blocks"] == [{"type": "markdown", "content": raw_markdown}]
 
 
+def test_build_webchat_response_payload_backfills_request_id_from_execution_result():
+    mod = _load_chat_payloads_module()
+    execution_result = type("ExecutionResult", (), {"request_id": "exec-123"})()
+    payload = mod.build_webchat_response_payload(
+        {"response": "hello", "_execution_result": execution_result},
+        "s-request-id",
+    )
+
+    assert payload["request_id"] == "exec-123"
+
+
 def test_normalize_assistant_history_message_treats_whitespace_content_as_empty():
     mod = _load_chat_payloads_module()
     message = mod.normalize_assistant_history_message(

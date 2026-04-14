@@ -17,6 +17,7 @@ _SUPPORTED_FILTER_KEYS = {
     "task_id",
     "group_id",
     "coordination_run_id",
+    "request_id",
 }
 
 
@@ -65,6 +66,8 @@ class EventBus:
                     data.get("current_coordination_run_id"),
                     data.get("portal_coordination_run_id"),
                 ]
+            elif key == "request_id":
+                candidates = [data.get("request_id"), data.get("execution_id")]
             else:
                 return False
 

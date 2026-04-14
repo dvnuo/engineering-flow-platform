@@ -58,6 +58,12 @@ def build_webchat_response_payload(result: Optional[Dict[str, Any]], session_id:
         "usage": usage,
         "display_blocks": normalize_display_blocks(payload_result.get("display_blocks"), response_text),
     }
+    request_id = payload_result.get("request_id")
+    if not request_id:
+        execution_result = payload_result.get("_execution_result")
+        request_id = getattr(execution_result, "request_id", None) if execution_result is not None else None
+    if request_id:
+        response_payload["request_id"] = request_id
     for key in ("user_message_id", "events", "_llm_debug", "reasoning"):
         if key in payload_result:
             response_payload[key] = payload_result[key]

@@ -57,6 +57,10 @@ from src.gateway.chat_payloads import (
     build_webchat_response_payload,
     normalize_assistant_history_message,
 )
+from src.gateway.webchat_request_contracts import (
+    build_stream_start_event_payload,
+    extract_trusted_client_request_id,
+)
 from src.runtime.capability_registry import get_capability_registry
 from src.gateway.event_bus import emit_agent_event
 from src.sessions.manager import session_manager
@@ -148,6 +152,10 @@ def _extract_trusted_control_plane_metadata(request: web.Request, data: Dict[str
                 if key in _DERIVED_RUNTIME_RULE_KEYS:
                     trusted_metadata[key] = value
     return trusted_metadata
+
+
+def _extract_trusted_client_request_id(request: web.Request, data: Dict[str, Any]) -> Optional[str]:
+    return extract_trusted_client_request_id(_is_trusted_portal_request(request), data)
 
 
 def _require_non_empty_string(data: Dict[str, Any], key: str) -> str:
@@ -261,6 +269,7 @@ async def _run_chat_via_execution_bus(
     request_path: str = "/api/chat",
     execution_metadata: Optional[Dict[str, Any]] = None,
     agent_id: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     async def _chat_handler(execution_request):
         payload = execution_request.input_payload
@@ -280,8 +289,9 @@ async def _run_chat_via_execution_bus(
 
     merged_metadata = dict(execution_metadata or {})
     merged_metadata.pop("path", None)
+    resolved_request_id = request_id or f"chat-{uuid.uuid4()}"
     execution_result = await execute_chat_orchestration(
-        request_id=f"chat-{uuid.uuid4()}",
+        request_id=resolved_request_id,
         session_id=session_id,
         source_ref="webchat",
         agent_id=agent_id,
@@ -305,6 +315,7 @@ async def _run_chat_via_execution_bus(
     )
     original_output_payload = execution_result.output_payload
     output_payload = dict(original_output_payload) if isinstance(original_output_payload, dict) else {}
+    output_payload["request_id"] = getattr(execution_result, "request_id", resolved_request_id)
     output_payload["_execution_result"] = execution_result
     if execution_result.status == "error" or output_payload.get("error"):
         error_value = output_payload.get("error", "Execution bus error")
@@ -489,6 +500,8 @@ async def api_chat(request: web.Request) -> web.Response:
         attachments = data.get('attachments', [])
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
+        client_request_id = _extract_trusted_client_request_id(request, data)
+        request_id = client_request_id or f"chat-{uuid.uuid4()}"
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
         logger.debug(
             "[api_chat] Request summary: session_id=%s, has_message=%s, attachment_count=%d, portal_user_id_present=%s",
@@ -629,6 +642,20 @@ async def api_chat(request: web.Request) -> web.Response:
             agent_id=runtime_agent_id,
             agent_name=runtime_agent_name,
         )
+        if runtime_agent_id and session_id:
+            try:
+                await publish_session_metadata(
+                    agent_id=runtime_agent_id,
+                    session_id=session_id,
+                    last_execution_id=request_id,
+                    latest_event_type="chat.started",
+                    latest_event_state="running",
+                    snapshot_version=None,
+                    runtime_events=[],
+                    metadata=execution_metadata,
+                )
+            except Exception:
+                logger.warning("Best-effort session metadata publish failed for chat.started", exc_info=True)
         result = await _run_chat_via_execution_bus(
             agent=agent,
             message=message,
@@ -642,6 +669,7 @@ async def api_chat(request: web.Request) -> web.Response:
             request_path="/api/chat",
             execution_metadata=execution_metadata,
             agent_id=runtime_agent_id,
+            request_id=request_id,
         )
         execution_result = result.get("_execution_result")
         if runtime_agent_id and execution_result is not None:
@@ -788,6 +816,8 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
+        client_request_id = _extract_trusted_client_request_id(request, data)
+        request_id = client_request_id or f"chat-{uuid.uuid4()}"
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
 
         if not message:
@@ -808,7 +838,9 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         await response.prepare(request)
 
         # Send start event
-        await response.write(f"event: start\ndata: {json.dumps({'session_id': session_id})}\n\n".encode())
+        await response.write(
+            f"event: start\ndata: {json.dumps(build_stream_start_event_payload(session_id, request_id))}\n\n".encode()
+        )
 
         event_queue = asyncio.Queue()
 
@@ -823,6 +855,20 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             agent_id=runtime_agent_id,
             agent_name=runtime_agent_name,
         )
+        if runtime_agent_id and session_id:
+            try:
+                await publish_session_metadata(
+                    agent_id=runtime_agent_id,
+                    session_id=session_id,
+                    last_execution_id=request_id,
+                    latest_event_type="chat.started",
+                    latest_event_state="running",
+                    snapshot_version=None,
+                    runtime_events=[],
+                    metadata=execution_metadata,
+                )
+            except Exception:
+                logger.warning("Best-effort session metadata publish failed for streaming chat.started", exc_info=True)
 
         run_task = asyncio.create_task(
             _run_chat_via_execution_bus(
@@ -836,6 +882,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 request_path="/api/chat/stream",
                 execution_metadata=execution_metadata,
                 agent_id=runtime_agent_id,
+                request_id=request_id,
             )
         )
 
