@@ -8,7 +8,7 @@ import logging
 import re
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from aiohttp import ClientSession
@@ -56,6 +56,7 @@ class SubscriptionWatcherManager:
     def __init__(self) -> None:
         self._running = False
         self._lock = asyncio.Lock()
+        self._stop_event = asyncio.Event()
         self._last_check_by_subscription: dict[str, datetime] = {}
         self._seen_event_keys: dict[str, set[str]] = {}
         self._seen_event_order: dict[str, deque[str]] = {}
@@ -271,15 +272,63 @@ class SubscriptionWatcherManager:
         return {m.lower() for m in MentionPoller.extract_mentions(text or "")}
 
     @staticmethod
-    def _binding_reviewers(bindings: List[Dict[str, Any]]) -> List[str]:
-        reviewers: List[str] = []
+    def _binding_external_id(binding: Dict[str, Any]) -> Optional[str]:
+        external_id = str(binding.get("external_account_id") or "").strip()
+        if external_id:
+            return external_id
+        username = str(binding.get("username") or "").strip()
+        return username or None
+
+    @staticmethod
+    def _binding_lookup_name(binding: Dict[str, Any]) -> Optional[str]:
+        username = str(binding.get("username") or "").strip()
+        if username:
+            return username
+        external_id = str(binding.get("external_account_id") or "").strip()
+        return external_id or None
+
+    @classmethod
+    def _iter_binding_reviewers(cls, bindings: List[Dict[str, Any]]) -> List[tuple[Dict[str, Any], str, str]]:
+        reviewers: List[tuple[Dict[str, Any], str, str]] = []
         for binding in bindings:
-            reviewer = str(binding.get("username") or "").strip()
-            if not reviewer:
-                reviewer = str(binding.get("external_account_id") or "").strip()
-            if reviewer:
-                reviewers.append(reviewer)
+            reviewer_login = cls._binding_lookup_name(binding)
+            canonical_external_account_id = cls._binding_external_id(binding)
+            if reviewer_login and canonical_external_account_id:
+                reviewers.append((binding, reviewer_login, canonical_external_account_id))
         return reviewers
+
+    @classmethod
+    def _resolve_matched_binding(
+        cls,
+        bindings: List[Dict[str, Any]],
+        mentions: set[str],
+    ) -> Optional[Dict[str, Any]]:
+        for binding in bindings:
+            username = str(binding.get("username") or "").strip()
+            external_id = str(binding.get("external_account_id") or "").strip()
+            if username and username.lower() in mentions:
+                return binding
+            if external_id and external_id.lower() in mentions:
+                return binding
+        return None
+
+    @staticmethod
+    def _build_poll_metadata(
+        subscription: WatchSubscription,
+        binding: Dict[str, Any] | None = None,
+        extra: Dict[str, Any] | None = None,
+    ) -> str:
+        metadata: Dict[str, Any] = {
+            "trigger_mode": "poll",
+            "source_kind": subscription.source_kind,
+            "subscription_id": subscription.id,
+            "subscription_mode": subscription.mode,
+            "watcher_agent_id": subscription.agent_id,
+            "binding_id": (binding or {}).get("id"),
+        }
+        if isinstance(extra, dict):
+            metadata.update(extra)
+        return json.dumps(metadata, ensure_ascii=False)
 
     async def _poll_github_review_requests(self, subscription: WatchSubscription, bindings: List[Dict[str, Any]], *, session: ClientSession | None = None) -> None:
         repos = self._resolve_repo_list(subscription)
@@ -287,7 +336,7 @@ class SubscriptionWatcherManager:
             logger.warning("Subscription %s has no repos to scan for GitHub review polling", subscription.id)
             return
 
-        for reviewer_login in self._binding_reviewers(bindings):
+        for binding, reviewer_login, canonical_external_account_id in self._iter_binding_reviewers(bindings):
             for repo_ref in repos:
                 if "/" not in repo_ref:
                     continue
@@ -315,7 +364,7 @@ class SubscriptionWatcherManager:
                         payload = {
                             "source_type": "github",
                             "event_type": "pull_request_review_requested",
-                            "external_account_id": reviewer_login,
+                            "external_account_id": canonical_external_account_id,
                             "target_ref": f"{owner}/{repo_name}",
                             "dedupe_key": dedupe_key,
                             "payload_json": json.dumps({
@@ -325,10 +374,7 @@ class SubscriptionWatcherManager:
                                 "reviewer": reviewer_login,
                                 "head_sha": head_sha,
                             }, ensure_ascii=False),
-                            "metadata_json": json.dumps({
-                                "trigger_mode": "poll",
-                                "source_kind": "github.pull_request_review_requested",
-                            }, ensure_ascii=False),
+                            "metadata_json": self._build_poll_metadata(subscription, binding=binding),
                         }
                         await self._post_json("/api/internal/external-events/ingest", payload, session=session)
                         self._mark_seen(subscription.id, dedupe_key)
@@ -354,17 +400,6 @@ class SubscriptionWatcherManager:
             "url": url,
         }
 
-    @staticmethod
-    def _resolve_matched_account(bindings: List[Dict[str, Any]], mentions: set[str]) -> Optional[str]:
-        for binding in bindings:
-            username = str(binding.get("username") or "").strip()
-            external = str(binding.get("external_account_id") or "").strip()
-            if username and username.lower() in mentions:
-                return username
-            if external and external.lower() in mentions:
-                return external
-        return None
-
     async def _poll_github_mentions(self, subscription: WatchSubscription, bindings: List[Dict[str, Any]], *, session: ClientSession | None = None) -> None:
         repos = self._resolve_repo_list(subscription)
         if not repos:
@@ -383,8 +418,11 @@ class SubscriptionWatcherManager:
                 if not comment_id:
                     continue
                 mentions = self._extract_mentions(str(comment.get("body") or ""))
-                matched_account = self._resolve_matched_account(bindings, mentions)
-                if not matched_account:
+                matched_binding = self._resolve_matched_binding(bindings, mentions)
+                if not matched_binding:
+                    continue
+                canonical_external_account_id = self._binding_external_id(matched_binding)
+                if not canonical_external_account_id:
                     continue
                 context = self._extract_github_comment_context(repo_ref, comment)
                 target_ref = f"{context['owner']}/{context['repo']}"
@@ -394,7 +432,7 @@ class SubscriptionWatcherManager:
                 payload = {
                     "source_type": "github",
                     "event_type": "mention",
-                    "external_account_id": matched_account,
+                    "external_account_id": canonical_external_account_id,
                     "target_ref": target_ref,
                     "dedupe_key": dedupe_key,
                     "payload_json": json.dumps({
@@ -406,10 +444,7 @@ class SubscriptionWatcherManager:
                         "url": context["url"],
                         "issue_number": context["issue_number"],
                     }, ensure_ascii=False),
-                    "metadata_json": json.dumps({
-                        "trigger_mode": "poll",
-                        "source_kind": "github.mention",
-                    }, ensure_ascii=False),
+                    "metadata_json": self._build_poll_metadata(subscription, binding=matched_binding),
                 }
                 try:
                     await self._post_json("/api/internal/external-events/ingest", payload, session=session)
@@ -450,8 +485,11 @@ class SubscriptionWatcherManager:
                 if not comment_id:
                     continue
                 mentions = self._extract_mentions(str(comment.get("body") or ""))
-                matched_account = self._resolve_matched_account(bindings, mentions)
-                if not matched_account:
+                matched_binding = self._resolve_matched_binding(bindings, mentions)
+                if not matched_binding:
+                    continue
+                canonical_external_account_id = self._binding_external_id(matched_binding)
+                if not canonical_external_account_id:
                     continue
                 dedupe_key = f"jira:mention:{issue_key}:{comment_id}"
                 if self._is_seen(subscription.id, dedupe_key):
@@ -459,7 +497,7 @@ class SubscriptionWatcherManager:
                 payload = {
                     "source_type": "jira",
                     "event_type": "mention",
-                    "external_account_id": matched_account,
+                    "external_account_id": canonical_external_account_id,
                     "target_ref": project_key,
                     "dedupe_key": dedupe_key,
                     "payload_json": json.dumps({
@@ -469,10 +507,7 @@ class SubscriptionWatcherManager:
                         "author": comment.get("author"),
                         "body": comment.get("body"),
                     }, ensure_ascii=False),
-                    "metadata_json": json.dumps({
-                        "trigger_mode": "poll",
-                        "source_kind": "jira.mention",
-                    }, ensure_ascii=False),
+                    "metadata_json": self._build_poll_metadata(subscription, binding=matched_binding),
                 }
                 try:
                     await self._post_json("/api/internal/external-events/ingest", payload, session=session)
@@ -511,8 +546,11 @@ class SubscriptionWatcherManager:
                         continue
                     body = str(((comment.get("body") or {}).get("storage") or {}).get("value") or comment.get("body") or "")
                     mentions = self._extract_mentions(body)
-                    matched_account = self._resolve_matched_account(bindings, mentions)
-                    if not matched_account:
+                    matched_binding = self._resolve_matched_binding(bindings, mentions)
+                    if not matched_binding:
+                        continue
+                    canonical_external_account_id = self._binding_external_id(matched_binding)
+                    if not canonical_external_account_id:
                         continue
                     dedupe_key = f"confluence:mention:{page_id}:{comment_id}"
                     if self._is_seen(subscription.id, dedupe_key):
@@ -520,7 +558,7 @@ class SubscriptionWatcherManager:
                     payload = {
                         "source_type": "confluence",
                         "event_type": "mention",
-                        "external_account_id": matched_account,
+                        "external_account_id": canonical_external_account_id,
                         "target_ref": space_key,
                         "dedupe_key": dedupe_key,
                         "payload_json": json.dumps({
@@ -531,10 +569,7 @@ class SubscriptionWatcherManager:
                             "body": body,
                             "title": page.get("title"),
                         }, ensure_ascii=False),
-                        "metadata_json": json.dumps({
-                            "trigger_mode": "poll",
-                            "source_kind": "confluence.mention",
-                        }, ensure_ascii=False),
+                        "metadata_json": self._build_poll_metadata(subscription, binding=matched_binding),
                     }
                     try:
                         await self._post_json("/api/internal/external-events/ingest", payload, session=session)
@@ -581,13 +616,23 @@ class SubscriptionWatcherManager:
 
     async def start(self) -> None:
         self._running = True
+        self._stop_event.clear()
         while self._running:
             await self.run_once()
-            await asyncio.sleep(get_interval_seconds())
+            if not self._running:
+                break
+            timeout = get_interval_seconds()
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                pass
+            if self._stop_event.is_set():
+                break
 
     async def stop(self) -> None:
         async with self._lock:
             self._running = False
+            self._stop_event.set()
 
 
 _runner = SubscriptionWatcherManager()

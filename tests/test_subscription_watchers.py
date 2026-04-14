@@ -1,6 +1,7 @@
 import json
 
 import pytest
+import asyncio
 
 
 @pytest.mark.asyncio
@@ -109,7 +110,7 @@ async def test_poll_github_review_requests_posts_normalized_ingress(monkeypatch)
         routing={},
         poll_profile={},
     )
-    bindings = [{"id": "b-1", "username": "reviewer1", "external_account_id": "ext-1"}]
+    bindings = [{"id": "b-1", "username": "reviewer1", "external_account_id": "github-reviewer-123"}]
 
     await manager._poll_github_review_requests(subscription, bindings)
 
@@ -118,7 +119,7 @@ async def test_poll_github_review_requests_posts_normalized_ingress(monkeypatch)
     assert path == "/api/internal/external-events/ingest"
     assert payload["source_type"] == "github"
     assert payload["event_type"] == "pull_request_review_requested"
-    assert payload["external_account_id"] == "reviewer1"
+    assert payload["external_account_id"] == "github-reviewer-123"
     assert payload["target_ref"] == "octo/portal"
     assert payload["dedupe_key"] == "github:review:octo/portal:123:reviewer1:abc123"
     parsed = json.loads(payload["payload_json"])
@@ -129,6 +130,12 @@ async def test_poll_github_review_requests_posts_normalized_ingress(monkeypatch)
         "reviewer": "reviewer1",
         "head_sha": "abc123",
     }
+    metadata = json.loads(payload["metadata_json"])
+    assert metadata["trigger_mode"] == "poll"
+    assert metadata["source_kind"] == "github.pull_request_review_requested"
+    assert metadata["subscription_id"] == "sub-1"
+    assert metadata["subscription_mode"] == "poll"
+    assert metadata["binding_id"] == "b-1"
 
 
 @pytest.mark.asyncio
@@ -143,7 +150,9 @@ async def test_build_mention_ingress_payloads_for_github_jira_confluence(monkeyp
 
     monkeypatch.setattr(manager, "_post_json", _fake_post_json)
 
-    bindings = [{"id": "b-1", "username": "reviewer1", "external_account_id": "reviewer1"}]
+    github_bindings = [{"id": "gh-bind-1", "username": "reviewer1", "external_account_id": "gh-user-1"}]
+    jira_bindings = [{"id": "jira-bind-1", "username": "reviewer1", "external_account_id": "jira-account-1"}]
+    confluence_bindings = [{"id": "conf-bind-1", "username": "reviewer1", "external_account_id": "conf-user-1"}]
 
     github_sub = WatchSubscription(
         id="gh-sub",
@@ -215,13 +224,38 @@ async def test_build_mention_ingress_payloads_for_github_jira_confluence(monkeyp
     monkeypatch.setattr("src.cron.subscription_watchers.confluence_channel.search_pages", _fake_search_pages)
     monkeypatch.setattr("src.cron.subscription_watchers.confluence_channel.get_comments", _fake_get_conf_comments)
 
-    await manager._poll_github_mentions(github_sub, bindings)
-    await manager._poll_jira_mentions(jira_sub, bindings)
-    await manager._poll_confluence_mentions(confluence_sub, bindings)
+    await manager._poll_github_mentions(github_sub, github_bindings)
+    await manager._poll_jira_mentions(jira_sub, jira_bindings)
+    await manager._poll_confluence_mentions(confluence_sub, confluence_bindings)
 
-    assert any(p["dedupe_key"] == "github:mention:octo/portal:c1" for p in posts)
-    assert any(p["dedupe_key"] == "jira:mention:ENG-1:jc1" for p in posts)
-    assert any(p["dedupe_key"] == "confluence:mention:p1:cc1" for p in posts)
+    github_payload = next(p for p in posts if p["dedupe_key"] == "github:mention:octo/portal:c1")
+    jira_payload = next(p for p in posts if p["dedupe_key"] == "jira:mention:ENG-1:jc1")
+    confluence_payload = next(p for p in posts if p["dedupe_key"] == "confluence:mention:p1:cc1")
+
+    assert github_payload["external_account_id"] == "gh-user-1"
+    assert jira_payload["external_account_id"] == "jira-account-1"
+    assert confluence_payload["external_account_id"] == "conf-user-1"
+
+    github_metadata = json.loads(github_payload["metadata_json"])
+    assert github_metadata["trigger_mode"] == "poll"
+    assert github_metadata["source_kind"] == "github.mention"
+    assert github_metadata["subscription_id"] == "gh-sub"
+    assert github_metadata["subscription_mode"] == "poll"
+    assert github_metadata["binding_id"] == "gh-bind-1"
+
+    jira_metadata = json.loads(jira_payload["metadata_json"])
+    assert jira_metadata["trigger_mode"] == "poll"
+    assert jira_metadata["source_kind"] == "jira.mention"
+    assert jira_metadata["subscription_id"] == "jira-sub"
+    assert jira_metadata["subscription_mode"] == "poll"
+    assert jira_metadata["binding_id"] == "jira-bind-1"
+
+    confluence_metadata = json.loads(confluence_payload["metadata_json"])
+    assert confluence_metadata["trigger_mode"] == "poll"
+    assert confluence_metadata["source_kind"] == "confluence.mention"
+    assert confluence_metadata["subscription_id"] == "conf-sub"
+    assert confluence_metadata["subscription_mode"] == "poll"
+    assert confluence_metadata["binding_id"] == "conf-bind-1"
 
 
 @pytest.mark.asyncio
@@ -286,3 +320,25 @@ async def test_run_once_reuses_single_client_session_per_run(monkeypatch):
     assert len(session_constructors) == 1
     assert sessions_seen
     assert all(session is session_constructors[0] for session in sessions_seen)
+
+
+@pytest.mark.asyncio
+async def test_stop_sets_event_and_allows_start_loop_to_exit_promptly(monkeypatch):
+    from src.cron.subscription_watchers import SubscriptionWatcherManager
+
+    manager = SubscriptionWatcherManager()
+    run_once_started = asyncio.Event()
+
+    async def _fake_run_once():
+        run_once_started.set()
+
+    monkeypatch.setattr(manager, "run_once", _fake_run_once)
+    monkeypatch.setattr("src.cron.subscription_watchers.get_interval_seconds", lambda: 999)
+
+    start_task = asyncio.create_task(manager.start())
+    await asyncio.wait_for(run_once_started.wait(), timeout=1.0)
+
+    await manager.stop()
+    await asyncio.wait_for(start_task, timeout=1.0)
+
+    assert start_task.done()
