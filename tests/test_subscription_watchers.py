@@ -136,6 +136,8 @@ async def test_poll_github_review_requests_posts_normalized_ingress(monkeypatch)
     assert metadata["subscription_id"] == "sub-1"
     assert metadata["subscription_mode"] == "poll"
     assert metadata["binding_id"] == "b-1"
+    assert metadata["binding_lookup_username"] == "reviewer1"
+    assert metadata["reviewer_login"] == "reviewer1"
 
 
 @pytest.mark.asyncio
@@ -242,6 +244,7 @@ async def test_build_mention_ingress_payloads_for_github_jira_confluence(monkeyp
     assert github_metadata["subscription_id"] == "gh-sub"
     assert github_metadata["subscription_mode"] == "poll"
     assert github_metadata["binding_id"] == "gh-bind-1"
+    assert github_metadata["binding_lookup_username"] == "reviewer1"
 
     jira_metadata = json.loads(jira_payload["metadata_json"])
     assert jira_metadata["trigger_mode"] == "poll"
@@ -249,6 +252,7 @@ async def test_build_mention_ingress_payloads_for_github_jira_confluence(monkeyp
     assert jira_metadata["subscription_id"] == "jira-sub"
     assert jira_metadata["subscription_mode"] == "poll"
     assert jira_metadata["binding_id"] == "jira-bind-1"
+    assert jira_metadata["binding_lookup_username"] == "reviewer1"
 
     confluence_metadata = json.loads(confluence_payload["metadata_json"])
     assert confluence_metadata["trigger_mode"] == "poll"
@@ -256,6 +260,7 @@ async def test_build_mention_ingress_payloads_for_github_jira_confluence(monkeyp
     assert confluence_metadata["subscription_id"] == "conf-sub"
     assert confluence_metadata["subscription_mode"] == "poll"
     assert confluence_metadata["binding_id"] == "conf-bind-1"
+    assert confluence_metadata["binding_lookup_username"] == "reviewer1"
 
 
 @pytest.mark.asyncio

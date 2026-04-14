@@ -326,6 +326,9 @@ class SubscriptionWatcherManager:
             "watcher_agent_id": subscription.agent_id,
             "binding_id": (binding or {}).get("id"),
         }
+        lookup_name = SubscriptionWatcherManager._binding_lookup_name(binding) if binding else None
+        if lookup_name:
+            metadata["binding_lookup_username"] = lookup_name
         if isinstance(extra, dict):
             metadata.update(extra)
         return json.dumps(metadata, ensure_ascii=False)
@@ -374,7 +377,11 @@ class SubscriptionWatcherManager:
                                 "reviewer": reviewer_login,
                                 "head_sha": head_sha,
                             }, ensure_ascii=False),
-                            "metadata_json": self._build_poll_metadata(subscription, binding=binding),
+                            "metadata_json": self._build_poll_metadata(
+                                subscription,
+                                binding=binding,
+                                extra={"reviewer_login": reviewer_login},
+                            ),
                         }
                         await self._post_json("/api/internal/external-events/ingest", payload, session=session)
                         self._mark_seen(subscription.id, dedupe_key)

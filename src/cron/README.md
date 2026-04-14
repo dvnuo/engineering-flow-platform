@@ -12,6 +12,7 @@ cron/
 
 ### Subscription Watchers (Primary)
 Pulls enabled subscriptions/bindings from Portal internal export, discovers external signals, and posts normalized ingress events back to Portal.
+Poll ingress metadata includes subscription/binding provenance plus lookup-alias fields for Portal-side debugging.
 
 ### Mention Poller (Legacy)
 Kept for backward compatibility and tests. Not used as the main runtime entrypoint.
