@@ -3,6 +3,7 @@
 import logging
 import os
 import time
+import copy
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -91,6 +92,15 @@ class Config:
     ]
 
     PROJECT_EXAMPLE = Path(__file__).parent.parent / 'config.yaml.example'
+    MANAGED_OVERLAY_SECTIONS = {
+        "llm",
+        "proxy",
+        "jira",
+        "confluence",
+        "github",
+        "git",
+        "debug",
+    }
 
     def __init__(self, config_path: Optional[str] = None):
         if config_path is None:
@@ -98,8 +108,16 @@ class Config:
             self.config_path = self._find_config()
         else:
             self.config_path = Path(config_path)
+        self.runtime_profile_path = Path.home() / ".efp" / "runtime_profile.yaml"
         self._config: Dict[str, Any] = {}
+        self._base_config: Dict[str, Any] = {}
+        self._managed_overlay: Dict[str, Any] = {}
+        self._managed_overlay_meta: Dict[str, Any] = {
+            "runtime_profile_id": None,
+            "revision": None,
+        }
         self._last_modified: float = 0
+        self._managed_overlay_last_modified: float = 0
         self._yaml = _yaml  # Use module-level instance
         self.load()
 
@@ -119,13 +137,112 @@ class Config:
         """Load configuration from YAML file."""
         if self.config_path.exists():
             with open(self.config_path, "r", encoding="utf-8") as f:
-                self._config = self._yaml.load(f) or {}
+                self._base_config = self._yaml.load(f) or {}
             self._last_modified = self.config_path.stat().st_mtime
         else:
-            self._config = {}
+            self._base_config = {}
+            self._last_modified = 0
         
         # Decrypt sensitive fields
-        self._decrypt_sensitive_fields(self._config)
+        self._decrypt_sensitive_fields(self._base_config)
+        self.load_managed_overlay()
+        self._rebuild_effective_config()
+
+    def _deep_merge(self, base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+        result = copy.deepcopy(base)
+        for key, value in (overlay or {}).items():
+            if isinstance(result.get(key), dict) and isinstance(value, dict):
+                result[key] = self._deep_merge(result[key], value)
+            else:
+                result[key] = copy.deepcopy(value)
+        return result
+
+    def _filter_managed_overlay_sections(self, overlay_config: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(overlay_config, dict):
+            return {}
+        filtered: Dict[str, Any] = {}
+        for section, value in overlay_config.items():
+            if section in self.MANAGED_OVERLAY_SECTIONS:
+                filtered[section] = copy.deepcopy(value)
+        return filtered
+
+    def _rebuild_effective_config(self) -> None:
+        self._config = self._deep_merge(self._base_config, self._managed_overlay)
+
+    def load_managed_overlay(self) -> Dict[str, Any]:
+        """Load runtime managed overlay from runtime_profile.yaml."""
+        self._managed_overlay = {}
+        self._managed_overlay_meta = {"runtime_profile_id": None, "revision": None}
+
+        if not self.runtime_profile_path.exists():
+            self._managed_overlay_last_modified = 0
+            return {}
+
+        with open(self.runtime_profile_path, "r", encoding="utf-8") as f:
+            payload = self._yaml.load(f) or {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        overlay_config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
+        overlay_config = self._filter_managed_overlay_sections(overlay_config)
+        self._decrypt_sensitive_fields(overlay_config)
+
+        self._managed_overlay = overlay_config
+        self._managed_overlay_meta = {
+            "runtime_profile_id": payload.get("runtime_profile_id"),
+            "revision": payload.get("revision"),
+        }
+        self._managed_overlay_last_modified = self.runtime_profile_path.stat().st_mtime
+        return copy.deepcopy(self._managed_overlay)
+
+    def set_managed_overlay(
+        self,
+        runtime_profile_id: Optional[str],
+        revision: Optional[int],
+        overlay_config: Dict[str, Any],
+    ) -> List[str]:
+        """Set and persist managed overlay config, then reload effective config."""
+        previous_sections = set(self._managed_overlay.keys())
+        filtered_overlay = self._filter_managed_overlay_sections(overlay_config or {})
+        new_sections = set(filtered_overlay.keys())
+        payload = {
+            "runtime_profile_id": runtime_profile_id,
+            "revision": revision,
+            "config": copy.deepcopy(filtered_overlay),
+        }
+        encrypted_payload = copy.deepcopy(payload)
+        self._encrypt_sensitive_fields(encrypted_payload)
+
+        self.runtime_profile_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.runtime_profile_path, "w", encoding="utf-8") as f:
+            self._yaml.dump(encrypted_payload, f)
+
+        # Use union so section removals (e.g. proxy removed from overlay) still
+        # trigger reload/apply side effects for the removed section.
+        changed_sections = sorted(previous_sections | new_sections)
+        self.reload(changed_sections=changed_sections)
+        if "proxy" in changed_sections:
+            self.apply_proxy()
+        return changed_sections
+
+    def clear_managed_overlay(self) -> None:
+        """Clear managed runtime overlay and reload effective config."""
+        previous_sections = sorted(self._managed_overlay.keys())
+        if self.runtime_profile_path.exists():
+            self.runtime_profile_path.unlink()
+        self.reload(changed_sections=previous_sections)
+        if "proxy" in previous_sections:
+            self.apply_proxy()
+
+    def get_effective_config(self) -> Dict[str, Any]:
+        return copy.deepcopy(self._config)
+
+    def get_managed_overlay_meta(self) -> Dict[str, Any]:
+        return {
+            "runtime_profile_id": self._managed_overlay_meta.get("runtime_profile_id"),
+            "revision": self._managed_overlay_meta.get("revision"),
+            "managed_sections": sorted(self._managed_overlay.keys()),
+        }
     
     def _is_mapping(self, obj: Any) -> bool:
         """Check if obj is a mapping (dict or CommentedMap)."""
@@ -241,14 +358,22 @@ class Config:
         Returns:
             True if config was reloaded, False otherwise.
         """
-        if not self.config_path.exists():
+        base_exists = self.config_path.exists()
+        overlay_exists = self.runtime_profile_path.exists()
+        if not base_exists and not overlay_exists:
             return False
         
         try:
-            current_mtime = self.config_path.stat().st_mtime
+            current_mtime = self.config_path.stat().st_mtime if base_exists else 0
+            overlay_mtime = self.runtime_profile_path.stat().st_mtime if overlay_exists else 0
             # Force reload if changed_sections is provided (user explicitly saved config)
             # Otherwise only reload if file was modified
-            if changed_sections or current_mtime > self._last_modified:
+            if (
+                changed_sections
+                or current_mtime > self._last_modified
+                or overlay_mtime > self._managed_overlay_last_modified
+                or (not overlay_exists and self._managed_overlay_last_modified > 0)
+            ):
                 self.load()
                 # Notify registered services if sections are specified
                 if changed_sections:
@@ -258,6 +383,8 @@ class Config:
                             logger.info(f"Service reloaded: {service}")
                         else:
                             logger.warning(f"Service reload failed: {service}")
+                    if "proxy" in changed_sections:
+                        self.apply_proxy()
                 return True
         except Exception:
             pass

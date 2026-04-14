@@ -162,8 +162,6 @@ workspace:
 server:
   host: "0.0.0.0"  # Listen on all interfaces
   port: 8000       # Default port
-  runtime_internal_api_key: "change-me"  # Reserved for future internal Portal -> Runtime API-key enforcement
-  portal_internal_api_key: "change-me"   # Reserved for future trusted Portal -> Runtime chat key enforcement
   portal_internal_base_url: "https://portal.internal"  # Runtime -> Portal internal API base URL (adapter:portal:*)
   portal_internal_auth_token: ""  # Optional legacy Runtime -> Portal bearer token; env/config supported, env takes precedence
   jira_reconciliation_enabled: false  # Enable scheduled Jira reconciliation -> Portal external event ingest

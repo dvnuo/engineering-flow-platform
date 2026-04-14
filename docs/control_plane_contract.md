@@ -15,20 +15,19 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 ## 2) Runtime Internal Endpoints
 
 - `/api/tasks/execute` and `/api/capabilities` are internal control-plane endpoints.
-- They currently do **not** require `X-Internal-Api-Key` (internal key enforcement is intentionally disabled for Portal-only internal-VPC deployments).
+- Runtime profile apply still relies on trusted Portal source marker and deployment topology.
 
 ## 3) Runtime Adapter → Portal Internal API Contract
 
 - `adapter:portal:*` actions call Portal internal APIs with:
   - base URL from `PORTAL_INTERNAL_BASE_URL` env, fallback `server.portal_internal_base_url`
   - optional `Authorization: Bearer <PORTAL_INTERNAL_AUTH_TOKEN>` (legacy compatibility; env first, fallback `server.portal_internal_auth_token`)
-- Runtime no longer emits `X-Internal-Api-Key` on these calls.
 
-## 4) Key Pairing Matrix
+## 4) Trust Matrix
 
 | Chain | EFP setting | Portal side should provide |
 |---|---|---|
-| Portal → EFP `/api/tasks/execute`, `/api/capabilities` | `server.runtime_internal_api_key` or `RUNTIME_INTERNAL_API_KEY` | none required (currently permissive) |
+| Portal → EFP `/api/tasks/execute`, `/api/capabilities` | none | none required (currently permissive) |
 | Portal → EFP trusted chat metadata/identity | `X-Portal-Author-Source: portal` | `X-Portal-User-Id`, `X-Portal-User-Name` (optional) |
 | Runtime adapter (`adapter:portal:*`) → Portal internal API | `server.portal_internal_base_url` / `PORTAL_INTERNAL_BASE_URL`; optional `server.portal_internal_auth_token` / `PORTAL_INTERNAL_AUTH_TOKEN` | optional `Authorization` |
 
