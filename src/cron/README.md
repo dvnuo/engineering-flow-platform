@@ -19,10 +19,15 @@ Kept for backward compatibility and tests. Not used as the main runtime entrypoi
 ## Usage
 
 ```python
+import asyncio
 from src.cron.subscription_watchers import (
     start_subscription_watchers,
     stop_subscription_watchers,
 )
 
-start_subscription_watchers()
+async def main():
+    watcher_task = asyncio.create_task(start_subscription_watchers())
+    ...
+    await stop_subscription_watchers()
+    await watcher_task
 ```

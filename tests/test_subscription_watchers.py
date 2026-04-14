@@ -342,3 +342,44 @@ async def test_stop_sets_event_and_allows_start_loop_to_exit_promptly(monkeypatc
     await asyncio.wait_for(start_task, timeout=1.0)
 
     assert start_task.done()
+
+
+@pytest.mark.asyncio
+async def test_start_is_idempotent_when_already_running(monkeypatch):
+    from src.cron.subscription_watchers import SubscriptionWatcherManager
+
+    manager = SubscriptionWatcherManager()
+    run_once_calls = 0
+    first_run_entered = asyncio.Event()
+
+    async def _fake_run_once():
+        nonlocal run_once_calls
+        run_once_calls += 1
+        first_run_entered.set()
+
+    monkeypatch.setattr(manager, "run_once", _fake_run_once)
+    monkeypatch.setattr("src.cron.subscription_watchers.get_interval_seconds", lambda: 999)
+
+    first_start_task = asyncio.create_task(manager.start())
+    await asyncio.wait_for(first_run_entered.wait(), timeout=1.0)
+    calls_after_first_start = run_once_calls
+
+    await asyncio.wait_for(manager.start(), timeout=1.0)
+    await asyncio.sleep(0)
+
+    assert run_once_calls == calls_after_first_start
+
+    await manager.stop()
+    await asyncio.wait_for(first_start_task, timeout=1.0)
+    assert first_start_task.done()
+
+
+@pytest.mark.asyncio
+async def test_stop_is_safe_when_not_running():
+    from src.cron.subscription_watchers import SubscriptionWatcherManager
+
+    manager = SubscriptionWatcherManager()
+
+    await manager.stop()
+
+    assert manager._stop_event.is_set() is True

@@ -615,8 +615,12 @@ class SubscriptionWatcherManager:
             logger.warning("Subscription watchers failed to load Portal control-plane exports: %s", exc)
 
     async def start(self) -> None:
-        self._running = True
-        self._stop_event.clear()
+        async with self._lock:
+            if self._running:
+                logger.debug("Subscription watchers already running; start() is a no-op")
+                return
+            self._running = True
+            self._stop_event.clear()
         while self._running:
             await self.run_once()
             if not self._running:
@@ -631,6 +635,10 @@ class SubscriptionWatcherManager:
 
     async def stop(self) -> None:
         async with self._lock:
+            if not self._running:
+                logger.debug("Subscription watchers already stopped; stop() is a no-op")
+                self._stop_event.set()
+                return
             self._running = False
             self._stop_event.set()
 
