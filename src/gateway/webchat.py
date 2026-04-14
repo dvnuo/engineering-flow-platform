@@ -210,10 +210,6 @@ def _parse_task_execute_request(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _build_internal_auth_error_response(status_code: int, message: str) -> web.Response:
-    return web.json_response({"error": message}, status=status_code)
-
-
 def _sanitize_trace_value(value: Any, max_len: int = 128) -> Optional[str]:
     if value is None:
         return None
@@ -237,14 +233,6 @@ def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]
     if not trace["span_id"]:
         trace["span_id"] = uuid.uuid4().hex[:16]
     return trace
-
-
-def _authorize_internal_runtime_request(request: web.Request) -> Optional[web.Response]:
-    # This helper is intentionally a no-op.
-    # Keep it as a compatibility seam so existing internal routes
-    # can continue calling it without branching changes.
-    _ = request
-    return None
 
 
 def _json_compatible(value: Any) -> Any:
@@ -977,9 +965,6 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
         path="/api/tasks/execute",
     )
     try:
-        auth_error = _authorize_internal_runtime_request(request)
-        if auth_error is not None:
-            return auth_error
         data = await request.json()
         parsed = _parse_task_execute_request(data)
         set_log_context(
@@ -1278,9 +1263,6 @@ async def api_task_status(request: web.Request) -> web.Response:
         path="/api/tasks/{task_id}",
     )
     try:
-        auth_error = _authorize_internal_runtime_request(request)
-        if auth_error is not None:
-            return auth_error
         task_id = str(request.match_info.get("task_id") or "").strip()
         if not task_id:
             return web.json_response({"error": "task_id is required"}, status=400)
@@ -1327,9 +1309,6 @@ async def api_capabilities(request: web.Request) -> web.Response:
     GET /api/capabilities?type=...&enabled=true|false&capability_id=...
     """
     try:
-        auth_error = _authorize_internal_runtime_request(request)
-        if auth_error is not None:
-            return auth_error
         registry = get_capability_registry()
         snapshot = (
             registry.export_catalog_snapshot()
@@ -2142,11 +2121,8 @@ async def api_get_config(request: web.Request) -> web.Response:
 
 async def api_apply_runtime_profile(request: web.Request) -> web.Response:
     """Apply runtime managed profile overlay from trusted Portal control-plane request."""
-    auth_error = _authorize_internal_runtime_request(request)
-    if auth_error is not None:
-        return auth_error
     if not _is_trusted_portal_request(request):
-        return _build_internal_auth_error_response(403, "Forbidden")
+        return web.json_response({"error": "Forbidden"}, status=403)
 
     try:
         data = await request.json()

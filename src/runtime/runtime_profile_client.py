@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 from aiohttp import ClientSession
 
 from src.config import Config, config
-from src.utils.internal_api_keys import (
+from src.utils.portal_internal_api import (
     build_portal_internal_api_headers,
     get_portal_agent_id,
     get_portal_internal_base_url,

@@ -163,7 +163,6 @@ server:
   host: "0.0.0.0"  # Listen on all interfaces
   port: 8000       # Default port
   portal_internal_base_url: "https://portal.internal"  # Runtime -> Portal internal API base URL (adapter:portal:*)
-  portal_internal_auth_token: ""  # Optional legacy Runtime -> Portal bearer token; env/config supported, env takes precedence
   jira_reconciliation_enabled: false  # Enable scheduled Jira reconciliation -> Portal external event ingest
   jira_reconciliation_interval_seconds: 300  # Reconciliation polling interval
 

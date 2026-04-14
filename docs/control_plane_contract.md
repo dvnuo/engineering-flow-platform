@@ -21,7 +21,6 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 
 - `adapter:portal:*` actions call Portal internal APIs with:
   - base URL from `PORTAL_INTERNAL_BASE_URL` env, fallback `server.portal_internal_base_url`
-  - optional `Authorization: Bearer <PORTAL_INTERNAL_AUTH_TOKEN>` (legacy compatibility; env first, fallback `server.portal_internal_auth_token`)
 
 ## 4) Trust Matrix
 
@@ -29,7 +28,7 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 |---|---|---|
 | Portal → EFP `/api/tasks/execute`, `/api/capabilities` | none | none required (currently permissive) |
 | Portal → EFP trusted chat metadata/identity | `X-Portal-Author-Source: portal` | `X-Portal-User-Id`, `X-Portal-User-Name` (optional) |
-| Runtime adapter (`adapter:portal:*`) → Portal internal API | `server.portal_internal_base_url` / `PORTAL_INTERNAL_BASE_URL`; optional `server.portal_internal_auth_token` / `PORTAL_INTERNAL_AUTH_TOKEN` | optional `Authorization` |
+| Runtime adapter (`adapter:portal:*`) → Portal internal API | `server.portal_internal_base_url` / `PORTAL_INTERNAL_BASE_URL` | internal route available at configured base URL |
 
 ## 5) Jira Reconciliation Contract (Runtime Fallback)
 
