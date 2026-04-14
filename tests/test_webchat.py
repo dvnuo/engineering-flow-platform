@@ -16,11 +16,6 @@ except ImportError:
 INTERNAL_API_KEY = "runtime-internal-key"
 INTERNAL_HEADERS = {}
 
-@pytest.fixture(autouse=True)
-def _default_internal_auth_permissive(monkeypatch):
-    from src.gateway import webchat
-    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: "")
-
 
 class TestWebChatTemplate:
     """Tests for WebChat template loading."""
@@ -226,36 +221,22 @@ class _HeaderOnlyRequest:
         self.headers = headers or {}
 
 
-def test_authorize_internal_runtime_request_allows_when_key_unset_and_header_missing(monkeypatch):
+def test_authorize_runtime_request_returns_none_without_internal_like_headers():
     from src.gateway import webchat
 
-    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: "")
     assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest()) is None
 
 
-def test_authorize_internal_runtime_request_rejects_when_key_set_and_header_missing(monkeypatch):
+def test_authorize_runtime_request_returns_none_with_wrong_internal_like_header():
     from src.gateway import webchat
 
-    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: INTERNAL_API_KEY)
-    response = webchat._authorize_internal_runtime_request(_HeaderOnlyRequest())
-    assert response is not None
-    assert response.status == 403
+    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Internal-Api-Key": "wrong"})) is None
 
 
-def test_authorize_internal_runtime_request_rejects_when_key_set_and_header_wrong(monkeypatch):
+def test_authorize_runtime_request_returns_none_with_any_internal_like_header():
     from src.gateway import webchat
 
-    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: INTERNAL_API_KEY)
-    response = webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Internal-Api-Key": "wrong"}))
-    assert response is not None
-    assert response.status == 403
-
-
-def test_authorize_internal_runtime_request_allows_when_key_set_and_header_valid(monkeypatch):
-    from src.gateway import webchat
-
-    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: INTERNAL_API_KEY)
-    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Internal-Api-Key": INTERNAL_API_KEY})) is None
+    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Internal-Api-Key": "anything"})) is None
 
 
 def test_is_trusted_portal_request_true_for_portal_source():
@@ -276,10 +257,9 @@ def test_is_trusted_portal_request_false_for_non_portal_source():
     assert webchat._is_trusted_portal_request(_HeaderOnlyRequest({"X-Portal-Author-Source": "runtime"})) is False
 
 
-def test_is_trusted_portal_request_ignores_internal_key_env_and_headers(monkeypatch):
+def test_is_trusted_portal_request_ignores_unrelated_internal_like_headers():
     from src.gateway import webchat
 
-    monkeypatch.setenv("PORTAL_INTERNAL_API_KEY", "portal-secret")
     trusted = webchat._is_trusted_portal_request(
         _HeaderOnlyRequest({"X-Portal-Author-Source": "portal", "X-Portal-Internal-Api-Key": "wrong"})
     )
@@ -1265,11 +1245,8 @@ async def test_api_capabilities_filters_by_capability_id_and_type(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_capabilities_does_not_require_runtime_internal_api_key(monkeypatch):
+async def test_api_capabilities_does_not_depend_on_internal_like_auth_headers(monkeypatch):
     from src.gateway import webchat
-
-    monkeypatch.delenv("RUNTIME_INTERNAL_API_KEY", raising=False)
-    monkeypatch.setattr(webchat.global_config, "get", lambda key, default=None: default)
 
     class _Registry:
         def export_catalog_snapshot(self):
@@ -1305,32 +1282,9 @@ async def test_api_capabilities_ignores_bad_internal_api_key_header(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_api_capabilities_ignores_configured_runtime_internal_api_key(monkeypatch):
+async def test_api_tasks_execute_does_not_require_internal_like_auth_header(monkeypatch):
     from src.gateway import webchat
 
-    monkeypatch.delenv("RUNTIME_INTERNAL_API_KEY", raising=False)
-    monkeypatch.setattr(webchat.global_config, "get", lambda key, default=None: "cfg-key" if key == "server.runtime_internal_api_key" else default)
-
-    class _Registry:
-        def export_catalog_snapshot(self):
-            return {"capabilities": [{"capability_id": "tool:read", "type": "tool", "enabled": True}], "count": 1, "catalog_version": "v", "generated_at": "2026-04-07T00:00:00Z"}
-
-    monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
-
-    class _Request:
-        headers = {}
-        query = {"enabled": "true"}
-
-    response = await webchat.api_capabilities(_Request())
-    assert response.status == 200
-
-
-@pytest.mark.asyncio
-async def test_api_tasks_execute_does_not_require_internal_api_key_not_configured(monkeypatch):
-    from src.gateway import webchat
-
-    monkeypatch.delenv("RUNTIME_INTERNAL_API_KEY", raising=False)
-    monkeypatch.setattr(webchat.global_config, "get", lambda *_args, **_kwargs: "")
     webchat.runtime_task_tracker.reset()
 
     class _Request:

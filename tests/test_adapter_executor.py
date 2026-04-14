@@ -308,12 +308,8 @@ async def test_execute_adapter_action_portal_delete_task_agent_uses_delete(monke
     assert "X-Internal-Api-Key" not in captured["headers"]
 
 
-def test_build_portal_headers_no_longer_emits_config_fallback_api_key(monkeypatch):
+def test_build_portal_headers_no_longer_emits_internal_like_key_header(monkeypatch):
     monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
-    monkeypatch.setattr(
-        "src.utils.internal_api_keys.global_config.get",
-        lambda key, default=None: "cfg-key" if key == "server.portal_internal_api_key" else default,
-    )
 
     headers = _build_portal_headers()
 
@@ -322,12 +318,8 @@ def test_build_portal_headers_no_longer_emits_config_fallback_api_key(monkeypatc
     assert "Authorization" not in headers
 
 
-def test_build_portal_headers_keeps_auth_token_without_internal_api_key(monkeypatch):
+def test_build_portal_headers_keeps_auth_token_without_internal_like_key_header(monkeypatch):
     monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "legacy-token")
-    monkeypatch.setattr(
-        "src.utils.internal_api_keys.global_config.get",
-        lambda key, default=None: "cfg-key-2" if key == "server.portal_internal_api_key" else default,
-    )
 
     headers = _build_portal_headers()
 
@@ -350,8 +342,6 @@ async def test_execute_portal_action_uses_config_fallback_base_url(monkeypatch):
         lambda key, default=None: (
             "https://portal.cfg"
             if key == "server.portal_internal_base_url"
-            else "cfg-key"
-            if key == "server.portal_internal_api_key"
             else default
         ),
     )
@@ -377,8 +367,6 @@ async def test_execute_portal_action_base_url_env_precedence_over_config(monkeyp
         lambda key, default=None: (
             "https://portal.cfg"
             if key == "server.portal_internal_base_url"
-            else "cfg-key"
-            if key == "server.portal_internal_api_key"
             else default
         ),
     )

@@ -62,7 +62,6 @@ from src.gateway.event_bus import emit_agent_event
 from src.sessions.manager import session_manager
 from src.sessions.persistence import session_persistence
 from src.sessions.usage import usage_tracker
-from src.utils.internal_api_keys import get_runtime_internal_api_key
 
 logger = logging.getLogger(__name__)
 runtime_task_tracker = RuntimeTaskTracker()
@@ -233,14 +232,10 @@ def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]
 
 
 def _authorize_internal_runtime_request(request: web.Request) -> Optional[web.Response]:
-    # Runtime internal S2S auth: permissive when key is unset for compatibility;
-    # when configured, X-Internal-Api-Key must match exactly.
-    expected_key = get_runtime_internal_api_key()
-    if not expected_key:
-        return None
-    provided_key = str((getattr(request, "headers", {}) or {}).get("X-Internal-Api-Key") or "").strip()
-    if provided_key != expected_key:
-        return _build_internal_auth_error_response(403, "Forbidden")
+    # Internal API-key enforcement has been removed.
+    # Keep this helper as a compatibility seam so existing internal routes
+    # can continue calling it without branching changes.
+    _ = request
     return None
 
 

@@ -78,21 +78,13 @@ llm:
   model: "gpt-4o"
 ```
 
-### Control-Plane Internal Keys
+### Control-Plane Runtime Settings
 
 ```yaml
 server:
-  runtime_internal_api_key: "change-me"  # Reserved for future re-enable; not currently enforced by runtime endpoints
-  portal_internal_api_key: "change-me"   # Reserved for future re-enable; not currently enforced for portal trust
   jira_reconciliation_enabled: false     # Runtime scheduled Jira reconciliation loop
   jira_reconciliation_interval_seconds: 300
 ```
-
-Environment variables override config values:
-- `RUNTIME_INTERNAL_API_KEY`
-- `PORTAL_INTERNAL_API_KEY`
-  
-> Note: runtime currently does not enforce these internal API keys in the Portal-only internal-VPC topology.
 
 Reconciliation/session contract notes:
 - Jira reconciliation fallback publishes to Portal via `/api/internal/external-events/ingest` using Portal `ExternalEventIngressRequest`-compatible fields (`workflow_review_requested`, `payload_json`, `project_key`, `issue_key`, etc.).

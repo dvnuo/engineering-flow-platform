@@ -12,11 +12,6 @@ class _Req:
         return self._payload
 
 
-@pytest.fixture(autouse=True)
-def _default_internal_auth_permissive(monkeypatch):
-    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: "")
-
-
 @pytest.mark.asyncio
 async def test_internal_apply_runtime_profile_trusted(monkeypatch):
     captured = {}
@@ -75,35 +70,33 @@ async def test_internal_apply_runtime_profile_untrusted_rejected():
 
 
 @pytest.mark.asyncio
-async def test_internal_apply_runtime_profile_requires_internal_api_key_when_configured(monkeypatch):
-    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: "rt-key")
-    req = _Req(
-        payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
-        headers={"X-Portal-Author-Source": "portal"},
-    )
-    resp = await webchat.api_apply_runtime_profile(req)
-    assert resp.status == 403
-
-
-@pytest.mark.asyncio
-async def test_internal_apply_runtime_profile_accepts_matching_internal_api_key_when_configured(monkeypatch):
-    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: "rt-key")
+async def test_internal_apply_runtime_profile_trusted_succeeds_without_internal_like_header(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "set_managed_overlay", lambda *_args, **_kwargs: ["jira"])
     req = _Req(
         payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
-        headers={"X-Portal-Author-Source": "portal", "X-Internal-Api-Key": "rt-key"},
+        headers={"X-Portal-Author-Source": "portal"},
     )
     resp = await webchat.api_apply_runtime_profile(req)
     assert resp.status == 200
 
 
 @pytest.mark.asyncio
-async def test_internal_apply_runtime_profile_allows_legacy_trusted_portal_request_when_internal_key_unset(monkeypatch):
-    monkeypatch.setattr(webchat, "get_runtime_internal_api_key", lambda: "")
+async def test_internal_apply_runtime_profile_trusted_ignores_wrong_internal_like_header(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "set_managed_overlay", lambda *_args, **_kwargs: ["jira"])
     req = _Req(
         payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
-        headers={"X-Portal-Author-Source": "portal"},
+        headers={"X-Portal-Author-Source": "portal", "X-Internal-Api-Key": "wrong"},
+    )
+    resp = await webchat.api_apply_runtime_profile(req)
+    assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_internal_apply_runtime_profile_allows_trusted_portal_with_any_internal_like_header(monkeypatch):
+    monkeypatch.setattr(webchat.global_config, "set_managed_overlay", lambda *_args, **_kwargs: ["jira"])
+    req = _Req(
+        payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
+        headers={"X-Portal-Author-Source": "portal", "X-Internal-Api-Key": "anything"},
     )
     resp = await webchat.api_apply_runtime_profile(req)
     assert resp.status == 200
