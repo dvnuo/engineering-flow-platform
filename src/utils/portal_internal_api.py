@@ -24,6 +24,15 @@ def get_portal_agent_id() -> str:
     return str(config_value or "").strip()
 
 
+def is_portal_internal_configured() -> bool:
+    return bool(get_portal_internal_base_url() and get_portal_agent_id())
+
+
+def build_portal_internal_url(path: str) -> str:
+    normalized_path = f"/{str(path or '').lstrip('/')}"
+    return f"{get_portal_internal_base_url()}{normalized_path}"
+
+
 def build_portal_internal_api_headers(include_content_type: bool = True) -> Dict[str, str]:
     if include_content_type:
         return {"Content-Type": "application/json"}
