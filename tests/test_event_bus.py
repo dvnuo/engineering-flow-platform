@@ -116,3 +116,18 @@ async def test_event_bus_request_id_and_session_id_combined_filter():
     assert event["data"]["session_id"] == "s-1"
     assert event["data"]["request_id"] == "req-1"
     assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_event_bus_request_id_filter_does_not_match_parent_request_id():
+    bus = EventBus()
+    queue = asyncio.Queue()
+    await bus.add_listener(queue, filters={"request_id": "req-1"})
+
+    await bus.emit("execution.progress", {"parent_request_id": "req-1"})
+    await bus.emit("execution.progress", {"request_id": "req-1"})
+
+    event = json.loads(await queue.get())
+    assert "parent_request_id" not in event["data"]
+    assert event["data"]["request_id"] == "req-1"
+    assert queue.empty()

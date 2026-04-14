@@ -68,3 +68,39 @@ async def test_handle_websocket_passes_query_filters_to_event_bus(monkeypatch):
         "request_id": "req-1",
     }
     assert captured.get("removed") is True
+
+
+@pytest.mark.asyncio
+async def test_handle_websocket_passes_combined_session_and_request_filters_and_omits_blank_values(monkeypatch):
+    captured = {}
+
+    async def _fake_add_listener(queue, filters=None):
+        captured["queue"] = queue
+        captured["filters"] = filters
+
+    async def _fake_remove_listener(_queue):
+        captured["removed"] = True
+
+    monkeypatch.setattr(events.web, "WebSocketResponse", _FakeWS)
+    monkeypatch.setattr(events.event_bus, "add_listener", _fake_add_listener)
+    monkeypatch.setattr(events.event_bus, "remove_listener", _fake_remove_listener)
+    monkeypatch.setattr(events.event_bus, "_listeners", [])
+
+    request = SimpleNamespace(
+        rel_url=SimpleNamespace(
+            query={
+                "session_id": " s-keep ",
+                "request_id": " req-keep ",
+                "task_id": " ",
+            }
+        )
+    )
+
+    ws = await events.handle_websocket(request)
+
+    assert isinstance(ws, _FakeWS)
+    assert captured["filters"] == {
+        "session_id": "s-keep",
+        "request_id": "req-keep",
+    }
+    assert captured.get("removed") is True

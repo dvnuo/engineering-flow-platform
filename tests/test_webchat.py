@@ -1053,6 +1053,77 @@ async def test_api_chat_stream_start_event_contains_request_id_and_forwards_same
 
 
 @pytest.mark.asyncio
+async def test_api_chat_stream_first_start_event_request_id_matches_execution_request_id(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data.decode())
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-stream-contract", "client_request_id": "portal-stream-req-1"}
+
+    resp = await webchat.api_chat_stream(_Request())
+    assert resp.status == 200
+    assert resp.writes
+    assert resp.writes[0].startswith("event: start")
+    start_data = json.loads(resp.writes[0].split("data: ", 1)[1].strip())
+    assert start_data["session_id"] == "s-stream-contract"
+    assert start_data["request_id"] == "portal-stream-req-1"
+    assert captured["request_id"] == "portal-stream-req-1"
+
+
+def test_build_webchat_response_payload_prefers_top_level_request_id_over_execution_result():
+    from src.gateway.chat_payloads import build_webchat_response_payload
+
+    payload = build_webchat_response_payload(
+        {
+            "response": "ok",
+            "request_id": "top-1",
+            "_execution_result": type("ExecutionResult", (), {"request_id": "exec-1"})(),
+        },
+        "s-payload-priority",
+    )
+
+    assert payload["request_id"] == "top-1"
+
+
+def test_build_webchat_response_payload_backfills_request_id_from_execution_result_when_missing_top_level():
+    from src.gateway.chat_payloads import build_webchat_response_payload
+
+    payload = build_webchat_response_payload(
+        {
+            "response": "ok",
+            "_execution_result": type("ExecutionResult", (), {"request_id": "exec-1"})(),
+        },
+        "s-payload-fallback",
+    )
+
+    assert payload["request_id"] == "exec-1"
+
+
+@pytest.mark.asyncio
 async def test_api_chat_rejects_non_object_metadata(monkeypatch):
     from src.gateway import webchat
 
