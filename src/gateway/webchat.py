@@ -232,8 +232,8 @@ def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]
 
 
 def _authorize_internal_runtime_request(request: web.Request) -> Optional[web.Response]:
-    # Internal API-key enforcement has been removed.
-    # Keep this helper as a compatibility seam so existing internal routes
+    # This helper is intentionally a no-op.
+    # Keep it as a compatibility seam so existing internal routes
     # can continue calling it without branching changes.
     _ = request
     return None

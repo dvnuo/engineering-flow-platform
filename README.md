@@ -221,7 +221,7 @@ For complete control-plane contract details, see `docs/control_plane_contract.md
    Header: `X-Portal-Author-Source: portal`.
 
 2. **Portal -> EFP internal runtime endpoints** (`/api/tasks/execute`, `/api/capabilities`)  
-   No internal API-key header required in current deployment mode.
+   The current deployment mode relies on the trusted Portal source/header contract.
 
 3. **EFP adapter -> Portal internal APIs** (`adapter:portal:*`)  
    Requires `PORTAL_INTERNAL_BASE_URL` (env) or `server.portal_internal_base_url`.  
