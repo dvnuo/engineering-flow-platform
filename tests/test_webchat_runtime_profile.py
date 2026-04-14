@@ -70,7 +70,7 @@ async def test_internal_apply_runtime_profile_untrusted_rejected():
 
 
 @pytest.mark.asyncio
-async def test_internal_apply_runtime_profile_trusted_succeeds_without_unrelated_header(monkeypatch):
+async def test_internal_apply_runtime_profile_trusted_succeeds_with_portal_source_marker(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "set_managed_overlay", lambda *_args, **_kwargs: ["jira"])
     req = _Req(
         payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
@@ -81,7 +81,7 @@ async def test_internal_apply_runtime_profile_trusted_succeeds_without_unrelated
 
 
 @pytest.mark.asyncio
-async def test_internal_apply_runtime_profile_trusted_ignores_unrelated_header(monkeypatch):
+async def test_internal_apply_runtime_profile_trusted_accepts_arbitrary_sideband_header(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "set_managed_overlay", lambda *_args, **_kwargs: ["jira"])
     req = _Req(
         payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
@@ -92,7 +92,7 @@ async def test_internal_apply_runtime_profile_trusted_ignores_unrelated_header(m
 
 
 @pytest.mark.asyncio
-async def test_internal_apply_runtime_profile_allows_trusted_portal_with_any_unrelated_header(monkeypatch):
+async def test_internal_apply_runtime_profile_trusted_remains_valid_with_extra_sideband_header(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "set_managed_overlay", lambda *_args, **_kwargs: ["jira"])
     req = _Req(
         payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},

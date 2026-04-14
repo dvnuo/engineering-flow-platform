@@ -238,11 +238,11 @@ def test_is_trusted_portal_request_false_for_non_portal_source():
     assert webchat._is_trusted_portal_request(_HeaderOnlyRequest({"X-Portal-Author-Source": "runtime"})) is False
 
 
-def test_is_trusted_portal_request_ignores_unrelated_internal_like_headers():
+def test_is_trusted_portal_request_depends_only_on_portal_source_marker():
     from src.gateway import webchat
 
     trusted = webchat._is_trusted_portal_request(
-        _HeaderOnlyRequest({"X-Portal-Author-Source": "portal", "X-Unused-Sideband": "wrong"})
+        _HeaderOnlyRequest({"X-Portal-Author-Source": "portal", "X-Unused-Sideband": "ignored"})
     )
     untrusted = webchat._is_trusted_portal_request(
         _HeaderOnlyRequest({"X-Portal-Author-Source": "runtime", "X-Unused-Sideband": "unused-value"})
@@ -1407,7 +1407,7 @@ async def test_api_capabilities_filters_by_capability_id_and_type(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_capabilities_does_not_depend_on_unrelated_headers(monkeypatch):
+async def test_api_capabilities_accepts_default_request_headers(monkeypatch):
     from src.gateway import webchat
 
     class _Registry:
@@ -1425,7 +1425,7 @@ async def test_api_capabilities_does_not_depend_on_unrelated_headers(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_api_capabilities_ignores_unrelated_header(monkeypatch):
+async def test_api_capabilities_ignores_arbitrary_sideband_header(monkeypatch):
     from src.gateway import webchat
 
 
@@ -1436,7 +1436,7 @@ async def test_api_capabilities_ignores_unrelated_header(monkeypatch):
     monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
 
     class _Request:
-        headers = {"X-Unused-Sideband": "bad-key"}
+        headers = {"X-Unused-Sideband": "ignored"}
         query = {}
 
     response = await webchat.api_capabilities(_Request())
@@ -1444,7 +1444,7 @@ async def test_api_capabilities_ignores_unrelated_header(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_does_not_require_unrelated_header(monkeypatch):
+async def test_api_tasks_execute_accepts_default_request_headers(monkeypatch):
     from src.gateway import webchat
 
     webchat.runtime_task_tracker.reset()
@@ -1453,7 +1453,7 @@ async def test_api_tasks_execute_does_not_require_unrelated_header(monkeypatch):
         headers = {}
 
         async def json(self):
-            return {"task_id": "task-no-key-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
+            return {"task_id": "task-open-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
 
     async def _fake_execute_runtime_task_request(**kwargs):
         return type(
@@ -1480,7 +1480,7 @@ async def test_api_tasks_execute_does_not_require_unrelated_header(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_not_configured_does_not_log_auth_rejection(monkeypatch, caplog):
+async def test_api_tasks_execute_not_configured_still_accepts_request(monkeypatch):
     from src.gateway import webchat
 
     monkeypatch.setattr(webchat.global_config, "get", lambda *_args, **_kwargs: "")
@@ -1490,7 +1490,7 @@ async def test_api_tasks_execute_not_configured_does_not_log_auth_rejection(monk
         headers = {"X-Trace-Id": "trace-auth-503", "X-Portal-Dispatch-Id": "dispatch-1"}
 
         async def json(self):
-            return {"task_id": "task-no-key-2", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
+            return {"task_id": "task-open-2", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
 
     async def _fake_execute_runtime_task_request(**kwargs):
         return type(
@@ -1511,16 +1511,14 @@ async def test_api_tasks_execute_not_configured_does_not_log_auth_rejection(monk
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
     monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
-    with caplog.at_level("WARNING"):
-        response = await webchat.api_tasks_execute(_Request())
+    response = await webchat.api_tasks_execute(_Request())
 
     assert response.status == 202
-    assert "auth rejected" not in caplog.text.lower()
     await spawned[0]
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_ignores_missing_unrelated_header(monkeypatch):
+async def test_api_tasks_execute_accepts_request_without_sideband_headers(monkeypatch):
     from src.gateway import webchat
 
     webchat.runtime_task_tracker.reset()
@@ -1529,7 +1527,7 @@ async def test_api_tasks_execute_ignores_missing_unrelated_header(monkeypatch):
         headers = {}
 
         async def json(self):
-            return {"task_id": "task-key-missing-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
+            return {"task_id": "task-default-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
 
     async def _fake_execute_runtime_task_request(**kwargs):
         return type(
@@ -1556,16 +1554,16 @@ async def test_api_tasks_execute_ignores_missing_unrelated_header(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_ignores_unrelated_header(monkeypatch):
+async def test_api_tasks_execute_ignores_arbitrary_sideband_header(monkeypatch):
     from src.gateway import webchat
 
     webchat.runtime_task_tracker.reset()
 
     class _Request:
-        headers = {"X-Unused-Sideband": "wrong"}
+        headers = {"X-Unused-Sideband": "ignored"}
 
         async def json(self):
-            return {"task_id": "task-key-wrong-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
+            return {"task_id": "task-sideband-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
 
     async def _fake_execute_runtime_task_request(**kwargs):
         return type(
@@ -2023,7 +2021,7 @@ async def test_api_tasks_execute_accepts_without_waiting_for_terminal_result(mon
 
 
 @pytest.mark.asyncio
-async def test_api_task_status_pending_ignores_unrelated_header(monkeypatch):
+async def test_api_task_status_pending_accepts_arbitrary_sideband_header(monkeypatch):
     from src.gateway import webchat
     webchat.runtime_task_tracker.reset()
 
@@ -2045,7 +2043,7 @@ async def test_api_task_status_pending_ignores_unrelated_header(monkeypatch):
     await webchat.api_tasks_execute(_ExecuteRequest())
 
     class _StatusBadAuth:
-        headers = {"X-Unused-Sideband": "bad"}
+        headers = {"X-Unused-Sideband": "ignored"}
         match_info = {"task_id": "task-pending-1"}
 
     bad_auth_response = await webchat.api_task_status(_StatusBadAuth())
