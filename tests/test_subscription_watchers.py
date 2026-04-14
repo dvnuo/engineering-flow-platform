@@ -2,6 +2,7 @@ import json
 
 import pytest
 import asyncio
+from pathlib import Path
 
 
 @pytest.mark.asyncio
@@ -388,3 +389,8 @@ async def test_stop_is_safe_when_not_running():
     await manager.stop()
 
     assert manager._stop_event.is_set() is True
+
+
+def test_subscription_watchers_does_not_call_execute_tool_directly():
+    source = Path("src/cron/subscription_watchers.py").read_text(encoding="utf-8")
+    assert "execute_tool(" not in source
