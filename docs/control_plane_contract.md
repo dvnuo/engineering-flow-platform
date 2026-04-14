@@ -15,7 +15,6 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 ## 2) Runtime Internal Endpoints
 
 - `/api/tasks/execute` and `/api/capabilities` are internal control-plane endpoints.
-- Portal → EFP internal routes currently do not require an internal API key.
 - Runtime profile apply still relies on trusted Portal source marker and deployment topology.
 
 ## 3) Runtime Adapter → Portal Internal API Contract
@@ -23,7 +22,6 @@ This document defines the Portal ↔ EFP runtime trust boundaries.
 - `adapter:portal:*` actions call Portal internal APIs with:
   - base URL from `PORTAL_INTERNAL_BASE_URL` env, fallback `server.portal_internal_base_url`
   - optional `Authorization: Bearer <PORTAL_INTERNAL_AUTH_TOKEN>` (legacy compatibility; env first, fallback `server.portal_internal_auth_token`)
-- Runtime no longer emits `X-Internal-Api-Key` on these calls.
 
 ## 4) Trust Matrix
 

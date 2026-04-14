@@ -1,6 +1,6 @@
 """Portal internal request header helpers.
 
-Internal API key support has been removed; legacy bearer auth fallback is retained.
+Uses the optional legacy bearer auth token fallback when configured.
 """
 
 from __future__ import annotations

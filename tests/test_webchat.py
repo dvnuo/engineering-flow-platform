@@ -221,22 +221,22 @@ class _HeaderOnlyRequest:
         self.headers = headers or {}
 
 
-def test_authorize_runtime_request_returns_none_without_internal_like_headers():
+def test_authorize_runtime_request_returns_none_without_extra_headers():
     from src.gateway import webchat
 
     assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest()) is None
 
 
-def test_authorize_runtime_request_returns_none_with_wrong_internal_like_header():
+def test_authorize_runtime_request_returns_none_with_unrelated_header():
     from src.gateway import webchat
 
-    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Internal-Api-Key": "wrong"})) is None
+    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Debug-Bypass": "wrong"})) is None
 
 
-def test_authorize_runtime_request_returns_none_with_any_internal_like_header():
+def test_authorize_runtime_request_returns_none_with_any_unrelated_header():
     from src.gateway import webchat
 
-    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Internal-Api-Key": "anything"})) is None
+    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Unused-Sideband": "anything"})) is None
 
 
 def test_is_trusted_portal_request_true_for_portal_source():
@@ -261,10 +261,10 @@ def test_is_trusted_portal_request_ignores_unrelated_internal_like_headers():
     from src.gateway import webchat
 
     trusted = webchat._is_trusted_portal_request(
-        _HeaderOnlyRequest({"X-Portal-Author-Source": "portal", "X-Portal-Internal-Api-Key": "wrong"})
+        _HeaderOnlyRequest({"X-Portal-Author-Source": "portal", "X-Debug-Bypass": "wrong"})
     )
     untrusted = webchat._is_trusted_portal_request(
-        _HeaderOnlyRequest({"X-Portal-Author-Source": "runtime", "X-Portal-Internal-Api-Key": "portal-secret"})
+        _HeaderOnlyRequest({"X-Portal-Author-Source": "runtime", "X-Debug-Bypass": "portal-secret"})
     )
     assert trusted is True
     assert untrusted is False
@@ -1245,7 +1245,7 @@ async def test_api_capabilities_filters_by_capability_id_and_type(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_capabilities_does_not_depend_on_internal_like_auth_headers(monkeypatch):
+async def test_api_capabilities_does_not_depend_on_unrelated_headers(monkeypatch):
     from src.gateway import webchat
 
     class _Registry:
@@ -1263,7 +1263,7 @@ async def test_api_capabilities_does_not_depend_on_internal_like_auth_headers(mo
 
 
 @pytest.mark.asyncio
-async def test_api_capabilities_ignores_bad_internal_api_key_header(monkeypatch):
+async def test_api_capabilities_ignores_unrelated_header(monkeypatch):
     from src.gateway import webchat
 
 
@@ -1274,7 +1274,7 @@ async def test_api_capabilities_ignores_bad_internal_api_key_header(monkeypatch)
     monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
 
     class _Request:
-        headers = {"X-Internal-Api-Key": "bad-key"}
+        headers = {"X-Debug-Bypass": "bad-key"}
         query = {}
 
     response = await webchat.api_capabilities(_Request())
@@ -1282,7 +1282,7 @@ async def test_api_capabilities_ignores_bad_internal_api_key_header(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_does_not_require_internal_like_auth_header(monkeypatch):
+async def test_api_tasks_execute_does_not_require_unrelated_header(monkeypatch):
     from src.gateway import webchat
 
     webchat.runtime_task_tracker.reset()
@@ -1358,7 +1358,7 @@ async def test_api_tasks_execute_not_configured_does_not_log_auth_rejection(monk
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_ignores_missing_internal_api_key_header(monkeypatch):
+async def test_api_tasks_execute_ignores_missing_unrelated_header(monkeypatch):
     from src.gateway import webchat
 
     webchat.runtime_task_tracker.reset()
@@ -1394,13 +1394,13 @@ async def test_api_tasks_execute_ignores_missing_internal_api_key_header(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_ignores_wrong_internal_api_key_header(monkeypatch):
+async def test_api_tasks_execute_ignores_unrelated_header(monkeypatch):
     from src.gateway import webchat
 
     webchat.runtime_task_tracker.reset()
 
     class _Request:
-        headers = {"X-Internal-Api-Key": "wrong"}
+        headers = {"X-Debug-Bypass": "wrong"}
 
         async def json(self):
             return {"task_id": "task-key-wrong-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
@@ -1883,7 +1883,7 @@ async def test_api_task_status_pending_and_auth(monkeypatch):
     await webchat.api_tasks_execute(_ExecuteRequest())
 
     class _StatusBadAuth:
-        headers = {"X-Internal-Api-Key": "bad"}
+        headers = {"X-Debug-Bypass": "bad"}
         match_info = {"task_id": "task-pending-1"}
 
     bad_auth_response = await webchat.api_task_status(_StatusBadAuth())

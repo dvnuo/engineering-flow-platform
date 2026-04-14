@@ -200,8 +200,7 @@ async def test_execute_adapter_action_portal_create_delegation_normalizes_struct
     assert result["success"] is True
     assert result["system"] == "portal"
     assert captured["url"] == "https://portal.internal/api/internal/agent-delegations"
-    assert "X-Internal-Api-Key" not in captured["headers"]
-    assert "X-Portal-Internal-Api-Key" not in captured["headers"]
+    assert captured["headers"] == {"Content-Type": "application/json"}
     assert isinstance(captured["payload"]["scoped_context_payload_json"], str)
     assert isinstance(captured["payload"]["input_artifacts_json"], str)
     assert isinstance(captured["payload"]["expected_output_schema_json"], str)
@@ -236,7 +235,7 @@ async def test_execute_adapter_action_portal_read_actions_use_get(monkeypatch):
     assert captured[2][0] == "https://portal.internal/api/internal/agent-groups/group-1/coordination-runs"
     assert captured[3][0] == "https://portal.internal/api/internal/coordination-runs/coord-1"
     assert captured[4][0] == "https://portal.internal/api/internal/agent-groups/group-1/specialist-pool"
-    assert "X-Internal-Api-Key" not in captured[0][1]
+    assert captured[0][1] == {"Content-Type": "application/json"}
 
 
 @pytest.mark.asyncio
@@ -268,7 +267,7 @@ async def test_execute_adapter_action_portal_create_task_agent_uses_post_and_nor
     assert captured["url"] == "https://portal.internal/api/internal/agent-groups/group-1/task-agents"
     assert isinstance(captured["payload"]["metadata"], str)
     assert isinstance(captured["payload"]["tags"], str)
-    assert "X-Internal-Api-Key" not in captured["headers"]
+    assert captured["headers"] == {"Content-Type": "application/json"}
 
 
 @pytest.mark.asyncio
@@ -305,26 +304,23 @@ async def test_execute_adapter_action_portal_delete_task_agent_uses_delete(monke
 
     assert result["success"] is True
     assert captured["url"] == "https://portal.internal/api/internal/agent-groups/group-1/task-agents/ta-1"
-    assert "X-Internal-Api-Key" not in captured["headers"]
+    assert captured["headers"] == {"Content-Type": "application/json"}
 
 
-def test_build_portal_headers_no_longer_emits_internal_like_key_header(monkeypatch):
+def test_build_portal_headers_without_auth_token(monkeypatch):
     monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
 
     headers = _build_portal_headers()
 
-    assert headers["Content-Type"] == "application/json"
-    assert "X-Internal-Api-Key" not in headers
-    assert "Authorization" not in headers
+    assert headers == {"Content-Type": "application/json"}
 
 
-def test_build_portal_headers_keeps_auth_token_without_internal_like_key_header(monkeypatch):
+def test_build_portal_headers_with_auth_token(monkeypatch):
     monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "legacy-token")
 
     headers = _build_portal_headers()
 
-    assert headers["Authorization"] == "Bearer legacy-token"
-    assert "X-Internal-Api-Key" not in headers
+    assert headers == {"Content-Type": "application/json", "Authorization": "Bearer legacy-token"}
 
 
 @pytest.mark.asyncio
@@ -405,17 +401,11 @@ def test_build_portal_internal_api_headers_contract_with_and_without_auth_token(
     monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
 
     headers_without_token = build_portal_internal_api_headers(include_content_type=True)
-    assert headers_without_token["Content-Type"] == "application/json"
-    assert "Authorization" not in headers_without_token
-    assert "X-Internal-Api-Key" not in headers_without_token
-    assert "X-Portal-Internal-Api-Key" not in headers_without_token
+    assert headers_without_token == {"Content-Type": "application/json"}
 
     monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "token-123")
     headers_with_token = build_portal_internal_api_headers(include_content_type=True)
-    assert headers_with_token["Content-Type"] == "application/json"
-    assert headers_with_token["Authorization"] == "Bearer token-123"
-    assert "X-Internal-Api-Key" not in headers_with_token
-    assert "X-Portal-Internal-Api-Key" not in headers_with_token
+    assert headers_with_token == {"Content-Type": "application/json", "Authorization": "Bearer token-123"}
 
 
 @pytest.mark.asyncio

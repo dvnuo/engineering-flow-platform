@@ -70,7 +70,7 @@ async def test_internal_apply_runtime_profile_untrusted_rejected():
 
 
 @pytest.mark.asyncio
-async def test_internal_apply_runtime_profile_trusted_succeeds_without_internal_like_header(monkeypatch):
+async def test_internal_apply_runtime_profile_trusted_succeeds_without_unrelated_header(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "set_managed_overlay", lambda *_args, **_kwargs: ["jira"])
     req = _Req(
         payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
@@ -81,22 +81,22 @@ async def test_internal_apply_runtime_profile_trusted_succeeds_without_internal_
 
 
 @pytest.mark.asyncio
-async def test_internal_apply_runtime_profile_trusted_ignores_wrong_internal_like_header(monkeypatch):
+async def test_internal_apply_runtime_profile_trusted_ignores_unrelated_header(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "set_managed_overlay", lambda *_args, **_kwargs: ["jira"])
     req = _Req(
         payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
-        headers={"X-Portal-Author-Source": "portal", "X-Internal-Api-Key": "wrong"},
+        headers={"X-Portal-Author-Source": "portal", "X-Debug-Bypass": "wrong"},
     )
     resp = await webchat.api_apply_runtime_profile(req)
     assert resp.status == 200
 
 
 @pytest.mark.asyncio
-async def test_internal_apply_runtime_profile_allows_trusted_portal_with_any_internal_like_header(monkeypatch):
+async def test_internal_apply_runtime_profile_allows_trusted_portal_with_any_unrelated_header(monkeypatch):
     monkeypatch.setattr(webchat.global_config, "set_managed_overlay", lambda *_args, **_kwargs: ["jira"])
     req = _Req(
         payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
-        headers={"X-Portal-Author-Source": "portal", "X-Internal-Api-Key": "anything"},
+        headers={"X-Portal-Author-Source": "portal", "X-Unused-Sideband": "anything"},
     )
     resp = await webchat.api_apply_runtime_profile(req)
     assert resp.status == 200
