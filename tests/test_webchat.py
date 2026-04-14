@@ -595,6 +595,157 @@ async def test_api_chat_stream_resolves_portal_identity_from_headers(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_api_chat_forwards_two_attached_images_when_max_prompt_images_is_two(monkeypatch, tmp_path):
+    from src.gateway import webchat
+    from src.utils.file_parser import storage
+
+    captured = {}
+    one = tmp_path / "one.png"
+    two = tmp_path / "two.png"
+    one.write_bytes(b"one")
+    two.write_bytes(b"two")
+
+    class _Meta:
+        def __init__(self, file_id: str, session_id: str):
+            self.file_id = file_id
+            self.session_id = session_id
+            self.content_type = "image/png"
+
+    metadata_map = {"f1": _Meta("f1", "s1"), "f2": _Meta("f2", "s1")}
+    file_map = {"f1": one, "f2": two}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai", "max_prompt_images": 2}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat, "get_metadata", lambda file_id: metadata_map[file_id])
+    monkeypatch.setattr(storage, "get_file_path", lambda file_id: file_map[file_id])
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "compare", "session_id": "s1", "attachments": ["f1", "f2"]}
+
+    response = await webchat.api_chat(_Request())
+    assert response.status == 200
+    assert len(captured["attached_images"]) == 2
+    assert captured["attached_images"][0].startswith("data:image/png;base64,")
+    assert captured["attached_images"][1].startswith("data:image/png;base64,")
+    assert captured["attached_images"][0].endswith("b25l")
+    assert captured["attached_images"][1].endswith("dHdv")
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_forwards_two_attached_images_when_max_prompt_images_is_two(monkeypatch, tmp_path):
+    from src.gateway import webchat
+    from src.utils.file_parser import storage
+
+    captured = {}
+    one = tmp_path / "one.png"
+    two = tmp_path / "two.png"
+    one.write_bytes(b"one")
+    two.write_bytes(b"two")
+
+    class _Meta:
+        def __init__(self, file_id: str, session_id: str):
+            self.file_id = file_id
+            self.session_id = session_id
+            self.content_type = "image/png"
+
+    metadata_map = {"f1": _Meta("f1", "s2"), "f2": _Meta("f2", "s2")}
+    file_map = {"f1": one, "f2": two}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data)
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai", "max_prompt_images": 2}}, raising=False)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+    monkeypatch.setattr(webchat, "get_metadata", lambda file_id: metadata_map[file_id])
+    monkeypatch.setattr(storage, "get_file_path", lambda file_id: file_map[file_id])
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "compare", "session_id": "s2", "attachments": ["f1", "f2"]}
+
+    response = await webchat.api_chat_stream(_Request())
+    assert response.status == 200
+    assert len(captured["attached_images"]) == 2
+    assert captured["attached_images"][0].endswith("b25l")
+    assert captured["attached_images"][1].endswith("dHdv")
+    assert captured["attachments"] == ["f1", "f2"]
+
+
+@pytest.mark.asyncio
+async def test_api_chat_defaults_to_one_image_when_max_prompt_images_is_unset(monkeypatch, tmp_path):
+    from src.gateway import webchat
+    from src.utils.file_parser import storage
+
+    captured = {}
+    one = tmp_path / "one.png"
+    two = tmp_path / "two.png"
+    one.write_bytes(b"one")
+    two.write_bytes(b"two")
+
+    class _Meta:
+        def __init__(self, file_id: str, session_id: str):
+            self.file_id = file_id
+            self.session_id = session_id
+            self.content_type = "image/png"
+
+    metadata_map = {"f1": _Meta("f1", "s1"), "f2": _Meta("f2", "s1")}
+    file_map = {"f1": one, "f2": two}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat, "get_metadata", lambda file_id: metadata_map[file_id])
+    monkeypatch.setattr(storage, "get_file_path", lambda file_id: file_map[file_id])
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "compare", "session_id": "s1", "attachments": ["f1", "f2"]}
+
+    response = await webchat.api_chat(_Request())
+    assert response.status == 200
+    assert len(captured["attached_images"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_api_chat_trusted_portal_metadata_passed_to_execution_bus(monkeypatch):
     from src.gateway import webchat
 
