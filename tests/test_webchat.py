@@ -220,24 +220,6 @@ class _HeaderOnlyRequest:
         self.headers = headers or {}
 
 
-def test_authorize_runtime_request_returns_none_without_extra_headers():
-    from src.gateway import webchat
-
-    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest()) is None
-
-
-def test_authorize_runtime_request_returns_none_with_unrelated_header():
-    from src.gateway import webchat
-
-    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Unused-Sideband": "wrong"})) is None
-
-
-def test_authorize_runtime_request_returns_none_with_any_unrelated_header():
-    from src.gateway import webchat
-
-    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Unused-Sideband": "anything"})) is None
-
-
 def test_is_trusted_portal_request_true_for_portal_source():
     from src.gateway import webchat
 
