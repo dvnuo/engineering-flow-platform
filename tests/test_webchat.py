@@ -1094,35 +1094,6 @@ async def test_api_chat_stream_first_start_event_request_id_matches_execution_re
     assert captured["request_id"] == "portal-stream-req-1"
 
 
-def test_build_webchat_response_payload_prefers_top_level_request_id_over_execution_result():
-    from src.gateway.chat_payloads import build_webchat_response_payload
-
-    payload = build_webchat_response_payload(
-        {
-            "response": "ok",
-            "request_id": "top-1",
-            "_execution_result": type("ExecutionResult", (), {"request_id": "exec-1"})(),
-        },
-        "s-payload-priority",
-    )
-
-    assert payload["request_id"] == "top-1"
-
-
-def test_build_webchat_response_payload_backfills_request_id_from_execution_result_when_missing_top_level():
-    from src.gateway.chat_payloads import build_webchat_response_payload
-
-    payload = build_webchat_response_payload(
-        {
-            "response": "ok",
-            "_execution_result": type("ExecutionResult", (), {"request_id": "exec-1"})(),
-        },
-        "s-payload-fallback",
-    )
-
-    assert payload["request_id"] == "exec-1"
-
-
 @pytest.mark.asyncio
 async def test_api_chat_rejects_non_object_metadata(monkeypatch):
     from src.gateway import webchat

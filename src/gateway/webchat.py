@@ -57,6 +57,10 @@ from src.gateway.chat_payloads import (
     build_webchat_response_payload,
     normalize_assistant_history_message,
 )
+from src.gateway.webchat_request_contracts import (
+    build_stream_start_event_payload,
+    extract_trusted_client_request_id,
+)
 from src.runtime.capability_registry import get_capability_registry
 from src.gateway.event_bus import emit_agent_event
 from src.sessions.manager import session_manager
@@ -151,19 +155,7 @@ def _extract_trusted_control_plane_metadata(request: web.Request, data: Dict[str
 
 
 def _extract_trusted_client_request_id(request: web.Request, data: Dict[str, Any]) -> Optional[str]:
-    if not _is_trusted_portal_request(request):
-        return None
-    candidate = data.get("client_request_id")
-    if candidate is None:
-        candidate = data.get("request_id")
-    if not isinstance(candidate, str):
-        return None
-    cleaned = candidate.strip()
-    if not cleaned or len(cleaned) > 128:
-        return None
-    if not re.fullmatch(r"[A-Za-z0-9_:-]+", cleaned):
-        return None
-    return cleaned
+    return extract_trusted_client_request_id(_is_trusted_portal_request(request), data)
 
 
 def _require_non_empty_string(data: Dict[str, Any], key: str) -> str:
@@ -847,7 +839,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
 
         # Send start event
         await response.write(
-            f"event: start\ndata: {json.dumps({'session_id': session_id, 'request_id': request_id})}\n\n".encode()
+            f"event: start\ndata: {json.dumps(build_stream_start_event_payload(session_id, request_id))}\n\n".encode()
         )
 
         event_queue = asyncio.Queue()
