@@ -38,6 +38,10 @@ llm:
   # model: "claude-sonnet-4-20250514"  # or claude-haiku-4-20250514, claude-opus-4-20250514
   
   max_tokens: 1000
+  # Local EFP cap for how many image blocks can be sent in one prompt.
+  # Keep this <= the actual capability of your upstream model/runtime.
+  # Default behavior is 1 for backward compatibility.
+  max_prompt_images: 1
   temperature: 0.7
   max_retries: 3
   retry_delay: 1

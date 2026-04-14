@@ -19,7 +19,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from aiohttp import web, ContentTypeError
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -217,6 +217,74 @@ def _sanitize_trace_value(value: Any, max_len: int = 128) -> Optional[str]:
     if not cleaned:
         return None
     return cleaned[:max_len]
+
+
+async def _collect_attached_images(
+    *,
+    session_id: str,
+    message: str,
+    attachments: Optional[List[str]],
+) -> List[str]:
+    max_prompt_images = global_config.get_max_prompt_images()
+    attached_images: List[str] = []
+    processed_file_ids: Set[str] = set()
+
+    async def process_file(file_id: str) -> bool:
+        if len(attached_images) >= max_prompt_images:
+            return False
+        if not isinstance(file_id, str) or not file_id:
+            return False
+        if file_id in processed_file_ids:
+            return False
+        try:
+            from src.utils.file_parser.storage import get_file_path
+            metadata = get_metadata(file_id)
+            if metadata.session_id and metadata.session_id != session_id:
+                logger.warning(f"[api_chat] File {file_id} belongs to different session")
+                return False
+            if metadata.content_type and metadata.content_type.startswith('image/'):
+                file_path = get_file_path(file_id)
+                if file_path.exists():
+                    import base64
+                    img_data = await asyncio.to_thread(
+                        lambda: base64.b64encode(file_path.read_bytes()).decode('utf-8')
+                    )
+                    ext = metadata.content_type.split('/')[-1]
+                    attached_images.append(f'data:image/{ext};base64,{img_data}')
+                    processed_file_ids.add(file_id)
+                    return True
+        except StoredFileNotFoundError:
+            logger.warning(f"[api_chat] File {file_id} not found")
+        except Exception as e:
+            logger.warning(f"[api_chat] Failed to process file {safe_preview(file_id, 80)}: {sanitize_exception_message(e)}")
+        return False
+
+    try:
+        refs = re.findall(r'@file_([a-zA-Z0-9]+)', message)
+        for short_id in dict.fromkeys(refs):
+            try:
+                metadata = get_metadata(short_id)
+                await process_file(metadata.file_id)
+            except (StoredFileNotFoundError, ValueError):
+                from src.utils.file_parser.storage import find_file_by_prefix
+                try:
+                    fid = find_file_by_prefix(short_id)
+                    if fid:
+                        await process_file(fid)
+                except ValueError as ve:
+                    logger.warning(f"[api_chat] Prefix lookup failed: {sanitize_exception_message(ve)}")
+            if len(attached_images) >= max_prompt_images:
+                break
+    except Exception as e:
+        logger.warning(f"[api_chat] @file_ parse error: {sanitize_exception_message(e)}")
+
+    if attachments and isinstance(attachments, list):
+        for file_id in attachments:
+            await process_file(file_id)
+            if len(attached_images) >= max_prompt_images:
+                break
+
+    return attached_images
 
 
 def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]]:
@@ -514,66 +582,11 @@ async def api_chat(request: web.Request) -> web.Response:
         
         logger.info(f"[api_chat] Processing message for session: {session_id}")
         
-        # Process attachments from both @file_ references (backward compat) and attachments field
-        attached_images = []
-        
-        # Helper to process a single file_id
-        async def process_file(file_id: str) -> bool:
-            """Process a file_id and add to attached_images if valid. Returns True if processed."""
-            nonlocal attached_images
-            # Only process first image to avoid large payloads
-            if attached_images:
-                return True
-            try:
-                from src.utils.file_parser.storage import get_metadata, get_file_path, StoredFileNotFoundError
-                metadata = get_metadata(file_id)
-                # Validate session ownership
-                if metadata.session_id and metadata.session_id != session_id:
-                    logger.warning(f"[api_chat] File {file_id} belongs to different session")
-                    return False
-                # Check if it's an image
-                if metadata.content_type and metadata.content_type.startswith('image/'):
-                    file_path = get_file_path(file_id)
-                    if file_path.exists():
-                        import base64
-                        img_data = await asyncio.to_thread(
-                            lambda: base64.b64encode(file_path.read_bytes()).decode('utf-8')
-                        )
-                        ext = metadata.content_type.split('/')[-1]
-                        attached_images.append(f'data:image/{ext};base64,{img_data}')
-                        return True
-            except StoredFileNotFoundError:
-                logger.warning(f"[api_chat] File {file_id} not found")
-            except Exception as e:
-                logger.warning(f"[api_chat] Failed to process file {safe_preview(file_id, 80)}: {sanitize_exception_message(e)}")
-            return False
-        
-        # 1. Parse @file_ references from message (backward compatibility)
-        try:
-            refs = re.findall(r'@file_([a-zA-Z0-9]+)', message)
-            for short_id in set(refs):
-                # Try exact match first, then prefix match
-                try:
-                    from src.utils.file_parser.storage import get_metadata
-                    metadata = get_metadata(short_id)
-                    if await process_file(metadata.file_id):
-                        break  # Stop after first image
-                except (StoredFileNotFoundError, ValueError):
-                    # Try prefix match using public helper (handles short/ambiguous prefixes)
-                    from src.utils.file_parser.storage import find_file_by_prefix
-                    try:
-                        fid = find_file_by_prefix(short_id)
-                        if fid:
-                            await process_file(fid)
-                    except ValueError as ve:
-                        logger.warning(f"[api_chat] Prefix lookup failed: {sanitize_exception_message(ve)}")
-        except Exception as e:
-            logger.warning(f"[api_chat] @file_ parse error: {sanitize_exception_message(e)}")
-        
-        # 2. Process attachments from new attachments field
-        if attachments and isinstance(attachments, list):
-            for file_id in attachments:
-                await process_file(file_id)
+        attached_images = await _collect_attached_images(
+            session_id=session_id,
+            message=message,
+            attachments=attachments if isinstance(attachments, list) else None,
+        )
         
         # Set placeholder message if only images
         if attached_images and not message.strip():
@@ -803,13 +816,22 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         data = await request.json()
         message = (data.get('message') or '').strip()
         session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
+        attachments = data.get('attachments')
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
         client_request_id = _extract_trusted_client_request_id(request, data)
         request_id = client_request_id or f"chat-{uuid.uuid4()}"
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
 
-        if not message:
+        attached_images = await _collect_attached_images(
+            session_id=session_id,
+            message=message,
+            attachments=attachments if isinstance(attachments, list) else None,
+        )
+        if attached_images and not message.strip():
+            message = "[image]"
+
+        if not message.strip() and not attached_images:
             response = web.json_response({'error': 'Empty message'}, status=400)
             return response
 
@@ -868,6 +890,8 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 portal_user_id=portal_user_id,
                 portal_user_name=portal_user_name,
                 stream_callback=event_queue,
+                attached_images=attached_images if attached_images else None,
+                attachments=attachments if attachments else None,
                 request_path="/api/chat/stream",
                 execution_metadata=execution_metadata,
                 agent_id=runtime_agent_id,

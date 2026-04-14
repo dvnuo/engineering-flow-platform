@@ -148,6 +148,51 @@ def _format_content(content: str, prefix: str = "", max_length: int = 500) -> st
     return f"{prefix}(content hidden)"
 
 
+def _inject_attached_images_into_last_user_message(
+    messages: List[Dict[str, Any]],
+    attached_images: Optional[List[str]],
+    max_prompt_images: int,
+) -> int:
+    if not attached_images or not messages:
+        return 0
+
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") != "user":
+            continue
+
+        user_content = messages[i].get("content", "")
+        if isinstance(user_content, list):
+            msg_content = []
+            for item in user_content:
+                if isinstance(item, dict):
+                    if item.get("type") == "text":
+                        msg_content.append({"type": "input_text", "text": item.get("text", "")})
+                    elif item.get("type") == "image_url":
+                        img_url = item.get("image_url", {}).get("url") if isinstance(item.get("image_url"), dict) else str(item.get("image_url", ""))
+                        if img_url:
+                            msg_content.append({"type": "input_image", "image_url": img_url})
+                    else:
+                        msg_content.append(item)
+        else:
+            msg_content = [{"type": "input_text", "text": str(user_content)}]
+
+        existing_images = sum(
+            1 for block in msg_content
+            if isinstance(block, dict) and block.get("type") == "input_image"
+        )
+        remaining_slots = max_prompt_images - existing_images
+        added_count = 0
+        if remaining_slots > 0:
+            for img in attached_images[:remaining_slots]:
+                msg_content.append({"type": "input_image", "image_url": img})
+                added_count += 1
+
+        messages[i] = {"role": "user", "content": msg_content}
+        return added_count
+
+    return 0
+
+
 def _hash_text(value: Any, max_len: int = 800) -> str:
     text = str(value or "")
     if len(text) > max_len:
@@ -975,34 +1020,18 @@ You have access to the following tools. When a user asks you to do something tha
                 ),
             )
         
-        # ===== INJECT ATTACHED IMAGES =====
-        if attached_images and len(messages) > 0:
-            # Find the last user message and add images to it
-            for i in range(len(messages) - 1, -1, -1):
-                if messages[i].get("role") == "user":
-                    user_content = messages[i].get("content", "")
-                    # Build vision content for Responses API (input_image format)
-                    if isinstance(user_content, list):
-                        msg_content = []
-                        for item in user_content:
-                            if isinstance(item, dict):
-                                if item.get("type") == "text":
-                                    msg_content.append({"type": "input_text", "text": item.get("text", "")})
-                                elif item.get("type") == "image_url":
-                                    img_url = item.get("image_url", {}).get("url") if isinstance(item.get("image_url"), dict) else str(item.get("image_url", ""))
-                                    if img_url:
-                                        msg_content.append({"type": "input_image", "image_url": img_url})
-                                else:
-                                    msg_content.append(item)
-                    else:
-                        msg_content = [{"type": "input_text", "text": str(user_content)}]
-                    
-                    for img in attached_images[:1]:
-                        msg_content.append({"type": "input_image", "image_url": img})
-                    messages[i] = {"role": "user", "content": msg_content}
-                    logger.info(f"[Agent] Attached {min(len(attached_images), 1)} image(s) to user message (Responses format)")
-                    break
-        # ===== END IMAGE INJECTION =====
+        max_prompt_images = config.get_max_prompt_images()
+        added_images = _inject_attached_images_into_last_user_message(
+            messages,
+            attached_images,
+            max_prompt_images,
+        )
+        if added_images:
+            logger.info(
+                "[Agent] Attached %s image(s) to user message (Responses format, max_prompt_images=%s)",
+                added_images,
+                max_prompt_images,
+            )
 
         # Convert messages to input_items for Responses API
         def _to_input_items(msgs):

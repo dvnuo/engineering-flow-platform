@@ -414,6 +414,19 @@ class Config:
         """Get LLM configuration."""
         return self._config.get("llm", {})
 
+    def get_max_prompt_images(self) -> int:
+        """Return the local EFP cap for image blocks per prompt.
+
+        This is NOT automatic provider capability discovery.
+        It is an operator-configured transport cap. Default: 1.
+        """
+        raw = self.llm.get("max_prompt_images", 1)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return 1
+        return value if value > 0 else 1
+
     @property
     def session(self) -> Dict[str, Any]:
         """Get session configuration."""
