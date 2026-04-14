@@ -1,7 +1,4 @@
-"""Portal internal request header helpers.
-
-Uses the optional legacy bearer auth token fallback when configured.
-"""
+"""Portal internal API request helpers."""
 
 from __future__ import annotations
 
@@ -27,19 +24,7 @@ def get_portal_agent_id() -> str:
     return str(config_value or "").strip()
 
 
-def get_portal_internal_auth_token() -> str:
-    env_value = str(os.getenv("PORTAL_INTERNAL_AUTH_TOKEN") or "").strip()
-    if env_value:
-        return env_value
-    config_value = global_config.get("server.portal_internal_auth_token", "")
-    return str(config_value or "").strip()
-
-
 def build_portal_internal_api_headers(include_content_type: bool = True) -> Dict[str, str]:
-    headers: Dict[str, str] = {}
     if include_content_type:
-        headers["Content-Type"] = "application/json"
-    token = get_portal_internal_auth_token()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
+        return {"Content-Type": "application/json"}
+    return {}

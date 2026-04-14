@@ -225,7 +225,6 @@ For complete control-plane contract details, see `docs/control_plane_contract.md
 
 3. **EFP adapter -> Portal internal APIs** (`adapter:portal:*`)  
    Requires `PORTAL_INTERNAL_BASE_URL` (env) or `server.portal_internal_base_url`.  
-   Optional legacy token: `PORTAL_INTERNAL_AUTH_TOKEN` (env) or `server.portal_internal_auth_token`.
 
 ### Sessions
 

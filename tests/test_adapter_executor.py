@@ -8,7 +8,7 @@ from src.runtime.adapter_executor import (
     validate_enabled_adapter_actions_have_executors,
 )
 from src.runtime.leader_delegation_adapter import create_portal_delegation_from_runtime
-from src.utils.internal_api_keys import build_portal_internal_api_headers
+from src.utils.portal_internal_api import build_portal_internal_api_headers
 
 
 @pytest.mark.asyncio
@@ -307,20 +307,10 @@ async def test_execute_adapter_action_portal_delete_task_agent_uses_delete(monke
     assert captured["headers"] == {"Content-Type": "application/json"}
 
 
-def test_build_portal_headers_without_auth_token(monkeypatch):
-    monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
-
+def test_build_portal_headers_default_contract():
     headers = _build_portal_headers()
 
     assert headers == {"Content-Type": "application/json"}
-
-
-def test_build_portal_headers_with_auth_token(monkeypatch):
-    monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "legacy-token")
-
-    headers = _build_portal_headers()
-
-    assert headers == {"Content-Type": "application/json", "Authorization": "Bearer legacy-token"}
 
 
 @pytest.mark.asyncio
@@ -334,7 +324,7 @@ async def test_execute_portal_action_uses_config_fallback_base_url(monkeypatch):
 
     monkeypatch.delenv("PORTAL_INTERNAL_BASE_URL", raising=False)
     monkeypatch.setattr(
-        "src.utils.internal_api_keys.global_config.get",
+        "src.utils.portal_internal_api.global_config.get",
         lambda key, default=None: (
             "https://portal.cfg"
             if key == "server.portal_internal_base_url"
@@ -359,7 +349,7 @@ async def test_execute_portal_action_base_url_env_precedence_over_config(monkeyp
 
     monkeypatch.setenv("PORTAL_INTERNAL_BASE_URL", "https://portal.env")
     monkeypatch.setattr(
-        "src.utils.internal_api_keys.global_config.get",
+        "src.utils.portal_internal_api.global_config.get",
         lambda key, default=None: (
             "https://portal.cfg"
             if key == "server.portal_internal_base_url"
@@ -373,39 +363,9 @@ async def test_execute_portal_action_base_url_env_precedence_over_config(monkeyp
     assert captured["url"].startswith("https://portal.env/")
 
 
-def test_build_portal_internal_api_headers_auth_token_config_fallback(monkeypatch):
-    monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
-    monkeypatch.setattr(
-        "src.utils.internal_api_keys.global_config.get",
-        lambda key, default=None: "tok-cfg" if key == "server.portal_internal_auth_token" else default,
-    )
-
-    headers = build_portal_internal_api_headers()
-
-    assert headers["Authorization"] == "Bearer tok-cfg"
-
-
-def test_build_portal_internal_api_headers_auth_token_env_precedence(monkeypatch):
-    monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "tok-env")
-    monkeypatch.setattr(
-        "src.utils.internal_api_keys.global_config.get",
-        lambda key, default=None: "tok-cfg" if key == "server.portal_internal_auth_token" else default,
-    )
-
-    headers = build_portal_internal_api_headers()
-
-    assert headers["Authorization"] == "Bearer tok-env"
-
-
-def test_build_portal_internal_api_headers_contract_with_and_without_auth_token(monkeypatch):
-    monkeypatch.delenv("PORTAL_INTERNAL_AUTH_TOKEN", raising=False)
-
-    headers_without_token = build_portal_internal_api_headers(include_content_type=True)
-    assert headers_without_token == {"Content-Type": "application/json"}
-
-    monkeypatch.setenv("PORTAL_INTERNAL_AUTH_TOKEN", "token-123")
-    headers_with_token = build_portal_internal_api_headers(include_content_type=True)
-    assert headers_with_token == {"Content-Type": "application/json", "Authorization": "Bearer token-123"}
+def test_build_portal_internal_api_headers_content_type_contract():
+    assert build_portal_internal_api_headers(include_content_type=True) == {"Content-Type": "application/json"}
+    assert build_portal_internal_api_headers(include_content_type=False) == {}
 
 
 @pytest.mark.asyncio

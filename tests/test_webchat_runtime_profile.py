@@ -85,7 +85,7 @@ async def test_internal_apply_runtime_profile_trusted_ignores_unrelated_header(m
     monkeypatch.setattr(webchat.global_config, "set_managed_overlay", lambda *_args, **_kwargs: ["jira"])
     req = _Req(
         payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
-        headers={"X-Portal-Author-Source": "portal", "X-Debug-Bypass": "wrong"},
+        headers={"X-Portal-Author-Source": "portal", "X-Unused-Sideband": "wrong"},
     )
     resp = await webchat.api_apply_runtime_profile(req)
     assert resp.status == 200
