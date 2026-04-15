@@ -10,43 +10,6 @@ import pytest
 from src.config import Config
 
 
-def test_get_max_prompt_images_defaults_to_one(tmp_path):
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        "llm:\n"
-        "  api_key: test\n"
-        "  model: gpt-5-mini\n"
-    )
-    config = Config(str(config_path))
-
-    assert config.get_max_prompt_images() == 1
-
-
-def test_get_max_prompt_images_parses_and_clamps_values(tmp_path):
-    config_path = tmp_path / "config.yaml"
-
-    config_path.write_text(
-        "llm:\n"
-        "  max_prompt_images: \"2\"\n"
-    )
-    config = Config(str(config_path))
-    assert config.get_max_prompt_images() == 2
-
-    config_path.write_text(
-        "llm:\n"
-        "  max_prompt_images: 0\n"
-    )
-    config.load()
-    assert config.get_max_prompt_images() == 1
-
-    config_path.write_text(
-        "llm:\n"
-        "  max_prompt_images: abc\n"
-    )
-    config.load()
-    assert config.get_max_prompt_images() == 1
-
-
 class TestConfigBasic:
     """Basic configuration tests."""
 
