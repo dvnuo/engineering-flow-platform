@@ -52,6 +52,43 @@ def _get_adapter() -> ConfluenceFormatAdapter:
 # ========== Tool Functions ==========
 
 
+def _infer_attachment_media_type(att: dict, filename: str) -> str:
+    """Infer attachment media type from metadata and filename."""
+    media_type = att.get("metadata", {}).get("mediaType")
+    if media_type:
+        return media_type
+
+    media_type = att.get("extensions", {}).get("mediaType")
+    if media_type:
+        return media_type
+
+    extension_to_media_type = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "gif": "image/gif",
+        "webp": "image/webp",
+        "bmp": "image/bmp",
+        "svg": "image/svg+xml",
+        "txt": "text/plain",
+        "md": "text/markdown",
+        "json": "application/json",
+        "csv": "text/csv",
+        "pdf": "application/pdf",
+    }
+
+    if "." in filename:
+        extension = filename.rsplit(".", 1)[-1].lower()
+        return extension_to_media_type.get(extension, "application/octet-stream")
+
+    return "application/octet-stream"
+
+
+def _is_image_attachment(att: dict, filename: str) -> bool:
+    """Check whether an attachment is an image."""
+    media_type = _infer_attachment_media_type(att, filename)
+    return media_type.startswith("image/")
+
 
 async def _process_confluence_attachments(
     page_id: str,
@@ -64,23 +101,36 @@ async def _process_confluence_attachments(
     except Exception as e:
         logger.debug(f"No attachments for page {page_id}: {e}")
         return ""
-    
+
     if not attachments:
         return ""
-    
+
     logger.info(f"Processing {len(attachments)} attachments for page {page_id}")
-    
+
+    shown_attachments = attachments[:5]
+    omitted_count = max(len(attachments) - len(shown_attachments), 0)
+
     results = []
-    for att in attachments[:5]:  # Max 5
+    for att in shown_attachments:
         filename = att.get("title", "unknown")
         size = att.get("extensions", {}).get("fileSize", 0)
-        
         link = att.get("_links", {}).get("download", "")
+        media_type = _infer_attachment_media_type(att, filename)
+
+        if _is_image_attachment(att, filename):
+            if size:
+                results.append(
+                    f"- **{filename}** (image, {size} bytes) [image attachment not auto-expanded]"
+                )
+            else:
+                results.append(f"- **{filename}** (image) [image attachment not auto-expanded]")
+            continue
+
         if link:
             base_url = channel.base_url.rstrip("/")
             auth_header = channel._auth_header if channel.is_configured() else None
             download_url = f"{base_url}{link}"
-            
+
             try:
                 result = await download_and_process_attachment(
                     url=download_url,
@@ -92,30 +142,44 @@ async def _process_confluence_attachments(
                     },
                     auth_header=auth_header,
                 )
-                
-                is_image = result.content_type.startswith("image/")
-                if is_image:
-                    results.append(f"- **{filename}** (image, {size} bytes)")
-                    if result.content_format == "text" and result.content:
-                        preview = result.content[:500]
-                        results.append("  Extracted text:")
-                        results.append(f"  {preview}")
-                    else:
-                        results.append("  [image retrieved, but no text could be extracted]")
-                elif result.content_format == "text" and result.content:
+
+                if result.content_format == "text" and result.content:
                     preview = result.content[:500]
-                    results.append(f"- **{filename}** (text, {size} bytes)")
+                    if size:
+                        results.append(f"- **{filename}** ({media_type}, {size} bytes)")
+                    else:
+                        results.append(f"- **{filename}** ({media_type})")
                     results.append(f"  {preview}")
+                elif result.content_format == "base64":
+                    if size:
+                        results.append(
+                            f"- **{filename}** ({media_type}, {size} bytes) [binary attachment omitted]"
+                        )
+                    else:
+                        results.append(f"- **{filename}** ({media_type}) [binary attachment omitted]")
                 else:
-                    results.append(f"- **{filename}** ({size} bytes)")
+                    if size:
+                        results.append(f"- **{filename}** ({media_type}, {size} bytes)")
+                    else:
+                        results.append(f"- **{filename}** ({media_type})")
             except Exception as e:
                 logger.warning(f"Failed to process {filename}: {e}")
-                results.append(f"- **{filename}** ({size} bytes) - [processing failed]")
+                if size:
+                    results.append(f"- **{filename}** ({media_type}, {size} bytes) - [processing failed]")
+                else:
+                    results.append(f"- **{filename}** ({media_type}) - [processing failed]")
         else:
-            results.append(f"- **{filename}** ({size} bytes)")
-    
+            if size:
+                results.append(f"- **{filename}** ({media_type}, {size} bytes)")
+            else:
+                results.append(f"- **{filename}** ({media_type})")
+
     if results:
-        return "**Attachments:**\n" + "\n".join(results) + "\n"
+        header = f"**Attachments:** (showing first {len(shown_attachments)} of {len(attachments)})"
+        if omitted_count > 0:
+            results.append(f"- ... and {omitted_count} more attachment(s) omitted")
+        return header + "\n" + "\n".join(results) + "\n"
+
     return ""
 
 
