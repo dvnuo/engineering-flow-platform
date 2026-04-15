@@ -635,6 +635,49 @@ async def test_api_chat_stream_resolves_portal_identity_from_headers(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_api_chat_stream_uses_trusted_portal_agent_name_for_agent_identity(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data)
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(
+        webchat.global_config,
+        "_config",
+        {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}},
+        raising=False,
+    )
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal", "X-Portal-Agent-Name": "Portal Agent"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-stream-agent-name"}
+
+    response = await webchat.api_chat_stream(_Request())
+    assert response.status == 200
+    assert captured["agent"].agent_name == "Portal Agent"
+
+
+@pytest.mark.asyncio
 async def test_api_chat_forwards_two_attached_images_when_max_prompt_images_is_two(monkeypatch, tmp_path):
     from src.gateway import webchat
     from src.utils.file_parser import storage
