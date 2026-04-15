@@ -27,7 +27,11 @@ from src.gateway.server import gateway
 from src.sessions.persistence import session_persistence
 from src.sessions.manager import session_manager
 from src.sessions.usage import usage_tracker
-from src.cron.mention_poller import start_polling, stop_polling, is_enabled
+from src.cron.subscription_watchers import (
+    start_subscription_watchers,
+    stop_subscription_watchers,
+    is_enabled as are_subscription_watchers_enabled,
+)
 from src.cron.jira_reconciliation import start_reconciliation, stop_reconciliation, is_enabled as is_jira_reconciliation_enabled
 from src.git.api import setup_git_user
 from src.utils.logger import setup_logging, get_logger
@@ -165,7 +169,7 @@ async def main() -> None:
     except Exception as e:
         logger.warning(f"Failed to setup git user | error={e}", exc_info=True)
 
-    # Initialize polling_task before gateway start
+    # Initialize watcher task before gateway start
     polling_task = None
     jira_reconciliation_task = None
     
@@ -173,13 +177,13 @@ async def main() -> None:
         await gateway.start()
         logger.info("Gateway server started")
         
-        # Start mention polling if enabled
-        if is_enabled():
-            logger.info("Starting mention polling...")
-            polling_task = asyncio.create_task(start_polling())
-            logger.info("Mention polling started")
+        # Start subscription watchers if enabled
+        if are_subscription_watchers_enabled():
+            logger.info("Starting subscription watchers...")
+            polling_task = asyncio.create_task(start_subscription_watchers())
+            logger.info("Subscription watchers started")
         else:
-            logger.debug("Mention polling is disabled")
+            logger.debug("Subscription watchers are disabled")
 
         if is_jira_reconciliation_enabled():
             logger.info("Starting Jira reconciliation...")
@@ -202,12 +206,12 @@ async def main() -> None:
     except Exception as e:
         logger.error(f"Unexpected error in main loop | error={e}", exc_info=True)
     finally:
-        # Stop mention polling
+        # Stop subscription watchers
         if polling_task and not polling_task.done():
-            logger.info("Stopping mention polling...")
-            await stop_polling()
+            logger.info("Stopping subscription watchers...")
+            await stop_subscription_watchers()
             await polling_task
-            logger.info("Mention polling stopped")
+            logger.info("Subscription watchers stopped")
 
         await _shutdown_jira_reconciliation_task(jira_reconciliation_task, logger)
         

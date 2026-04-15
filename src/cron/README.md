@@ -4,18 +4,31 @@
 
 ```
 cron/
-└── mention_poller.py  # Monitor @mentions across platforms
+├── subscription_watchers.py  # Main Portal-driven ingress watchers (poll/hybrid subscriptions)
+└── mention_poller.py         # Legacy mention poller (tests compatibility / old direct-execute path)
 ```
 
 ## Components
 
-### Mention Poller
-Monitors GitHub, Jira, and Confluence for @mentions and processes commands.
+### Subscription Watchers (Primary)
+Pulls enabled subscriptions/bindings from Portal internal export, discovers external signals, and posts normalized ingress events back to Portal.
+Poll ingress metadata includes subscription/binding provenance plus lookup-alias fields for Portal-side debugging.
+
+### Mention Poller (Legacy)
+Kept for backward compatibility and tests. Not used as the main runtime entrypoint.
 
 ## Usage
 
 ```python
-from src.cron.mention_poller import start_polling, stop_polling
+import asyncio
+from src.cron.subscription_watchers import (
+    start_subscription_watchers,
+    stop_subscription_watchers,
+)
 
-start_polling()
+async def main():
+    watcher_task = asyncio.create_task(start_subscription_watchers())
+    ...
+    await stop_subscription_watchers()
+    await watcher_task
 ```
