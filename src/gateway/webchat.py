@@ -119,6 +119,14 @@ def _extract_portal_identity(request: web.Request, data: Dict[str, Any]) -> tupl
     return resolved_user_id, resolved_user_name
 
 
+def _extract_trusted_portal_agent_name(request: web.Request) -> Optional[str]:
+    if not _is_trusted_portal_request(request):
+        return None
+    headers = getattr(request, "headers", {}) or {}
+    agent_name = _sanitize_portal_identity_value(headers.get("X-Portal-Agent-Name"))
+    return agent_name or None
+
+
 def _is_trusted_portal_request(request: web.Request) -> bool:
     headers = getattr(request, "headers", {}) or {}
     portal_source = str(headers.get("X-Portal-Author-Source") or "").strip().lower()
@@ -414,11 +422,15 @@ def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str]
                 return ""
         return str(value).strip()
 
+    trusted_portal_agent_name = _extract_trusted_portal_agent_name(request)
+
     raw_agent_id = app.get("agent_id") if hasattr(app, "get") else None
     raw_agent_name = app.get("agent_name") if hasattr(app, "get") else None
     if raw_agent_id:
         runtime_agent_id = str(raw_agent_id).strip() or None
-    if raw_agent_name:
+    if trusted_portal_agent_name:
+        runtime_agent_name = trusted_portal_agent_name
+    elif raw_agent_name:
         runtime_agent_name = str(raw_agent_name).strip() or None
 
     raw_agent = app.get("agent") if hasattr(app, "get") else None
@@ -455,9 +467,49 @@ def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str]
     return runtime_agent_id, runtime_agent_name
 
 
-def _message_with_display_blocks(message: Dict[str, Any]) -> Dict[str, Any]:
-    """Return assistant messages with normalized display blocks."""
-    return normalize_assistant_history_message(message)
+def _normalize_chat_history_message(
+    message: Dict[str, Any],
+    *,
+    portal_user_id: Optional[str],
+    portal_user_name: Optional[str],
+    runtime_agent_id: Optional[str],
+    runtime_agent_name: Optional[str],
+    trusted_portal_agent_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Normalize history message fields for display blocks and author metadata."""
+    if not isinstance(message, dict):
+        return message
+
+    normalized_message = dict(message)
+    role = normalized_message.get("role")
+
+    if role == "assistant":
+        normalized_message = normalize_assistant_history_message(normalized_message)
+        normalized_message.setdefault("author_type", "agent")
+        normalized_message.setdefault("author_source", "runtime")
+        if runtime_agent_id and not normalized_message.get("author_id"):
+            normalized_message["author_id"] = runtime_agent_id
+        if runtime_agent_name and not normalized_message.get("author_name"):
+            normalized_message["author_name"] = runtime_agent_name
+
+        if trusted_portal_agent_name and runtime_agent_name == trusted_portal_agent_name:
+            author_type = normalized_message.get("author_type")
+            author_id = normalized_message.get("author_id")
+            if (author_type in (None, "agent")) and (
+                not author_id or (runtime_agent_id and author_id == runtime_agent_id)
+            ):
+                normalized_message["author_name"] = runtime_agent_name
+        return normalized_message
+
+    if role == "user":
+        normalized_message.setdefault("author_type", "human")
+        if portal_user_id and not normalized_message.get("author_id"):
+            normalized_message["author_id"] = portal_user_id
+        if portal_user_name and not normalized_message.get("author_name"):
+            normalized_message["author_name"] = portal_user_name
+        if not normalized_message.get("author_source"):
+            normalized_message["author_source"] = "portal" if (portal_user_id or portal_user_name) else "runtime"
+    return normalized_message
 
 
 def load_template(filename: str) -> str:
@@ -1463,8 +1515,22 @@ async def api_load_session(request: web.Request) -> web.Response:
         if not session_info:
             return web.json_response({'error': 'Session not found'}, status=404)
         
+        portal_user_id, portal_user_name = _extract_portal_identity(request, {})
+        runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
+        trusted_portal_agent_name = _extract_trusted_portal_agent_name(request)
+
         history = session_info.get('history', [])
-        normalized_history = [_message_with_display_blocks(msg) for msg in history]
+        normalized_history = [
+            _normalize_chat_history_message(
+                msg,
+                portal_user_id=portal_user_id,
+                portal_user_name=portal_user_name,
+                runtime_agent_id=runtime_agent_id,
+                runtime_agent_name=runtime_agent_name,
+                trusted_portal_agent_name=trusted_portal_agent_name,
+            )
+            for msg in history
+        ]
         
         # Extract session name from first user message
         session_name = 'New Chat'

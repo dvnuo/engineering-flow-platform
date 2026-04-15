@@ -636,6 +636,9 @@ You have access to the following tools. When a user asks you to do something tha
             "response": content,
             "display_blocks": assistant_extra.get("display_blocks", []),
         }
+        for key in ("author_type", "author_id", "author_name", "author_source"):
+            if key in assistant_extra:
+                payload[key] = assistant_extra[key]
         if usage is not None:
             payload["usage"] = usage
         if user_message_id:
