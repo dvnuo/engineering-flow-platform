@@ -64,7 +64,16 @@ def build_webchat_response_payload(result: Optional[Dict[str, Any]], session_id:
         request_id = getattr(execution_result, "request_id", None) if execution_result is not None else None
     if request_id:
         response_payload["request_id"] = request_id
-    for key in ("user_message_id", "events", "_llm_debug", "reasoning"):
+    for key in (
+        "user_message_id",
+        "events",
+        "_llm_debug",
+        "reasoning",
+        "author_type",
+        "author_id",
+        "author_name",
+        "author_source",
+    ):
         if key in payload_result:
             response_payload[key] = payload_result[key]
     return response_payload

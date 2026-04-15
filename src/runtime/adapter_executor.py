@@ -12,7 +12,7 @@ from src.runtime.capability_adapters import (
     build_jira_adapter_capabilities,
     build_portal_adapter_capabilities,
 )
-from src.utils.internal_api_keys import build_portal_internal_api_headers, get_portal_internal_base_url
+from src.utils.portal_internal_api import build_portal_internal_api_headers, get_portal_internal_base_url
 
 
 def _event(event_type: str, state: str, detail_payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -111,6 +111,42 @@ async def test_process_normal_path_persists_user_and_assistant_author_metadata(m
 
 
 @pytest.mark.asyncio
+async def test_process_normal_path_persists_trusted_portal_assistant_display_name(monkeypatch):
+    from src.agents.core import Agent
+    from src.agents import core as core_mod
+
+    calls = []
+    monkeypatch.setattr(core_mod, "session_manager", _mk_session_manager(calls))
+
+    async def fake_fastlane(*args, **kwargs):
+        return None
+
+    async def fake_responses(**kwargs):
+        return {"content": "assistant reply", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr("src.agents.fastlane.process_fastlane_command", fake_fastlane)
+    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
+    monkeypatch.setattr("src.skills.get_tracer", lambda: FakeTracer())
+    monkeypatch.setattr("src.skills.skill_registry._initialized", True)
+    monkeypatch.setattr("src.skills.skill_registry.match_skill", lambda message: [])
+
+    agent = Agent(agent_id="agent-1", agent_name="Portal Agent")
+    await agent.process(
+        message="hello",
+        session_id="s1",
+        user_name="Runtime User",
+        portal_user_id="portal-user-1",
+        portal_user_name="Alice",
+    )
+
+    assistant_call = next(c for c in calls if c["role"] == "assistant")
+    assert assistant_call["author_name"] == "Portal Agent"
+    assert assistant_call["author_id"] == "agent-1"
+    assert assistant_call["author_type"] == "agent"
+    assert assistant_call["author_source"] == "runtime"
+
+
+@pytest.mark.asyncio
 async def test_process_fastlane_path_persists_assistant_author_metadata(monkeypatch):
     from src.agents.core import Agent
     from src.agents import core as core_mod

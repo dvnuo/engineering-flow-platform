@@ -125,6 +125,25 @@ def test_build_webchat_response_payload_backfills_request_id_from_execution_resu
     assert payload["request_id"] == "exec-123"
 
 
+def test_build_webchat_response_payload_forwards_author_metadata():
+    mod = _load_chat_payloads_module()
+    payload = mod.build_webchat_response_payload(
+        {
+            "response": "hello",
+            "author_name": "Portal Agent",
+            "author_id": "agent-1",
+            "author_type": "agent",
+            "author_source": "runtime",
+        },
+        "s-author",
+    )
+
+    assert payload["author_name"] == "Portal Agent"
+    assert payload["author_id"] == "agent-1"
+    assert payload["author_type"] == "agent"
+    assert payload["author_source"] == "runtime"
+
+
 def test_normalize_assistant_history_message_treats_whitespace_content_as_empty():
     mod = _load_chat_payloads_module()
     message = mod.normalize_assistant_history_message(

@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 from aiohttp import ClientSession
 
 from src.config import Config, config
-from src.utils.internal_api_keys import (
+from src.utils.portal_internal_api import (
     build_portal_internal_api_headers,
     get_portal_agent_id,
     get_portal_internal_base_url,
@@ -28,9 +28,15 @@ def _extract_runtime_profile_overlay(
       "runtime_profile_context": {
         "runtime_profile_id": "...",
         "revision": 3,
-        "config": {...}
+        "config": {...},
+        "...": "portal control-plane metadata (ignored by runtime)"
       }
     }
+
+    Runtime only consumes ``runtime_profile_context.config`` (overlay body)
+    and ``runtime_profile_context.revision``. Extra Portal-side ownership /
+    default metadata (for example ``owner_user_id`` or ``is_default``)
+    remains control-plane-only and is ignored here.
 
     Returns: (runtime_profile_id, revision, overlay_config, clear_flag)
     """

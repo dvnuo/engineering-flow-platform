@@ -19,7 +19,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from aiohttp import web, ContentTypeError
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -119,6 +119,14 @@ def _extract_portal_identity(request: web.Request, data: Dict[str, Any]) -> tupl
     return resolved_user_id, resolved_user_name
 
 
+def _extract_trusted_portal_agent_name(request: web.Request) -> Optional[str]:
+    if not _is_trusted_portal_request(request):
+        return None
+    headers = getattr(request, "headers", {}) or {}
+    agent_name = _sanitize_portal_identity_value(headers.get("X-Portal-Agent-Name"))
+    return agent_name or None
+
+
 def _is_trusted_portal_request(request: web.Request) -> bool:
     headers = getattr(request, "headers", {}) or {}
     portal_source = str(headers.get("X-Portal-Author-Source") or "").strip().lower()
@@ -210,10 +218,6 @@ def _parse_task_execute_request(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _build_internal_auth_error_response(status_code: int, message: str) -> web.Response:
-    return web.json_response({"error": message}, status=status_code)
-
-
 def _sanitize_trace_value(value: Any, max_len: int = 128) -> Optional[str]:
     if value is None:
         return None
@@ -221,6 +225,74 @@ def _sanitize_trace_value(value: Any, max_len: int = 128) -> Optional[str]:
     if not cleaned:
         return None
     return cleaned[:max_len]
+
+
+async def _collect_attached_images(
+    *,
+    session_id: str,
+    message: str,
+    attachments: Optional[List[str]],
+) -> List[str]:
+    max_prompt_images = global_config.get_max_prompt_images()
+    attached_images: List[str] = []
+    processed_file_ids: Set[str] = set()
+
+    async def process_file(file_id: str) -> bool:
+        if len(attached_images) >= max_prompt_images:
+            return False
+        if not isinstance(file_id, str) or not file_id:
+            return False
+        if file_id in processed_file_ids:
+            return False
+        try:
+            from src.utils.file_parser.storage import get_file_path
+            metadata = get_metadata(file_id)
+            if metadata.session_id and metadata.session_id != session_id:
+                logger.warning(f"[api_chat] File {file_id} belongs to different session")
+                return False
+            if metadata.content_type and metadata.content_type.startswith('image/'):
+                file_path = get_file_path(file_id)
+                if file_path.exists():
+                    import base64
+                    img_data = await asyncio.to_thread(
+                        lambda: base64.b64encode(file_path.read_bytes()).decode('utf-8')
+                    )
+                    ext = metadata.content_type.split('/')[-1]
+                    attached_images.append(f'data:image/{ext};base64,{img_data}')
+                    processed_file_ids.add(file_id)
+                    return True
+        except StoredFileNotFoundError:
+            logger.warning(f"[api_chat] File {file_id} not found")
+        except Exception as e:
+            logger.warning(f"[api_chat] Failed to process file {safe_preview(file_id, 80)}: {sanitize_exception_message(e)}")
+        return False
+
+    try:
+        refs = re.findall(r'@file_([a-zA-Z0-9]+)', message)
+        for short_id in dict.fromkeys(refs):
+            try:
+                metadata = get_metadata(short_id)
+                await process_file(metadata.file_id)
+            except (StoredFileNotFoundError, ValueError):
+                from src.utils.file_parser.storage import find_file_by_prefix
+                try:
+                    fid = find_file_by_prefix(short_id)
+                    if fid:
+                        await process_file(fid)
+                except ValueError as ve:
+                    logger.warning(f"[api_chat] Prefix lookup failed: {sanitize_exception_message(ve)}")
+            if len(attached_images) >= max_prompt_images:
+                break
+    except Exception as e:
+        logger.warning(f"[api_chat] @file_ parse error: {sanitize_exception_message(e)}")
+
+    if attachments and isinstance(attachments, list):
+        for file_id in attachments:
+            await process_file(file_id)
+            if len(attached_images) >= max_prompt_images:
+                break
+
+    return attached_images
 
 
 def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]]:
@@ -237,14 +309,6 @@ def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]
     if not trace["span_id"]:
         trace["span_id"] = uuid.uuid4().hex[:16]
     return trace
-
-
-def _authorize_internal_runtime_request(request: web.Request) -> Optional[web.Response]:
-    # This helper is intentionally a no-op.
-    # Keep it as a compatibility seam so existing internal routes
-    # can continue calling it without branching changes.
-    _ = request
-    return None
 
 
 def _json_compatible(value: Any) -> Any:
@@ -358,11 +422,15 @@ def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str]
                 return ""
         return str(value).strip()
 
+    trusted_portal_agent_name = _extract_trusted_portal_agent_name(request)
+
     raw_agent_id = app.get("agent_id") if hasattr(app, "get") else None
     raw_agent_name = app.get("agent_name") if hasattr(app, "get") else None
     if raw_agent_id:
         runtime_agent_id = str(raw_agent_id).strip() or None
-    if raw_agent_name:
+    if trusted_portal_agent_name:
+        runtime_agent_name = trusted_portal_agent_name
+    elif raw_agent_name:
         runtime_agent_name = str(raw_agent_name).strip() or None
 
     raw_agent = app.get("agent") if hasattr(app, "get") else None
@@ -399,9 +467,49 @@ def _resolve_runtime_agent_identity(request: web.Request) -> tuple[Optional[str]
     return runtime_agent_id, runtime_agent_name
 
 
-def _message_with_display_blocks(message: Dict[str, Any]) -> Dict[str, Any]:
-    """Return assistant messages with normalized display blocks."""
-    return normalize_assistant_history_message(message)
+def _normalize_chat_history_message(
+    message: Dict[str, Any],
+    *,
+    portal_user_id: Optional[str],
+    portal_user_name: Optional[str],
+    runtime_agent_id: Optional[str],
+    runtime_agent_name: Optional[str],
+    trusted_portal_agent_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Normalize history message fields for display blocks and author metadata."""
+    if not isinstance(message, dict):
+        return message
+
+    normalized_message = dict(message)
+    role = normalized_message.get("role")
+
+    if role == "assistant":
+        normalized_message = normalize_assistant_history_message(normalized_message)
+        normalized_message.setdefault("author_type", "agent")
+        normalized_message.setdefault("author_source", "runtime")
+        if runtime_agent_id and not normalized_message.get("author_id"):
+            normalized_message["author_id"] = runtime_agent_id
+        if runtime_agent_name and not normalized_message.get("author_name"):
+            normalized_message["author_name"] = runtime_agent_name
+
+        if trusted_portal_agent_name and runtime_agent_name == trusted_portal_agent_name:
+            author_type = normalized_message.get("author_type")
+            author_id = normalized_message.get("author_id")
+            if (author_type in (None, "agent")) and (
+                not author_id or (runtime_agent_id and author_id == runtime_agent_id)
+            ):
+                normalized_message["author_name"] = runtime_agent_name
+        return normalized_message
+
+    if role == "user":
+        normalized_message.setdefault("author_type", "human")
+        if portal_user_id and not normalized_message.get("author_id"):
+            normalized_message["author_id"] = portal_user_id
+        if portal_user_name and not normalized_message.get("author_name"):
+            normalized_message["author_name"] = portal_user_name
+        if not normalized_message.get("author_source"):
+            normalized_message["author_source"] = "portal" if (portal_user_id or portal_user_name) else "runtime"
+    return normalized_message
 
 
 def load_template(filename: str) -> str:
@@ -526,66 +634,11 @@ async def api_chat(request: web.Request) -> web.Response:
         
         logger.info(f"[api_chat] Processing message for session: {session_id}")
         
-        # Process attachments from both @file_ references (backward compat) and attachments field
-        attached_images = []
-        
-        # Helper to process a single file_id
-        async def process_file(file_id: str) -> bool:
-            """Process a file_id and add to attached_images if valid. Returns True if processed."""
-            nonlocal attached_images
-            # Only process first image to avoid large payloads
-            if attached_images:
-                return True
-            try:
-                from src.utils.file_parser.storage import get_metadata, get_file_path, StoredFileNotFoundError
-                metadata = get_metadata(file_id)
-                # Validate session ownership
-                if metadata.session_id and metadata.session_id != session_id:
-                    logger.warning(f"[api_chat] File {file_id} belongs to different session")
-                    return False
-                # Check if it's an image
-                if metadata.content_type and metadata.content_type.startswith('image/'):
-                    file_path = get_file_path(file_id)
-                    if file_path.exists():
-                        import base64
-                        img_data = await asyncio.to_thread(
-                            lambda: base64.b64encode(file_path.read_bytes()).decode('utf-8')
-                        )
-                        ext = metadata.content_type.split('/')[-1]
-                        attached_images.append(f'data:image/{ext};base64,{img_data}')
-                        return True
-            except StoredFileNotFoundError:
-                logger.warning(f"[api_chat] File {file_id} not found")
-            except Exception as e:
-                logger.warning(f"[api_chat] Failed to process file {safe_preview(file_id, 80)}: {sanitize_exception_message(e)}")
-            return False
-        
-        # 1. Parse @file_ references from message (backward compatibility)
-        try:
-            refs = re.findall(r'@file_([a-zA-Z0-9]+)', message)
-            for short_id in set(refs):
-                # Try exact match first, then prefix match
-                try:
-                    from src.utils.file_parser.storage import get_metadata
-                    metadata = get_metadata(short_id)
-                    if await process_file(metadata.file_id):
-                        break  # Stop after first image
-                except (StoredFileNotFoundError, ValueError):
-                    # Try prefix match using public helper (handles short/ambiguous prefixes)
-                    from src.utils.file_parser.storage import find_file_by_prefix
-                    try:
-                        fid = find_file_by_prefix(short_id)
-                        if fid:
-                            await process_file(fid)
-                    except ValueError as ve:
-                        logger.warning(f"[api_chat] Prefix lookup failed: {sanitize_exception_message(ve)}")
-        except Exception as e:
-            logger.warning(f"[api_chat] @file_ parse error: {sanitize_exception_message(e)}")
-        
-        # 2. Process attachments from new attachments field
-        if attachments and isinstance(attachments, list):
-            for file_id in attachments:
-                await process_file(file_id)
+        attached_images = await _collect_attached_images(
+            session_id=session_id,
+            message=message,
+            attachments=attachments if isinstance(attachments, list) else None,
+        )
         
         # Set placeholder message if only images
         if attached_images and not message.strip():
@@ -815,13 +868,22 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         data = await request.json()
         message = (data.get('message') or '').strip()
         session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
+        attachments = data.get('attachments')
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
         client_request_id = _extract_trusted_client_request_id(request, data)
         request_id = client_request_id or f"chat-{uuid.uuid4()}"
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
 
-        if not message:
+        attached_images = await _collect_attached_images(
+            session_id=session_id,
+            message=message,
+            attachments=attachments if isinstance(attachments, list) else None,
+        )
+        if attached_images and not message.strip():
+            message = "[image]"
+
+        if not message.strip() and not attached_images:
             response = web.json_response({'error': 'Empty message'}, status=400)
             return response
 
@@ -880,6 +942,8 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 portal_user_id=portal_user_id,
                 portal_user_name=portal_user_name,
                 stream_callback=event_queue,
+                attached_images=attached_images if attached_images else None,
+                attachments=attachments if attachments else None,
                 request_path="/api/chat/stream",
                 execution_metadata=execution_metadata,
                 agent_id=runtime_agent_id,
@@ -977,9 +1041,6 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
         path="/api/tasks/execute",
     )
     try:
-        auth_error = _authorize_internal_runtime_request(request)
-        if auth_error is not None:
-            return auth_error
         data = await request.json()
         parsed = _parse_task_execute_request(data)
         set_log_context(
@@ -1278,9 +1339,6 @@ async def api_task_status(request: web.Request) -> web.Response:
         path="/api/tasks/{task_id}",
     )
     try:
-        auth_error = _authorize_internal_runtime_request(request)
-        if auth_error is not None:
-            return auth_error
         task_id = str(request.match_info.get("task_id") or "").strip()
         if not task_id:
             return web.json_response({"error": "task_id is required"}, status=400)
@@ -1327,9 +1385,6 @@ async def api_capabilities(request: web.Request) -> web.Response:
     GET /api/capabilities?type=...&enabled=true|false&capability_id=...
     """
     try:
-        auth_error = _authorize_internal_runtime_request(request)
-        if auth_error is not None:
-            return auth_error
         registry = get_capability_registry()
         snapshot = (
             registry.export_catalog_snapshot()
@@ -1460,8 +1515,22 @@ async def api_load_session(request: web.Request) -> web.Response:
         if not session_info:
             return web.json_response({'error': 'Session not found'}, status=404)
         
+        portal_user_id, portal_user_name = _extract_portal_identity(request, {})
+        runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
+        trusted_portal_agent_name = _extract_trusted_portal_agent_name(request)
+
         history = session_info.get('history', [])
-        normalized_history = [_message_with_display_blocks(msg) for msg in history]
+        normalized_history = [
+            _normalize_chat_history_message(
+                msg,
+                portal_user_id=portal_user_id,
+                portal_user_name=portal_user_name,
+                runtime_agent_id=runtime_agent_id,
+                runtime_agent_name=runtime_agent_name,
+                trusted_portal_agent_name=trusted_portal_agent_name,
+            )
+            for msg in history
+        ]
         
         # Extract session name from first user message
         session_name = 'New Chat'
@@ -2142,11 +2211,8 @@ async def api_get_config(request: web.Request) -> web.Response:
 
 async def api_apply_runtime_profile(request: web.Request) -> web.Response:
     """Apply runtime managed profile overlay from trusted Portal control-plane request."""
-    auth_error = _authorize_internal_runtime_request(request)
-    if auth_error is not None:
-        return auth_error
     if not _is_trusted_portal_request(request):
-        return _build_internal_auth_error_response(403, "Forbidden")
+        return web.json_response({"error": "Forbidden"}, status=403)
 
     try:
         data = await request.json()

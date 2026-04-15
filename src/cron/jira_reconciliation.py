@@ -11,7 +11,7 @@ from aiohttp import ClientSession
 
 from src.channels.jira import jira_channel
 from src.config import config
-from src.utils.internal_api_keys import build_portal_internal_api_headers, get_portal_internal_base_url
+from src.utils.portal_internal_api import build_portal_internal_api_headers, get_portal_internal_base_url
 
 logger = logging.getLogger(__name__)
 

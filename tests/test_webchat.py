@@ -13,7 +13,6 @@ except ImportError:
     pytest.skip("WebChat module not available", allow_module_level=True)
 
 
-INTERNAL_API_KEY = "runtime-internal-key"
 INTERNAL_HEADERS = {}
 
 
@@ -221,24 +220,6 @@ class _HeaderOnlyRequest:
         self.headers = headers or {}
 
 
-def test_authorize_runtime_request_returns_none_without_extra_headers():
-    from src.gateway import webchat
-
-    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest()) is None
-
-
-def test_authorize_runtime_request_returns_none_with_unrelated_header():
-    from src.gateway import webchat
-
-    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Debug-Bypass": "wrong"})) is None
-
-
-def test_authorize_runtime_request_returns_none_with_any_unrelated_header():
-    from src.gateway import webchat
-
-    assert webchat._authorize_internal_runtime_request(_HeaderOnlyRequest({"X-Unused-Sideband": "anything"})) is None
-
-
 def test_is_trusted_portal_request_true_for_portal_source():
     from src.gateway import webchat
 
@@ -257,14 +238,14 @@ def test_is_trusted_portal_request_false_for_non_portal_source():
     assert webchat._is_trusted_portal_request(_HeaderOnlyRequest({"X-Portal-Author-Source": "runtime"})) is False
 
 
-def test_is_trusted_portal_request_ignores_unrelated_internal_like_headers():
+def test_is_trusted_portal_request_depends_only_on_portal_source_marker():
     from src.gateway import webchat
 
     trusted = webchat._is_trusted_portal_request(
-        _HeaderOnlyRequest({"X-Portal-Author-Source": "portal", "X-Debug-Bypass": "wrong"})
+        _HeaderOnlyRequest({"X-Portal-Author-Source": "portal", "X-Arbitrary-Header": "ignored"})
     )
     untrusted = webchat._is_trusted_portal_request(
-        _HeaderOnlyRequest({"X-Portal-Author-Source": "runtime", "X-Debug-Bypass": "portal-secret"})
+        _HeaderOnlyRequest({"X-Portal-Author-Source": "runtime", "X-Arbitrary-Header": "unused-value"})
     )
     assert trusted is True
     assert untrusted is False
@@ -575,6 +556,46 @@ async def test_api_chat_resolves_portal_identity_from_headers(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_api_chat_uses_trusted_portal_agent_name_for_assistant_author(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {
+            "response": "ok",
+            "usage": {},
+            "author_name": kwargs["agent"].agent_name,
+            "author_id": kwargs["agent"].agent_id,
+            "author_type": "agent",
+            "author_source": "runtime",
+            "_execution_result": object(),
+        }
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal", "X-Portal-Agent-Name": "Portal Agent"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-portal-agent-name"}
+
+    resp = await webchat.api_chat(_Request())
+    payload = json.loads(resp.text)
+    assert resp.status == 200
+    assert captured["agent"].agent_name == "Portal Agent"
+    assert payload["author_name"] == "Portal Agent"
+    assert payload["author_id"] == captured["agent"].agent_id
+
+
+@pytest.mark.asyncio
 async def test_api_chat_stream_resolves_portal_identity_from_headers(monkeypatch):
     from src.gateway import webchat
 
@@ -611,6 +632,200 @@ async def test_api_chat_stream_resolves_portal_identity_from_headers(monkeypatch
     assert resp.status == 200
     assert captured["portal_user_id"] == "stream-user"
     assert captured["portal_user_name"] == "stream-name"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_uses_trusted_portal_agent_name_for_agent_identity(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data)
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(
+        webchat.global_config,
+        "_config",
+        {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}},
+        raising=False,
+    )
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal", "X-Portal-Agent-Name": "Portal Agent"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-stream-agent-name"}
+
+    response = await webchat.api_chat_stream(_Request())
+    assert response.status == 200
+    assert captured["agent"].agent_name == "Portal Agent"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_forwards_two_attached_images_when_max_prompt_images_is_two(monkeypatch, tmp_path):
+    from src.gateway import webchat
+    from src.utils.file_parser import storage
+
+    captured = {}
+    one = tmp_path / "one.png"
+    two = tmp_path / "two.png"
+    one.write_bytes(b"one")
+    two.write_bytes(b"two")
+
+    class _Meta:
+        def __init__(self, file_id: str, session_id: str):
+            self.file_id = file_id
+            self.session_id = session_id
+            self.content_type = "image/png"
+
+    metadata_map = {"f1": _Meta("f1", "s1"), "f2": _Meta("f2", "s1")}
+    file_map = {"f1": one, "f2": two}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai", "max_prompt_images": 2}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat, "get_metadata", lambda file_id: metadata_map[file_id])
+    monkeypatch.setattr(storage, "get_file_path", lambda file_id: file_map[file_id])
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "compare", "session_id": "s1", "attachments": ["f1", "f2"]}
+
+    response = await webchat.api_chat(_Request())
+    assert response.status == 200
+    assert len(captured["attached_images"]) == 2
+    assert captured["attached_images"][0].startswith("data:image/png;base64,")
+    assert captured["attached_images"][1].startswith("data:image/png;base64,")
+    assert captured["attached_images"][0].endswith("b25l")
+    assert captured["attached_images"][1].endswith("dHdv")
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_forwards_two_attached_images_when_max_prompt_images_is_two(monkeypatch, tmp_path):
+    from src.gateway import webchat
+    from src.utils.file_parser import storage
+
+    captured = {}
+    one = tmp_path / "one.png"
+    two = tmp_path / "two.png"
+    one.write_bytes(b"one")
+    two.write_bytes(b"two")
+
+    class _Meta:
+        def __init__(self, file_id: str, session_id: str):
+            self.file_id = file_id
+            self.session_id = session_id
+            self.content_type = "image/png"
+
+    metadata_map = {"f1": _Meta("f1", "s2"), "f2": _Meta("f2", "s2")}
+    file_map = {"f1": one, "f2": two}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data)
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai", "max_prompt_images": 2}}, raising=False)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+    monkeypatch.setattr(webchat, "get_metadata", lambda file_id: metadata_map[file_id])
+    monkeypatch.setattr(storage, "get_file_path", lambda file_id: file_map[file_id])
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "compare", "session_id": "s2", "attachments": ["f1", "f2"]}
+
+    response = await webchat.api_chat_stream(_Request())
+    assert response.status == 200
+    assert len(captured["attached_images"]) == 2
+    assert captured["attached_images"][0].endswith("b25l")
+    assert captured["attached_images"][1].endswith("dHdv")
+    assert captured["attachments"] == ["f1", "f2"]
+
+
+@pytest.mark.asyncio
+async def test_api_chat_defaults_to_one_image_when_max_prompt_images_is_unset(monkeypatch, tmp_path):
+    from src.gateway import webchat
+    from src.utils.file_parser import storage
+
+    captured = {}
+    one = tmp_path / "one.png"
+    two = tmp_path / "two.png"
+    one.write_bytes(b"one")
+    two.write_bytes(b"two")
+
+    class _Meta:
+        def __init__(self, file_id: str, session_id: str):
+            self.file_id = file_id
+            self.session_id = session_id
+            self.content_type = "image/png"
+
+    metadata_map = {"f1": _Meta("f1", "s1"), "f2": _Meta("f2", "s1")}
+    file_map = {"f1": one, "f2": two}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat, "get_metadata", lambda file_id: metadata_map[file_id])
+    monkeypatch.setattr(storage, "get_file_path", lambda file_id: file_map[file_id])
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "compare", "session_id": "s1", "attachments": ["f1", "f2"]}
+
+    response = await webchat.api_chat(_Request())
+    assert response.status == 200
+    assert len(captured["attached_images"]) == 1
 
 
 @pytest.mark.asyncio
@@ -1426,7 +1641,7 @@ async def test_api_capabilities_filters_by_capability_id_and_type(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_capabilities_does_not_depend_on_unrelated_headers(monkeypatch):
+async def test_api_capabilities_accepts_default_request_headers(monkeypatch):
     from src.gateway import webchat
 
     class _Registry:
@@ -1444,7 +1659,7 @@ async def test_api_capabilities_does_not_depend_on_unrelated_headers(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_api_capabilities_ignores_unrelated_header(monkeypatch):
+async def test_api_capabilities_ignores_unrecognized_header(monkeypatch):
     from src.gateway import webchat
 
 
@@ -1455,7 +1670,7 @@ async def test_api_capabilities_ignores_unrelated_header(monkeypatch):
     monkeypatch.setattr(webchat, "get_capability_registry", lambda: _Registry())
 
     class _Request:
-        headers = {"X-Debug-Bypass": "bad-key"}
+        headers = {"X-Arbitrary-Header": "ignored"}
         query = {}
 
     response = await webchat.api_capabilities(_Request())
@@ -1463,7 +1678,7 @@ async def test_api_capabilities_ignores_unrelated_header(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_does_not_require_unrelated_header(monkeypatch):
+async def test_api_tasks_execute_accepts_default_request_headers(monkeypatch):
     from src.gateway import webchat
 
     webchat.runtime_task_tracker.reset()
@@ -1472,7 +1687,7 @@ async def test_api_tasks_execute_does_not_require_unrelated_header(monkeypatch):
         headers = {}
 
         async def json(self):
-            return {"task_id": "task-no-key-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
+            return {"task_id": "task-open-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
 
     async def _fake_execute_runtime_task_request(**kwargs):
         return type(
@@ -1499,7 +1714,7 @@ async def test_api_tasks_execute_does_not_require_unrelated_header(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_not_configured_does_not_log_auth_rejection(monkeypatch, caplog):
+async def test_api_tasks_execute_not_configured_still_accepts_request(monkeypatch):
     from src.gateway import webchat
 
     monkeypatch.setattr(webchat.global_config, "get", lambda *_args, **_kwargs: "")
@@ -1509,7 +1724,7 @@ async def test_api_tasks_execute_not_configured_does_not_log_auth_rejection(monk
         headers = {"X-Trace-Id": "trace-auth-503", "X-Portal-Dispatch-Id": "dispatch-1"}
 
         async def json(self):
-            return {"task_id": "task-no-key-2", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
+            return {"task_id": "task-open-2", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
 
     async def _fake_execute_runtime_task_request(**kwargs):
         return type(
@@ -1530,16 +1745,14 @@ async def test_api_tasks_execute_not_configured_does_not_log_auth_rejection(monk
     monkeypatch.setattr(webchat, "execute_runtime_task_request", _fake_execute_runtime_task_request)
     monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
 
-    with caplog.at_level("WARNING"):
-        response = await webchat.api_tasks_execute(_Request())
+    response = await webchat.api_tasks_execute(_Request())
 
     assert response.status == 202
-    assert "auth rejected" not in caplog.text.lower()
     await spawned[0]
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_ignores_missing_unrelated_header(monkeypatch):
+async def test_api_tasks_execute_accepts_empty_headers(monkeypatch):
     from src.gateway import webchat
 
     webchat.runtime_task_tracker.reset()
@@ -1548,7 +1761,7 @@ async def test_api_tasks_execute_ignores_missing_unrelated_header(monkeypatch):
         headers = {}
 
         async def json(self):
-            return {"task_id": "task-key-missing-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
+            return {"task_id": "task-default-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
 
     async def _fake_execute_runtime_task_request(**kwargs):
         return type(
@@ -1575,16 +1788,16 @@ async def test_api_tasks_execute_ignores_missing_unrelated_header(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_tasks_execute_ignores_unrelated_header(monkeypatch):
+async def test_api_tasks_execute_ignores_unrecognized_header(monkeypatch):
     from src.gateway import webchat
 
     webchat.runtime_task_tracker.reset()
 
     class _Request:
-        headers = {"X-Debug-Bypass": "wrong"}
+        headers = {"X-Arbitrary-Header": "ignored"}
 
         async def json(self):
-            return {"task_id": "task-key-wrong-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
+            return {"task_id": "task-sideband-1", "task_type": "adapter_action_task", "input_payload": {"action_id": "jira.transition"}}
 
     async def _fake_execute_runtime_task_request(**kwargs):
         return type(
@@ -2042,7 +2255,7 @@ async def test_api_tasks_execute_accepts_without_waiting_for_terminal_result(mon
 
 
 @pytest.mark.asyncio
-async def test_api_task_status_pending_and_auth(monkeypatch):
+async def test_api_task_status_pending_accepts_unrecognized_header(monkeypatch):
     from src.gateway import webchat
     webchat.runtime_task_tracker.reset()
 
@@ -2064,7 +2277,7 @@ async def test_api_task_status_pending_and_auth(monkeypatch):
     await webchat.api_tasks_execute(_ExecuteRequest())
 
     class _StatusBadAuth:
-        headers = {"X-Debug-Bypass": "bad"}
+        headers = {"X-Arbitrary-Header": "ignored"}
         match_info = {"task_id": "task-pending-1"}
 
     bad_auth_response = await webchat.api_task_status(_StatusBadAuth())
@@ -2255,6 +2468,75 @@ async def test_api_load_session_backfills_assistant_display_blocks(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_api_load_session_normalizes_assistant_name_from_trusted_portal_header(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _request: ("agent-1", "Portal Agent"))
+
+    async def _fake_get_session(_session_id):
+        return {
+            "history": [
+                {
+                    "role": "assistant",
+                    "content": "hello from history",
+                    "author_id": "agent-1",
+                    "author_name": "Runtime Alias",
+                    "author_type": "agent",
+                    "author_source": "runtime",
+                },
+            ],
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+
+    class _Request:
+        match_info = {"session_id": "s-load-agent-name"}
+        headers = {"X-Portal-Author-Source": "portal", "X-Portal-Agent-Name": "Portal Agent"}
+        app = {}
+
+    resp = await webchat.api_load_session(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["messages"][0]["author_name"] == "Portal Agent"
+
+
+@pytest.mark.asyncio
+async def test_api_load_session_backfills_user_author_from_trusted_portal_headers(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+
+    async def _fake_get_session(_session_id):
+        return {
+            "history": [
+                {"role": "user", "content": "hello from history"},
+            ],
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+
+    class _Request:
+        match_info = {"session_id": "s-load-user"}
+        headers = {
+            "X-Portal-Author-Source": "portal",
+            "X-Portal-User-Id": "user-1",
+            "X-Portal-User-Name": "Alice",
+        }
+        app = {}
+
+    resp = await webchat.api_load_session(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    user_msg = payload["messages"][0]
+    assert user_msg["author_name"] == "Alice"
+    assert user_msg["author_id"] == "user-1"
+    assert user_msg["author_type"] == "human"
+
+
+@pytest.mark.asyncio
 async def test_api_chat_preserves_structured_display_blocks(monkeypatch):
     from src.gateway import webchat
 
@@ -2392,6 +2674,10 @@ def test_agent_assistant_display_helpers_minimal_payload():
     assert payload["response"] == "hello"
     assert payload["display_blocks"][0]["content"] == "hello"
     assert payload["user_message_id"] == "u1"
+    assert payload["author_name"] == "Assistant"
+    assert payload["author_id"] == "agent-1"
+    assert payload["author_type"] == "agent"
+    assert payload["author_source"] == "runtime"
 
 
 def test_webchat_js_passes_display_blocks_in_both_session_render_paths():
