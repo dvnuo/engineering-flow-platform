@@ -233,13 +233,10 @@ async def _collect_attached_images(
     message: str,
     attachments: Optional[List[str]],
 ) -> List[str]:
-    max_prompt_images = global_config.get_max_prompt_images()
     attached_images: List[str] = []
     processed_file_ids: Set[str] = set()
 
     async def process_file(file_id: str) -> bool:
-        if len(attached_images) >= max_prompt_images:
-            return False
         if not isinstance(file_id, str) or not file_id:
             return False
         if file_id in processed_file_ids:
@@ -281,16 +278,12 @@ async def _collect_attached_images(
                         await process_file(fid)
                 except ValueError as ve:
                     logger.warning(f"[api_chat] Prefix lookup failed: {sanitize_exception_message(ve)}")
-            if len(attached_images) >= max_prompt_images:
-                break
     except Exception as e:
         logger.warning(f"[api_chat] @file_ parse error: {sanitize_exception_message(e)}")
 
     if attachments and isinstance(attachments, list):
         for file_id in attachments:
             await process_file(file_id)
-            if len(attached_images) >= max_prompt_images:
-                break
 
     return attached_images
 

@@ -151,7 +151,6 @@ def _format_content(content: str, prefix: str = "", max_length: int = 500) -> st
 def _inject_attached_images_into_last_user_message(
     messages: List[Dict[str, Any]],
     attached_images: Optional[List[str]],
-    max_prompt_images: int,
 ) -> int:
     if not attached_images or not messages:
         return 0
@@ -176,16 +175,18 @@ def _inject_attached_images_into_last_user_message(
         else:
             msg_content = [{"type": "input_text", "text": str(user_content)}]
 
-        existing_images = sum(
-            1 for block in msg_content
-            if isinstance(block, dict) and block.get("type") == "input_image"
-        )
-        remaining_slots = max_prompt_images - existing_images
+        existing_image_urls = {
+            block.get("image_url")
+            for block in msg_content
+            if isinstance(block, dict) and block.get("type") == "input_image" and block.get("image_url")
+        }
         added_count = 0
-        if remaining_slots > 0:
-            for img in attached_images[:remaining_slots]:
-                msg_content.append({"type": "input_image", "image_url": img})
-                added_count += 1
+        for img in attached_images:
+            if img in existing_image_urls:
+                continue
+            msg_content.append({"type": "input_image", "image_url": img})
+            existing_image_urls.add(img)
+            added_count += 1
 
         messages[i] = {"role": "user", "content": msg_content}
         return added_count
@@ -1023,17 +1024,14 @@ You have access to the following tools. When a user asks you to do something tha
                 ),
             )
         
-        max_prompt_images = config.get_max_prompt_images()
         added_images = _inject_attached_images_into_last_user_message(
             messages,
             attached_images,
-            max_prompt_images,
         )
         if added_images:
             logger.info(
-                "[Agent] Attached %s image(s) to user message (Responses format, max_prompt_images=%s)",
+                "[Agent] Attached %s image(s) to user message (Responses format)",
                 added_images,
-                max_prompt_images,
             )
 
         # Convert messages to input_items for Responses API
