@@ -71,6 +71,85 @@ async def test_run_once_fetches_subscriptions_and_bindings_with_poll_filter(monk
 
 
 @pytest.mark.asyncio
+async def test_run_once_normalizes_portal_self_service_export_shape(monkeypatch):
+    from src.cron.subscription_watchers import SubscriptionWatcherManager
+
+    manager = SubscriptionWatcherManager()
+    polled = []
+
+    async def _fake_get_json(path, *, session=None):
+        if path.startswith("/api/internal/external-event-subscriptions"):
+            return {
+                "items": [
+                    {
+                        "id": "s-gh-review",
+                        "agent_id": "agent-1",
+                        "source_type": "github",
+                        "event_type": "pull_request_review_requested",
+                        "mode": "poll",
+                        "source_kind": "github.pull_request_review_requested",
+                        "enabled": True,
+                        "config_json": '{"allowed_repos": ["octo/portal"]}',
+                        "scope_json": '{"repos": ["octo/portal"]}',
+                        "matcher_json": '{"review_states": ["changes_requested"]}',
+                        # Portal self-service control-plane/UI metadata should be ignored by runtime watcher.
+                        "read_only": True,
+                        "display_name": "Owner managed GitHub review watcher",
+                    },
+                    {
+                        "id": "s-jira-mention",
+                        "agent_id": "agent-1",
+                        "provider_type": "jira",
+                        "event_type": "mention",
+                        "mode": "hybrid",
+                        "source_kind": "jira.mention",
+                        "enabled": True,
+                        "target_ref": "ENG",
+                        "routing_json": '{"queue":"external_events"}',
+                        "poll_profile_json": '{"lookback_minutes": 90}',
+                    },
+                ]
+            }
+        if path == "/api/internal/agent-identity-bindings?enabled=true":
+            return {
+                "items": [
+                    {"id": "b-gh", "agent_id": "agent-1", "system_type": "github", "username": "reviewer1"},
+                    {"id": "b-jira", "agent_id": "agent-1", "provider_type": "jira", "username": "jira-user"},
+                ]
+            }
+        raise AssertionError("unexpected path")
+
+    async def _fake_poll_subscription(subscription, bindings, *, session=None):
+        polled.append((subscription, bindings))
+
+    monkeypatch.setattr("src.cron.subscription_watchers.is_portal_internal_configured", lambda: True)
+    monkeypatch.setattr(manager, "_get_json", _fake_get_json)
+    monkeypatch.setattr(manager, "_poll_subscription", _fake_poll_subscription)
+    monkeypatch.setattr(manager, "_agent_id", lambda: "agent-1")
+
+    await manager.run_once()
+
+    assert len(polled) == 2
+
+    github_subscription, github_bindings = polled[0]
+    assert github_subscription.id == "s-gh-review"
+    assert github_subscription.source_type == "github"
+    assert github_subscription.scope == {"repos": ["octo/portal"]}
+    assert github_subscription.matcher == {"review_states": ["changes_requested"]}
+    assert github_subscription.routing == {}
+    assert github_subscription.poll_profile == {}
+    assert [b["id"] for b in github_bindings] == ["b-gh"]
+
+    jira_subscription, jira_bindings = polled[1]
+    assert jira_subscription.id == "s-jira-mention"
+    assert jira_subscription.source_type == "jira"
+    assert jira_subscription.routing == {"queue": "external_events"}
+    assert jira_subscription.poll_profile == {"lookback_minutes": 90}
+    assert jira_subscription.matcher == {}
+    assert [b["id"] for b in jira_bindings] == ["b-jira"]
+
+
+@pytest.mark.asyncio
 async def test_poll_github_review_requests_posts_normalized_ingress(monkeypatch):
     from src.cron.subscription_watchers import SubscriptionWatcherManager, WatchSubscription
 
