@@ -42,16 +42,13 @@ async def test_confluence_get_page_by_url_processes_attachments_with_instance_ch
 
         assert "# Test Page" in result
         assert "**Attachments:**" in result
-        assert "timeout 30s" in result
+        assert "image attachment not auto-expanded" in result
 
         mock_channel.get_instance_client.assert_called_once_with(
             url="https://right.example/wiki/spaces/SPACE/pages/123456/Page-Title",
             strict=True,
         )
-        mock_download.assert_called_once()
-        call_kwargs = mock_download.call_args.kwargs
-        assert call_kwargs["auth_header"] == instance_channel._auth_header
-        assert call_kwargs["url"].startswith("https://right.example/wiki/")
+        mock_download.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -88,7 +85,8 @@ async def test_confluence_get_page_does_not_emit_raw_base64_for_image_attachment
         assert "**Attachments:**" in result
         assert "image.png" in result
         assert "VERY_LONG_BLOB" not in result
-        assert "no text could be extracted" in result
+        assert "image attachment not auto-expanded" in result
+        mock_download.assert_not_called()
 
 
 @pytest.mark.asyncio
