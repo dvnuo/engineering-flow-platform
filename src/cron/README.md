@@ -4,15 +4,15 @@
 
 ```
 cron/
-├── subscription_watchers.py  # Main Portal-driven ingress watchers (poll/hybrid subscriptions)
+├── subscription_watchers.py  # Main runtime-profile automation ingress watchers
 └── mention_poller.py         # Legacy mention poller (tests compatibility / old direct-execute path)
 ```
 
 ## Components
 
-### Subscription Watchers (Primary)
-Pulls enabled subscriptions/bindings from Portal internal export, discovers external signals, and posts normalized ingress events back to Portal.
-Poll ingress metadata includes subscription/binding provenance plus lookup-alias fields for Portal-side debugging.
+### Subscription Watchers (Primary runtime automation watcher)
+Pulls runtime context + identity bindings from Portal internal APIs, builds in-memory automation rules, discovers external signals, and ingests normalized external events back to Portal.
+Poll ingress metadata is minimal and focused on trigger/binding/source traceability.
 
 ### Mention Poller (Legacy)
 Kept for backward compatibility and tests. Not used as the main runtime entrypoint.

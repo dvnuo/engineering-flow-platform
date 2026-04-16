@@ -575,6 +575,22 @@ def test_governance_context_matches_canonical_contract_for_triggered_event_task(
     assert gov_context["capability_id"] == plan["primary_capability_id"]
 
 
+def test_governance_context_triggered_event_task_resolves_with_portal_metadata():
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "triggered_event_task"},
+        metadata={
+            "source_kind": "jira.assigned",
+            "portal_task_source": "jira",
+            "portal_task_trigger": "assigned",
+        },
+    )
+    gov_context = _resolve_capability_context(req)
+    plan = resolve_task_capability_contract("triggered_event_task", {"source_kind": "jira.assigned"})
+    assert gov_context["capability_id"] == plan["primary_capability_id"]
+
+
 def test_governance_hook_facades_delegate_to_skill_runtime(monkeypatch):
     from src.runtime import governance_bus
     from src.agents.skill_runtime import HookEffects

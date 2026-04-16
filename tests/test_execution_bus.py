@@ -3539,3 +3539,46 @@ async def test_execution_bus_triggered_event_task_writeback_failure_error(monkey
     result = await build_default_execution_bus().execute(req)
     assert result.status == "error"
     assert "writeback failed" in result.output_payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_triggered_event_task_enriches_source_kind_from_metadata_and_sets_session_fallback(monkeypatch):
+    captured = {}
+
+    async def _fake_run_triggered_event_task(payload):
+        captured.update(payload)
+        return {"success": True, "source_kind": payload["source_kind"], "response": "ok"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_triggered_event_task", _fake_run_triggered_event_task)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        session_id=None,
+        input_payload={"task_type": "triggered_event_task", "issue_key": "ENG-1"},
+        metadata={"source_kind": "jira.mention"},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "success"
+    assert captured["source_kind"] == "jira.mention"
+    assert captured["session_id"]
+    assert captured["task_id"]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_triggered_event_task_derives_source_kind_from_portal_metadata(monkeypatch):
+    captured = {}
+
+    async def _fake_run_triggered_event_task(payload):
+        captured.update(payload)
+        return {"success": True, "source_kind": payload["source_kind"], "response": "ok"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_triggered_event_task", _fake_run_triggered_event_task)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "triggered_event_task"},
+        metadata={"portal_task_source": "jira", "portal_task_trigger": "assigned"},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "success"
+    assert captured["source_kind"] == "jira.assigned"

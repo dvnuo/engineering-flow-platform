@@ -17,8 +17,17 @@ def _require(payload: Dict[str, Any], key: str) -> Any:
     return value
 
 
+async def _run_agent_response(message: str, session_id: str) -> str:
+    result = await agent.process(message=message, session_id=session_id)
+    response_text = str(result.get("response") or result.get("output") or "").strip()
+    if not response_text:
+        raise RuntimeError("Agent returned empty response for triggered event")
+    return response_text
+
+
 async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     source_kind = str(payload.get("source_kind") or "").strip().lower()
+    session_id = str(_require(payload, "session_id"))
     if source_kind == "github.mention":
         owner = str(_require(payload, "owner"))
         repo = str(_require(payload, "repo"))
@@ -37,10 +46,7 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"评论内容:\n{comment_body}\n\n"
             "请生成一段简洁、直接、可直接发布的回复。必要时可使用已有工具查看更多上下文。"
         )
-        result = await agent.process(message=message)
-        response_text = str(result.get("response") or result.get("output") or "").strip()
-        if not response_text:
-            raise RuntimeError("Agent returned empty response for github mention")
+        response_text = await _run_agent_response(message, session_id)
         await github_channel.add_comment(owner, repo, issue_number, response_text)
         return {"success": True, "source_kind": source_kind, "response": response_text}
 
@@ -57,10 +63,7 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"Assignee: {assignee}\n\n"
             "请先审阅该 issue，再生成首条处理评论（包含你的理解、下一步、缺失信息）。"
         )
-        result = await agent.process(message=message)
-        response_text = str(result.get("response") or result.get("output") or "").strip()
-        if not response_text:
-            raise RuntimeError("Agent returned empty response for jira assigned")
+        response_text = await _run_agent_response(message, session_id)
         await jira_channel.add_comment(issue_key, response_text)
         return {"success": True, "source_kind": source_kind, "response": response_text}
 
@@ -75,10 +78,7 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"评论内容:\n{comment_body}\n\n"
             "请生成简洁且有帮助的回复。"
         )
-        result = await agent.process(message=message)
-        response_text = str(result.get("response") or result.get("output") or "").strip()
-        if not response_text:
-            raise RuntimeError("Agent returned empty response for jira mention")
+        response_text = await _run_agent_response(message, session_id)
         await jira_channel.add_comment(issue_key, response_text)
         return {"success": True, "source_kind": source_kind, "response": response_text}
 
@@ -96,10 +96,7 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"评论内容:\n{comment_body}\n\n"
             "请生成简洁且有帮助的回复。"
         )
-        result = await agent.process(message=message)
-        response_text = str(result.get("response") or result.get("output") or "").strip()
-        if not response_text:
-            raise RuntimeError("Agent returned empty response for confluence mention")
+        response_text = await _run_agent_response(message, session_id)
         await confluence_channel.add_comment(page_id, response_text)
         return {"success": True, "source_kind": source_kind, "response": response_text}
 

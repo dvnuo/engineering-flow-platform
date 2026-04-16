@@ -1260,6 +1260,66 @@ def build_default_execution_bus(
             runtime_events=runtime_events,
         )
 
+    def _derive_triggered_source_kind(payload: Dict[str, Any], metadata: Dict[str, Any]) -> Optional[str]:
+        explicit = _non_empty_string(payload.get("source_kind"))
+        if explicit:
+            return explicit.lower()
+        explicit = _non_empty_string(metadata.get("source_kind"))
+        if explicit:
+            return explicit.lower()
+        explicit = _non_empty_string(metadata.get("portal_source_kind"))
+        if explicit:
+            return explicit.lower()
+
+        source_type = (
+            _non_empty_string(payload.get("source_type"))
+            or _non_empty_string(payload.get("source"))
+            or _non_empty_string(metadata.get("source_type"))
+            or _non_empty_string(metadata.get("portal_task_source"))
+        )
+        event_type = (
+            _non_empty_string(payload.get("event_type"))
+            or _non_empty_string(payload.get("trigger"))
+            or _non_empty_string(metadata.get("event_type"))
+            or _non_empty_string(metadata.get("portal_task_trigger"))
+        )
+        if not source_type or not event_type:
+            return None
+        normalized_pair = (source_type.strip().lower(), event_type.strip().lower())
+        mapping = {
+            ("github", "mention"): "github.mention",
+            ("jira", "assigned"): "jira.assigned",
+            ("jira", "mention"): "jira.mention",
+            ("confluence", "mention"): "confluence.mention",
+        }
+        return mapping.get(normalized_pair)
+
+    def _build_enriched_triggered_event_payload(
+        request: ExecutionRequest,
+        task_id: Optional[str],
+    ) -> Dict[str, Any]:
+        payload = dict(request.input_payload or {})
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        effective_session_id = request.session_id or task_id or request.request_id
+
+        payload.setdefault("task_type", "triggered_event_task")
+        payload.setdefault("task_id", task_id or request.request_id)
+        payload.setdefault("session_id", effective_session_id)
+        if metadata.get("source_type"):
+            payload.setdefault("source_type", metadata.get("source_type"))
+        if metadata.get("event_type"):
+            payload.setdefault("event_type", metadata.get("event_type"))
+        if metadata.get("portal_task_trigger"):
+            payload.setdefault("event_type", metadata.get("portal_task_trigger"))
+        if metadata.get("portal_task_source"):
+            payload.setdefault("source_type", metadata.get("portal_task_source"))
+
+        source_kind = _derive_triggered_source_kind(payload, metadata)
+        if not source_kind:
+            raise ValueError("Missing source_kind for triggered_event_task")
+        payload["source_kind"] = source_kind
+        return payload
+
     async def task_handler(request: ExecutionRequest) -> ExecutionResult:
         task_id = bus._resolve_task_id(request)
         task_type = request.input_payload.get("task_type")
@@ -2074,10 +2134,10 @@ def build_default_execution_bus(
             )
 
         if task_type == "triggered_event_task":
-            capability = resolve_task_capability_plan(task_type, request.input_payload)
+            enriched_payload = _build_enriched_triggered_event_payload(request, task_id)
+            capability = resolve_task_capability_plan(task_type, enriched_payload)
             involved_capability_ids = list(capability.get("involved_capability_ids") or [])
-            triggered_payload = dict(request.input_payload or {})
-            result_payload = await run_triggered_event_task(triggered_payload)
+            result_payload = await run_triggered_event_task(enriched_payload)
             success_value = bool(result_payload.get("success"))
             runtime_events = bus._attach_task_id_to_runtime_events([], task_id)
             runtime_events.append(
@@ -2085,14 +2145,14 @@ def build_default_execution_bus(
                     event_type="task.triggered_event.completed" if success_value else "task.triggered_event.failed",
                     execution_type=request.execution_type,
                     state="completed" if success_value else "failed",
-                    session_id=request.session_id,
+                    session_id=enriched_payload["session_id"],
                     request_id=request.request_id,
                     agent_id=request.agent_id,
                     summary="triggered event task",
                     task_id=task_id,
                     detail_payload={
                         "task_type": task_type,
-                        "source_kind": triggered_payload.get("source_kind"),
+                        "source_kind": enriched_payload.get("source_kind"),
                         "capability_id": capability.get("capability_id"),
                         "capability_type": capability.get("capability_type"),
                         "policy_tags": capability.get("policy_tags"),
@@ -2110,7 +2170,7 @@ def build_default_execution_bus(
                 output_payload={
                     "task_type": task_type,
                     "success": success_value,
-                    "source_kind": triggered_payload.get("source_kind"),
+                    "source_kind": enriched_payload.get("source_kind"),
                     "task_boundary": True,
                     "capability_id": capability.get("capability_id"),
                     "capability_type": capability.get("capability_type"),
