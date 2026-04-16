@@ -2760,6 +2760,29 @@ async def test_api_rename_session_returns_404_when_missing(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_api_rename_session_returns_400_for_bad_input(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+
+    async def _fake_rename_session(_sid, _name):
+        raise ValueError("Session name cannot be empty")
+
+    monkeypatch.setattr(webchat.session_manager, "rename_session", _fake_rename_session)
+
+    class _Request:
+        match_info = {"session_id": "session-rename-invalid"}
+
+        async def json(self):
+            return {"name": "   "}
+
+    resp = await webchat.api_rename_session(_Request())
+    assert resp.status == 400
+    payload = json.loads(resp.text)
+    assert payload["error"] == "Session name cannot be empty"
+
+
+@pytest.mark.asyncio
 async def test_api_delete_session_success(monkeypatch):
     from src.gateway import webchat
 
