@@ -56,8 +56,6 @@ sessions/
 ├── sessions.json          # Store: sessionKey -> metadata
 ├── main/
 │   └── <sessionId>.jsonl  # 转录文件
-├── discord:channel:<id>/
-│   └── <sessionId>.jsonl
 └── jira:<issueKey>/
     └── <sessionId>.jsonl
 ```

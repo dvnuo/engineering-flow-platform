@@ -18,7 +18,6 @@ src/
 │   └── compaction.py     # Context compaction
 │
 ├── channels/             # Channel adapters
-│   ├── discord.py       # Discord bot
 │   ├── github.py        # GitHub webhook/comments
 │   ├── jira.py         # Jira
 │   └── confluence.py    # Confluence
