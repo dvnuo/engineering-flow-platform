@@ -19,8 +19,6 @@ services:
       # Optional: logs directory
       - ./logs:/app/logs
     environment:
-      - EFP_DISCORD_BOT_TOKEN=${EFP_DISCORD_BOT_TOKEN}
-      - EFP_DISCORD_CHANNEL_ID=${EFP_DISCORD_CHANNEL_ID}
       - EFP_LLM_API_KEY=${EFP_LLM_API_KEY}
     restart: unless-stopped
     healthcheck:

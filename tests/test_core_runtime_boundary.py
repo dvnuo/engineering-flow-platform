@@ -66,3 +66,11 @@ def test_attach_governance_hint_preserves_tool_result_fields():
     assert returned.content == "body"
     assert returned.error == "err"
     assert core._read_governance_hint(returned).get("tool_result_passthrough_recommended") is True
+
+
+def test_agent_process_source_prefers_self_model_in_multiple_paths():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent.process)
+    expected = 'self.model or config.llm.get("model", "gpt-5-mini")'
+    assert source.count(expected) >= 2

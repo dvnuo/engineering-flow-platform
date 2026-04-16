@@ -817,7 +817,7 @@ You have access to the following tools. When a user asks you to do something tha
         )
         
         # Get context window for the model (not max_tokens which is for responses)
-        model = config.llm.get("model", "gpt-5-mini")
+        model = self.model or config.llm.get("model", "gpt-5-mini")
         context_window = resolve_context_window_tokens(model)
         
         # Use 80% of context window as the limit for prompt history
@@ -855,9 +855,8 @@ You have access to the following tools. When a user asks you to do something tha
             )
             
             # Get context window for the model
-            context_window = resolve_context_window_tokens(
-                config.llm.get("model", "gpt-5-mini")
-            )
+            model = self.model or config.llm.get("model", "gpt-5-mini")
+            context_window = resolve_context_window_tokens(model)
             
             # Compact messages
             compacted_messages, compaction_stats = await compact_messages(

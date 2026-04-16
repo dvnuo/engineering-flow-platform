@@ -8,79 +8,7 @@ import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 import json
 
-from src.gateway.server import Gateway, verify_discord_signature
-
-
-class TestDiscordSignature:
-    """Discord signature verification tests."""
-
-    def test_verify_discord_signature_valid(self):
-        """Test valid signature verification."""
-        import hmac
-        import hashlib
-        
-        payload = b'{"type": 0}'
-        secret = "test_secret"
-        
-        expected = hmac.new(
-            secret.encode("utf-8"),
-            payload,
-            hashlib.sha256,
-        ).hexdigest()
-        signature = f"sha256={expected}"
-        
-        assert verify_discord_signature(payload, signature, secret) is True
-
-    def test_verify_discord_signature_invalid(self):
-        """Test invalid signature verification."""
-        payload = b'{"type": 0}'
-        signature = "sha256=invalid_signature"
-        
-        assert verify_discord_signature(payload, signature, "test_secret") is False
-
-    def test_verify_discord_signature_skip(self):
-        """Test signature verification is skipped when no secret."""
-        payload = b'{"type": 0}'
-        signature = ""
-        
-        # Should skip verification if secret is empty
-        assert verify_discord_signature(payload, signature, "") is True
-
-    def test_verify_discord_signature_empty_payload(self):
-        """Test signature verification with empty payload."""
-        import hmac
-        import hashlib
-        
-        payload = b''
-        secret = "test_secret"
-        
-        expected = hmac.new(
-            secret.encode("utf-8"),
-            payload,
-            hashlib.sha256,
-        ).hexdigest()
-        signature = f"sha256={expected}"
-        
-        assert verify_discord_signature(payload, signature, secret) is True
-
-    def test_verify_discord_signature_mismatched_payload(self):
-        """Test signature verification with mismatched payload."""
-        import hmac
-        import hashlib
-        
-        payload1 = b'{"type": 0}'
-        payload2 = b'{"type": 1}'
-        secret = "test_secret"
-        
-        expected = hmac.new(
-            secret.encode("utf-8"),
-            payload1,
-            hashlib.sha256,
-        ).hexdigest()
-        signature = f"sha256={expected}"
-        
-        # Using signature from payload1 but verifying payload2
-        assert verify_discord_signature(payload2, signature, secret) is False
+from src.gateway.server import Gateway
 
 
 class TestGatewayInit:
@@ -170,16 +98,26 @@ class TestGatewayRoutes:
         ]
         assert len(health_routes) >= 1
 
-    def test_gateway_discord_webhook_route_for_webhook_mode(self):
-        """Test Discord webhook route is registered for webhook mode."""
-        # This test verifies the route registration logic exists
-        # The actual behavior depends on config
-        from src.gateway.server import Gateway
-        import inspect
-        source = inspect.getsource(Gateway.__init__)
-        
-        # Verify the webhook route is defined somewhere
-        assert "/webhook/discord" in source or "webhook" in source.lower()
+    def test_gateway_jira_webhook_route_when_jira_enabled(self, monkeypatch):
+        """Test Jira webhook route is registered when Jira is enabled."""
+        from src.gateway import server as gateway_server
+
+        class _FakeSection(dict):
+            def get(self, key, default=None):
+                if key == "enabled":
+                    return True
+                return super().get(key, default)
+
+        class _FakeConfig:
+            jira = _FakeSection()
+            server = {"host": "0.0.0.0", "port": 8000}
+
+        monkeypatch.setattr(gateway_server, "config", _FakeConfig())
+        monkeypatch.setattr(gateway_server, "setup_webchat_routes", lambda app: None)
+
+        gateway = gateway_server.Gateway()
+        routes = list(gateway.app.router.routes())
+        assert any(r.resource and r.resource.canonical == "/webhook/jira" for r in routes)
 
 
 class TestGatewaySessionManagement:

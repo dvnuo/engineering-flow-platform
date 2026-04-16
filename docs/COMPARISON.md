@@ -6,7 +6,7 @@
 |------|----------|-------|------|
 | **语言** | TypeScript/Node.js | Python | 语言不同 |
 | **代码行数** | ~87,000 行 | ~2,500 行 | 35x |
-| **Channel 数** | 26 个 | 2 个 (Discord, Jira) | 24 个 |
+| **Channel 数** | 26 个 | 1 个 (Jira) + WebChat 网关入口 | 仍有明显差距 |
 | **Skill 数** | 54 个 | 2 个 | 52 个 |
 | **测试数** | E2E + Unit | 76 个 | 需完善 |
 | **平台支持** | 桌面/Web/移动 | Web only | 需扩展 |
@@ -17,11 +17,10 @@
 
 ### 1. 多 Channel 支持 (最重要)
 
-Engineering Flow Platform 有 **26 个 channel**，CodeW 只有 **2 个**：
+Engineering Flow Platform 有 **26 个 channel**，CodeW 当前可用入站路径是 **Jira + WebChat 网关**：
 
 ```
 Engineering Flow Platform Channels (按优先级):
-├── ✅ Discord (已有)
 ├── ✅ Jira (已有)
 ├── 🚀 Telegram (高优先级 - 用户常用)
 ├── 🚀 Slack (高优先级 - 工作常用)
@@ -115,7 +114,7 @@ Engineering Flow Platform 消息能力:
 └── ✏️ 消息编辑
 
 CodeW 现状:
-└── 基础文本 + Discord reactions
+└── 基础文本能力（Jira/WebChat）
 ```
 
 ### 7. 权限与安全
@@ -234,7 +233,6 @@ CodeW 现状:
 | 功能 | Engineering Flow Platform | CodeW | 状态 |
 |------|----------|-------|------|
 | 内存系统 | ✅ | ✅ | PR #29 已合并 |
-| Discord | ✅ | ✅ | 基础可用 |
 | Jira | ✅ | ✅ | 基础可用 |
 | Session 管理 | ✅ | ✅ | 基础可用 |
 | Docker 部署 | ✅ | ✅ | 已支持 |

@@ -259,6 +259,20 @@ def test_is_trusted_portal_request_depends_only_on_portal_source_marker():
     assert untrusted is False
 
 
+def test_extract_trusted_model_override_accepts_trimmed_value_for_trusted_request():
+    from src.gateway import webchat
+
+    request = _HeaderOnlyRequest({"X-Portal-Author-Source": "portal"})
+    assert webchat._extract_trusted_model_override(request, {"model_override": "  gpt-5  "}) == "gpt-5"
+
+
+def test_extract_trusted_model_override_ignores_untrusted_request():
+    from src.gateway import webchat
+
+    request = _HeaderOnlyRequest({})
+    assert webchat._extract_trusted_model_override(request, {"model_override": "gpt-5"}) is None
+
+
 @pytest.mark.asyncio
 async def test_chat_execution_bus_adapter_non_stream(monkeypatch):
     from src.gateway import webchat
@@ -683,6 +697,249 @@ async def test_api_chat_stream_uses_trusted_portal_agent_name_for_agent_identity
     response = await webchat.api_chat_stream(_Request())
     assert response.status == 200
     assert captured["agent"].agent_name == "Portal Agent"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_uses_trusted_model_override_when_present(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    class _FakeAgentCore:
+        def __init__(self, model, session_id, agent_id, agent_name):
+            captured["model"] = model
+            self.model = model
+            self.agent_id = agent_id
+            self.agent_name = agent_name
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {"response": "ok", "usage": {}}
+
+    monkeypatch.setattr(webchat, "AgentCore", _FakeAgentCore)
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-model-1", "model_override": "gpt-5-override"}
+
+    response = await webchat.api_chat(_Request())
+    assert response.status == 200
+    assert captured["model"] == "gpt-5-override"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_ignores_model_override_for_untrusted_request(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    class _FakeAgentCore:
+        def __init__(self, model, session_id, agent_id, agent_name):
+            captured["model"] = model
+            self.model = model
+            self.agent_id = agent_id
+            self.agent_name = agent_name
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {"response": "ok", "usage": {}}
+
+    monkeypatch.setattr(webchat, "AgentCore", _FakeAgentCore)
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-model-2", "model_override": "gpt-5-override"}
+
+    response = await webchat.api_chat(_Request())
+    assert response.status == 200
+    assert captured["model"] == "default-model"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_uses_trusted_model_override_when_present(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    class _FakeAgentCore:
+        def __init__(self, model, session_id, agent_id, agent_name):
+            captured["model"] = model
+            self.model = model
+            self.agent_id = agent_id
+            self.agent_name = agent_name
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {"response": "ok", "usage": {}}
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data)
+
+    monkeypatch.setattr(webchat, "AgentCore", _FakeAgentCore)
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-model-stream-1", "model_override": "gpt-5-override"}
+
+    response = await webchat.api_chat_stream(_Request())
+    assert response.status == 200
+    assert captured["model"] == "gpt-5-override"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_ignores_model_override_for_untrusted_request(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    class _FakeAgentCore:
+        def __init__(self, model, session_id, agent_id, agent_name):
+            captured["model"] = model
+            self.model = model
+            self.agent_id = agent_id
+            self.agent_name = agent_name
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {"response": "ok", "usage": {}}
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data)
+
+    monkeypatch.setattr(webchat, "AgentCore", _FakeAgentCore)
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-model-stream-2", "model_override": "gpt-5-override"}
+
+    response = await webchat.api_chat_stream(_Request())
+    assert response.status == 200
+    assert captured["model"] == "default-model"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_usage_tracker_records_actual_override_model(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {
+            "response": "ok",
+            "usage": {"prompt_tokens": 5, "completion_tokens": 6},
+            "_llm_debug": {"request": {"model": "gpt-5-actual"}},
+        }
+
+    def _fake_record_usage(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.usage_tracker, "record_usage", _fake_record_usage)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-usage-1", "model_override": "gpt-5-override"}
+
+    response = await webchat.api_chat(_Request())
+    assert response.status == 200
+    assert captured["model"] == "gpt-5-actual"
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_usage_tracker_records_actual_override_model(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {
+            "response": "ok",
+            "usage": {"prompt_tokens": 5, "completion_tokens": 6},
+            "_llm_debug": {"request": {"model": "gpt-5-actual"}},
+        }
+
+    def _fake_record_usage(**kwargs):
+        captured.update(kwargs)
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data)
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.usage_tracker, "record_usage", _fake_record_usage)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "default-model", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-usage-2", "model_override": "gpt-5-override"}
+
+    response = await webchat.api_chat_stream(_Request())
+    assert response.status == 200
+    assert captured["model"] == "gpt-5-actual"
 
 
 @pytest.mark.asyncio

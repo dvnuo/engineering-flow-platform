@@ -59,10 +59,12 @@ class TestUsageTracker:
         }
         
         stats = tracker.record_usage(
-            "test_session",
-            response,
+            "openai",
             "gpt-4o",
-            channel="discord"
+            100,
+            50,
+            session_id="test_session",
+            task_type="chat"
         )
         
         assert stats.input_tokens == 100
@@ -82,9 +84,12 @@ class TestUsageTracker:
         # Record multiple requests
         for i in range(3):
             tracker.record_usage(
-                "session_usage_test",
-                response,
-                "gpt-4o"
+                "openai",
+                "gpt-4o",
+                100,
+                50,
+                session_id="session_usage_test",
+                task_type="chat"
             )
         
         usages = tracker.get_session_usage("session_usage_test")
@@ -101,7 +106,7 @@ class TestUsageTracker:
         }
         
         for i in range(5):
-            tracker.record_usage("summary_test", response, "gpt-4o")
+            tracker.record_usage("openai", "gpt-4o", 100, 50, session_id="summary_test", task_type="chat")
         
         summary = tracker.get_session_summary("summary_test")
         
@@ -121,7 +126,7 @@ class TestUsageTracker:
         
         # Record from different sessions
         for i in range(3):
-            tracker.record_usage(f"global_{i}", response, "gpt-4o")
+            tracker.record_usage("openai", "gpt-4o", 100, 50, session_id=f"global_{i}", task_type="chat")
         
         summary = tracker.get_global_summary()
         
@@ -137,7 +142,14 @@ class TestUsageTracker:
         
         for model, resp in responses.items():
             for _ in range(2):
-                tracker.record_usage(f"model_{model}", resp, model)
+                tracker.record_usage(
+                    "openai",
+                    model,
+                    resp["usage"]["prompt_tokens"],
+                    resp["usage"]["completion_tokens"],
+                    session_id=f"model_{model}",
+                    task_type="chat",
+                )
         
         by_model = tracker.get_usage_by_model()
         
@@ -156,7 +168,7 @@ class TestUsageTracker:
         }
         
         for i in range(3):
-            tracker.record_usage(f"clear_{i}", response, "gpt-4o")
+            tracker.record_usage("openai", "gpt-4o", 100, 50, session_id=f"clear_{i}", task_type="chat")
         
         # Clear one session
         count = tracker.clear_session_usage("clear_1")
