@@ -23,7 +23,7 @@ src/
 │   └── confluence.py    # Confluence
 │
 ├── cron/                 # Scheduled tasks
-│   └── mention_poller.py
+│   └── automation_watchers.py
 │
 ├── gateway/              # Web API server
 │   ├── server.py        # Main gateway

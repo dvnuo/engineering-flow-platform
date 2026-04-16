@@ -42,6 +42,17 @@ class JiraReconciliationRunner:
             return [value.strip()]
         return []
 
+    @staticmethod
+    def _extract_list_payload(raw: Any, *keys: str) -> List[Dict[str, Any]]:
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+        if isinstance(raw, dict):
+            for key in keys:
+                value = raw.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+        return []
+
     @classmethod
     def _normalize_workflow_rule(cls, rule: Dict[str, Any]) -> Dict[str, Any] | None:
         if not isinstance(rule, dict):
@@ -98,9 +109,7 @@ class JiraReconciliationRunner:
 
     async def fetch_enabled_workflow_rules(self, *, session: ClientSession | None = None) -> List[Dict[str, Any]]:
         data = await self._get_json("/api/internal/workflow-transition-rules", session=session)
-        rules = data.get("items") if isinstance(data.get("items"), list) else data.get("rules")
-        if not isinstance(rules, list):
-            return []
+        rules = self._extract_list_payload(data, "items", "rules")
         normalized_rules: List[Dict[str, Any]] = []
         for rule in rules:
             normalized = self._normalize_workflow_rule(rule) if isinstance(rule, dict) else None
@@ -112,8 +121,7 @@ class JiraReconciliationRunner:
 
     async def fetch_identity_bindings(self, *, session: ClientSession | None = None) -> List[Dict[str, Any]]:
         data = await self._get_json("/api/internal/agent-identity-bindings", session=session)
-        items = data.get("items") if isinstance(data.get("items"), list) else []
-        return [item for item in items if isinstance(item, dict)]
+        return self._extract_list_payload(data, "items")
 
     @staticmethod
     def _extract_issue_assignee(issue_fields: Dict[str, Any]) -> str | None:

@@ -560,6 +560,18 @@ class JiraChannel:
         block_type = block.get("type", "")
         if block_type == "text":
             text_parts.append(block.get("text", ""))
+        elif block_type == "mention":
+            attrs = block.get("attrs") if isinstance(block.get("attrs"), dict) else {}
+            candidate = (
+                attrs.get("text")
+                or attrs.get("displayName")
+                or attrs.get("username")
+                or attrs.get("id")
+                or attrs.get("accountId")
+            )
+            candidate_text = str(candidate or "").strip()
+            if candidate_text:
+                text_parts.append(candidate_text if candidate_text.startswith("@") else f"@{candidate_text}")
         elif block_type in ("paragraph", "heading"):
             for item in block.get("content", []):
                 self._extract_text(item, text_parts)

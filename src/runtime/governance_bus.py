@@ -389,7 +389,7 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
     capability_id: Optional[str] = None
     action_id: Optional[str] = None
     if request.execution_type == "task":
-        if task_type in {"adapter_action_task", "jira_workflow_review_task", "github_review_task", "delegation_task"}:
+        if task_type in {"adapter_action_task", "jira_workflow_review_task", "github_review_task", "triggered_event_task", "delegation_task"}:
             # Governance intentionally follows the same canonical wrapper-task
             # contract used by execution to avoid split sources of truth.
             plan = resolve_task_capability_contract(task_type, payload)

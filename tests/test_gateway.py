@@ -183,7 +183,6 @@ class TestGatewayIntegration:
 
     def test_gateway_has_session_manager(self):
         """Test Gateway imports session manager."""
-        # Just ensure the import works
         from src.gateway.server import JIRA_SESSION_PREFIX
         assert JIRA_SESSION_PREFIX == "jira:"
 
@@ -196,6 +195,72 @@ class TestGatewayIntegration:
         """Test Gateway imports jira channel."""
         from src.gateway.server import jira_channel
         assert jira_channel is not None
+
+
+class TestGatewayWatcherLifecycle:
+    @pytest.mark.asyncio
+    async def test_gateway_start_starts_automation_watchers(self, monkeypatch):
+        from src.gateway import server as gateway_server
+
+        started = {"watchers": 0}
+
+        async def _fake_start_watchers():
+            started["watchers"] += 1
+
+        monkeypatch.setattr(gateway_server, "start_automation_watchers", _fake_start_watchers)
+        gateway = gateway_server.Gateway()
+        await gateway.start()
+        await gateway.stop()
+        assert started["watchers"] == 1
+
+    @pytest.mark.asyncio
+    async def test_gateway_stop_stops_automation_watchers(self, monkeypatch):
+        from src.gateway import server as gateway_server
+
+        stopped = {"watchers": 0}
+
+        async def _fake_start_watchers():
+            return None
+
+        async def _fake_stop_watchers():
+            stopped["watchers"] += 1
+
+        monkeypatch.setattr(gateway_server, "start_automation_watchers", _fake_start_watchers)
+        monkeypatch.setattr(gateway_server, "stop_automation_watchers", _fake_stop_watchers)
+        gateway = gateway_server.Gateway()
+        await gateway.start()
+        await gateway.stop()
+        assert stopped["watchers"] == 1
+
+
+class TestHandleMessageFunctions:
+    """Tests for message handler functions."""
+
+    def test_handle_jira_message_function_exists(self):
+        """Test handle_jira_message function exists."""
+        from src.gateway import server
+        assert hasattr(server, 'handle_jira_message')
+        import inspect
+        assert inspect.iscoroutinefunction(server.handle_jira_message)
+
+
+class TestGatewayAttributes:
+    """Tests for Gateway core attributes."""
+
+    def test_gateway_has_required_attributes(self):
+        """Test Gateway has required runtime attributes."""
+        gateway = Gateway()
+        assert hasattr(gateway, 'host')
+        assert hasattr(gateway, 'port')
+        assert hasattr(gateway, '_automation_watchers_task')
+
+    def test_gateway_host_port_from_config(self):
+        """Test Gateway uses config for host and port."""
+        with patch.dict('os.environ', {'EFP_CONFIG': ''}):
+            gateway = Gateway()
+            # Should have host and port attributes
+            assert hasattr(gateway, 'host')
+            assert hasattr(gateway, 'port')
 
 
 class TestGatewayEdgeCases:

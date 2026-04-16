@@ -20,6 +20,7 @@ from src.utils.truncate import truncate
 from src.agents.core import agent
 from src.channels.jira import jira_channel
 from src.config import config
+from src.cron.automation_watchers import start_automation_watchers, stop_automation_watchers
 from src.runtime.runtime_profile_client import bootstrap_runtime_profile_sync
 from src.sessions.manager import JIRA_SESSION_PREFIX
 
@@ -95,6 +96,7 @@ class Gateway:
         self.app = web.Application()
         self.runner: web.AppRunner | None = None
         self.site: web.TCPSite | None = None
+        self._automation_watchers_task: asyncio.Task | None = None
 
         # Register routes (only for webhook mode or API endpoints)
         self.app.router.add_get("/health", self.handle_health)
@@ -761,6 +763,8 @@ class Gateway:
         # Jira channel is initialized in __init__ with HTTP client ready
         if self.jira_enabled and jira_channel.is_configured():
             logger.info("Jira channel enabled and ready")
+        if self._automation_watchers_task is None or self._automation_watchers_task.done():
+            self._automation_watchers_task = asyncio.create_task(start_automation_watchers())
 
     async def _run_memory_bootstrap(self) -> None:
         """Run memory bootstrap in background."""
@@ -869,6 +873,17 @@ class Gateway:
 
     async def stop(self) -> None:
         """Stop the gateway server."""
+        try:
+            await stop_automation_watchers()
+            if self._automation_watchers_task is not None:
+                await self._automation_watchers_task
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Error stopping automation watchers: {e}")
+        finally:
+            self._automation_watchers_task = None
+
         # Close Jira client if it was initialized
         if self.jira_enabled:
             try:

@@ -34,6 +34,7 @@ from src.runtime.governance_bus import (
 from src.runtime.github_review import run_github_review_task
 from src.runtime.jira_workflow_review import run_jira_workflow_review
 from src.runtime.leader_orchestration import dispatch_task_breakdown_as_delegations, run_delegation_cycle
+from src.runtime.triggered_event_task import run_triggered_event_task
 from src.utils.redaction import safe_preview, sanitize_exception_message
 
 logger = logging.getLogger(__name__)
@@ -736,12 +737,13 @@ def _evaluate_secondary_action_gate(
     *,
     request: ExecutionRequest,
     action_id: str,
+    capability_type: str = "adapter_action",
 ) -> Optional[Dict[str, str]]:
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
     return evaluate_capability_constraint_decision(
         metadata=metadata,
         capability_id=action_id,
-        capability_type="adapter_action",
+        capability_type=capability_type,
         action_id=action_id,
     )
 
@@ -778,6 +780,7 @@ def _append_secondary_governance_audit_event(
     task_type: str,
     action_id: str,
     deny_reason: Optional[str],
+    capability_type: str = "adapter_action",
 ) -> None:
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
     policy_profile_id = request.policy_profile_id or metadata.get("policy_profile_id") or "default"
@@ -790,7 +793,7 @@ def _append_secondary_governance_audit_event(
             "status": "blocked",
             "rule": "capability_policy",
             "capability_id": action_id,
-            "capability_type": "adapter_action",
+            "capability_type": capability_type,
             "action_id": action_id,
             "deny_reason": deny_reason or "capability_policy_blocked",
             "task_type": task_type,
@@ -837,6 +840,32 @@ def _build_secondary_governance_summary(
         "applied_secondary_action_ids": sorted(set(applied_secondary_action_ids)),
         "secondary_action_decisions": list(secondary_action_decisions),
     }
+
+
+def _triggered_event_secondary_action_descriptor(source_kind: str) -> Optional[Dict[str, str]]:
+    mapping = {
+        "github.mention": {
+            "action_id": "adapter:github:add_comment",
+            "capability_type": "adapter_action",
+            "event_prefix": "task.triggered_event.secondary_action",
+        },
+        "jira.assigned": {
+            "action_id": "adapter:jira:add_comment",
+            "capability_type": "adapter_action",
+            "event_prefix": "task.triggered_event.secondary_action",
+        },
+        "jira.mention": {
+            "action_id": "adapter:jira:add_comment",
+            "capability_type": "adapter_action",
+            "event_prefix": "task.triggered_event.secondary_action",
+        },
+        "confluence.mention": {
+            "action_id": "channel_action:confluence_add_comment",
+            "capability_type": "channel_action",
+            "event_prefix": "task.triggered_event.secondary_action",
+        },
+    }
+    return mapping.get(str(source_kind or "").strip().lower())
 
 
 def _as_dict(value: Any) -> dict:
@@ -1258,6 +1287,66 @@ def build_default_execution_bus(
             },
             runtime_events=runtime_events,
         )
+
+    def _derive_triggered_source_kind(payload: Dict[str, Any], metadata: Dict[str, Any]) -> Optional[str]:
+        explicit = _non_empty_string(payload.get("source_kind"))
+        if explicit:
+            return explicit.lower()
+        explicit = _non_empty_string(metadata.get("source_kind"))
+        if explicit:
+            return explicit.lower()
+        explicit = _non_empty_string(metadata.get("portal_source_kind"))
+        if explicit:
+            return explicit.lower()
+
+        source_type = (
+            _non_empty_string(payload.get("source_type"))
+            or _non_empty_string(payload.get("source"))
+            or _non_empty_string(metadata.get("source_type"))
+            or _non_empty_string(metadata.get("portal_task_source"))
+        )
+        event_type = (
+            _non_empty_string(payload.get("event_type"))
+            or _non_empty_string(payload.get("trigger"))
+            or _non_empty_string(metadata.get("event_type"))
+            or _non_empty_string(metadata.get("portal_task_trigger"))
+        )
+        if not source_type or not event_type:
+            return None
+        normalized_pair = (source_type.strip().lower(), event_type.strip().lower())
+        mapping = {
+            ("github", "mention"): "github.mention",
+            ("jira", "assigned"): "jira.assigned",
+            ("jira", "mention"): "jira.mention",
+            ("confluence", "mention"): "confluence.mention",
+        }
+        return mapping.get(normalized_pair)
+
+    def _build_enriched_triggered_event_payload(
+        request: ExecutionRequest,
+        task_id: Optional[str],
+    ) -> Dict[str, Any]:
+        payload = dict(request.input_payload or {})
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        effective_session_id = request.session_id or task_id or request.request_id
+
+        payload.setdefault("task_type", "triggered_event_task")
+        payload.setdefault("task_id", task_id or request.request_id)
+        payload.setdefault("session_id", effective_session_id)
+        if metadata.get("source_type"):
+            payload.setdefault("source_type", metadata.get("source_type"))
+        if metadata.get("event_type"):
+            payload.setdefault("event_type", metadata.get("event_type"))
+        if metadata.get("portal_task_trigger"):
+            payload.setdefault("event_type", metadata.get("portal_task_trigger"))
+        if metadata.get("portal_task_source"):
+            payload.setdefault("source_type", metadata.get("portal_task_source"))
+
+        source_kind = _derive_triggered_source_kind(payload, metadata)
+        if not source_kind:
+            raise ValueError("Missing source_kind for triggered_event_task")
+        payload["source_kind"] = source_kind
+        return payload
 
     async def task_handler(request: ExecutionRequest) -> ExecutionResult:
         task_id = bus._resolve_task_id(request)
@@ -2068,6 +2157,205 @@ def build_default_execution_bus(
                     "secondary_action_id": secondary_action_id,
                     "secondary_action_success": secondary_action_success,
                     "result": review_result.get("result"),
+                },
+                runtime_events=runtime_events,
+            )
+
+        if task_type == "triggered_event_task":
+            enriched_payload = _build_enriched_triggered_event_payload(request, task_id)
+            capability = resolve_task_capability_plan(task_type, enriched_payload)
+            involved_capability_ids = list(capability.get("involved_capability_ids") or [])
+            source_kind = str(enriched_payload.get("source_kind") or "").strip().lower()
+            secondary_descriptor = _triggered_event_secondary_action_descriptor(source_kind)
+            if secondary_descriptor is None:
+                raise ValueError(f"Unsupported source_kind for triggered_event_task secondary governance: {source_kind}")
+            secondary_action_id = secondary_descriptor["action_id"]
+            secondary_action_capability_type = secondary_descriptor["capability_type"]
+            event_prefix = secondary_descriptor["event_prefix"]
+            governed_secondary_action_ids = [secondary_action_id]
+            blocked_secondary_action_ids: list[str] = []
+            applied_secondary_action_ids: list[str] = []
+            secondary_action_decisions: list[Dict[str, Any]] = []
+
+            def _triggered_action_gate(action_id: str, _kwargs: Dict[str, Any]) -> Dict[str, Any]:
+                if action_id != secondary_action_id:
+                    return {
+                        "blocked": True,
+                        "reason": "unsupported_secondary_action",
+                        "error": f"Unsupported secondary action: {action_id}",
+                    }
+                decision = _evaluate_secondary_action_gate(
+                    request=request,
+                    action_id=action_id,
+                    capability_type=secondary_action_capability_type,
+                )
+                if decision:
+                    return {
+                        "blocked": True,
+                        "reason": decision.get("reason"),
+                        "error": f"capability policy blocked for secondary action: {action_id}",
+                    }
+                return {"blocked": False}
+
+            result_payload = await run_triggered_event_task(
+                {
+                    **enriched_payload,
+                    "_action_gate": _triggered_action_gate,
+                }
+            )
+            success_value = bool(result_payload.get("success"))
+            secondary_action_attempted = bool(result_payload.get("secondary_action_attempted"))
+            secondary_action_success = bool(result_payload.get("secondary_action_success"))
+            secondary_action_id = str(result_payload.get("secondary_action_id") or secondary_action_id)
+            secondary_action_capability_type = str(
+                result_payload.get("secondary_action_capability_type") or secondary_action_capability_type
+            )
+            blocked_reason = str(result_payload.get("blocked_reason") or result_payload.get("error") or "capability_policy_blocked")
+            blocked = bool(result_payload.get("blocked"))
+
+            if secondary_action_attempted and blocked:
+                blocked_secondary_action_ids.append(secondary_action_id)
+                _record_secondary_action_decision(
+                    secondary_action_decisions,
+                    action_id=secondary_action_id,
+                    decision="blocked",
+                    reason=blocked_reason,
+                    success=False,
+                )
+            elif secondary_action_attempted and secondary_action_success:
+                applied_secondary_action_ids.append(secondary_action_id)
+                _record_secondary_action_decision(
+                    secondary_action_decisions,
+                    action_id=secondary_action_id,
+                    decision="applied",
+                    reason=None,
+                    success=True,
+                )
+            elif secondary_action_attempted:
+                _record_secondary_action_decision(
+                    secondary_action_decisions,
+                    action_id=secondary_action_id,
+                    decision="failed",
+                    reason=str(result_payload.get("error") or "secondary_action_failed"),
+                    success=False,
+                )
+            else:
+                _record_secondary_action_decision(
+                    secondary_action_decisions,
+                    action_id=secondary_action_id,
+                    decision="allowed",
+                    reason="not_invoked",
+                    success=False,
+                )
+
+            secondary_summary = _build_secondary_governance_summary(
+                governed_secondary_action_ids=governed_secondary_action_ids,
+                blocked_secondary_action_ids=blocked_secondary_action_ids,
+                applied_secondary_action_ids=applied_secondary_action_ids,
+                secondary_action_decisions=secondary_action_decisions,
+            )
+            runtime_events = bus._attach_task_id_to_runtime_events([], task_id)
+            if secondary_action_attempted and blocked:
+                _append_secondary_action_event(
+                    runtime_events=runtime_events,
+                    request=request,
+                    task_id=task_id,
+                    event_type=f"{event_prefix}.blocked",
+                    state="blocked",
+                    detail_payload={
+                        "task_type": task_type,
+                        "source_kind": source_kind,
+                        "secondary_action_id": secondary_action_id,
+                        "secondary_action_capability_type": secondary_action_capability_type,
+                        "reason": blocked_reason,
+                    },
+                )
+                _append_secondary_governance_audit_event(
+                    runtime_events=runtime_events,
+                    request=request,
+                    task_type=task_type,
+                    action_id=secondary_action_id,
+                    deny_reason=blocked_reason,
+                    capability_type=secondary_action_capability_type,
+                )
+            elif secondary_action_attempted and secondary_action_success:
+                _append_secondary_action_event(
+                    runtime_events=runtime_events,
+                    request=request,
+                    task_id=task_id,
+                    event_type=f"{event_prefix}.completed",
+                    state="completed",
+                    detail_payload={
+                        "task_type": task_type,
+                        "source_kind": source_kind,
+                        "secondary_action_id": secondary_action_id,
+                        "secondary_action_capability_type": secondary_action_capability_type,
+                    },
+                )
+            elif secondary_action_attempted:
+                _append_secondary_action_event(
+                    runtime_events=runtime_events,
+                    request=request,
+                    task_id=task_id,
+                    event_type=f"{event_prefix}.failed",
+                    state="failed",
+                    detail_payload={
+                        "task_type": task_type,
+                        "source_kind": source_kind,
+                        "secondary_action_id": secondary_action_id,
+                        "secondary_action_capability_type": secondary_action_capability_type,
+                        "reason": str(result_payload.get("error") or "secondary_action_failed"),
+                    },
+                )
+            runtime_events.append(
+                build_runtime_event(
+                    event_type="task.triggered_event.completed" if success_value else "task.triggered_event.failed",
+                    execution_type=request.execution_type,
+                    state="completed" if success_value else "failed",
+                    session_id=enriched_payload["session_id"],
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    summary="triggered event task",
+                    task_id=task_id,
+                    detail_payload={
+                        "task_type": task_type,
+                        "source_kind": enriched_payload.get("source_kind"),
+                        "capability_id": capability.get("capability_id"),
+                        "capability_type": capability.get("capability_type"),
+                        "policy_tags": capability.get("policy_tags"),
+                        "requires_identity_binding": capability.get("requires_identity_binding"),
+                        "capability_resolution": capability.get("capability_resolution"),
+                        "involved_capability_ids": involved_capability_ids,
+                        **secondary_summary,
+                        "secondary_action_attempted": secondary_action_attempted,
+                        "secondary_action_success": secondary_action_success,
+                        "secondary_action_id": secondary_action_id,
+                        "secondary_action_capability_type": secondary_action_capability_type,
+                        "success": success_value,
+                    },
+                    legacy_payload={"legacy_type": "task_triggered_event"},
+                )
+            )
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success" if success_value else "error",
+                output_payload={
+                    "task_type": task_type,
+                    "success": success_value,
+                    "source_kind": enriched_payload.get("source_kind"),
+                    "task_boundary": True,
+                    "capability_id": capability.get("capability_id"),
+                    "capability_type": capability.get("capability_type"),
+                    "policy_tags": capability.get("policy_tags"),
+                    "requires_identity_binding": capability.get("requires_identity_binding"),
+                    "capability_resolution": capability.get("capability_resolution"),
+                    "involved_capability_ids": involved_capability_ids,
+                    **secondary_summary,
+                    "secondary_action_attempted": secondary_action_attempted,
+                    "secondary_action_success": secondary_action_success,
+                    "secondary_action_id": secondary_action_id,
+                    "secondary_action_capability_type": secondary_action_capability_type,
+                    "result": result_payload,
                 },
                 runtime_events=runtime_events,
             )
