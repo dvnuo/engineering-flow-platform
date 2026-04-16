@@ -3582,3 +3582,130 @@ async def test_execution_bus_triggered_event_task_derives_source_kind_from_porta
     result = await build_default_execution_bus().execute(req)
     assert result.status == "success"
     assert captured["source_kind"] == "jira.assigned"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_triggered_event_task_github_secondary_action_blocked(monkeypatch):
+    async def _fake_process(*, message, session_id):
+        return {"response": "ok"}
+
+    async def _fake_add_comment(*args, **kwargs):
+        raise AssertionError("writeback should be blocked by governance gate")
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={
+            "task_type": "triggered_event_task",
+            "source_kind": "github.mention",
+            "owner": "acme",
+            "repo": "demo",
+            "issue_number": 1,
+            "body": "@bot",
+        },
+        metadata={"denied_adapter_actions": ["adapter:github:add_comment"]},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "error"
+    assert result.output_payload["blocked_secondary_action_ids"] == ["adapter:github:add_comment"]
+    event_types = [evt.get("event_type") for evt in result.runtime_events]
+    assert "task.triggered_event.secondary_action.blocked" in event_types
+    assert "governance.audit" in event_types
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_triggered_event_task_jira_secondary_action_blocked(monkeypatch):
+    async def _fake_process(*, message, session_id):
+        return {"response": "ok"}
+
+    async def _fake_add_comment(*args, **kwargs):
+        raise AssertionError("writeback should be blocked by governance gate")
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.jira_channel.add_comment", _fake_add_comment)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={
+            "task_type": "triggered_event_task",
+            "source_kind": "jira.assigned",
+            "issue_key": "ENG-1",
+            "summary": "Feature",
+            "status": "Open",
+            "assignee": "jira-user",
+        },
+        metadata={"denied_actions": ["add_comment"]},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "error"
+    assert result.output_payload["blocked_secondary_action_ids"] == ["adapter:jira:add_comment"]
+    event_types = [evt.get("event_type") for evt in result.runtime_events]
+    assert "task.triggered_event.secondary_action.blocked" in event_types
+    assert "governance.audit" in event_types
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_triggered_event_task_confluence_secondary_action_blocked(monkeypatch):
+    async def _fake_process(*, message, session_id):
+        return {"response": "ok"}
+
+    async def _fake_add_comment(*args, **kwargs):
+        raise AssertionError("writeback should be blocked by governance gate")
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.confluence_channel.add_comment", _fake_add_comment)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={
+            "task_type": "triggered_event_task",
+            "source_kind": "confluence.mention",
+            "page_id": "123",
+            "title": "Doc",
+            "space_key": "ENG",
+            "body": "@bot",
+        },
+        metadata={"denied_capability_ids": ["channel_action:confluence_add_comment"]},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "error"
+    assert result.output_payload["blocked_secondary_action_ids"] == ["channel_action:confluence_add_comment"]
+    event_types = [evt.get("event_type") for evt in result.runtime_events]
+    assert "task.triggered_event.secondary_action.blocked" in event_types
+    assert "governance.audit" in event_types
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_triggered_event_task_success_includes_secondary_governance_summary(monkeypatch):
+    async def _fake_process(*, message, session_id):
+        return {"response": "ok"}
+
+    async def _fake_add_comment(owner, repo, issue_number, body):
+        return {"ok": True}
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={
+            "task_type": "triggered_event_task",
+            "source_kind": "github.mention",
+            "owner": "acme",
+            "repo": "demo",
+            "issue_number": 5,
+            "body": "@bot",
+        },
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "success"
+    for key in (
+        "governed_secondary_action_ids",
+        "blocked_secondary_action_ids",
+        "applied_secondary_action_ids",
+        "secondary_action_decisions",
+        "secondary_action_id",
+    ):
+        assert key in result.output_payload
