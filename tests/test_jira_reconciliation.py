@@ -73,6 +73,75 @@ async def test_jira_reconciliation_consumes_portal_contract_and_posts_ingress_pa
 
 
 @pytest.mark.asyncio
+async def test_jira_reconciliation_ignores_portal_self_service_metadata_and_posts_ingress(monkeypatch):
+    from src.cron import jira_reconciliation
+
+    runner = jira_reconciliation.JiraReconciliationRunner()
+    posts = []
+
+    async def _fake_get_json(path, *, session=None):
+        if path.endswith("workflow-transition-rules"):
+            return {
+                "items": [
+                    {
+                        "id": "r-self-service-1",
+                        "system_type": "jira",
+                        "is_enabled": True,
+                        "project_key": "ENG",
+                        "trigger_status": "In Progress",
+                        "assignee_binding": "jira-acct-1",
+                        "read_only": True,
+                        "display_name": "Owner managed Jira workflow rule",
+                        "ui_badges": ["self-service"],
+                        "owner_user_id": 42,
+                    }
+                ]
+            }
+        if path.endswith("agent-identity-bindings"):
+            return {"items": [{"agent_id": "a-1", "provider_type": "jira"}]}
+        raise AssertionError("unexpected path")
+
+    async def _fake_post_json(path, payload, *, session=None):
+        posts.append((path, payload))
+
+    async def _fake_search_issues(jql, max_results=50):
+        assert 'project IN (ENG)' in jql
+        assert 'status IN ("In Progress")' in jql
+        return {
+            "issues": [
+                {
+                    "key": "ENG-1",
+                    "fields": {
+                        "project": {"key": "ENG"},
+                        "issuetype": {"name": "Story"},
+                        "status": {"name": "In Progress"},
+                        "assignee": {"accountId": "jira-acct-1", "displayName": "User One"},
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr(runner, "_get_json", _fake_get_json)
+    monkeypatch.setattr(runner, "_post_json", _fake_post_json)
+    monkeypatch.setattr("src.cron.jira_reconciliation.jira_channel.search_issues", _fake_search_issues)
+    monkeypatch.setattr(runner, "_base_url", lambda: "https://portal.internal")
+
+    await runner.reconcile_once()
+
+    assert len(posts) == 1
+    path, payload = posts[0]
+    assert path == "/api/internal/external-events/ingest"
+    assert payload["source_type"] == "jira"
+    assert payload["event_type"] == "workflow_review_requested"
+    assert payload["project_key"] == "ENG"
+    assert payload["trigger_status"] == "In Progress"
+    assert payload["issue_key"] == "ENG-1"
+    parsed = json.loads(payload["payload_json"])
+    assert parsed["mode"] == "reconciliation"
+    assert parsed["workflow_rule_id"] == "r-self-service-1"
+
+
+@pytest.mark.asyncio
 async def test_jira_reconciliation_issue_failure_does_not_break_loop(monkeypatch):
     from src.cron import jira_reconciliation
 

@@ -71,6 +71,441 @@ async def test_run_once_fetches_subscriptions_and_bindings_with_poll_filter(monk
 
 
 @pytest.mark.asyncio
+async def test_run_once_normalizes_portal_self_service_export_shape(monkeypatch):
+    from src.cron.subscription_watchers import SubscriptionWatcherManager
+
+    manager = SubscriptionWatcherManager()
+    polled = []
+
+    async def _fake_get_json(path, *, session=None):
+        if path.startswith("/api/internal/external-event-subscriptions"):
+            return {
+                "items": [
+                    {
+                        "id": "s-gh-review",
+                        "agent_id": "agent-1",
+                        "source_type": "github",
+                        "event_type": "pull_request_review_requested",
+                        "mode": "poll",
+                        "source_kind": "github.pull_request_review_requested",
+                        "enabled": True,
+                        "config_json": '{"allowed_repos": ["octo/portal"]}',
+                        "scope_json": '{"repos": ["octo/portal"]}',
+                        "matcher_json": '{"review_states": ["changes_requested"]}',
+                        # Portal self-service control-plane/UI metadata should be ignored by runtime watcher.
+                        "read_only": True,
+                        "display_name": "Owner managed GitHub review watcher",
+                    },
+                    {
+                        "id": "s-jira-mention",
+                        "agent_id": "agent-1",
+                        "provider_type": "jira",
+                        "event_type": "mention",
+                        "mode": "hybrid",
+                        "source_kind": "jira.mention",
+                        "enabled": True,
+                        "target_ref": "ENG",
+                        "routing_json": '{"queue":"external_events"}',
+                        "poll_profile_json": '{"lookback_minutes": 90}',
+                    },
+                ]
+            }
+        if path == "/api/internal/agent-identity-bindings?enabled=true":
+            return {
+                "items": [
+                    {"id": "b-gh", "agent_id": "agent-1", "system_type": "github", "username": "reviewer1"},
+                    {"id": "b-jira", "agent_id": "agent-1", "provider_type": "jira", "username": "jira-user"},
+                ]
+            }
+        raise AssertionError("unexpected path")
+
+    async def _fake_poll_subscription(subscription, bindings, *, session=None):
+        polled.append((subscription, bindings))
+
+    monkeypatch.setattr("src.cron.subscription_watchers.is_portal_internal_configured", lambda: True)
+    monkeypatch.setattr(manager, "_get_json", _fake_get_json)
+    monkeypatch.setattr(manager, "_poll_subscription", _fake_poll_subscription)
+    monkeypatch.setattr(manager, "_agent_id", lambda: "agent-1")
+
+    await manager.run_once()
+
+    assert len(polled) == 2
+
+    github_subscription, github_bindings = polled[0]
+    assert github_subscription.id == "s-gh-review"
+    assert github_subscription.source_type == "github"
+    assert github_subscription.scope == {"repos": ["octo/portal"]}
+    assert github_subscription.matcher == {"review_states": ["changes_requested"]}
+    assert github_subscription.routing == {}
+    assert github_subscription.poll_profile == {}
+    assert [b["id"] for b in github_bindings] == ["b-gh"]
+
+    jira_subscription, jira_bindings = polled[1]
+    assert jira_subscription.id == "s-jira-mention"
+    assert jira_subscription.source_type == "jira"
+    assert jira_subscription.routing == {"queue": "external_events"}
+    assert jira_subscription.poll_profile == {"lookback_minutes": 90}
+    assert jira_subscription.matcher == {}
+    assert [b["id"] for b in jira_bindings] == ["b-jira"]
+
+
+@pytest.mark.asyncio
+async def test_run_once_self_service_github_mention_posts_ingest_not_direct_execute(monkeypatch):
+    from src.cron.subscription_watchers import SubscriptionWatcherManager
+    import src.runtime.execution_bus as execution_bus
+
+    manager = SubscriptionWatcherManager()
+    posts = []
+
+    async def _fake_get_json(path, *, session=None):
+        if path.startswith("/api/internal/external-event-subscriptions"):
+            return {
+                "items": [
+                    {
+                        "id": "s-gh-mention",
+                        "agent_id": "agent-1",
+                        "provider_type": "github",
+                        "event_type": "mention",
+                        "mode": "poll",
+                        "source_kind": "github.mention",
+                        "enabled": True,
+                        "target_ref": "octo/portal",
+                        "read_only": True,
+                        "display_name": "Owner managed mention watcher",
+                        "ui_badges": ["self-service"],
+                    }
+                ]
+            }
+        if path == "/api/internal/agent-identity-bindings?enabled=true":
+            return {
+                "items": [
+                    {
+                        "id": "b-gh-1",
+                        "agent_id": "agent-1",
+                        "system_type": "github",
+                        "username": "reviewer1",
+                        "external_account_id": "gh-user-1",
+                    }
+                ]
+            }
+        raise AssertionError("unexpected path")
+
+    async def _fake_get_recent_issue_comments(repo, since=None):
+        assert repo == "octo/portal"
+        return [
+            {
+                "id": "c1",
+                "body": "ping @reviewer1",
+                "author": "alice",
+                "url": "https://github.com/octo/portal/issues/5#issuecomment-1",
+                "issue_number": 5,
+            }
+        ]
+
+    async def _fake_post_json(path, payload, *, session=None):
+        posts.append((path, payload))
+
+    async def _unexpected_execute(*args, **kwargs):
+        raise AssertionError("run_once mention path must not call runtime direct execute entry")
+
+    monkeypatch.setattr("src.cron.subscription_watchers.is_portal_internal_configured", lambda: True)
+    monkeypatch.setattr(manager, "_get_json", _fake_get_json)
+    monkeypatch.setattr(manager, "_post_json", _fake_post_json)
+    monkeypatch.setattr(manager, "_agent_id", lambda: "agent-1")
+    monkeypatch.setattr("src.cron.subscription_watchers.github_channel.get_recent_issue_comments", _fake_get_recent_issue_comments)
+    if hasattr(execution_bus, "execute_tool_by_name"):
+        monkeypatch.setattr(execution_bus, "execute_tool_by_name", _unexpected_execute)
+
+    await manager.run_once()
+
+    assert len(posts) == 1
+    path, payload = posts[0]
+    assert path == "/api/internal/external-events/ingest"
+    assert payload["dedupe_key"] == "github:mention:octo/portal:c1"
+    assert payload["external_account_id"] == "gh-user-1"
+
+    metadata = json.loads(payload["metadata_json"])
+    assert metadata["source_kind"] == "github.mention"
+    assert metadata["subscription_id"] == "s-gh-mention"
+    assert metadata["binding_id"] == "b-gh-1"
+    assert metadata["subscription_mode"] == "poll"
+    assert metadata["trigger_mode"] == "poll"
+
+
+@pytest.mark.asyncio
+async def test_run_once_self_service_github_review_requested_posts_ingest_not_direct_execute(monkeypatch):
+    from src.cron.subscription_watchers import SubscriptionWatcherManager
+    import src.runtime.execution_bus as execution_bus
+
+    manager = SubscriptionWatcherManager()
+    posts = []
+
+    async def _fake_get_json(path, *, session=None):
+        if path.startswith("/api/internal/external-event-subscriptions"):
+            return {
+                "items": [
+                    {
+                        "id": "s-gh-review",
+                        "agent_id": "agent-1",
+                        "provider_type": "github",
+                        "event_type": "pull_request_review_requested",
+                        "mode": "poll",
+                        "source_kind": "github.pull_request_review_requested",
+                        "enabled": True,
+                        "target_ref": "octo/portal",
+                        "config_json": '{"allowed_repos":["octo/portal"]}',
+                        "scope_json": '{"repos":["octo/portal"]}',
+                        "matcher_json": '{"review_states":["changes_requested"]}',
+                        "read_only": True,
+                        "display_name": "Owner managed GitHub review watcher",
+                        "ui_badges": ["self-service"],
+                    }
+                ]
+            }
+        if path == "/api/internal/agent-identity-bindings?enabled=true":
+            return {
+                "items": [
+                    {
+                        "id": "b-gh-review",
+                        "agent_id": "agent-1",
+                        "system_type": "github",
+                        "username": "reviewer1",
+                        "external_account_id": "gh-reviewer-123",
+                    }
+                ]
+            }
+        raise AssertionError("unexpected path")
+
+    async def _fake_search_issues(query, max_results=50):
+        assert "repo:octo/portal" in query
+        assert "review-requested:reviewer1" in query
+        assert max_results == 50
+        return {"items": [{"number": 123}]}
+
+    async def _fake_get_pr(owner, repo, pull_number):
+        assert owner == "octo"
+        assert repo == "portal"
+        assert pull_number == 123
+        return {"head": {"sha": "abc123"}}
+
+    async def _fake_post_json(path, payload, *, session=None):
+        posts.append((path, payload))
+
+    async def _unexpected_execute(*args, **kwargs):
+        raise AssertionError("run_once github review path must not call runtime direct execute entry")
+
+    monkeypatch.setattr("src.cron.subscription_watchers.is_portal_internal_configured", lambda: True)
+    monkeypatch.setattr(manager, "_get_json", _fake_get_json)
+    monkeypatch.setattr(manager, "_post_json", _fake_post_json)
+    monkeypatch.setattr(manager, "_agent_id", lambda: "agent-1")
+    monkeypatch.setattr("src.cron.subscription_watchers.github_channel.search_issues", _fake_search_issues)
+    monkeypatch.setattr("src.cron.subscription_watchers.github_channel.get_pull_request", _fake_get_pr)
+    if hasattr(execution_bus, "execute_tool_by_name"):
+        monkeypatch.setattr(execution_bus, "execute_tool_by_name", _unexpected_execute)
+
+    await manager.run_once()
+
+    assert len(posts) == 1
+    path, payload = posts[0]
+    assert path == "/api/internal/external-events/ingest"
+    assert payload["source_type"] == "github"
+    assert payload["event_type"] == "pull_request_review_requested"
+    assert payload["external_account_id"] == "gh-reviewer-123"
+    assert payload["target_ref"] == "octo/portal"
+    assert payload["dedupe_key"] == "github:review:octo/portal:123:reviewer1:abc123"
+
+    parsed_payload = json.loads(payload["payload_json"])
+    assert parsed_payload["owner"] == "octo"
+    assert parsed_payload["repo"] == "portal"
+    assert parsed_payload["pull_number"] == 123
+    assert parsed_payload["reviewer"] == "reviewer1"
+    assert parsed_payload["head_sha"] == "abc123"
+
+    metadata = json.loads(payload["metadata_json"])
+    assert metadata["source_kind"] == "github.pull_request_review_requested"
+    assert metadata["subscription_id"] == "s-gh-review"
+    assert metadata["binding_id"] == "b-gh-review"
+    assert metadata["subscription_mode"] == "poll"
+    assert metadata["trigger_mode"] == "poll"
+    assert metadata["reviewer_login"] == "reviewer1"
+
+
+@pytest.mark.asyncio
+async def test_run_once_self_service_jira_mention_posts_ingest_not_direct_execute(monkeypatch):
+    from src.cron.subscription_watchers import SubscriptionWatcherManager
+    import src.runtime.execution_bus as execution_bus
+
+    manager = SubscriptionWatcherManager()
+    posts = []
+
+    async def _fake_get_json(path, *, session=None):
+        if path.startswith("/api/internal/external-event-subscriptions"):
+            return {
+                "items": [
+                    {
+                        "id": "s-jira-mention",
+                        "agent_id": "agent-1",
+                        "provider_type": "jira",
+                        "event_type": "mention",
+                        "mode": "poll",
+                        "source_kind": "jira.mention",
+                        "enabled": True,
+                        "target_ref": "ENG",
+                        "scope_json": '{"projects":["ENG"]}',
+                        "read_only": True,
+                        "display_name": "Owner managed Jira mention watcher",
+                        "ui_badges": ["self-service"],
+                    }
+                ]
+            }
+        if path == "/api/internal/agent-identity-bindings?enabled=true":
+            return {
+                "items": [
+                    {
+                        "id": "b-jira-1",
+                        "agent_id": "agent-1",
+                        "provider_type": "jira",
+                        "username": "reviewer1",
+                        "external_account_id": "jira-account-1",
+                    }
+                ]
+            }
+        raise AssertionError("unexpected path")
+
+    async def _fake_search_issues(jql, max_results=50):
+        assert "project IN (ENG)" in jql
+        assert max_results == 50
+        return {"issues": [{"key": "ENG-1", "fields": {"project": {"key": "ENG"}}}]}
+
+    async def _fake_get_comments(issue_key):
+        assert issue_key == "ENG-1"
+        return [{"id": "jc1", "body": "ping @reviewer1", "author": "bob"}]
+
+    async def _fake_post_json(path, payload, *, session=None):
+        posts.append((path, payload))
+
+    async def _unexpected_execute(*args, **kwargs):
+        raise AssertionError("run_once jira mention path must not call runtime direct execute entry")
+
+    monkeypatch.setattr("src.cron.subscription_watchers.is_portal_internal_configured", lambda: True)
+    monkeypatch.setattr(manager, "_get_json", _fake_get_json)
+    monkeypatch.setattr(manager, "_post_json", _fake_post_json)
+    monkeypatch.setattr(manager, "_agent_id", lambda: "agent-1")
+    monkeypatch.setattr("src.cron.subscription_watchers.jira_channel.search_issues", _fake_search_issues)
+    monkeypatch.setattr("src.cron.subscription_watchers.jira_channel.get_comments", _fake_get_comments)
+    if hasattr(execution_bus, "execute_tool_by_name"):
+        monkeypatch.setattr(execution_bus, "execute_tool_by_name", _unexpected_execute)
+
+    await manager.run_once()
+
+    assert len(posts) == 1
+    path, payload = posts[0]
+    assert path == "/api/internal/external-events/ingest"
+    assert payload["source_type"] == "jira"
+    assert payload["event_type"] == "mention"
+    assert payload["external_account_id"] == "jira-account-1"
+    assert payload["target_ref"] == "ENG"
+    assert payload["dedupe_key"] == "jira:mention:ENG-1:jc1"
+
+    metadata = json.loads(payload["metadata_json"])
+    assert metadata["source_kind"] == "jira.mention"
+    assert metadata["subscription_id"] == "s-jira-mention"
+    assert metadata["binding_id"] == "b-jira-1"
+    assert metadata["subscription_mode"] == "poll"
+    assert metadata["trigger_mode"] == "poll"
+
+
+@pytest.mark.asyncio
+async def test_run_once_self_service_confluence_mention_posts_ingest_not_direct_execute(monkeypatch):
+    from src.cron.subscription_watchers import SubscriptionWatcherManager
+    import src.runtime.execution_bus as execution_bus
+
+    manager = SubscriptionWatcherManager()
+    posts = []
+
+    async def _fake_get_json(path, *, session=None):
+        if path.startswith("/api/internal/external-event-subscriptions"):
+            return {
+                "items": [
+                    {
+                        "id": "s-conf-mention",
+                        "agent_id": "agent-1",
+                        "provider_type": "confluence",
+                        "event_type": "mention",
+                        "mode": "poll",
+                        "source_kind": "confluence.mention",
+                        "enabled": True,
+                        "target_ref": "DEV",
+                        "scope_json": '{"spaces":["DEV"]}',
+                        "read_only": True,
+                        "display_name": "Owner managed Confluence mention watcher",
+                        "ui_badges": ["self-service"],
+                    }
+                ]
+            }
+        if path == "/api/internal/agent-identity-bindings?enabled=true":
+            return {
+                "items": [
+                    {
+                        "id": "b-conf-1",
+                        "agent_id": "agent-1",
+                        "provider_type": "confluence",
+                        "username": "reviewer1",
+                        "external_account_id": "conf-user-1",
+                    }
+                ]
+            }
+        raise AssertionError("unexpected path")
+
+    async def _fake_search_pages(cql, limit=20):
+        assert 'space = "DEV"' in cql
+        return {"results": [{"id": "p1", "title": "Doc", "space": {"key": "DEV"}}]}
+
+    async def _fake_get_comments(page_id):
+        assert page_id == "p1"
+        return [
+            {
+                "id": "cc1",
+                "body": {"storage": {"value": "<p>@reviewer1 please check</p>"}},
+                "version": {"by": {"displayName": "carol"}},
+            }
+        ]
+
+    async def _fake_post_json(path, payload, *, session=None):
+        posts.append((path, payload))
+
+    async def _unexpected_execute(*args, **kwargs):
+        raise AssertionError("run_once confluence mention path must not call runtime direct execute entry")
+
+    monkeypatch.setattr("src.cron.subscription_watchers.is_portal_internal_configured", lambda: True)
+    monkeypatch.setattr(manager, "_get_json", _fake_get_json)
+    monkeypatch.setattr(manager, "_post_json", _fake_post_json)
+    monkeypatch.setattr(manager, "_agent_id", lambda: "agent-1")
+    monkeypatch.setattr("src.cron.subscription_watchers.confluence_channel.search_pages", _fake_search_pages)
+    monkeypatch.setattr("src.cron.subscription_watchers.confluence_channel.get_comments", _fake_get_comments)
+    if hasattr(execution_bus, "execute_tool_by_name"):
+        monkeypatch.setattr(execution_bus, "execute_tool_by_name", _unexpected_execute)
+
+    await manager.run_once()
+
+    assert len(posts) == 1
+    path, payload = posts[0]
+    assert path == "/api/internal/external-events/ingest"
+    assert payload["source_type"] == "confluence"
+    assert payload["event_type"] == "mention"
+    assert payload["external_account_id"] == "conf-user-1"
+    assert payload["target_ref"] == "DEV"
+    assert payload["dedupe_key"] == "confluence:mention:p1:cc1"
+
+    metadata = json.loads(payload["metadata_json"])
+    assert metadata["source_kind"] == "confluence.mention"
+    assert metadata["subscription_id"] == "s-conf-mention"
+    assert metadata["binding_id"] == "b-conf-1"
+    assert metadata["subscription_mode"] == "poll"
+    assert metadata["trigger_mode"] == "poll"
+
+
+@pytest.mark.asyncio
 async def test_poll_github_review_requests_posts_normalized_ingress(monkeypatch):
     from src.cron.subscription_watchers import SubscriptionWatcherManager, WatchSubscription
 
