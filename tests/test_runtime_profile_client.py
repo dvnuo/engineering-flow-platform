@@ -157,7 +157,7 @@ def test_extract_runtime_profile_overlay_keeps_working_when_portal_adds_more_non
     assert clear_flag is False
 
 
-def test_runtime_profile_client_ignores_additional_portal_control_plane_metadata():
+def test_runtime_profile_client_ignores_future_portal_control_plane_metadata_without_touching_overlay():
     payload = {
         "runtime_profile_context": {
             "config": {
@@ -172,6 +172,10 @@ def test_runtime_profile_client_ignores_additional_portal_control_plane_metadata
         "read_only": False,
         "binding_count": 2,
         "subscription_count": 3,
+        "settings_summary": {
+            "binding_enabled_count": 1,
+            "subscription_enabled_count": 2,
+        },
     }
 
     runtime_profile_id, revision, overlay_config, clear_flag = runtime_profile_client._extract_runtime_profile_overlay(payload)
@@ -187,6 +191,7 @@ def test_runtime_profile_client_ignores_additional_portal_control_plane_metadata
     assert "ui_badges" not in overlay_config
     assert "binding_count" not in overlay_config
     assert "subscription_count" not in overlay_config
+    assert "settings_summary" not in overlay_config
 
 
 @pytest.mark.asyncio
