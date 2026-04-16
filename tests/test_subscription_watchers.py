@@ -233,6 +233,104 @@ async def test_run_once_self_service_github_mention_posts_ingest_not_direct_exec
 
 
 @pytest.mark.asyncio
+async def test_run_once_self_service_github_review_requested_posts_ingest_not_direct_execute(monkeypatch):
+    from src.cron.subscription_watchers import SubscriptionWatcherManager
+    import src.runtime.execution_bus as execution_bus
+
+    manager = SubscriptionWatcherManager()
+    posts = []
+
+    async def _fake_get_json(path, *, session=None):
+        if path.startswith("/api/internal/external-event-subscriptions"):
+            return {
+                "items": [
+                    {
+                        "id": "s-gh-review",
+                        "agent_id": "agent-1",
+                        "provider_type": "github",
+                        "event_type": "pull_request_review_requested",
+                        "mode": "poll",
+                        "source_kind": "github.pull_request_review_requested",
+                        "enabled": True,
+                        "target_ref": "octo/portal",
+                        "config_json": '{"allowed_repos":["octo/portal"]}',
+                        "scope_json": '{"repos":["octo/portal"]}',
+                        "matcher_json": '{"review_states":["changes_requested"]}',
+                        "read_only": True,
+                        "display_name": "Owner managed GitHub review watcher",
+                        "ui_badges": ["self-service"],
+                    }
+                ]
+            }
+        if path == "/api/internal/agent-identity-bindings?enabled=true":
+            return {
+                "items": [
+                    {
+                        "id": "b-gh-review",
+                        "agent_id": "agent-1",
+                        "system_type": "github",
+                        "username": "reviewer1",
+                        "external_account_id": "gh-reviewer-123",
+                    }
+                ]
+            }
+        raise AssertionError("unexpected path")
+
+    async def _fake_search_issues(query, max_results=50):
+        assert "repo:octo/portal" in query
+        assert "review-requested:reviewer1" in query
+        assert max_results == 50
+        return {"items": [{"number": 123}]}
+
+    async def _fake_get_pr(owner, repo, pull_number):
+        assert owner == "octo"
+        assert repo == "portal"
+        assert pull_number == 123
+        return {"head": {"sha": "abc123"}}
+
+    async def _fake_post_json(path, payload, *, session=None):
+        posts.append((path, payload))
+
+    async def _unexpected_execute(*args, **kwargs):
+        raise AssertionError("run_once github review path must not call runtime direct execute entry")
+
+    monkeypatch.setattr("src.cron.subscription_watchers.is_portal_internal_configured", lambda: True)
+    monkeypatch.setattr(manager, "_get_json", _fake_get_json)
+    monkeypatch.setattr(manager, "_post_json", _fake_post_json)
+    monkeypatch.setattr(manager, "_agent_id", lambda: "agent-1")
+    monkeypatch.setattr("src.cron.subscription_watchers.github_channel.search_issues", _fake_search_issues)
+    monkeypatch.setattr("src.cron.subscription_watchers.github_channel.get_pull_request", _fake_get_pr)
+    if hasattr(execution_bus, "execute_tool_by_name"):
+        monkeypatch.setattr(execution_bus, "execute_tool_by_name", _unexpected_execute)
+
+    await manager.run_once()
+
+    assert len(posts) == 1
+    path, payload = posts[0]
+    assert path == "/api/internal/external-events/ingest"
+    assert payload["source_type"] == "github"
+    assert payload["event_type"] == "pull_request_review_requested"
+    assert payload["external_account_id"] == "gh-reviewer-123"
+    assert payload["target_ref"] == "octo/portal"
+    assert payload["dedupe_key"] == "github:review:octo/portal:123:reviewer1:abc123"
+
+    parsed_payload = json.loads(payload["payload_json"])
+    assert parsed_payload["owner"] == "octo"
+    assert parsed_payload["repo"] == "portal"
+    assert parsed_payload["pull_number"] == 123
+    assert parsed_payload["reviewer"] == "reviewer1"
+    assert parsed_payload["head_sha"] == "abc123"
+
+    metadata = json.loads(payload["metadata_json"])
+    assert metadata["source_kind"] == "github.pull_request_review_requested"
+    assert metadata["subscription_id"] == "s-gh-review"
+    assert metadata["binding_id"] == "b-gh-review"
+    assert metadata["subscription_mode"] == "poll"
+    assert metadata["trigger_mode"] == "poll"
+    assert metadata["reviewer_login"] == "reviewer1"
+
+
+@pytest.mark.asyncio
 async def test_poll_github_review_requests_posts_normalized_ingress(monkeypatch):
     from src.cron.subscription_watchers import SubscriptionWatcherManager, WatchSubscription
 
