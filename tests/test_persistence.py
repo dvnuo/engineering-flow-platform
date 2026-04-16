@@ -168,6 +168,20 @@ class TestSessionPersistence:
         assert info["metadata"]["topic"] == "project讨论"
         assert info["metadata"]["priority"] == "high"
 
+    @pytest.mark.asyncio
+    async def test_metadata_round_trip_preserves_custom_session_name(self, store):
+        session_id = "custom_name_roundtrip"
+        await store.save_session(
+            session_id=session_id,
+            channel="webchat",
+            messages=[{"role": "user", "content": "hello"}],
+            metadata={"custom_session_name": "Runtime Custom Session"},
+        )
+
+        info = await store.load_session(session_id)
+        assert info is not None
+        assert info["metadata"]["custom_session_name"] == "Runtime Custom Session"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

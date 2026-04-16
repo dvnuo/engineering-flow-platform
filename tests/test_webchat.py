@@ -152,8 +152,16 @@ class TestWebChatRoutes:
         assert '/' in routes
         assert '/api/chat' in routes
         assert '/api/sessions' in routes
+        assert '/api/sessions/{session_id}/rename' in routes
+        assert '/api/sessions/{session_id}' in routes
         assert '/api/usage' in routes
         assert '/api/clear' in routes
+
+        delete_routes = [
+            r for r in app.router.routes()
+            if r.resource and r.resource.canonical == '/api/sessions/{session_id}' and r.method == 'DELETE'
+        ]
+        assert delete_routes
     
     def test_static_route_registered(self):
         """Test static file route is registered."""
@@ -2444,7 +2452,7 @@ async def test_api_load_session_backfills_assistant_display_blocks(monkeypatch):
 
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
 
-    async def _fake_get_session(_session_id):
+    async def _fake_get_existing_session(_session_id):
         return {
             "history": [
                 {"role": "user", "content": "hi"},
@@ -2453,7 +2461,7 @@ async def test_api_load_session_backfills_assistant_display_blocks(monkeypatch):
             "metadata": {},
         }
 
-    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+    monkeypatch.setattr(webchat.session_manager, "get_existing_session", _fake_get_existing_session)
 
     class _Request:
         match_info = {"session_id": "s-load"}
@@ -2474,7 +2482,7 @@ async def test_api_load_session_normalizes_assistant_name_from_trusted_portal_he
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
     monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _request: ("agent-1", "Portal Agent"))
 
-    async def _fake_get_session(_session_id):
+    async def _fake_get_existing_session(_session_id):
         return {
             "history": [
                 {
@@ -2489,7 +2497,7 @@ async def test_api_load_session_normalizes_assistant_name_from_trusted_portal_he
             "metadata": {},
         }
 
-    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+    monkeypatch.setattr(webchat.session_manager, "get_existing_session", _fake_get_existing_session)
 
     class _Request:
         match_info = {"session_id": "s-load-agent-name"}
@@ -2508,7 +2516,7 @@ async def test_api_load_session_backfills_user_author_from_trusted_portal_header
 
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
 
-    async def _fake_get_session(_session_id):
+    async def _fake_get_existing_session(_session_id):
         return {
             "history": [
                 {"role": "user", "content": "hello from history"},
@@ -2516,7 +2524,7 @@ async def test_api_load_session_backfills_user_author_from_trusted_portal_header
             "metadata": {},
         }
 
-    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+    monkeypatch.setattr(webchat.session_manager, "get_existing_session", _fake_get_existing_session)
 
     class _Request:
         match_info = {"session_id": "s-load-user"}
@@ -2641,7 +2649,7 @@ async def test_api_load_session_keeps_existing_structured_display_blocks(monkeyp
 
     monkeypatch.setattr(webchat.session_manager, "_initialized", True)
 
-    async def _fake_get_session(_session_id):
+    async def _fake_get_existing_session(_session_id):
         return {
             "history": [
                 {"role": "assistant", "content": "fallback", "display_blocks": [{"type": "code", "lang": "python", "content": "print('x')"}]},
@@ -2649,7 +2657,7 @@ async def test_api_load_session_keeps_existing_structured_display_blocks(monkeyp
             "metadata": {},
         }
 
-    monkeypatch.setattr(webchat.session_manager, "get_session", _fake_get_session)
+    monkeypatch.setattr(webchat.session_manager, "get_existing_session", _fake_get_existing_session)
 
     class _Request:
         match_info = {"session_id": "s-keep"}
@@ -2658,6 +2666,49 @@ async def test_api_load_session_keeps_existing_structured_display_blocks(monkeyp
     assert resp.status == 200
     payload = json.loads(resp.text)
     assert payload["messages"][0]["display_blocks"][0]["type"] == "code"
+
+
+@pytest.mark.asyncio
+async def test_api_load_session_returns_404_when_session_missing(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_existing_session", lambda _sid: asyncio.sleep(0, result=None))
+
+    class _Request:
+        match_info = {"session_id": "missing-session"}
+        headers = {}
+        app = {}
+
+    resp = await webchat.api_load_session(_Request())
+    assert resp.status == 404
+    payload = json.loads(resp.text)
+    assert payload["error"] == "Session not found"
+
+
+@pytest.mark.asyncio
+async def test_api_load_session_uses_custom_session_name_from_metadata(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+
+    async def _fake_get_existing_session(_session_id):
+        return {
+            "history": [{"role": "user", "content": "fallback title"}],
+            "metadata": {"custom_session_name": "My Custom Name"},
+        }
+
+    monkeypatch.setattr(webchat.session_manager, "get_existing_session", _fake_get_existing_session)
+
+    class _Request:
+        match_info = {"session_id": "session-custom-name"}
+        headers = {}
+        app = {}
+
+    resp = await webchat.api_load_session(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["name"] == "My Custom Name"
 
 
 def test_agent_assistant_display_helpers_minimal_payload():

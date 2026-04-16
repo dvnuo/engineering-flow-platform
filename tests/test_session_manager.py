@@ -156,6 +156,65 @@ class TestSessionManagerInfo:
         assert info is None
 
     @pytest.mark.asyncio
+    async def test_get_existing_session_returns_none_for_missing_session(self, fresh_session_manager):
+        import uuid
+
+        session_id = f"missing_existing_{uuid.uuid4().hex[:8]}"
+        existing = await fresh_session_manager.get_existing_session(session_id)
+        assert existing is None
+
+    @pytest.mark.asyncio
+    async def test_rename_session_persists_custom_session_name(self, fresh_session_manager):
+        import uuid
+
+        session_id = f"rename_meta_{uuid.uuid4().hex[:8]}"
+        await fresh_session_manager.get_session(session_id)
+
+        save_calls = []
+
+        async def _fake_save_session(**kwargs):
+            save_calls.append(kwargs)
+            return True
+
+        fresh_session_manager.persistence_enabled = True
+        from src.sessions import manager as manager_module
+        original_save = manager_module.session_persistence.save_session
+        manager_module.session_persistence.save_session = _fake_save_session
+        try:
+            renamed = await fresh_session_manager.rename_session(session_id, "  Renamed Session  ")
+        finally:
+            manager_module.session_persistence.save_session = original_save
+
+        assert renamed == "Renamed Session"
+        assert fresh_session_manager.sessions[session_id]["metadata"]["custom_session_name"] == "Renamed Session"
+        assert len(save_calls) == 1
+        assert save_calls[0]["metadata"]["custom_session_name"] == "Renamed Session"
+
+    @pytest.mark.asyncio
+    async def test_delete_session_removes_session_from_memory_and_returns_true(self, fresh_session_manager):
+        import uuid
+
+        session_id = f"delete_existing_{uuid.uuid4().hex[:8]}"
+        await fresh_session_manager.get_session(session_id)
+        assert session_id in fresh_session_manager.sessions
+
+        fresh_session_manager.persistence_enabled = False
+        deleted = await fresh_session_manager.delete_session(session_id)
+
+        assert deleted is True
+        assert session_id not in fresh_session_manager.sessions
+        assert session_id not in fresh_session_manager._session_timestamps
+
+    @pytest.mark.asyncio
+    async def test_delete_session_returns_false_when_missing(self, fresh_session_manager):
+        import uuid
+
+        session_id = f"delete_missing_{uuid.uuid4().hex[:8]}"
+        fresh_session_manager.persistence_enabled = False
+        deleted = await fresh_session_manager.delete_session(session_id)
+        assert deleted is False
+
+    @pytest.mark.asyncio
     async def test_set_last_execution_id_updates_in_memory_and_schedules_metadata_persist(self, fresh_session_manager):
         import uuid
 

@@ -202,6 +202,20 @@ class TestGatewaySessionManagement:
         route_strs = [str(r.resource.canonical) if r.resource else "" for r in routes]
         assert any("/api/sessions" in p for p in route_strs)
 
+    def test_gateway_session_management_routes_include_rename_and_delete(self):
+        """Gateway should expose rename/delete session management routes."""
+        gateway = Gateway()
+        routes = list(gateway.app.router.routes())
+
+        assert any(
+            r.resource and r.resource.canonical == "/api/sessions/{session_id}/rename" and r.method == "POST"
+            for r in routes
+        )
+        assert any(
+            r.resource and r.resource.canonical == "/api/sessions/{session_id}" and r.method == "DELETE"
+            for r in routes
+        )
+
 
 class TestGatewayRequestHandling:
     """Gateway request handling tests."""
