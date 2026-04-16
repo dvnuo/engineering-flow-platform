@@ -13,8 +13,6 @@ from aiohttp.web import Request
 
 import os
 import re
-import hashlib
-import hmac
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -39,29 +37,6 @@ def _runtime_workspace_root() -> Path:
     """Canonical runtime workspace root."""
     return (Path.home() / ".efp" / "workspace").resolve()
 
-
-def verify_discord_signature(payload: bytes, signature: str, secret: str) -> bool:
-    """Verify Discord webhook signature using HMAC SHA-256.
-
-    If ``secret`` is empty, verification is skipped and returns True.
-    """
-    if not secret:
-        return True
-
-    if not signature:
-        return False
-
-    expected = hmac.new(
-        secret.encode("utf-8"),
-        payload,
-        hashlib.sha256,
-    ).hexdigest()
-
-    provided = signature
-    if signature.startswith("sha256="):
-        provided = signature[len("sha256="):]
-
-    return hmac.compare_digest(provided, expected)
 
 
 def get_traceback_str() -> str:

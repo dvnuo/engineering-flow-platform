@@ -201,7 +201,7 @@ def _build_session_entry(
     
     Args:
         session_id: Session ID
-        channel: Source channel (webchat, discord, etc.)
+        channel: Source channel (webchat, jira, etc.)
         created_at: Session creation timestamp
         summary: Heuristic-based summary
         

@@ -21,12 +21,11 @@ class TestConfigBasic:
     def test_config_get_nested(self):
         """Test getting nested config values."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("discord:\n  bot_token: test_token\n  channel_id: 123\n")
+            f.write("jira:\n  enabled: true\n")
             f.flush()
             
             config = Config(f.name)
-            assert config.get("discord.bot_token") == "test_token"
-            assert config.get("discord.channel_id") == 123
+            assert config.get("jira.enabled") is True
             
             os.unlink(f.name)
 
@@ -141,11 +140,11 @@ class TestConfigEdgeCases:
     def test_config_property_accessors(self):
         """Test config property accessors."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write("discord:\n  bot_token: token\nllm:\n  api_key: key\n")
+            f.write("jira:\n  enabled: true\nllm:\n  api_key: key\n")
             f.flush()
             
             config = Config(f.name)
-            assert config.discord["bot_token"] == "token"
+            assert config.jira["enabled"] is True
             assert config.llm["api_key"] == "key"
             
             os.unlink(f.name)
