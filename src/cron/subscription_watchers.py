@@ -115,6 +115,17 @@ class SubscriptionWatcherManager:
                 return {}
         return {}
 
+    @staticmethod
+    def _extract_list_payload(raw: Any, *keys: str) -> List[Dict[str, Any]]:
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+        if isinstance(raw, dict):
+            for key in keys:
+                value = raw.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+        return []
+
     async def fetch_runtime_profile_config(self, agent_id: str, *, session: ClientSession | None = None) -> Dict[str, Any]:
         data = await self._get_json(f"/api/internal/agents/{agent_id}/runtime-context", session=session)
         context = data.get("runtime_profile_context") if isinstance(data.get("runtime_profile_context"), dict) else {}
@@ -122,7 +133,7 @@ class SubscriptionWatcherManager:
 
     async def fetch_identity_bindings(self, *, session: ClientSession | None = None) -> List[IdentityBinding]:
         data = await self._get_json("/api/internal/agent-identity-bindings?enabled=true", session=session)
-        items = data.get("items") if isinstance(data.get("items"), list) else []
+        items = self._extract_list_payload(data, "items")
         normalized: list[IdentityBinding] = []
         for item in items:
             if not isinstance(item, dict):

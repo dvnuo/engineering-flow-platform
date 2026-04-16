@@ -260,3 +260,76 @@ async def test_watcher_only_ingests_not_execute(monkeypatch):
 
     assert called["ingest"] == 1
     assert called["execute"] == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_identity_bindings_accepts_bare_list_response(monkeypatch):
+    from src.cron.subscription_watchers import SubscriptionWatcherManager
+
+    manager = SubscriptionWatcherManager()
+
+    async def _fake_get_json(path, *, session=None):
+        assert path == "/api/internal/agent-identity-bindings?enabled=true"
+        return [
+            {
+                "id": "b1",
+                "agent_id": "agent-1",
+                "system_type": "github",
+                "username": "agentuser",
+                "external_account_id": "agentuser",
+            }
+        ]
+
+    monkeypatch.setattr(manager, "_get_json", _fake_get_json)
+    bindings = await manager.fetch_identity_bindings()
+    assert len(bindings) == 1
+    assert bindings[0].id == "b1"
+    assert bindings[0].system_type == "github"
+
+
+@pytest.mark.asyncio
+async def test_run_once_accepts_bare_list_bindings_response(monkeypatch):
+    from src.cron.subscription_watchers import SubscriptionWatcherManager
+
+    manager = SubscriptionWatcherManager()
+    polled = []
+
+    async def _fake_get_json(path, *, session=None):
+        if path == "/api/internal/agents/agent-1/runtime-context":
+            return {
+                "runtime_profile_context": {
+                    "config": {
+                        "github": {
+                            "enabled": True,
+                            "automation": {
+                                "mentions": {"enabled": True, "repos": ["acme/demo"]},
+                            },
+                        }
+                    }
+                }
+            }
+        if path == "/api/internal/agent-identity-bindings?enabled=true":
+            return [
+                {
+                    "id": "b1",
+                    "agent_id": "agent-1",
+                    "system_type": "github",
+                    "username": "agentuser",
+                    "external_account_id": "agentuser",
+                    "enabled": True,
+                }
+            ]
+        raise AssertionError(path)
+
+    async def _fake_poll(rule, *, session=None):
+        polled.append(rule)
+
+    monkeypatch.setattr("src.cron.subscription_watchers.is_portal_internal_configured", lambda: True)
+    monkeypatch.setattr(manager, "_agent_id", lambda: "agent-1")
+    monkeypatch.setattr(manager, "_get_json", _fake_get_json)
+    monkeypatch.setattr(manager, "_poll_rule", _fake_poll)
+
+    await manager.run_once()
+
+    assert polled
+    assert any(rule.source_kind == "github.mention" for rule in polled)

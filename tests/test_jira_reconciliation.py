@@ -250,6 +250,47 @@ async def test_jira_reconciliation_reuses_single_client_session_per_run(monkeypa
     assert [payload["issue_key"] for _, payload in posts] == ["ENG-1", "ENG-2"]
 
 
+@pytest.mark.asyncio
+async def test_fetch_enabled_workflow_rules_accepts_bare_list_response(monkeypatch):
+    from src.cron import jira_reconciliation
+
+    runner = jira_reconciliation.JiraReconciliationRunner()
+
+    async def _fake_get_json(path, *, session=None):
+        assert path == "/api/internal/workflow-transition-rules"
+        return [
+            {
+                "id": "r-1",
+                "system_type": "jira",
+                "is_enabled": True,
+                "project_key": "ENG",
+                "trigger_status": "In Progress",
+            }
+        ]
+
+    monkeypatch.setattr(runner, "_get_json", _fake_get_json)
+    rules = await runner.fetch_enabled_workflow_rules()
+    assert len(rules) == 1
+    assert rules[0]["id"] == "r-1"
+    assert rules[0]["provider_type"] == "jira"
+
+
+@pytest.mark.asyncio
+async def test_fetch_identity_bindings_accepts_bare_list_response(monkeypatch):
+    from src.cron import jira_reconciliation
+
+    runner = jira_reconciliation.JiraReconciliationRunner()
+
+    async def _fake_get_json(path, *, session=None):
+        assert path == "/api/internal/agent-identity-bindings"
+        return [{"id": "b-1", "agent_id": "a-1", "provider_type": "jira"}]
+
+    monkeypatch.setattr(runner, "_get_json", _fake_get_json)
+    bindings = await runner.fetch_identity_bindings()
+    assert bindings
+    assert bindings[0]["id"] == "b-1"
+
+
 def test_build_external_event_ingress_request_shape():
     from src.cron import jira_reconciliation
 
