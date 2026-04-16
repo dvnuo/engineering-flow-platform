@@ -157,6 +157,38 @@ def test_extract_runtime_profile_overlay_keeps_working_when_portal_adds_more_non
     assert clear_flag is False
 
 
+def test_runtime_profile_client_ignores_additional_portal_control_plane_metadata():
+    payload = {
+        "runtime_profile_context": {
+            "config": {
+                "llm": {"provider": "openai", "model": "gpt-4.1"},
+                "tools": {"bash": {"enabled": True}},
+            },
+            "revision": 7,
+        },
+        "owner_user_id": 42,
+        "display_label": "owner-managed profile",
+        "ui_badges": ["self-service"],
+        "read_only": False,
+        "binding_count": 2,
+        "subscription_count": 3,
+    }
+
+    runtime_profile_id, revision, overlay_config, clear_flag = runtime_profile_client._extract_runtime_profile_overlay(payload)
+    assert runtime_profile_id is None
+    assert revision == 7
+    assert overlay_config == {
+        "llm": {"provider": "openai", "model": "gpt-4.1"},
+        "tools": {"bash": {"enabled": True}},
+    }
+    assert clear_flag is False
+    assert "owner_user_id" not in overlay_config
+    assert "display_label" not in overlay_config
+    assert "ui_badges" not in overlay_config
+    assert "binding_count" not in overlay_config
+    assert "subscription_count" not in overlay_config
+
+
 @pytest.mark.asyncio
 async def test_bootstrap_runtime_profile_apply(monkeypatch):
     monkeypatch.setattr(runtime_profile_client, "get_portal_internal_base_url", lambda: "http://portal")
