@@ -360,10 +360,10 @@ class SkillRegistry:
             part for part in [blocks.system_rules, blocks.developer_instructions, blocks.references_summary] if part
         )
 
-    def get_skill_runtime_config(self, skill: Skill):
+    def get_skill_runtime_config(self, skill: Skill, globally_allowed_tool_names=None):
         from src.skills.runtime import build_skill_runtime_config
 
-        return build_skill_runtime_config(skill)
+        return build_skill_runtime_config(skill, globally_allowed_tool_names=globally_allowed_tool_names)
 
     def get_reference_file_list(self, skill: Skill) -> List[str]:
         from src.skills.runtime import summarize_skill_references

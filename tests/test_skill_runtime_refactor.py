@@ -63,9 +63,12 @@ def base_agent(monkeypatch):
         {"function": {"name": "allowed_tool", "description": "ok"}},
         {"function": {"name": "blocked_tool", "description": "no"}},
     ]
+    agent.allowed_tool_names = {"allowed_tool", "blocked_tool"}
     agent.include_memory = False
     agent.think_level = SimpleNamespace(value="off")
     agent.model = None
+    agent.agent_id = None
+    agent.agent_name = None
     agent.memory_update_manager = None
 
     sess = _SessionManager()
@@ -339,6 +342,89 @@ def test_build_skill_runtime_config_scans_references_once(monkeypatch):
     assert "ref-a.md" in runtime_config.prompt_blocks.references_summary
 
 
+def test_build_skill_runtime_config_intersects_declared_tools_with_global_allowlist():
+    skill = SimpleNamespace(
+        name="demo",
+        description="demo",
+        tools=["git_clone", "jira_get_issue"],
+        task_tools=["git_clone", "jira_get_issue"],
+        strategy=[],
+        body="",
+        references=[],
+        model="",
+        hooks=[],
+        path="",
+    )
+    runtime_config = build_skill_runtime_config(skill, globally_allowed_tool_names={"git_clone"})
+
+    assert runtime_config.tool_policy_declared is True
+    assert runtime_config.allowed_tools == ["git_clone"]
+    assert runtime_config.allowed_tools_set == {"git_clone"}
+    assert runtime_config.task_tools == ["git_clone"]
+    assert "git_clone" in runtime_config.prompt_blocks.system_rules
+    assert "jira_get_issue" not in runtime_config.prompt_blocks.system_rules
+
+
+def test_build_skill_runtime_config_declared_tools_empty_after_intersection():
+    skill = SimpleNamespace(
+        name="demo",
+        description="demo",
+        tools=["jira_get_issue"],
+        task_tools=[],
+        strategy=[],
+        body="",
+        references=[],
+        model="",
+        hooks=[],
+        path="",
+    )
+    runtime_config = build_skill_runtime_config(skill, globally_allowed_tool_names={"git_clone"})
+
+    assert runtime_config.tool_policy_declared is True
+    assert runtime_config.allowed_tools == []
+    assert runtime_config.allowed_tools_set == set()
+    assert "allowed tools (none)" in runtime_config.prompt_blocks.system_rules
+    assert "all currently available tools" not in runtime_config.prompt_blocks.system_rules
+
+
+def test_build_skill_runtime_config_without_declared_tools_keeps_policy_open():
+    skill = SimpleNamespace(
+        name="demo",
+        description="demo",
+        tools=[],
+        task_tools=[],
+        strategy=[],
+        body="",
+        references=[],
+        model="",
+        hooks=[],
+        path="",
+    )
+    runtime_config = build_skill_runtime_config(skill, globally_allowed_tool_names={"git_clone"})
+
+    assert runtime_config.tool_policy_declared is False
+    assert runtime_config.allowed_tools == []
+    assert "all currently available tools" in runtime_config.prompt_blocks.system_rules
+
+
+def test_build_skill_runtime_config_task_tools_trimmed_by_global_allowlist():
+    skill = SimpleNamespace(
+        name="demo",
+        description="demo",
+        tools=["git_clone", "jira_get_issue"],
+        task_tools=["jira_get_issue"],
+        strategy=[],
+        body="",
+        references=[],
+        model="",
+        hooks=[],
+        path="",
+    )
+    runtime_config = build_skill_runtime_config(skill, globally_allowed_tool_names={"git_clone"})
+
+    assert runtime_config.task_tools == []
+
+
 def test_build_skill_tool_denied_result_contains_policy():
     runtime_config = build_skill_runtime_config(
         SimpleNamespace(
@@ -377,7 +463,7 @@ async def test_matched_skill_does_not_route_to_legacy_skill_mode(monkeypatch, ba
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
     )
 
     async def fake_responses(**kwargs):
@@ -436,7 +522,7 @@ async def test_matched_skill_workdir_updates_and_clears_when_path_falsy(monkeypa
         SimpleNamespace(
             _initialized=True,
             match_skill=_match_skill,
-            get_skill_runtime_config=lambda s: build_skill_runtime_config(s),
+            get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names),
         ),
     )
 
@@ -477,7 +563,7 @@ async def test_disallowed_tool_is_denied_and_allowed_tool_executes(monkeypatch, 
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
     )
 
     calls = {"execute": 0, "names": []}
@@ -529,7 +615,7 @@ async def test_hooks_and_task_path_emit_events(monkeypatch, base_agent):
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
     )
 
     async def _exec(*args, **kwargs):
@@ -572,7 +658,7 @@ async def test_hook_failure_does_not_break_request(monkeypatch, base_agent):
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
     )
 
     async def _exec(*args, **kwargs):
@@ -611,7 +697,7 @@ async def test_pre_hook_can_modify_args(monkeypatch, base_agent):
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
     )
     captured = {}
 
@@ -656,7 +742,7 @@ async def test_pre_hook_can_short_circuit(monkeypatch, base_agent):
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
     )
     called = {"tool": 0}
 
@@ -702,7 +788,7 @@ async def test_pre_hook_short_circuit_failure_emits_failed_tool_result(monkeypat
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
     )
     called = {"tool": 0}
 
@@ -744,7 +830,7 @@ async def test_post_hook_can_override_result(monkeypatch, base_agent):
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s: build_skill_runtime_config(s)),
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
     )
 
     async def _exec(*args, **kwargs):
@@ -768,7 +854,7 @@ async def test_non_skill_request_unaffected(monkeypatch, base_agent):
     agent, _ = base_agent
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [], get_skill_runtime_config=lambda s: None),
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: None),
     )
 
     async def fake_responses(**kwargs):

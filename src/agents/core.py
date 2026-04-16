@@ -815,7 +815,10 @@ You have access to the following tools. When a user asks you to do something tha
             if best_skill.path:
                 logger.info(f"[Skill] Workdir: {best_skill.path}")
 
-            active_skill_runtime = skill_registry.get_skill_runtime_config(best_skill)
+            active_skill_runtime = skill_registry.get_skill_runtime_config(
+                best_skill,
+                globally_allowed_tool_names=getattr(self, "allowed_tool_names", set()),
+            )
             # Log matched skill
             tracer.log_tool_call(
                 tool_name="skill_matched",
@@ -1289,13 +1292,8 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Only pass model if explicitly set
             loop_tools = self.tools
-            if active_skill_runtime and active_skill_runtime.allowed_tools:
-                allowed = active_skill_runtime.allowed_tools_set
-                loop_tools = [
-                    tool_schema
-                    for tool_schema in self.tools
-                    if tool_schema.get("function", {}).get("name") in allowed
-                ]
+            if active_skill_runtime and active_skill_runtime.tool_policy_declared:
+                loop_tools = intersect_tool_schemas_by_names(self.tools, active_skill_runtime.allowed_tools_set)
 
             llm_kwargs = dict(
                 input_items=input_items,
@@ -1595,7 +1593,7 @@ You have access to the following tools. When a user asks you to do something tha
                 })
 
                 # Runtime skill policy enforcement (hard guard, not prompt-only)
-                if active_skill_runtime and active_skill_runtime.allowed_tools:
+                if active_skill_runtime and active_skill_runtime.tool_policy_declared:
                     if tool_name not in active_skill_runtime.allowed_tools_set:
                         deny_result = build_skill_tool_denied_result(active_skill_runtime, tool_name)
                         logger.warning(
@@ -1987,7 +1985,13 @@ You have access to the following tools. When a user asks you to do something tha
         skill_session = SkillSession.from_dict(skill_state)
         skill = skill or skill_registry.get_skill(skill_session.skill_name)
         try:
-            skill_runtime_config = skill_registry.get_skill_runtime_config(skill) if skill else None
+            skill_runtime_config = (
+                skill_registry.get_skill_runtime_config(
+                    skill,
+                    globally_allowed_tool_names=getattr(self, "allowed_tool_names", set()),
+                )
+                if skill else None
+            )
         except Exception:
             logger.debug(
                 "[SkillMode] Failed to resolve runtime config for skill %s; continuing without runtime config",
