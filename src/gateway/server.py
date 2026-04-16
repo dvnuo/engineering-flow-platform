@@ -265,7 +265,7 @@ class Gateway:
         Returns: List of sessions with name, last message, timestamp
         """
         from datetime import datetime
-        from src.sessions.manager import session_manager
+        from src.sessions.manager import resolve_session_display_name, session_manager
 
         logger.info(f"[handle_list_sessions] ENTERING - listing sessions")
 
@@ -299,11 +299,7 @@ class Gateway:
                 if not user_messages:
                     continue
 
-                # Get first user message as session name
-                first_user_msg = user_messages[0]
-                session_name = truncate(first_user_msg.get("content", "") or "New Chat", 30)
-                if not session_name.strip():
-                    session_name = "New Chat"
+                session_name = resolve_session_display_name(session)
 
                 # Get last message preview
                 last_message = ""

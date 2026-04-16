@@ -1412,6 +1412,32 @@ body {
     min-width: 0;
 }
 
+.recent-session-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.session-action-btn {
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-input);
+    color: var(--color-text-muted);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    padding: 2px 6px;
+    cursor: pointer;
+    transition: all var(--duration-fast);
+}
+
+.session-action-btn:hover {
+    color: var(--color-text);
+}
+
+.session-action-btn.danger:hover {
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #ef4444;
+}
+
 .recent-session-name {
     font-weight: 500;
     white-space: nowrap;

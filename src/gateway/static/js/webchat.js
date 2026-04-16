@@ -1806,6 +1806,7 @@
             sessions.forEach((session, index) => {
                 const sessionId = session.session_id || ('session_' + (sessionsOffset + index));
                 const isActive = sessionId === currentActiveId || (index === 0 && sessionsOffset === 0 && !currentActiveId);
+                const sessionName = session.name || session.session_id || ('Chat ' + (sessionsOffset + index + 1));
 
                 const item = document.createElement('div');
                 item.className = `recent-session-item ${isActive ? 'active' : ''}`;
@@ -1815,13 +1816,31 @@
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                     </svg>
                     <div class="recent-session-info">
-                        <div class="recent-session-name">${escapeHtml(session.name || session.session_id || 'Chat ' + (sessionsOffset + index + 1))}</div>
+                        <div class="recent-session-name">${escapeHtml(sessionName)}</div>
                         <div class="recent-session-preview">${escapeHtml(session.last_message || '')}</div>
+                    </div>
+                    <div class="recent-session-actions">
+                        <button type="button" class="session-action-btn" data-session-action="rename" title="Rename session">Rename</button>
+                        <button type="button" class="session-action-btn danger" data-session-action="delete" title="Delete session">Delete</button>
                     </div>
                 `;
 
                 // Add click handler
                 item.addEventListener('click', function(e) {
+                    const actionEl = e.target.closest('[data-session-action]');
+                    if (actionEl) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const sid = this.getAttribute('data-session-id');
+                        const action = actionEl.getAttribute('data-session-action');
+                        if (action === 'rename' && sid) {
+                            renameSessionById(sid, sessionName);
+                        } else if (action === 'delete' && sid) {
+                            deleteSessionById(sid);
+                        }
+                        return;
+                    }
+
                     e.preventDefault();
                     const sid = this.getAttribute('data-session-id');
                     console.log('Clicked session:', sid);
@@ -1910,6 +1929,67 @@
             }
         } finally {
             sessionsLoading = false;
+        }
+    }
+
+    async function renameSessionById(sessionId, currentName) {
+        const inputName = prompt('Rename session', currentName || 'New Chat');
+        if (inputName === null) return;
+        const name = String(inputName || '').trim();
+        if (!name) {
+            alert('Session name cannot be empty.');
+            return;
+        }
+        if (name === String(currentName || '').trim()) return;
+
+        try {
+            const response = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/rename', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name }),
+            });
+            const data = await response.json();
+            if (!response.ok || data.error) {
+                alert(data.error || 'Failed to rename session.');
+                return;
+            }
+            loadRecentSessions(true);
+        } catch (error) {
+            console.error('Error renaming session:', error);
+            alert('Failed to rename session.');
+        }
+    }
+
+    async function deleteSessionById(sessionId) {
+        const confirmed = confirm('Delete this session? This cannot be undone.');
+        if (!confirmed) return;
+
+        try {
+            const response = await fetch('/api/sessions/' + encodeURIComponent(sessionId), {
+                method: 'DELETE',
+            });
+            const data = await response.json();
+            if (!response.ok || data.error) {
+                alert(data.error || 'Failed to delete session.');
+                return;
+            }
+
+            if (currentSessionId === sessionId) {
+                currentSessionId = null;
+                localStorage.removeItem(SESSION_ID_KEY);
+                messagesContainer.innerHTML = `
+                    <div class="welcome-message">
+                        <h2>👋 New Chat</h2>
+                        <p>Start a new conversation</p>
+                    </div>
+                `;
+                statusSpan.textContent = 'Ready';
+                if (newChatBtn) newChatBtn.classList.add('active');
+            }
+            loadRecentSessions(true);
+        } catch (error) {
+            console.error('Error deleting session:', error);
+            alert('Failed to delete session.');
         }
     }
 

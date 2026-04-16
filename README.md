@@ -232,6 +232,8 @@ For complete control-plane contract details, see `docs/control_plane_contract.md
 |----------|--------|-------------|
 | `/api/sessions` | GET | List all sessions |
 | `/api/sessions/{id}` | GET | Load session history |
+| `/api/sessions/{id}/rename` | POST | Rename session |
+| `/api/sessions/{id}` | DELETE | Delete session |
 | `/api/sessions/{id}/clear` | POST | Clear session history |
 | `/api/clear` | POST | Clear all sessions |
 

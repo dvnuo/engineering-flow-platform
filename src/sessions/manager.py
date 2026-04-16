@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from src.config import config
 from src.sessions.persistence import session_persistence
+from src.utils.truncate import truncate
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,25 @@ JIRA_SESSION_PREFIX = "jira:"
 DEFAULT_MAX_HISTORY = 999999  # Effectively unlimited
 DEFAULT_TTL_SECONDS = 86400  # 24 hours
 DEFAULT_AUTO_SAVE = True
+
+
+def resolve_session_display_name(session: Dict[str, Any]) -> str:
+    """Resolve a session display name from custom metadata or first user message."""
+    metadata = session.get("metadata", {})
+    custom_name = metadata.get("custom_session_name") if isinstance(metadata, dict) else None
+    if isinstance(custom_name, str):
+        custom_name = custom_name.strip()
+        if custom_name:
+            return custom_name
+
+    history = session.get("history", [])
+    if isinstance(history, list):
+        for msg in history:
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                derived = truncate(msg.get("content", "") or "New Chat", 30)
+                return derived if derived.strip() else "New Chat"
+
+    return "New Chat"
 
 
 class SessionManager:
@@ -243,6 +263,96 @@ class SessionManager:
         self._session_timestamps[session_id] = datetime.now()
         
         return self.sessions[session_id]
+
+    async def get_existing_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get an existing session without auto-creating when missing."""
+        if session_id in self.sessions:
+            self._restore_active_skill_session_from_metadata(self.sessions[session_id])
+            self._update_timestamp(session_id)
+            return self.sessions[session_id]
+
+        if self.persistence_enabled:
+            persisted = await session_persistence.load_session(session_id)
+            if persisted:
+                self.sessions[session_id] = {
+                    "history": persisted.get("messages", []),
+                    "user_id": persisted.get("user_id", ""),
+                    "channel": persisted.get("channel", ""),
+                    "metadata": persisted.get("metadata", {}),
+                    "created_at": persisted.get("created_at", datetime.now().isoformat()),
+                    "updated_at": persisted.get("updated_at", datetime.now().isoformat()),
+                    "_persisted": True,
+                }
+                self._restore_active_skill_session_from_metadata(self.sessions[session_id])
+                self._session_timestamps[session_id] = datetime.now()
+                return self.sessions[session_id]
+
+        return None
+
+    async def rename_session(self, session_id: str, new_name: str) -> Optional[str]:
+        """Rename an existing session by setting metadata.custom_session_name."""
+        normalized_name = str(new_name or "").strip()
+        if not normalized_name:
+            raise ValueError("Session name cannot be empty")
+        if len(normalized_name) > 120:
+            raise ValueError("Session name must be at most 120 characters")
+
+        session = await self.get_existing_session(session_id)
+        if not session:
+            return None
+
+        metadata = session.setdefault("metadata", {})
+        metadata["custom_session_name"] = normalized_name
+        session["updated_at"] = datetime.now().isoformat()
+
+        if self.persistence_enabled:
+            await session_persistence.save_session(
+                session_id=session_id,
+                channel=session.get("channel", ""),
+                messages=session.get("history", []),
+                metadata=session.get("metadata", {}),
+            )
+
+        return normalized_name
+
+    def _delete_session_chatlog(self, session_id: str) -> bool:
+        """Delete session chatlog artifact if present."""
+        chatlog_file = session_persistence.storage_dir / "chatlogs" / f"{session_id}.json"
+        try:
+            if chatlog_file.exists():
+                chatlog_file.unlink()
+                return True
+            return False
+        except Exception as exc:
+            logger.warning("Failed to delete session chatlog for %s: %s", session_id, exc)
+            return False
+
+    def _delete_session_file_context(self, session_id: str) -> bool:
+        """Delete file-context artifacts for session if present."""
+        try:
+            from src.hooks.file_context.storage import storage as file_context_storage
+
+            deleted_count = file_context_storage.delete_session(session_id)
+            return deleted_count > 0
+        except Exception as exc:
+            logger.warning("Failed to delete session file context for %s: %s", session_id, exc)
+            return False
+
+    async def delete_session(self, session_id: str) -> bool:
+        """Delete a session and best-effort cleanup related local artifacts."""
+        in_memory_removed = session_id in self.sessions
+        if in_memory_removed:
+            del self.sessions[session_id]
+        self._session_timestamps.pop(session_id, None)
+
+        persisted_removed = False
+        if self.persistence_enabled:
+            persisted_removed = await session_persistence.delete_session(session_id)
+
+        chatlog_removed = self._delete_session_chatlog(session_id)
+        file_context_removed = self._delete_session_file_context(session_id)
+
+        return in_memory_removed or persisted_removed or chatlog_removed or file_context_removed
     
     async def add_message(self, session_id: str, role: str, content: str, wait_for_save: bool = False, extra: dict = None) -> str:
         """Add a message to the session history.

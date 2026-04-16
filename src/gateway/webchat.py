@@ -63,7 +63,7 @@ from src.gateway.webchat_request_contracts import (
 )
 from src.runtime.capability_registry import get_capability_registry
 from src.gateway.event_bus import emit_agent_event
-from src.sessions.manager import session_manager
+from src.sessions.manager import resolve_session_display_name, session_manager
 from src.sessions.persistence import session_persistence
 from src.sessions.usage import usage_tracker
 
@@ -1458,11 +1458,7 @@ async def api_sessions(request: web.Request) -> web.Response:
                 logger.info(f"[api_sessions] Skipping empty session: {session_id}")
                 continue
             
-            # Get first user message as session name
-            first_user_msg = user_messages[0]
-            session_name = truncate(first_user_msg.get('content', '') or 'New Chat', 30)
-            if not session_name.strip():
-                session_name = 'New Chat'
+            session_name = resolve_session_display_name(session_info)
             
             # Get last message preview
             last_message = ''
@@ -1503,7 +1499,7 @@ async def api_load_session(request: web.Request) -> web.Response:
         if not session_id:
             return web.json_response({'error': 'Session ID required'}, status=400)
         
-        session_info = await session_manager.get_session(session_id)
+        session_info = await session_manager.get_existing_session(session_id)
         
         if not session_info:
             return web.json_response({'error': 'Session not found'}, status=404)
@@ -1525,13 +1521,7 @@ async def api_load_session(request: web.Request) -> web.Response:
             for msg in history
         ]
         
-        # Extract session name from first user message
-        session_name = 'New Chat'
-        for msg in normalized_history:
-            if msg.get('role') == 'user':
-                content = msg.get('content', '') or 'New Chat'
-                session_name = truncate(content, 30)
-                break
+        session_name = resolve_session_display_name(session_info)
         
         return web.json_response({
             'session_id': session_id,
@@ -1972,6 +1962,63 @@ async def api_clear(request: web.Request) -> web.Response:
         return web.json_response({'success': True})
             
     except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_rename_session(request: web.Request) -> web.Response:
+    """Rename an existing session.
+
+    POST /api/sessions/{session_id}/rename
+    Body: {"name": "new title"}
+    """
+    try:
+        if not session_manager._initialized:
+            await session_manager.initialize()
+
+        session_id = request.match_info.get('session_id', '')
+        if not session_id:
+            return web.json_response({'error': 'Session ID required'}, status=400)
+
+        try:
+            data = await request.json()
+        except (json.JSONDecodeError, ContentTypeError):
+            return web.json_response({'error': 'Invalid JSON in request body'}, status=400)
+
+        name = data.get('name')
+        try:
+            renamed = await session_manager.rename_session(session_id, name)
+        except ValueError as exc:
+            return web.json_response({'error': str(exc)}, status=400)
+
+        if renamed is None:
+            return web.json_response({'error': 'Session not found'}, status=404)
+
+        return web.json_response({'success': True, 'session_id': session_id, 'name': renamed})
+    except Exception as e:
+        logger.error(f"Error renaming session: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
+async def api_delete_session(request: web.Request) -> web.Response:
+    """Delete an existing session.
+
+    DELETE /api/sessions/{session_id}
+    """
+    try:
+        if not session_manager._initialized:
+            await session_manager.initialize()
+
+        session_id = request.match_info.get('session_id', '')
+        if not session_id:
+            return web.json_response({'error': 'Session ID required'}, status=400)
+
+        deleted = await session_manager.delete_session(session_id)
+        if not deleted:
+            return web.json_response({'error': 'Session not found'}, status=404)
+
+        return web.json_response({'success': True, 'session_id': session_id})
+    except Exception as e:
+        logger.error(f"Error deleting session: {e}")
         return web.json_response({'error': str(e)}, status=500)
 
 
@@ -3142,6 +3189,8 @@ def setup_webchat_routes(app: web.Application):
         GET  /api/tasks/{task_id} - Runtime task status for portal polling
         GET  /api/sessions - List recent sessions
         GET  /api/sessions/{session_id} - Load session messages
+        POST /api/sessions/{session_id}/rename - Rename existing session
+        DELETE /api/sessions/{session_id} - Delete existing session
         GET  /api/server-files/* - Canonical path-based workspace file API
         GET  /api/files and /api/files/read - Legacy path-based compatibility aliases
         /api/files/{file_id}* - File-ID attachment APIs (separate from path-based server files)
@@ -3159,6 +3208,8 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_get('/api/capabilities', api_capabilities)
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/sessions/{session_id}', api_load_session)
+    app.router.add_post('/api/sessions/{session_id}/rename', api_rename_session)
+    app.router.add_delete('/api/sessions/{session_id}', api_delete_session)
     app.router.add_get('/api/sessions/{session_id}/chatlog', api_session_chatlog)
     # Primary workspace path-based API
     app.router.add_get('/api/server-files', api_server_files_browse)
@@ -3213,6 +3264,8 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  GET  /api/tasks/{task_id} - Runtime task status for portal polling")
     logger.info("  GET  /api/sessions - List recent sessions")
     logger.info("  GET  /api/sessions/{id} - Load session messages")
+    logger.info("  POST /api/sessions/{id}/rename - Rename existing session")
+    logger.info("  DELETE /api/sessions/{id} - Delete existing session")
     logger.info("  GET  /api/server-files - Browse workspace files")
     logger.info("  GET  /api/server-files/read - Read text file content")
     logger.info("  GET  /api/server-files/content - Inline file content")
