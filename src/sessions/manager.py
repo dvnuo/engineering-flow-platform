@@ -315,8 +315,31 @@ class SessionManager:
 
         return normalized_name
 
+    def _delete_session_chatlog(self, session_id: str) -> bool:
+        """Delete session chatlog artifact if present."""
+        chatlog_file = session_persistence.storage_dir / "chatlogs" / f"{session_id}.json"
+        try:
+            if chatlog_file.exists():
+                chatlog_file.unlink()
+                return True
+            return False
+        except Exception as exc:
+            logger.warning("Failed to delete session chatlog for %s: %s", session_id, exc)
+            return False
+
+    def _delete_session_file_context(self, session_id: str) -> bool:
+        """Delete file-context artifacts for session if present."""
+        try:
+            from src.hooks.file_context.storage import storage as file_context_storage
+
+            deleted_count = file_context_storage.delete_session(session_id)
+            return deleted_count > 0
+        except Exception as exc:
+            logger.warning("Failed to delete session file context for %s: %s", session_id, exc)
+            return False
+
     async def delete_session(self, session_id: str) -> bool:
-        """Delete a session from memory cache and persistence."""
+        """Delete a session and best-effort cleanup related local artifacts."""
         in_memory_removed = session_id in self.sessions
         if in_memory_removed:
             del self.sessions[session_id]
@@ -326,7 +349,10 @@ class SessionManager:
         if self.persistence_enabled:
             persisted_removed = await session_persistence.delete_session(session_id)
 
-        return in_memory_removed or persisted_removed
+        chatlog_removed = self._delete_session_chatlog(session_id)
+        file_context_removed = self._delete_session_file_context(session_id)
+
+        return in_memory_removed or persisted_removed or chatlog_removed or file_context_removed
     
     async def add_message(self, session_id: str, role: str, content: str, wait_for_save: bool = False, extra: dict = None) -> str:
         """Add a message to the session history.

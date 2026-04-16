@@ -215,6 +215,73 @@ class TestSessionManagerInfo:
         assert deleted is False
 
     @pytest.mark.asyncio
+    async def test_delete_session_removes_chatlog_file_and_returns_true(self, fresh_session_manager, tmp_path):
+        import uuid
+
+        session_id = f"delete_chatlog_{uuid.uuid4().hex[:8]}"
+        from src.sessions import manager as manager_module
+
+        sessions_dir = tmp_path / "sessions"
+        chatlogs_dir = sessions_dir / "chatlogs"
+        chatlogs_dir.mkdir(parents=True, exist_ok=True)
+        chatlog_file = chatlogs_dir / f"{session_id}.json"
+        chatlog_file.write_text('{"session_id":"x"}', encoding="utf-8")
+
+        original_storage_dir = manager_module.session_persistence.storage_dir
+        manager_module.session_persistence.storage_dir = sessions_dir
+        fresh_session_manager.persistence_enabled = False
+        try:
+            deleted = await fresh_session_manager.delete_session(session_id)
+        finally:
+            manager_module.session_persistence.storage_dir = original_storage_dir
+
+        assert deleted is True
+        assert not chatlog_file.exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_session_calls_file_context_cleanup(self, fresh_session_manager, monkeypatch):
+        import uuid
+        from src.hooks.file_context.storage import storage as file_context_storage
+
+        session_id = f"delete_file_context_{uuid.uuid4().hex[:8]}"
+        called = {"session_id": None}
+
+        def _fake_delete_session(sid):
+            called["session_id"] = sid
+            return 2
+
+        monkeypatch.setattr(file_context_storage, "delete_session", _fake_delete_session)
+        fresh_session_manager.persistence_enabled = False
+
+        deleted = await fresh_session_manager.delete_session(session_id)
+
+        assert deleted is True
+        assert called["session_id"] == session_id
+
+    @pytest.mark.asyncio
+    async def test_delete_session_returns_true_when_only_orphan_artifacts_exist(self, fresh_session_manager, tmp_path):
+        import uuid
+        from src.sessions import manager as manager_module
+
+        session_id = f"orphan_artifacts_{uuid.uuid4().hex[:8]}"
+        sessions_dir = tmp_path / "sessions"
+        chatlogs_dir = sessions_dir / "chatlogs"
+        chatlogs_dir.mkdir(parents=True, exist_ok=True)
+        orphan_chatlog = chatlogs_dir / f"{session_id}.json"
+        orphan_chatlog.write_text("{}", encoding="utf-8")
+
+        original_storage_dir = manager_module.session_persistence.storage_dir
+        manager_module.session_persistence.storage_dir = sessions_dir
+        fresh_session_manager.persistence_enabled = False
+        try:
+            deleted = await fresh_session_manager.delete_session(session_id)
+        finally:
+            manager_module.session_persistence.storage_dir = original_storage_dir
+
+        assert deleted is True
+        assert not orphan_chatlog.exists()
+
+    @pytest.mark.asyncio
     async def test_set_last_execution_id_updates_in_memory_and_schedules_metadata_persist(self, fresh_session_manager):
         import uuid
 

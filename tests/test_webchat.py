@@ -2711,6 +2711,95 @@ async def test_api_load_session_uses_custom_session_name_from_metadata(monkeypat
     assert payload["name"] == "My Custom Name"
 
 
+@pytest.mark.asyncio
+async def test_api_rename_session_success(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(
+        webchat.session_manager,
+        "rename_session",
+        lambda _sid, _name: asyncio.sleep(0, result="Renamed Title"),
+    )
+
+    class _Request:
+        match_info = {"session_id": "session-rename-ok"}
+
+        async def json(self):
+            return {"name": "Renamed Title"}
+
+    resp = await webchat.api_rename_session(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["success"] is True
+    assert payload["session_id"] == "session-rename-ok"
+    assert payload["name"] == "Renamed Title"
+
+
+@pytest.mark.asyncio
+async def test_api_rename_session_returns_404_when_missing(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(
+        webchat.session_manager,
+        "rename_session",
+        lambda _sid, _name: asyncio.sleep(0, result=None),
+    )
+
+    class _Request:
+        match_info = {"session_id": "session-rename-missing"}
+
+        async def json(self):
+            return {"name": "Renamed Title"}
+
+    resp = await webchat.api_rename_session(_Request())
+    assert resp.status == 404
+    payload = json.loads(resp.text)
+    assert payload["error"] == "Session not found"
+
+
+@pytest.mark.asyncio
+async def test_api_delete_session_success(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(
+        webchat.session_manager,
+        "delete_session",
+        lambda _sid: asyncio.sleep(0, result=True),
+    )
+
+    class _Request:
+        match_info = {"session_id": "session-delete-ok"}
+
+    resp = await webchat.api_delete_session(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["success"] is True
+    assert payload["session_id"] == "session-delete-ok"
+
+
+@pytest.mark.asyncio
+async def test_api_delete_session_returns_404_when_missing(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(
+        webchat.session_manager,
+        "delete_session",
+        lambda _sid: asyncio.sleep(0, result=False),
+    )
+
+    class _Request:
+        match_info = {"session_id": "session-delete-missing"}
+
+    resp = await webchat.api_delete_session(_Request())
+    assert resp.status == 404
+    payload = json.loads(resp.text)
+    assert payload["error"] == "Session not found"
+
+
 def test_agent_assistant_display_helpers_minimal_payload():
     from src.agents.core import Agent
 
