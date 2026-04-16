@@ -261,7 +261,7 @@ class TestGatewayIntegration:
 
 class TestGatewayWatcherLifecycle:
     @pytest.mark.asyncio
-    async def test_gateway_start_starts_subscription_watchers(self, monkeypatch):
+    async def test_gateway_start_starts_automation_watchers(self, monkeypatch):
         from src.gateway import server as gateway_server
 
         started = {"watchers": 0}
@@ -269,14 +269,14 @@ class TestGatewayWatcherLifecycle:
         async def _fake_start_watchers():
             started["watchers"] += 1
 
-        monkeypatch.setattr(gateway_server, "start_subscription_watchers", _fake_start_watchers)
+        monkeypatch.setattr(gateway_server, "start_automation_watchers", _fake_start_watchers)
         gateway = gateway_server.Gateway()
         await gateway.start()
         await gateway.stop()
         assert started["watchers"] == 1
 
     @pytest.mark.asyncio
-    async def test_gateway_stop_stops_subscription_watchers(self, monkeypatch):
+    async def test_gateway_stop_stops_automation_watchers(self, monkeypatch):
         from src.gateway import server as gateway_server
 
         stopped = {"watchers": 0}
@@ -287,8 +287,8 @@ class TestGatewayWatcherLifecycle:
         async def _fake_stop_watchers():
             stopped["watchers"] += 1
 
-        monkeypatch.setattr(gateway_server, "start_subscription_watchers", _fake_start_watchers)
-        monkeypatch.setattr(gateway_server, "stop_subscription_watchers", _fake_stop_watchers)
+        monkeypatch.setattr(gateway_server, "start_automation_watchers", _fake_start_watchers)
+        monkeypatch.setattr(gateway_server, "stop_automation_watchers", _fake_stop_watchers)
         gateway = gateway_server.Gateway()
         await gateway.start()
         await gateway.stop()
@@ -314,7 +314,7 @@ class TestGatewayAttributes:
         gateway = Gateway()
         assert hasattr(gateway, 'host')
         assert hasattr(gateway, 'port')
-        assert hasattr(gateway, '_subscription_watchers_task')
+        assert hasattr(gateway, '_automation_watchers_task')
 
     def test_gateway_host_port_from_config(self):
         """Test Gateway uses config for host and port."""

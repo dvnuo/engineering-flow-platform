@@ -17,7 +17,6 @@ from src.channels.confluence import confluence_channel
 from src.channels.github import github_channel
 from src.channels.jira import jira_channel
 from src.config import config
-from src.cron.mention_poller import MentionPoller
 from src.utils.portal_internal_api import (
     build_portal_internal_api_headers,
     build_portal_internal_url,
@@ -29,6 +28,13 @@ from src.utils.portal_internal_api import (
 logger = logging.getLogger(__name__)
 
 _MAX_DEDUPE_KEYS_PER_RULE = 1000
+_MENTION_PATTERN = re.compile(r"(?<![\\w])@([A-Za-z0-9][A-Za-z0-9_.-]{0,63})")
+
+
+def _extract_mentions(text: str) -> set[str]:
+    if not isinstance(text, str) or not text.strip():
+        return set()
+    return {match.group(1).strip().lower() for match in _MENTION_PATTERN.finditer(text) if match.group(1).strip()}
 
 
 @dataclass
@@ -55,7 +61,7 @@ class AutomationRule:
     automation_rule: str
 
 
-class SubscriptionWatcherManager:
+class AutomationWatcherManager:
     def __init__(self) -> None:
         self._running = False
         self._lock = asyncio.Lock()
@@ -294,7 +300,7 @@ class SubscriptionWatcherManager:
 
     @staticmethod
     def _extract_mentions(text: str) -> set[str]:
-        return {m.lower() for m in MentionPoller.extract_mentions(text or "")}
+        return _extract_mentions(text)
 
     def _mention_matches_rule(self, rule: AutomationRule, mentions: set[str]) -> bool:
         lookup = str(rule.binding_lookup_username or "").strip().lower()
@@ -726,7 +732,7 @@ class SubscriptionWatcherManager:
             self._stop_event.set()
 
 
-_runner = SubscriptionWatcherManager()
+_runner = AutomationWatcherManager()
 
 
 def get_interval_seconds() -> int:
@@ -740,9 +746,9 @@ def is_enabled() -> bool:
     return is_portal_internal_configured()
 
 
-async def start_subscription_watchers() -> None:
+async def start_automation_watchers() -> None:
     await _runner.start()
 
 
-async def stop_subscription_watchers() -> None:
+async def stop_automation_watchers() -> None:
     await _runner.stop()

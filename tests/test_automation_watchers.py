@@ -5,9 +5,9 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_run_once_uses_runtime_context_not_subscriptions(monkeypatch):
-    from src.cron.subscription_watchers import SubscriptionWatcherManager
+    from src.cron.automation_watchers import AutomationWatcherManager
 
-    manager = SubscriptionWatcherManager()
+    manager = AutomationWatcherManager()
     paths = []
 
     async def _fake_get_json(path, *, session=None):
@@ -46,7 +46,7 @@ async def test_run_once_uses_runtime_context_not_subscriptions(monkeypatch):
     async def _fake_poll(rule, *, session=None):
         polled.append(rule)
 
-    monkeypatch.setattr("src.cron.subscription_watchers.is_portal_internal_configured", lambda: True)
+    monkeypatch.setattr("src.cron.automation_watchers.is_portal_internal_configured", lambda: True)
     monkeypatch.setattr(manager, "_agent_id", lambda: "agent-1")
     monkeypatch.setattr(manager, "_get_json", _fake_get_json)
     monkeypatch.setattr(manager, "_poll_rule", _fake_poll)
@@ -60,7 +60,7 @@ async def test_run_once_uses_runtime_context_not_subscriptions(monkeypatch):
 
 
 def test_build_rules_scope_binding_overrides_profile_scope_when_non_empty():
-    from src.cron.subscription_watchers import IdentityBinding, SubscriptionWatcherManager
+    from src.cron.automation_watchers import IdentityBinding, AutomationWatcherManager
 
     runtime_config = {
         "jira": {
@@ -83,7 +83,7 @@ def test_build_rules_scope_binding_overrides_profile_scope_when_non_empty():
         )
     ]
 
-    rules = SubscriptionWatcherManager.build_automation_rules(runtime_config, bindings, "agent-1")
+    rules = AutomationWatcherManager.build_automation_rules(runtime_config, bindings, "agent-1")
 
     assert {r.source_kind for r in rules} == {"jira.assigned", "jira.mention"}
     assert all(r.scope["projects"] == ["OVERRIDE"] for r in rules)
@@ -91,9 +91,9 @@ def test_build_rules_scope_binding_overrides_profile_scope_when_non_empty():
 
 @pytest.mark.asyncio
 async def test_jira_assignment_poller_ingests_assigned_event(monkeypatch):
-    from src.cron.subscription_watchers import AutomationRule, SubscriptionWatcherManager
+    from src.cron.automation_watchers import AutomationRule, AutomationWatcherManager
 
-    manager = SubscriptionWatcherManager()
+    manager = AutomationWatcherManager()
     posts = []
 
     async def _fake_search_issues(jql, max_results=50):
@@ -117,7 +117,7 @@ async def test_jira_assignment_poller_ingests_assigned_event(monkeypatch):
     async def _fake_post(path, payload, *, session=None):
         posts.append((path, payload))
 
-    monkeypatch.setattr("src.cron.subscription_watchers.jira_channel.search_issues", _fake_search_issues)
+    monkeypatch.setattr("src.cron.automation_watchers.jira_channel.search_issues", _fake_search_issues)
     monkeypatch.setattr(manager, "_post_json", _fake_post)
 
     rule = AutomationRule(
@@ -143,9 +143,9 @@ async def test_jira_assignment_poller_ingests_assigned_event(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_github_mentions_include_review_comments(monkeypatch):
-    from src.cron.subscription_watchers import AutomationRule, SubscriptionWatcherManager
+    from src.cron.automation_watchers import AutomationRule, AutomationWatcherManager
 
-    manager = SubscriptionWatcherManager()
+    manager = AutomationWatcherManager()
     posts = []
 
     async def _fake_recent_comments(repo_ref, since=None):
@@ -170,9 +170,9 @@ async def test_github_mentions_include_review_comments(monkeypatch):
     async def _fake_post(path, payload, *, session=None):
         posts.append((path, payload))
 
-    monkeypatch.setattr("src.cron.subscription_watchers.github_channel.get_recent_issue_comments", _fake_recent_comments)
-    monkeypatch.setattr("src.cron.subscription_watchers.github_channel.search_issues", _fake_search_issues)
-    monkeypatch.setattr("src.cron.subscription_watchers.github_channel.get_pr_comments", _fake_get_pr_comments)
+    monkeypatch.setattr("src.cron.automation_watchers.github_channel.get_recent_issue_comments", _fake_recent_comments)
+    monkeypatch.setattr("src.cron.automation_watchers.github_channel.search_issues", _fake_search_issues)
+    monkeypatch.setattr("src.cron.automation_watchers.github_channel.get_pr_comments", _fake_get_pr_comments)
     monkeypatch.setattr(manager, "_post_json", _fake_post)
 
     rule = AutomationRule(
@@ -198,9 +198,9 @@ async def test_github_mentions_include_review_comments(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_watcher_only_ingests_not_execute(monkeypatch):
-    from src.cron.subscription_watchers import SubscriptionWatcherManager
+    from src.cron.automation_watchers import AutomationWatcherManager
 
-    manager = SubscriptionWatcherManager()
+    manager = AutomationWatcherManager()
 
     async def _fake_get_json(path, *, session=None):
         if path == "/api/internal/agents/agent-1/runtime-context":
@@ -249,11 +249,11 @@ async def test_watcher_only_ingests_not_execute(monkeypatch):
     async def _unexpected_execute(*args, **kwargs):
         called["execute"] += 1
 
-    monkeypatch.setattr("src.cron.subscription_watchers.is_portal_internal_configured", lambda: True)
+    monkeypatch.setattr("src.cron.automation_watchers.is_portal_internal_configured", lambda: True)
     monkeypatch.setattr(manager, "_agent_id", lambda: "agent-1")
     monkeypatch.setattr(manager, "_get_json", _fake_get_json)
     monkeypatch.setattr(manager, "_post_json", _fake_post)
-    monkeypatch.setattr("src.cron.subscription_watchers.github_channel.get_recent_issue_comments", _fake_recent_comments)
+    monkeypatch.setattr("src.cron.automation_watchers.github_channel.get_recent_issue_comments", _fake_recent_comments)
     monkeypatch.setattr("src.runtime.execution_bus.execute_tool_by_name", _unexpected_execute)
 
     await manager.run_once()
@@ -264,9 +264,9 @@ async def test_watcher_only_ingests_not_execute(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_fetch_identity_bindings_accepts_bare_list_response(monkeypatch):
-    from src.cron.subscription_watchers import SubscriptionWatcherManager
+    from src.cron.automation_watchers import AutomationWatcherManager
 
-    manager = SubscriptionWatcherManager()
+    manager = AutomationWatcherManager()
 
     async def _fake_get_json(path, *, session=None):
         assert path == "/api/internal/agent-identity-bindings?enabled=true"
@@ -289,9 +289,9 @@ async def test_fetch_identity_bindings_accepts_bare_list_response(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_once_accepts_bare_list_bindings_response(monkeypatch):
-    from src.cron.subscription_watchers import SubscriptionWatcherManager
+    from src.cron.automation_watchers import AutomationWatcherManager
 
-    manager = SubscriptionWatcherManager()
+    manager = AutomationWatcherManager()
     polled = []
 
     async def _fake_get_json(path, *, session=None):
@@ -324,7 +324,7 @@ async def test_run_once_accepts_bare_list_bindings_response(monkeypatch):
     async def _fake_poll(rule, *, session=None):
         polled.append(rule)
 
-    monkeypatch.setattr("src.cron.subscription_watchers.is_portal_internal_configured", lambda: True)
+    monkeypatch.setattr("src.cron.automation_watchers.is_portal_internal_configured", lambda: True)
     monkeypatch.setattr(manager, "_agent_id", lambda: "agent-1")
     monkeypatch.setattr(manager, "_get_json", _fake_get_json)
     monkeypatch.setattr(manager, "_poll_rule", _fake_poll)
