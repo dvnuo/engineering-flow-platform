@@ -245,46 +245,76 @@ class TestGatewayIntegration:
 
     def test_gateway_has_session_manager(self):
         """Test Gateway imports session manager."""
-        # Just ensure the import works
-        from src.gateway.server import DISCORD_SESSION_PREFIX
-        assert DISCORD_SESSION_PREFIX == "discord:"
+        from src.gateway.server import JIRA_SESSION_PREFIX
+        assert JIRA_SESSION_PREFIX == "jira:"
 
     def test_gateway_has_agent(self):
         """Test Gateway imports agent."""
         from src.gateway.server import agent
         assert agent is not None
 
-    def test_gateway_has_discord_channel(self):
-        """Test Gateway imports discord channel."""
-        from src.gateway.server import discord_channel
-        assert discord_channel is not None
+    def test_gateway_has_jira_channel(self):
+        """Test Gateway imports jira channel."""
+        from src.gateway.server import jira_channel
+        assert jira_channel is not None
 
 
-class TestHandleDiscordMessage:
-    """Tests for handle_discord_message function."""
+class TestGatewayWatcherLifecycle:
+    @pytest.mark.asyncio
+    async def test_gateway_start_starts_subscription_watchers(self, monkeypatch):
+        from src.gateway import server as gateway_server
 
-    def test_handle_discord_message_function_exists(self):
-        """Test handle_discord_message function exists."""
-        from gateway import server
-        assert hasattr(server, 'handle_discord_message')
+        started = {"watchers": 0}
+
+        async def _fake_start_watchers():
+            started["watchers"] += 1
+
+        monkeypatch.setattr(gateway_server, "start_subscription_watchers", _fake_start_watchers)
+        gateway = gateway_server.Gateway()
+        await gateway.start()
+        await gateway.stop()
+        assert started["watchers"] == 1
+
+    @pytest.mark.asyncio
+    async def test_gateway_stop_stops_subscription_watchers(self, monkeypatch):
+        from src.gateway import server as gateway_server
+
+        stopped = {"watchers": 0}
+
+        async def _fake_start_watchers():
+            return None
+
+        async def _fake_stop_watchers():
+            stopped["watchers"] += 1
+
+        monkeypatch.setattr(gateway_server, "start_subscription_watchers", _fake_start_watchers)
+        monkeypatch.setattr(gateway_server, "stop_subscription_watchers", _fake_stop_watchers)
+        gateway = gateway_server.Gateway()
+        await gateway.start()
+        await gateway.stop()
+        assert stopped["watchers"] == 1
+
+
+class TestHandleMessageFunctions:
+    """Tests for message handler functions."""
+
+    def test_handle_jira_message_function_exists(self):
+        """Test handle_jira_message function exists."""
+        from src.gateway import server
+        assert hasattr(server, 'handle_jira_message')
         import inspect
-        assert inspect.iscoroutinefunction(server.handle_discord_message)
+        assert inspect.iscoroutinefunction(server.handle_jira_message)
 
 
-class TestGatewayBotMode:
-    """Tests for Bot API mode."""
+class TestGatewayAttributes:
+    """Tests for Gateway core attributes."""
 
-    def test_gateway_has_mode_attribute(self):
-        """Test Gateway has mode attribute."""
+    def test_gateway_has_required_attributes(self):
+        """Test Gateway has required runtime attributes."""
         gateway = Gateway()
-        assert hasattr(gateway, 'mode')
-
-    def test_gateway_mode_default_value(self):
-        """Test Gateway mode defaults to 'bot'."""
-        gateway = Gateway()
-        # Mode is set from config, default is 'bot' per config.yaml
-        # The Gateway class should have mode attribute
-        assert hasattr(gateway, 'mode')
+        assert hasattr(gateway, 'host')
+        assert hasattr(gateway, 'port')
+        assert hasattr(gateway, '_subscription_watchers_task')
 
     def test_gateway_host_port_from_config(self):
         """Test Gateway uses config for host and port."""

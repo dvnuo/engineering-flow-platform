@@ -111,6 +111,31 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
             "capability_resolution": "resolved",
         }
 
+    if normalized_task_type == "triggered_event_task":
+        primary_capability_id = "skill:handle-triggered-event"
+        descriptor = registry.get(primary_capability_id)
+        involved = _resolve_involved_capability_ids_for_task(normalized_task_type, normalized_payload)
+        if descriptor is None:
+            return {
+                **fallback,
+                "primary_capability_id": primary_capability_id,
+                "capability_id": primary_capability_id,
+                "action_id": primary_capability_id,
+                "capability_type": "skill",
+                "involved_capability_ids": involved,
+            }
+        return {
+            **fallback,
+            "primary_capability_id": descriptor.capability_id,
+            "capability_id": descriptor.capability_id,
+            "capability_type": descriptor.type,
+            "action_id": descriptor.capability_id,
+            "involved_capability_ids": involved,
+            "policy_tags": list(descriptor.policy_tags or []),
+            "requires_identity_binding": bool(descriptor.requires_identity_binding),
+            "capability_resolution": "resolved",
+        }
+
     if normalized_task_type == "bundle_action_task":
         template_id = str(normalized_payload.get("template_id") or "").strip().lower()
         action_id = str(normalized_payload.get("action_id") or "").strip().lower()
@@ -252,4 +277,14 @@ def _resolve_involved_capability_ids_for_task(task_type: str, payload: Dict[str,
         writeback_mode = str(payload.get("writeback_mode") or "").strip().lower()
         secondary = "adapter:github:add_comment" if writeback_mode == "issue_comment" else "adapter:github:review_pull_request"
         return [secondary, f"skill:{skill_name}"]
+    if normalized_task_type == "triggered_event_task":
+        source_kind = str(payload.get("source_kind") or "").strip().lower()
+        involved = ["skill:handle-triggered-event"]
+        if source_kind == "github.mention":
+            involved.append("adapter:github:add_comment")
+        elif source_kind in {"jira.assigned", "jira.mention"}:
+            involved.append("adapter:jira:add_comment")
+        elif source_kind == "confluence.mention":
+            involved.append("channel_action:confluence_add_comment")
+        return involved
     return []

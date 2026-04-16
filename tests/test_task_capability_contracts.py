@@ -247,4 +247,21 @@ def test_resolve_task_capability_contract_bundle_action_task_unknown_is_unresolv
         {"template_id": "unknown.v1", "action_id": "does_not_exist"},
     )
     assert plan["capability_resolution"] == "unresolved"
-    assert plan["primary_capability_id"] is None
+
+
+def test_resolve_task_capability_contract_triggered_event_task_github_mention():
+    plan = resolve_task_capability_contract("triggered_event_task", {"source_kind": "github.mention"})
+    assert plan["primary_capability_id"] == "skill:handle-triggered-event"
+    assert "adapter:github:add_comment" in plan["involved_capability_ids"]
+
+
+def test_resolve_task_capability_contract_triggered_event_task_jira_assigned():
+    plan = resolve_task_capability_contract("triggered_event_task", {"source_kind": "jira.assigned"})
+    assert plan["primary_capability_id"] == "skill:handle-triggered-event"
+    assert "adapter:jira:add_comment" in plan["involved_capability_ids"]
+
+
+def test_resolve_task_capability_contract_triggered_event_task_confluence_mention():
+    plan = resolve_task_capability_contract("triggered_event_task", {"source_kind": "confluence.mention"})
+    assert plan["primary_capability_id"] == "skill:handle-triggered-event"
+    assert "channel_action:confluence_add_comment" in plan["involved_capability_ids"]

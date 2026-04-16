@@ -3485,3 +3485,57 @@ async def test_bundle_action_task_unknown_template_action_blocked(monkeypatch):
     assert result.status == "blocked"
     assert result.output_payload["task_boundary"] is True
     assert called["value"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source_kind",
+    ["github.mention", "jira.assigned", "jira.mention", "confluence.mention"],
+)
+async def test_execution_bus_triggered_event_task_success(monkeypatch, source_kind):
+    async def _fake_run_triggered_event_task(payload):
+        assert payload["source_kind"] == source_kind
+        return {"success": True, "source_kind": source_kind, "response": "ok"}
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_triggered_event_task", _fake_run_triggered_event_task)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "triggered_event_task", "source_kind": source_kind},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "success"
+    assert result.output_payload["task_type"] == "triggered_event_task"
+    assert result.output_payload["source_kind"] == source_kind
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_triggered_event_task_unsupported_source_kind_error(monkeypatch):
+    async def _fake_run_triggered_event_task(_payload):
+        raise ValueError("Unsupported source_kind: unknown")
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_triggered_event_task", _fake_run_triggered_event_task)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "triggered_event_task", "source_kind": "unknown"},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "error"
+    assert "Unsupported source_kind" in result.output_payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_triggered_event_task_writeback_failure_error(monkeypatch):
+    async def _fake_run_triggered_event_task(_payload):
+        raise RuntimeError("writeback failed")
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_triggered_event_task", _fake_run_triggered_event_task)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type": "triggered_event_task", "source_kind": "jira.mention"},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "error"
+    assert "writeback failed" in result.output_payload["error"]

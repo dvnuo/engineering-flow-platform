@@ -34,6 +34,7 @@ from src.runtime.governance_bus import (
 from src.runtime.github_review import run_github_review_task
 from src.runtime.jira_workflow_review import run_jira_workflow_review
 from src.runtime.leader_orchestration import dispatch_task_breakdown_as_delegations, run_delegation_cycle
+from src.runtime.triggered_event_task import run_triggered_event_task
 from src.utils.redaction import safe_preview, sanitize_exception_message
 
 logger = logging.getLogger(__name__)
@@ -2068,6 +2069,56 @@ def build_default_execution_bus(
                     "secondary_action_id": secondary_action_id,
                     "secondary_action_success": secondary_action_success,
                     "result": review_result.get("result"),
+                },
+                runtime_events=runtime_events,
+            )
+
+        if task_type == "triggered_event_task":
+            capability = resolve_task_capability_plan(task_type, request.input_payload)
+            involved_capability_ids = list(capability.get("involved_capability_ids") or [])
+            triggered_payload = dict(request.input_payload or {})
+            result_payload = await run_triggered_event_task(triggered_payload)
+            success_value = bool(result_payload.get("success"))
+            runtime_events = bus._attach_task_id_to_runtime_events([], task_id)
+            runtime_events.append(
+                build_runtime_event(
+                    event_type="task.triggered_event.completed" if success_value else "task.triggered_event.failed",
+                    execution_type=request.execution_type,
+                    state="completed" if success_value else "failed",
+                    session_id=request.session_id,
+                    request_id=request.request_id,
+                    agent_id=request.agent_id,
+                    summary="triggered event task",
+                    task_id=task_id,
+                    detail_payload={
+                        "task_type": task_type,
+                        "source_kind": triggered_payload.get("source_kind"),
+                        "capability_id": capability.get("capability_id"),
+                        "capability_type": capability.get("capability_type"),
+                        "policy_tags": capability.get("policy_tags"),
+                        "requires_identity_binding": capability.get("requires_identity_binding"),
+                        "capability_resolution": capability.get("capability_resolution"),
+                        "involved_capability_ids": involved_capability_ids,
+                        "success": success_value,
+                    },
+                    legacy_payload={"legacy_type": "task_triggered_event"},
+                )
+            )
+            return make_execution_result(
+                request_id=request.request_id,
+                status="success" if success_value else "error",
+                output_payload={
+                    "task_type": task_type,
+                    "success": success_value,
+                    "source_kind": triggered_payload.get("source_kind"),
+                    "task_boundary": True,
+                    "capability_id": capability.get("capability_id"),
+                    "capability_type": capability.get("capability_type"),
+                    "policy_tags": capability.get("policy_tags"),
+                    "requires_identity_binding": capability.get("requires_identity_binding"),
+                    "capability_resolution": capability.get("capability_resolution"),
+                    "involved_capability_ids": involved_capability_ids,
+                    "result": result_payload,
                 },
                 runtime_events=runtime_events,
             )
