@@ -166,6 +166,16 @@ def _extract_trusted_client_request_id(request: web.Request, data: Dict[str, Any
     return extract_trusted_client_request_id(_is_trusted_portal_request(request), data)
 
 
+def _extract_trusted_model_override(request: web.Request, data: Dict[str, Any]) -> Optional[str]:
+    if not _is_trusted_portal_request(request):
+        return None
+    value = data.get("model_override")
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
 def _require_non_empty_string(data: Dict[str, Any], key: str) -> str:
     value = data.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -678,8 +688,9 @@ async def api_chat(request: web.Request) -> web.Response:
         # Tools are registered via src/__init__.py and available to LLM via tool_calls
         # This is the Claude Code style - no separate skill matching/execution needed
         
-        # Get model from config
-        model = global_config.llm.get('model', 'gpt-5-mini')
+        # Get request-scoped model (trusted portal override only)
+        model_override = _extract_trusted_model_override(request, data)
+        model = model_override or global_config.llm.get('model', 'gpt-5-mini')
         
         # Run agent (history is managed internally by session_manager)
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
@@ -758,10 +769,13 @@ async def api_chat(request: web.Request) -> web.Response:
         # Record usage if available
         if usage:
             provider = global_config.llm.get('provider', 'openai')
-            model = global_config.llm.get('model', 'gpt-5-mini')
+            actual_model = (
+                ((response_data.get("_llm_debug") or {}).get("request") or {}).get("model")
+                or model
+            )
             usage_tracker.record_usage(
                 provider=provider,
-                model=model,
+                model=actual_model,
                 input_tokens=usage.get("prompt_tokens", 0),
                 output_tokens=usage.get("completion_tokens", 0),
                 session_id=session_id,
@@ -900,8 +914,9 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
 
         event_queue = asyncio.Queue()
 
-        # Get model from config
-        model = global_config.llm.get('model', 'gpt-5-mini')
+        # Get request-scoped model (trusted portal override only)
+        model_override = _extract_trusted_model_override(request, data)
+        model = model_override or global_config.llm.get('model', 'gpt-5-mini')
 
         # Run agent and stream response
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
@@ -975,10 +990,13 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         # Record usage
         if usage:
             provider = global_config.llm.get('provider', 'openai')
-            model = global_config.llm.get('model', 'gpt-5-mini')
+            actual_model = (
+                ((result.get("_llm_debug") or {}).get("request") or {}).get("model")
+                or model
+            )
             usage_tracker.record_usage(
                 provider=provider,
-                model=model,
+                model=actual_model,
                 input_tokens=usage.get("prompt_tokens", 0),
                 output_tokens=usage.get("completion_tokens", 0),
                 session_id=session_id,
