@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.config import config
+from src.runtime.tool_filtering import is_tool_name_enabled_for_llm
 
 logger = logging.getLogger(__name__)
 
@@ -387,4 +388,8 @@ def get_tools_schemas() -> List[Dict]:
 
 async def execute_tool_by_name(name: str, **kwargs) -> ToolResult:
     """Execute a tool by name."""
+    if not is_tool_name_enabled_for_llm(name, config.llm or {}):
+        message = f"Tool '{name}' is disabled by llm.tools policy."
+        logger.warning("[Tool Policy] Denied tool execution: tool=%s reason=llm.tools_policy", name)
+        return ToolResult(success=False, content=message, error=message)
     return await execute_tool(name, **kwargs)

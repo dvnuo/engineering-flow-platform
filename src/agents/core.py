@@ -55,6 +55,11 @@ from src.agents.skill_runtime import (
 from src.skills.runtime import SkillRuntimeConfig
 from src.runtime.chat_orchestration_adapter import execute_tool_or_task_orchestration
 from src.runtime.display_blocks import normalize_display_blocks
+from src.runtime.tool_filtering import (
+    extract_tool_name,
+    filter_tool_schemas_for_llm,
+    intersect_tool_schemas_by_names,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -489,19 +494,34 @@ class Agent:
         
         # Build Engineering Flow Platform-style system prompt
         # NOTE: get_tools_schema() already includes INTEGRATION_TOOLS (JIRA + Confluence + GitHub tools)
-        base_tools = get_tools_schemas()
-        self.tools = base_tools  # Already contains all tools from TOOLS + INTEGRATION_TOOLS
-        
-        # Debug logging for tools initialization
-        logger.debug(f"Tools initialized: count={len(self.tools)}, "
-                    f"names={[t['function']['name'] for t in self.tools]}, "
-                    f"think_level={self.think_level.value}")
-        
+        full_tool_catalog = get_tools_schemas()
+        llm_tool_filter_result = filter_tool_schemas_for_llm(full_tool_catalog, config.llm or {})
+        self.tools = llm_tool_filter_result.filtered_schemas
+        self.allowed_tool_names = set(llm_tool_filter_result.allowed_tool_names)
+
+        logger.info(
+            "[Tool Policy] Initialized llm.tools filter: full_count=%s filtered_count=%s mode=%s configured=%s unmatched_patterns=%s",
+            len(full_tool_catalog),
+            len(self.tools),
+            llm_tool_filter_result.mode,
+            llm_tool_filter_result.configured,
+            llm_tool_filter_result.unmatched_patterns,
+        )
+        logger.debug(
+            "Tools initialized: count=%s names=%s think_level=%s",
+            len(self.tools),
+            [extract_tool_name(t) for t in self.tools if extract_tool_name(t)],
+            self.think_level.value,
+        )
+
         # Human-readable tool list
-        tools_list = "\n".join([
-            f"- **{t['function']['name']}**: {t['function'].get('description', '')}"
-            for t in self.tools
-        ])
+        if self.tools:
+            tools_list = "\n".join([
+                f"- **{(extract_tool_name(t) or 'unknown_tool')}**: {t.get('function', {}).get('description') or t.get('description', '')}"
+                for t in self.tools
+            ])
+        else:
+            tools_list = "No runtime tools are enabled for this agent by llm.tools policy."
         
         # Load memory files for system prompt
         # For main session (includes memory), include MEMORY.md
@@ -2094,20 +2114,39 @@ You have access to the following tools. When a user asks you to do something tha
             logger.debug(f"[SkillMode] system_prompt length={len(system_prompt)}")
             logger.debug(f"[SkillMode] input_items count={len(input_items)}")
             
-            # Get tools - use skill's tools if available, otherwise fall back to all tools
+            # Get tools - always from globally filtered tools surface, then intersect with skill tools if present
             skill_tool_names = getattr(skill, 'tools', []) or []
+            globally_allowed_tool_names = getattr(self, "allowed_tool_names", None)
+            if not globally_allowed_tool_names:
+                globally_allowed_tool_names = {
+                    name
+                    for name in (extract_tool_name(schema) for schema in (self.tools or []))
+                    if name
+                }
             
-            # If skill defines tool names (List[str]), convert to schemas
-            # If skill defines tool schemas (List[Dict]), use directly
+            # If skill defines tool names (List[str]), intersect from globally filtered tools only.
+            # If skill defines tool schemas (List[Dict]), intersect with globally allowed names.
             if skill_tool_names and isinstance(skill_tool_names[0], str):
-                # Convert tool names to schemas
-                all_tool_schemas = get_tools_schemas()
-                available_tools = [t for t in all_tool_schemas if t.get("function", {}).get("name") in skill_tool_names]
-                logger.debug(f"[SkillMode] Converted {len(skill_tool_names)} tool names to {len(available_tools)} tool schemas")
+                available_tools = intersect_tool_schemas_by_names(self.tools, skill_tool_names)
+                logger.debug(
+                    "[SkillMode] Intersected skill tool names with llm.tools policy: requested=%s available=%s",
+                    len(skill_tool_names),
+                    len(available_tools),
+                )
             elif not skill_tool_names and self.tools:
                 available_tools = self.tools
+                logger.debug("[SkillMode] No skill-specific tools; using globally filtered tools")
             else:
-                available_tools = skill_tool_names if skill_tool_names and isinstance(skill_tool_names[0], dict) else []
+                skill_tool_schemas = skill_tool_names if skill_tool_names and isinstance(skill_tool_names[0], dict) else []
+                available_tools = [
+                    schema for schema in skill_tool_schemas
+                    if (extract_tool_name(schema) or "") in globally_allowed_tool_names
+                ]
+                logger.debug(
+                    "[SkillMode] Intersected skill tool schemas with llm.tools policy: declared=%s available=%s",
+                    len(skill_tool_schemas),
+                    len(available_tools),
+                )
             
             logger.debug(f"[SkillMode] available_tools count={len(available_tools)}")
             if available_tools and isinstance(available_tools[0], dict):
