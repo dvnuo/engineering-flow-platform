@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Iterable, List, Optional, Set
 
 from src.skills.registry import Skill
 
@@ -48,6 +48,7 @@ class SkillRuntimeConfig:
     skill_name: str
     allowed_tools: List[str] = field(default_factory=list)
     allowed_tools_set: Set[str] = field(default_factory=set)
+    tool_policy_declared: bool = False
     task_tools: List[str] = field(default_factory=list)
     model_override: Optional[str] = None
     hooks: List[str] = field(default_factory=list)
@@ -108,12 +109,24 @@ def build_reference_context(reference_paths: List[str], max_items: int = 8) -> s
     return f"Available references: {', '.join(names)}{suffix}"
 
 
-def build_skill_prompt_blocks(skill: Skill, references: Optional[List[str]] = None) -> SkillPromptBlocks:
-    allowed_tools = ", ".join(skill.tools) if skill.tools else "all tools"
-    task_tools = ", ".join(skill.task_tools) if skill.task_tools else "none"
+def build_skill_prompt_blocks(
+    skill: Skill,
+    references: Optional[List[str]] = None,
+    allowed_tools: Optional[List[str]] = None,
+    task_tools: Optional[List[str]] = None,
+    tool_policy_declared: Optional[bool] = None,
+) -> SkillPromptBlocks:
+    declared_policy = bool(skill.tools) if tool_policy_declared is None else bool(tool_policy_declared)
+    effective_allowed_tools = list(skill.tools or []) if allowed_tools is None else list(allowed_tools or [])
+    effective_task_tools = list(skill.task_tools or []) if task_tools is None else list(task_tools or [])
+    if declared_policy:
+        allowed_tools_text = ", ".join(effective_allowed_tools) if effective_allowed_tools else "none"
+    else:
+        allowed_tools_text = "all currently available tools"
+    task_tools_text = ", ".join(effective_task_tools) if effective_task_tools else "none"
     system_rules = (
-        f"Active skill: {skill.name}. Runtime policy: only use allowed tools ({allowed_tools}). "
-        f"Task-capable tools: {task_tools}."
+        f"Active skill: {skill.name}. Runtime policy: only use allowed tools ({allowed_tools_text}). "
+        f"Task-capable tools: {task_tools_text}."
     )
 
     strategy = "\n".join(f"- {item}" for item in (skill.strategy or []))
@@ -181,15 +194,46 @@ def attach_skill_references(runtime_config: Optional[SkillRuntimeConfig]) -> Ref
     return ReferenceAttachment(references=refs, context_text=build_reference_context(refs), attachment_mode="compact")
 
 
-def build_skill_runtime_config(skill: Skill) -> SkillRuntimeConfig:
+def build_skill_runtime_config(
+    skill: Skill,
+    globally_allowed_tool_names: Optional[Iterable[str]] = None,
+) -> SkillRuntimeConfig:
     references = summarize_skill_references(skill)
-    allowed_tools = list(skill.tools or [])
-    prompt_blocks = build_skill_prompt_blocks(skill, references=references)
+    raw_skill_tools = list(skill.tools or [])
+    raw_task_tools = list(skill.task_tools or [])
+    tool_policy_declared = bool(raw_skill_tools)
+
+    if globally_allowed_tool_names is None:
+        effective_allowed_tools = list(raw_skill_tools)
+        if raw_skill_tools:
+            raw_skill_tool_set = set(raw_skill_tools)
+            effective_task_tools = [tool_name for tool_name in raw_task_tools if tool_name in raw_skill_tool_set]
+        else:
+            effective_task_tools = list(raw_task_tools)
+    else:
+        allowset = {str(tool_name) for tool_name in globally_allowed_tool_names}
+        if tool_policy_declared:
+            effective_allowed_tools = [tool_name for tool_name in raw_skill_tools if tool_name in allowset]
+        else:
+            effective_allowed_tools = []
+        effective_task_tools = [tool_name for tool_name in raw_task_tools if tool_name in allowset]
+        if tool_policy_declared:
+            effective_allowed_tool_set = set(effective_allowed_tools)
+            effective_task_tools = [tool_name for tool_name in effective_task_tools if tool_name in effective_allowed_tool_set]
+
+    prompt_blocks = build_skill_prompt_blocks(
+        skill,
+        references=references,
+        allowed_tools=effective_allowed_tools,
+        task_tools=effective_task_tools,
+        tool_policy_declared=tool_policy_declared,
+    )
     return SkillRuntimeConfig(
         skill_name=skill.name,
-        allowed_tools=allowed_tools,
-        allowed_tools_set=set(allowed_tools),
-        task_tools=list(skill.task_tools or []),
+        allowed_tools=effective_allowed_tools,
+        allowed_tools_set=set(effective_allowed_tools),
+        tool_policy_declared=tool_policy_declared,
+        task_tools=effective_task_tools,
         model_override=skill.model or None,
         hooks=list(skill.hooks or []),
         workdir=skill.path or "",

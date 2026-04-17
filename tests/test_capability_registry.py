@@ -3,6 +3,7 @@ from src.runtime.capability_registry import (
     DefaultCapabilityRegistry,
     build_default_capability_registry,
 )
+from src.config import config
 
 
 def test_registry_register_and_get_descriptor():
@@ -142,3 +143,19 @@ def test_registry_adapter_action_entries_include_alias_and_system():
     adapter_entry = next(item for item in registry.export_catalog() if item["type"] == "adapter_action")
     assert adapter_entry["action_alias"]
     assert adapter_entry["adapter_system"] in {"github", "jira", "portal"}
+
+
+def test_capability_registry_uses_full_tool_catalog_even_when_llm_tools_restricted(monkeypatch):
+    monkeypatch.setitem(config._config, "llm", {"tools": ["git_clone"]})
+    from src import get_tools_schema
+
+    all_tool_names = {
+        (item.get("function", {}) or {}).get("name") or item.get("name")
+        for item in get_tools_schema()
+        if isinstance(item, dict)
+    }
+    all_tool_names.discard(None)
+
+    registry = build_default_capability_registry()
+    registry_tool_names = {item.name for item in registry.list_by_type("tool")}
+    assert all_tool_names.issubset(registry_tool_names)

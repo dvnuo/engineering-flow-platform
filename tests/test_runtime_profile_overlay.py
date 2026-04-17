@@ -128,3 +128,20 @@ def test_runtime_profile_overlay_section_removal_includes_proxy_change_and_rolls
     assert apply_calls["count"] >= 2
     assert cfg.proxy.get("enabled") is False
     assert cfg.proxy.get("url") is None
+
+
+def test_runtime_profile_overlay_preserves_llm_tools_configuration(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    runtime_profile_path = tmp_path / "runtime_profile.yaml"
+    _write_base_config(config_path)
+
+    cfg = Config(str(config_path))
+    cfg.runtime_profile_path = runtime_profile_path
+    cfg.set_managed_overlay(
+        "rp_tools",
+        1,
+        {"llm": {"tools": ["git_clone", "jira_*"]}},
+    )
+
+    effective = cfg.get_effective_config()
+    assert effective["llm"]["tools"] == ["git_clone", "jira_*"]
