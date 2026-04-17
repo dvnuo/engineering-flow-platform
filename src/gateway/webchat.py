@@ -31,15 +31,6 @@ from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception
 from src.utils.logger import clear_log_context, set_log_context
 
 
-from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedMap
-
-# Module-level YAML instance for reuse
-_yaml = YAML()
-_yaml.preserve_quotes = True
-_yaml.indent(mapping=2, sequence=4, offset=2)
-_yaml.width = 4096
-
 from src.agents.core import Agent as AgentCore
 from src.agents.core import run_chat_execution
 from src.hooks.session_memory import save_session_summary
@@ -2160,83 +2151,10 @@ async def api_save_config(request: web.Request) -> web.Response:
     """
     try:
         data = await request.json()
-        
-        # Try project config first, then fallback to ~/.efp/
-        project_config = Path(__file__).parent.parent.parent / 'config.yaml'
-        project_example = Path(__file__).parent.parent.parent / 'config.yaml.example'
-        efp_config = Path.home() / '.efp' / 'config.yaml'
-        
-        # Determine config path
-        if project_config.exists():
-            config_path = project_config
-        elif efp_config.exists():
-            config_path = efp_config
-        else:
-            # Create new config from example
-            efp_config.parent.mkdir(parents=True, exist_ok=True)
-            if project_example.exists():
-                import shutil
-                shutil.copy(project_example, efp_config)
-                config_path = efp_config
-            else:
-                config_path = efp_config
-            config = {}
-        
-        # Use module-level YAML instance (reused for performance)
-        yaml = _yaml
-        
-        # Read existing config with ruamel.yaml (preserves comments)
-        existing_config = CommentedMap()
-        try:
-            if config_path.exists():
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    existing_config = yaml.load(f) or CommentedMap()
-        except Exception as e:
-            logger.warning(f"Could not parse existing config, starting fresh: {e}")
-            existing_config = CommentedMap()
-        
-        # Deep merge function - only updates provided fields, preserves others
-        def deep_merge(base: Dict, update: Dict) -> Dict:
-            """Deep merge update into base, preserving unchanged fields."""
-            result = base.copy()
-            for key, value in update.items():
-                if key in result and isinstance(result.get(key), (dict, CommentedMap)) and isinstance(value, dict):
-                    result[key] = deep_merge(result[key], value)
-                else:
-                    result[key] = value
-            return result
-        
-        # Perform partial update - only merge provided sections
-        config = existing_config.copy()
         sections = ['llm', 'jira', 'confluence', 'github', 'git', 'debug', 'proxy']
-        
-        for section in sections:
-            if section in data:
-                # Deep merge to preserve other fields in this section
-                if section in config and isinstance(global_config.get(section), (dict, CommentedMap)):
-                    config[section] = deep_merge(config[section], data[section])
-                else:
-                    config[section] = data[section]
-        
-        # Remove deprecated SSH configuration from persisted config
-        _remove_legacy_ssh_config(config)
-
-        # Encrypt sensitive fields before saving
-        global_config._encrypt_sensitive_fields(config)
-        
-        # Write back with preserved formatting and comments
-        with open(config_path, 'w', encoding='utf-8') as f:
-            yaml.dump(config, f)
-        
-        # Determine which sections changed and reload services
-        updated_sections = [s for s in sections if s in data]
-        if not global_config.config_path.exists():
-            global_config.config_path = config_path
-        global_config.reload(changed_sections=updated_sections)
-        
-        # Apply proxy settings if proxy section was updated
-        if 'proxy' in updated_sections:
-            global_config.apply_proxy()
+        payload = dict(data) if isinstance(data, dict) else {}
+        _remove_legacy_ssh_config(payload)
+        updated_sections = global_config.save_partial_sections(payload, sections)
         
         return web.json_response({
             'success': True, 
@@ -2268,7 +2186,7 @@ async def api_get_config(request: web.Request) -> web.Response:
 
 
 async def api_apply_runtime_profile(request: web.Request) -> web.Response:
-    """Apply runtime managed profile overlay from trusted Portal control-plane request."""
+    """Apply managed runtime-profile snapshot from trusted Portal control-plane request."""
     if not _is_trusted_portal_request(request):
         return web.json_response({"error": "Forbidden"}, status=403)
 
@@ -2301,7 +2219,7 @@ async def api_apply_runtime_profile(request: web.Request) -> web.Response:
             }
         )
     except Exception as e:
-        logger.error("Error applying runtime profile overlay: %s", e, exc_info=True)
+        logger.error("Error applying runtime profile config: %s", e, exc_info=True)
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
 
