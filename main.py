@@ -27,10 +27,10 @@ from src.gateway.server import gateway
 from src.sessions.persistence import session_persistence
 from src.sessions.manager import session_manager
 from src.sessions.usage import usage_tracker
-from src.cron.subscription_watchers import (
-    start_subscription_watchers,
-    stop_subscription_watchers,
-    is_enabled as are_subscription_watchers_enabled,
+from src.cron.automation_watchers import (
+    start_automation_watchers,
+    stop_automation_watchers,
+    is_enabled as are_automation_watchers_enabled,
 )
 from src.cron.jira_reconciliation import start_reconciliation, stop_reconciliation, is_enabled as is_jira_reconciliation_enabled
 from src.git.api import setup_git_user
@@ -170,20 +170,20 @@ async def main() -> None:
         logger.warning(f"Failed to setup git user | error={e}", exc_info=True)
 
     # Initialize watcher task before gateway start
-    polling_task = None
+    automation_watchers_task = None
     jira_reconciliation_task = None
     
     try:
         await gateway.start()
         logger.info("Gateway server started")
         
-        # Start subscription watchers if enabled
-        if are_subscription_watchers_enabled():
-            logger.info("Starting subscription watchers...")
-            polling_task = asyncio.create_task(start_subscription_watchers())
-            logger.info("Subscription watchers started")
+        # Start automation watchers if enabled
+        if are_automation_watchers_enabled():
+            logger.info("Starting automation watchers...")
+            automation_watchers_task = asyncio.create_task(start_automation_watchers())
+            logger.info("Automation watchers started")
         else:
-            logger.debug("Subscription watchers are disabled")
+            logger.debug("Automation watchers are disabled")
 
         if is_jira_reconciliation_enabled():
             logger.info("Starting Jira reconciliation...")
@@ -206,12 +206,12 @@ async def main() -> None:
     except Exception as e:
         logger.error(f"Unexpected error in main loop | error={e}", exc_info=True)
     finally:
-        # Stop subscription watchers
-        if polling_task and not polling_task.done():
-            logger.info("Stopping subscription watchers...")
-            await stop_subscription_watchers()
-            await polling_task
-            logger.info("Subscription watchers stopped")
+        # Stop automation watchers
+        if automation_watchers_task and not automation_watchers_task.done():
+            logger.info("Stopping automation watchers...")
+            await stop_automation_watchers()
+            await automation_watchers_task
+            logger.info("Automation watchers stopped")
 
         await _shutdown_jira_reconciliation_task(jira_reconciliation_task, logger)
         
