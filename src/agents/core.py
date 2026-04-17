@@ -1074,7 +1074,7 @@ You have access to the following tools. When a user asks you to do something tha
                     items.append({
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": str(content) if content else "",
+                        "output": _tool_feedback_text(content) if content else "",
                     })
                     continue
                 
@@ -1112,7 +1112,7 @@ You have access to the following tools. When a user asks you to do something tha
                     items.append({
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": str(content) if content else "",
+                        "output": _tool_feedback_text(content) if content else "",
                     })
                     continue
                 

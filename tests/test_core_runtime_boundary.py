@@ -105,3 +105,15 @@ def test_agent_process_source_uses_tool_feedback_text_for_all_tool_feedback_path
     assert process_source.count("_tool_feedback_text(") >= 3
     # Module-level coverage also includes skill mode function_call_output feedback.
     assert module_source.count("_tool_feedback_text(") >= 4
+
+
+def test_to_input_items_source_bounds_historical_function_call_output_content():
+    from src.agents import core
+
+    module_source = inspect.getsource(core)
+    expected = '"output": _tool_feedback_text(content) if content else ""'
+
+    # Historical tool feedback can flow through two branches in _to_input_items:
+    # 1) role == "tool" with tool_call_id
+    # 2) generic fallback with tool_call_id
+    assert module_source.count(expected) >= 2
