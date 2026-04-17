@@ -1314,11 +1314,18 @@ You have access to the following tools. When a user asks you to do something tha
                 error_info = llm_result["error"]
                 error_msg = error_info.get("message", "Unknown LLM error")
                 logger.error(f"LLM error: {error_msg}")
-                return {
+                error_response = {
                     "error": error_msg,
                     "error_type": error_info.get("type", "llm_error"),
                     "code": error_info.get("code", "")
                 }
+                details = error_info.get("details")
+                status_code = error_info.get("status_code")
+                if isinstance(details, dict):
+                    error_response["details"] = details
+                if isinstance(status_code, int):
+                    error_response["status_code"] = status_code
+                return error_response
             
             # Debug logging for LLM response
             if _is_debug_enabled():
@@ -1746,7 +1753,7 @@ You have access to the following tools. When a user asks you to do something tha
                 # The tool result naturally comes after the assistant message in the iteration order.
                 tool_result_msg = {
                     "role": "tool",
-                    "content": str(tool_result),
+                    "content": truncate(str(tool_result), 4000),
                     "tool_call_id": call_id,
                 }
                 
@@ -2178,12 +2185,19 @@ You have access to the following tools. When a user asks you to do something tha
                 error_info = llm_result["error"]
                 error_msg = error_info.get("message", "Unknown LLM error")
                 logger.error(f"[SkillMode] LLM error: {error_msg}")
-                return {
+                error_response = {
                     "error": error_msg,
                     "error_type": error_info.get("type", "llm_error"),
                     "code": error_info.get("code", ""),
                     "user_message_id": user_message_id,
                 }
+                details = error_info.get("details")
+                status_code = error_info.get("status_code")
+                if isinstance(details, dict):
+                    error_response["details"] = details
+                if isinstance(status_code, int):
+                    error_response["status_code"] = status_code
+                return error_response
 
             if track_usage:
                 iter_usage = llm_result.get("usage", {}) or {}
