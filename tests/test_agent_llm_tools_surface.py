@@ -90,3 +90,59 @@ async def test_skill_mode_tool_names_intersect_with_global_surface(monkeypatch):
     )
 
     assert any([item["function"]["name"] for item in tools] == ["git_clone"] for tools in captured)
+
+
+@pytest.mark.asyncio
+async def test_skill_mode_tool_schema_list_intersect_with_global_surface(monkeypatch):
+    from src.agents import core as core_mod
+
+    monkeypatch.setattr(core_mod, "get_tools_schemas", lambda: (_ for _ in ()).throw(AssertionError("must not fetch full catalog")))
+    monkeypatch.setattr("src.skills.get_tracer", lambda: _FakeTracer())
+
+    async def _fake_add_message(*args, **kwargs):
+        return "m1"
+
+    async def _fake_set_active(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(core_mod, "session_manager", SimpleNamespace(add_message=_fake_add_message, set_active_skill_session=_fake_set_active))
+
+    captured = []
+
+    async def _fake_responses(**kwargs):
+        captured.append(kwargs.get("tools") or [])
+        return {"content": "", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=_fake_responses))
+
+    agent = Agent.__new__(Agent)
+    agent.model = None
+    agent.agent_id = None
+    agent.agent_name = None
+    agent.tools = [
+        {"type": "function", "function": {"name": "git_clone", "description": "clone"}},
+        {"type": "function", "function": {"name": "jira_get_issue", "description": "jira"}},
+    ]
+    agent.allowed_tool_names = {"git_clone"}
+
+    skill = SimpleNamespace(
+        name="demo",
+        description="demo",
+        path="",
+        tools=[
+            {"type": "function", "function": {"name": "git_clone", "description": "clone"}},
+            {"type": "function", "function": {"name": "jira_get_issue", "description": "jira"}},
+        ],
+        strategy=[],
+    )
+    skill_state = {"skill_name": "demo", "original_user_request": "run", "completed_steps": [], "artifacts": {}}
+
+    await agent._continue_skill_mode(
+        message="run",
+        session_id="s1",
+        user_message_id="u1",
+        skill_state=skill_state,
+        skill=skill,
+    )
+
+    assert any([item["function"]["name"] for item in tools] == ["git_clone"] for tools in captured)

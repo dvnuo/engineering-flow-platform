@@ -594,6 +594,63 @@ async def test_disallowed_tool_is_denied_and_allowed_tool_executes(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_skill_declared_tools_empty_intersection_sends_empty_llm_tool_surface(monkeypatch, base_agent):
+    agent, _ = base_agent
+    agent.tools = [{"function": {"name": "allowed_tool", "description": "ok"}}]
+    agent.allowed_tool_names = {"allowed_tool"}
+
+    matched_skill = SimpleNamespace(
+        name="runtime-skill",
+        description="d",
+        path="",
+        tools=["blocked_tool"],
+        task_tools=[],
+        strategy=[],
+        body="instructions",
+        references=[],
+        model="",
+        hooks=[],
+    )
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(
+            _initialized=True,
+            match_skill=lambda *_: [matched_skill],
+            get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(
+                s,
+                globally_allowed_tool_names=globally_allowed_tool_names,
+            ),
+        ),
+    )
+
+    seen_llm_tools = []
+    tool_exec_calls = {"count": 0}
+
+    async def _fake_execute_tool(*args, **kwargs):
+        tool_exec_calls["count"] += 1
+        return ToolResult(True, "unexpected")
+
+    monkeypatch.setattr("src.agents.core.execute_tool_by_name", _fake_execute_tool)
+
+    responses = [
+        {"content": "", "function_calls": [{"call_id": "1", "name": "blocked_tool", "arguments": "{}"}], "usage": {}},
+        {"content": "done", "function_calls": [], "usage": {}},
+    ]
+
+    async def _fake_responses(**kwargs):
+        seen_llm_tools.append(kwargs.get("tools"))
+        return responses.pop(0)
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=_fake_responses, default_provider="openai"))
+
+    result = await agent.process("runtime test", session_id="s-empty-intersection")
+    assert result["response"] == "done"
+    assert seen_llm_tools
+    assert seen_llm_tools[0] == []
+    assert tool_exec_calls["count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_hooks_and_task_path_emit_events(monkeypatch, base_agent):
     agent, _ = base_agent
     events = []
