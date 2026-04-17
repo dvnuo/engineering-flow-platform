@@ -132,6 +132,11 @@ _DEBUG_ENABLED = None  # Lazy initialization
 _TOOL_RESULT_GOVERNANCE_ATTR = "_governance"
 
 
+def _tool_feedback_text(value: Any, max_length: int = 4000) -> str:
+    """Build bounded tool feedback text for next-round LLM input only."""
+    return truncate_with_count(str(value), max_length)
+
+
 def _is_debug_enabled() -> bool:
     """Check if debug mode is enabled (logger is DEBUG level)."""
     global _DEBUG_ENABLED
@@ -1635,7 +1640,7 @@ You have access to the following tools. When a user asks you to do something tha
                         loop_messages.append(
                             {
                                 "role": "tool",
-                                "content": str(deny_result),
+                                "content": _tool_feedback_text(deny_result),
                                 "tool_call_id": call_id,
                             }
                         )
@@ -1670,7 +1675,7 @@ You have access to the following tools. When a user asks you to do something tha
                     loop_messages.append(
                         {
                             "role": "tool",
-                            "content": str(short_result),
+                            "content": _tool_feedback_text(short_result),
                             "tool_call_id": call_id,
                         }
                     )
@@ -1753,7 +1758,7 @@ You have access to the following tools. When a user asks you to do something tha
                 # The tool result naturally comes after the assistant message in the iteration order.
                 tool_result_msg = {
                     "role": "tool",
-                    "content": truncate(str(tool_result), 4000),
+                    "content": _tool_feedback_text(tool_result),
                     "tool_call_id": call_id,
                 }
                 
@@ -2271,7 +2276,7 @@ You have access to the following tools. When a user asks you to do something tha
                         args=normalized_args,
                         source_ref="agents.core.skill_mode_loop",
                     )
-                    output_text = str(tool_result)
+                    output_text = _tool_feedback_text(tool_result)
                     logger.debug(f"[SkillMode] [TOOL_RESULT] tool={tool_name}, result length={len(output_text)}, preview={safe_preview(output_text, 200)}")
                 except Exception as tool_exc:
                     output_text = f"Error: Tool '{tool_name}' failed with {tool_exc}"
