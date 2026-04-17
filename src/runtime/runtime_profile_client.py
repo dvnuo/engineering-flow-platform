@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 def _extract_runtime_profile_overlay(
     payload: Dict[str, Any],
 ) -> Tuple[Optional[str], Optional[int], Optional[Dict[str, Any]], bool]:
-    """Extract overlay fields from portal response.
+    """Extract managed runtime-profile snapshot fields from portal response.
 
     Expected structured Portal payload:
     {
@@ -33,12 +33,12 @@ def _extract_runtime_profile_overlay(
       }
     }
 
-    Runtime only consumes ``runtime_profile_context.config`` (overlay body)
+    Runtime only consumes ``runtime_profile_context.config`` (managed config body)
     and ``runtime_profile_context.revision``. Extra Portal-side ownership /
     default metadata (for example ``owner_user_id`` or ``is_default``)
     remains control-plane-only and is ignored here.
 
-    Returns: (runtime_profile_id, revision, overlay_config, clear_flag)
+    Returns: (runtime_profile_id, revision, managed_config, clear_flag)
     """
     runtime_profile_id = payload.get("runtime_profile_id")
     runtime_profile_context = payload.get("runtime_profile_context")
@@ -73,7 +73,7 @@ def _extract_runtime_profile_overlay(
 
 
 async def bootstrap_runtime_profile_from_portal() -> bool:
-    """Best-effort bootstrap for runtime profile overlay from Portal internal API."""
+    """Best-effort bootstrap for managed runtime-profile apply from Portal internal API."""
     base_url = get_portal_internal_base_url()
     agent_id = get_portal_agent_id()
     if not base_url or not agent_id:
@@ -111,7 +111,7 @@ async def bootstrap_runtime_profile_from_portal() -> bool:
     if clear_flag:
         config.clear_managed_overlay()
         logger.info(
-            "Runtime profile overlay cleared from portal bootstrap: agent_id=%s profile_id=%s",
+            "Runtime profile config cleared from portal bootstrap: agent_id=%s profile_id=%s",
             agent_id,
             runtime_profile_id,
         )
@@ -120,7 +120,7 @@ async def bootstrap_runtime_profile_from_portal() -> bool:
     if isinstance(overlay_config, dict):
         updated_sections = config.set_managed_overlay(runtime_profile_id, revision, overlay_config)
         logger.info(
-            "Runtime profile overlay applied from portal bootstrap: agent_id=%s profile_id=%s revision=%s sections=%s",
+            "Runtime profile config applied from portal bootstrap: agent_id=%s profile_id=%s revision=%s sections=%s",
             agent_id,
             runtime_profile_id,
             revision,

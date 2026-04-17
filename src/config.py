@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
 
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,72 @@ class Config:
         "git",
         "debug",
     }
+    PORTAL_MANAGED_FIELD_TREE = {
+        "llm": {
+            "provider": True,
+            "model": True,
+            "api_key": True,
+            "temperature": True,
+            "max_tokens": True,
+            "tools": True,
+        },
+        "proxy": {
+            "enabled": True,
+            "url": True,
+            "username": True,
+            "password": True,
+        },
+        "jira": {
+            "enabled": True,
+            "instances": True,
+            "automation": {
+                "assignments": {
+                    "enabled": True,
+                    "projects": True,
+                },
+                "mentions": {
+                    "enabled": True,
+                    "projects": True,
+                },
+            },
+        },
+        "confluence": {
+            "enabled": True,
+            "instances": True,
+            "automation": {
+                "mentions": {
+                    "enabled": True,
+                    "spaces": True,
+                },
+            },
+        },
+        "github": {
+            "enabled": True,
+            "api_token": True,
+            "base_url": True,
+            "automation": {
+                "review_requests": {
+                    "enabled": True,
+                    "repos": True,
+                },
+                "mentions": {
+                    "enabled": True,
+                    "repos": True,
+                    "include_review_comments": True,
+                },
+            },
+        },
+        "git": {
+            "user": {
+                "name": True,
+                "email": True,
+            },
+        },
+        "debug": {
+            "enabled": True,
+            "log_level": True,
+        },
+    }
 
     def __init__(self, config_path: Optional[str] = None):
         if config_path is None:
@@ -111,13 +178,12 @@ class Config:
         self.runtime_profile_path = Path.home() / ".efp" / "runtime_profile.yaml"
         self._config: Dict[str, Any] = {}
         self._base_config: Dict[str, Any] = {}
-        self._managed_overlay: Dict[str, Any] = {}
         self._managed_overlay_meta: Dict[str, Any] = {
             "runtime_profile_id": None,
             "revision": None,
         }
+        self._managed_sections: List[str] = []
         self._last_modified: float = 0
-        self._managed_overlay_last_modified: float = 0
         self._yaml = _yaml  # Use module-level instance
         self.load()
 
@@ -135,27 +201,71 @@ class Config:
 
     def load(self) -> None:
         """Load configuration from YAML file."""
-        if self.config_path.exists():
-            with open(self.config_path, "r", encoding="utf-8") as f:
-                self._base_config = self._yaml.load(f) or {}
-            self._last_modified = self.config_path.stat().st_mtime
-        else:
-            self._base_config = {}
-            self._last_modified = 0
+        self._base_config = self._load_yaml_document(self.config_path)
+        self._last_modified = self.config_path.stat().st_mtime if self.config_path.exists() else 0
         
         # Decrypt sensitive fields
         self._decrypt_sensitive_fields(self._base_config)
-        self.load_managed_overlay()
         self._rebuild_effective_config()
+
+    def _load_yaml_document(self, path: Path) -> Dict[str, Any]:
+        if not path.exists():
+            return CommentedMap()
+        with open(path, "r", encoding="utf-8") as f:
+            document = self._yaml.load(f) or CommentedMap()
+        return document if isinstance(document, dict) else CommentedMap()
+
+    def _write_yaml_document(self, path: Path, document: Dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            self._yaml.dump(document, f)
 
     def _deep_merge(self, base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
         result = copy.deepcopy(base)
-        for key, value in (overlay or {}).items():
-            if isinstance(result.get(key), dict) and isinstance(value, dict):
-                result[key] = self._deep_merge(result[key], value)
-            else:
-                result[key] = copy.deepcopy(value)
+        self._deep_merge_into(result, overlay)
         return result
+
+    def _deep_merge_into(self, base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+        for key, value in (overlay or {}).items():
+            if self._is_mapping(base.get(key)) and self._is_mapping(value):
+                self._deep_merge_into(base[key], value)
+            else:
+                base[key] = copy.deepcopy(value)
+        return base
+
+    def _prune_by_field_tree(self, target: Dict[str, Any], field_tree: Dict[str, Any]) -> None:
+        if not self._is_mapping(target) or not self._is_mapping(field_tree):
+            return
+        for key, subtree in field_tree.items():
+            if key not in target:
+                continue
+            if subtree is True:
+                del target[key]
+                continue
+            current_value = target.get(key)
+            if self._is_mapping(current_value):
+                self._prune_by_field_tree(current_value, subtree)
+                if not current_value:
+                    del target[key]
+            else:
+                del target[key]
+
+    def _filter_by_field_tree(self, source: Dict[str, Any], field_tree: Dict[str, Any]) -> Dict[str, Any]:
+        filtered: Dict[str, Any] = {}
+        if not self._is_mapping(source) or not self._is_mapping(field_tree):
+            return filtered
+        for key, subtree in field_tree.items():
+            if key not in source:
+                continue
+            value = source.get(key)
+            if subtree is True:
+                filtered[key] = copy.deepcopy(value)
+                continue
+            if self._is_mapping(value):
+                nested = self._filter_by_field_tree(value, subtree)
+                if nested:
+                    filtered[key] = nested
+        return filtered
 
     def _filter_managed_overlay_sections(self, overlay_config: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(overlay_config, dict):
@@ -164,36 +274,21 @@ class Config:
         for section, value in overlay_config.items():
             if section in self.MANAGED_OVERLAY_SECTIONS:
                 filtered[section] = copy.deepcopy(value)
-        return filtered
+        return self._filter_by_field_tree(filtered, self.PORTAL_MANAGED_FIELD_TREE)
 
     def _rebuild_effective_config(self) -> None:
-        self._config = self._deep_merge(self._base_config, self._managed_overlay)
+        self._config = copy.deepcopy(self._base_config)
 
     def load_managed_overlay(self) -> Dict[str, Any]:
-        """Load runtime managed overlay from runtime_profile.yaml."""
-        self._managed_overlay = {}
+        """Legacy compatibility no-op (overlay file model removed)."""
         self._managed_overlay_meta = {"runtime_profile_id": None, "revision": None}
+        self._managed_sections = []
+        return {}
 
-        if not self.runtime_profile_path.exists():
-            self._managed_overlay_last_modified = 0
-            return {}
-
-        with open(self.runtime_profile_path, "r", encoding="utf-8") as f:
-            payload = self._yaml.load(f) or {}
-        if not isinstance(payload, dict):
-            payload = {}
-
-        overlay_config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
-        overlay_config = self._filter_managed_overlay_sections(overlay_config)
-        self._decrypt_sensitive_fields(overlay_config)
-
-        self._managed_overlay = overlay_config
-        self._managed_overlay_meta = {
-            "runtime_profile_id": payload.get("runtime_profile_id"),
-            "revision": payload.get("revision"),
-        }
-        self._managed_overlay_last_modified = self.runtime_profile_path.stat().st_mtime
-        return copy.deepcopy(self._managed_overlay)
+    def _persist_runtime_config(self, config_document: Dict[str, Any]) -> None:
+        encrypted = copy.deepcopy(config_document)
+        self._encrypt_sensitive_fields(encrypted)
+        self._write_yaml_document(self.config_path, encrypted)
 
     def set_managed_overlay(
         self,
@@ -201,21 +296,24 @@ class Config:
         revision: Optional[int],
         overlay_config: Dict[str, Any],
     ) -> List[str]:
-        """Set and persist managed overlay config, then reload effective config."""
-        previous_sections = set(self._managed_overlay.keys())
+        """Apply Portal-managed snapshot into config.yaml and reload."""
+        previous_sections = set(self._managed_sections)
         filtered_overlay = self._filter_managed_overlay_sections(overlay_config or {})
         new_sections = set(filtered_overlay.keys())
-        payload = {
+
+        config_document = self._load_yaml_document(self.config_path)
+        self._decrypt_sensitive_fields(config_document)
+        self._prune_by_field_tree(config_document, self.PORTAL_MANAGED_FIELD_TREE)
+        self._deep_merge_into(config_document, filtered_overlay)
+        self._persist_runtime_config(config_document)
+
+        self._managed_overlay_meta = {
             "runtime_profile_id": runtime_profile_id,
             "revision": revision,
-            "config": copy.deepcopy(filtered_overlay),
         }
-        encrypted_payload = copy.deepcopy(payload)
-        self._encrypt_sensitive_fields(encrypted_payload)
-
-        self.runtime_profile_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.runtime_profile_path, "w", encoding="utf-8") as f:
-            self._yaml.dump(encrypted_payload, f)
+        self._managed_sections = sorted(new_sections)
+        if self.runtime_profile_path.exists():
+            self.runtime_profile_path.unlink()
 
         # Use union so section removals (e.g. proxy removed from overlay) still
         # trigger reload/apply side effects for the removed section.
@@ -226,8 +324,15 @@ class Config:
         return changed_sections
 
     def clear_managed_overlay(self) -> None:
-        """Clear managed runtime overlay and reload effective config."""
-        previous_sections = sorted(self._managed_overlay.keys())
+        """Remove all Portal-managed fields from config.yaml and reload."""
+        previous_sections = sorted(self._managed_sections)
+        config_document = self._load_yaml_document(self.config_path)
+        self._decrypt_sensitive_fields(config_document)
+        self._prune_by_field_tree(config_document, self.PORTAL_MANAGED_FIELD_TREE)
+        self._persist_runtime_config(config_document)
+
+        self._managed_overlay_meta = {"runtime_profile_id": None, "revision": None}
+        self._managed_sections = []
         if self.runtime_profile_path.exists():
             self.runtime_profile_path.unlink()
         self.reload(changed_sections=previous_sections)
@@ -241,8 +346,31 @@ class Config:
         return {
             "runtime_profile_id": self._managed_overlay_meta.get("runtime_profile_id"),
             "revision": self._managed_overlay_meta.get("revision"),
-            "managed_sections": sorted(self._managed_overlay.keys()),
+            "managed_sections": sorted(self._managed_sections),
         }
+
+    def save_partial_sections(self, updates: Dict[str, Any], sections: List[str]) -> List[str]:
+        """Persist partial section updates into config.yaml preserving YAML structure."""
+        config_document = self._load_yaml_document(self.config_path)
+        self._decrypt_sensitive_fields(config_document)
+        updated_sections: List[str] = []
+
+        for section in sections:
+            if section not in updates:
+                continue
+            if (
+                section in config_document
+                and self._is_mapping(config_document.get(section))
+                and self._is_mapping(updates[section])
+            ):
+                self._deep_merge_into(config_document[section], updates[section])
+            else:
+                config_document[section] = copy.deepcopy(updates[section])
+            updated_sections.append(section)
+
+        self._persist_runtime_config(config_document)
+        self.reload(changed_sections=updated_sections)
+        return updated_sections
     
     def _is_mapping(self, obj: Any) -> bool:
         """Check if obj is a mapping (dict or CommentedMap)."""
@@ -358,21 +486,16 @@ class Config:
         Returns:
             True if config was reloaded, False otherwise.
         """
-        base_exists = self.config_path.exists()
-        overlay_exists = self.runtime_profile_path.exists()
-        if not base_exists and not overlay_exists:
+        if not self.config_path.exists():
             return False
         
         try:
-            current_mtime = self.config_path.stat().st_mtime if base_exists else 0
-            overlay_mtime = self.runtime_profile_path.stat().st_mtime if overlay_exists else 0
+            current_mtime = self.config_path.stat().st_mtime
             # Force reload if changed_sections is provided (user explicitly saved config)
             # Otherwise only reload if file was modified
             if (
                 changed_sections
                 or current_mtime > self._last_modified
-                or overlay_mtime > self._managed_overlay_last_modified
-                or (not overlay_exists and self._managed_overlay_last_modified > 0)
             ):
                 self.load()
                 # Notify registered services if sections are specified

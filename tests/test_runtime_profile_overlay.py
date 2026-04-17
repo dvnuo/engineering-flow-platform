@@ -8,6 +8,11 @@ def _write_base_config(path):
         "llm:\n"
         "  provider: openai\n"
         "  model: gpt-4o\n"
+        "  api_base: https://api.local\n"
+        "  max_retries: 3\n"
+        "  system-prompt:\n"
+        "    tools:\n"
+        "      enabled: true\n"
         "jira:\n"
         "  enabled: false\n"
         "proxy:\n"
@@ -16,14 +21,13 @@ def _write_base_config(path):
     )
 
 
-def test_runtime_profile_overlay_deep_merge_and_managed_sections(tmp_path):
+def test_runtime_profile_apply_writes_config_yaml_without_sidecar(tmp_path):
     config_path = tmp_path / "config.yaml"
     runtime_profile_path = tmp_path / "runtime_profile.yaml"
     _write_base_config(config_path)
 
     cfg = Config(str(config_path))
     cfg.runtime_profile_path = runtime_profile_path
-
     updated = cfg.set_managed_overlay(
         "rp_1",
         3,
@@ -34,10 +38,12 @@ def test_runtime_profile_overlay_deep_merge_and_managed_sections(tmp_path):
         },
     )
     assert updated == ["jira", "llm"]
+    assert not runtime_profile_path.exists()
 
+    cfg.load()
     effective = cfg.get_effective_config()
     assert effective["llm"]["provider"] == "anthropic"
-    assert effective["llm"]["model"] == "gpt-4o"
+    assert effective["llm"].get("model") is None
     assert effective["jira"]["enabled"] is True
     assert "unknown" not in effective
 
@@ -47,32 +53,61 @@ def test_runtime_profile_overlay_deep_merge_and_managed_sections(tmp_path):
     assert meta["managed_sections"] == ["jira", "llm"]
 
 
-def test_runtime_profile_overlay_clear_restores_base(tmp_path):
+def test_runtime_profile_apply_preserves_unmanaged_llm_subtree(tmp_path):
     config_path = tmp_path / "config.yaml"
-    runtime_profile_path = tmp_path / "runtime_profile.yaml"
     _write_base_config(config_path)
 
     cfg = Config(str(config_path))
-    cfg.runtime_profile_path = runtime_profile_path
-    cfg.set_managed_overlay("rp_2", 1, {"jira": {"enabled": True}})
-    assert cfg.jira.get("enabled") is True
+    cfg.set_managed_overlay(
+        "rp_tools",
+        1,
+        {"llm": {"provider": "openai", "model": "gpt-4.1", "tools": ["git_clone", "jira_*"]}},
+    )
 
-    cfg.clear_managed_overlay()
-    assert cfg.jira.get("enabled") is False
-    assert not runtime_profile_path.exists()
+    cfg.load()
+    effective = cfg.get_effective_config()
+    assert effective["llm"]["provider"] == "openai"
+    assert effective["llm"]["model"] == "gpt-4.1"
+    assert effective["llm"]["tools"] == ["git_clone", "jira_*"]
+    assert effective["llm"]["api_base"] == "https://api.local"
+    assert effective["llm"]["max_retries"] == 3
+    assert effective["llm"]["system-prompt"]["tools"]["enabled"] is True
 
 
-def test_runtime_profile_overlay_encrypt_decrypt_sensitive_fields(tmp_path, monkeypatch):
+def test_runtime_profile_apply_prunes_stale_managed_proxy_fields(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
-    runtime_profile_path = tmp_path / "runtime_profile.yaml"
+    _write_base_config(config_path)
+    for key in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
+        monkeypatch.delenv(key, raising=False)
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp_proxy",
+        1,
+        {"proxy": {"enabled": True, "url": "http://overlay.proxy.local:8080", "password": "secret"}},
+    )
+    assert os.environ["http_proxy"] == "http://overlay.proxy.local:8080"
+
+    cfg.set_managed_overlay("rp_proxy", 2, {"llm": {"provider": "openai"}})
+    cfg.load()
+    assert cfg.proxy.get("enabled") is None
+    assert cfg.proxy.get("url") is None
+    assert cfg.proxy.get("password") is None
+
+
+def test_runtime_profile_apply_encrypts_sensitive_fields_in_config_yaml(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
     _write_base_config(config_path)
     monkeypatch.setenv("EFP_CONFIG_KEY", "test-key")
 
     cfg = Config(str(config_path))
-    cfg.runtime_profile_path = runtime_profile_path
-    cfg.set_managed_overlay("rp_3", 7, {"proxy": {"enabled": True, "url": "http://proxy:8080", "password": "secret"}})
+    cfg.set_managed_overlay(
+        "rp_3",
+        7,
+        {"proxy": {"enabled": True, "url": "http://proxy:8080", "password": "secret"}},
+    )
 
-    raw_content = runtime_profile_path.read_text(encoding="utf-8")
+    raw_content = config_path.read_text(encoding="utf-8")
     assert "ENC:" in raw_content
     assert "secret" not in raw_content
 
@@ -80,68 +115,20 @@ def test_runtime_profile_overlay_encrypt_decrypt_sensitive_fields(tmp_path, monk
     assert cfg.proxy.get("password") == "secret"
 
 
-def test_runtime_profile_overlay_proxy_applies_env(tmp_path, monkeypatch):
+def test_runtime_profile_clear_removes_managed_subtree_and_metadata(tmp_path):
     config_path = tmp_path / "config.yaml"
     runtime_profile_path = tmp_path / "runtime_profile.yaml"
     _write_base_config(config_path)
-    for key in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
-        monkeypatch.delenv(key, raising=False)
+    runtime_profile_path.write_text("legacy: true\n", encoding="utf-8")
 
     cfg = Config(str(config_path))
     cfg.runtime_profile_path = runtime_profile_path
-    cfg.set_managed_overlay("rp_4", 1, {"proxy": {"enabled": True, "url": "http://proxy.example.com:8080"}})
+    cfg.set_managed_overlay("rp_2", 1, {"jira": {"enabled": True}, "proxy": {"enabled": True, "url": "http://x"}})
+    cfg.clear_managed_overlay()
 
-    assert os.environ["http_proxy"] == "http://proxy.example.com:8080"
-    assert os.environ["HTTPS_PROXY"] == "http://proxy.example.com:8080"
-
-
-def test_runtime_profile_overlay_section_removal_includes_proxy_change_and_rolls_back_to_base(tmp_path, monkeypatch):
-    config_path = tmp_path / "config.yaml"
-    runtime_profile_path = tmp_path / "runtime_profile.yaml"
-    _write_base_config(config_path)
-
-    cfg = Config(str(config_path))
-    cfg.runtime_profile_path = runtime_profile_path
-
-    apply_calls = {"count": 0}
-    original_apply_proxy = cfg.apply_proxy
-
-    def _count_apply_proxy():
-        apply_calls["count"] += 1
-        original_apply_proxy()
-
-    monkeypatch.setattr(cfg, "apply_proxy", _count_apply_proxy)
-
-    first_changed = cfg.set_managed_overlay(
-        "rp_5",
-        1,
-        {
-            "proxy": {"enabled": True, "url": "http://overlay.proxy.local:8080"},
-            "llm": {"provider": "anthropic"},
-        },
-    )
-    assert "proxy" in first_changed
-    assert cfg.proxy.get("url") == "http://overlay.proxy.local:8080"
-
-    second_changed = cfg.set_managed_overlay("rp_5", 2, {"llm": {"provider": "openai"}})
-    assert "proxy" in second_changed
-    assert apply_calls["count"] >= 2
-    assert cfg.proxy.get("enabled") is False
-    assert cfg.proxy.get("url") is None
-
-
-def test_runtime_profile_overlay_preserves_llm_tools_configuration(tmp_path):
-    config_path = tmp_path / "config.yaml"
-    runtime_profile_path = tmp_path / "runtime_profile.yaml"
-    _write_base_config(config_path)
-
-    cfg = Config(str(config_path))
-    cfg.runtime_profile_path = runtime_profile_path
-    cfg.set_managed_overlay(
-        "rp_tools",
-        1,
-        {"llm": {"tools": ["git_clone", "jira_*"]}},
-    )
-
-    effective = cfg.get_effective_config()
-    assert effective["llm"]["tools"] == ["git_clone", "jira_*"]
+    cfg.load()
+    meta = cfg.get_managed_overlay_meta()
+    assert meta == {"runtime_profile_id": None, "revision": None, "managed_sections": []}
+    assert cfg.jira.get("enabled") is None
+    assert "proxy" not in cfg.get_effective_config()
+    assert not runtime_profile_path.exists()
