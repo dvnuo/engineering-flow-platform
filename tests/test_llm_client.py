@@ -70,6 +70,15 @@ def openai_provider():
     return provider
 
 
+@pytest.fixture
+def github_copilot_provider():
+    """Create a GitHubCopilotProvider with _check_api_key patched."""
+    from src.agents.llm import GitHubCopilotProvider
+    provider = GitHubCopilotProvider()
+    provider._check_api_key = lambda: None
+    return provider
+
+
 class TestLLMClientSuccess:
     """Successful LLM client tests."""
 
@@ -417,6 +426,45 @@ class TestResponsesAPI:
             # Should accumulate both parts
             assert "Part1" in result["content"]
             assert "Part2" in result["content"]
+
+    @pytest.mark.asyncio
+    async def test_openai_responses_empty_output_max_output_tokens_returns_truncated_error(self, openai_provider):
+        mock_response = MockResponse({
+            "output": [],
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {"input_tokens": 10, "output_tokens": 0},
+        })
+        mock_client = MockHttpClient(mock_response)
+
+        with patch('httpx.AsyncClient', return_value=mock_client):
+            result = await openai_provider.responses(
+                messages=[{"role": "user", "content": "hello"}]
+            )
+
+        assert result["error"]["type"] == "truncated_response"
+        assert result["error"]["code"] == "max_output_tokens_exceeded"
+        assert result["error"]["details"]["incomplete_reason"] == "max_output_tokens"
+
+    @pytest.mark.asyncio
+    async def test_github_copilot_responses_empty_output_max_output_tokens_returns_truncated_error(
+        self,
+        github_copilot_provider,
+    ):
+        mock_response = MockResponse({
+            "output": [],
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {"input_tokens": 10, "output_tokens": 0},
+        })
+        mock_client = MockHttpClient(mock_response)
+
+        with patch('httpx.AsyncClient', return_value=mock_client):
+            result = await github_copilot_provider.responses(
+                messages=[{"role": "user", "content": "hello"}]
+            )
+
+        assert result["error"]["type"] == "truncated_response"
+        assert result["error"]["code"] == "max_output_tokens_exceeded"
+        assert result["error"]["details"]["incomplete_reason"] == "max_output_tokens"
 
     @pytest.mark.asyncio
     async def test_responses_tool_calls(self, openai_provider):

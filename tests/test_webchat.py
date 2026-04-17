@@ -458,11 +458,26 @@ async def test_chat_execution_bus_adapter_persists_last_execution_id(monkeypatch
 
 @pytest.mark.asyncio
 async def test_chat_execution_bus_adapter_raises_on_error_status(monkeypatch):
+    import json
     from aiohttp import web
     from src.gateway import webchat
 
     async def _fake_execute_chat_orchestration(**kwargs):
-            return type("R", (), {"status": "error", "output_payload": {"error": {"message": "boom"}}})()
+        return type(
+            "R",
+            (),
+            {
+                "status": "error",
+                "request_id": "chat-structured-1",
+                "output_payload": {
+                    "error": "Model output was truncated because max_output_tokens was reached.",
+                    "error_type": "truncated_response",
+                    "code": "max_output_tokens_exceeded",
+                    "details": {"incomplete_reason": "max_output_tokens"},
+                    "status_code": 500,
+                },
+            },
+        )()
 
     monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
 
@@ -471,7 +486,7 @@ async def test_chat_execution_bus_adapter_raises_on_error_status(monkeypatch):
 
     monkeypatch.setattr(webchat, "run_chat_execution", _fake_run_chat_execution)
 
-    with pytest.raises(web.HTTPInternalServerError):
+    with pytest.raises(web.HTTPInternalServerError) as exc_info:
         await webchat._run_chat_via_execution_bus(
             agent=object(),
             session_id="s-chat",
@@ -480,6 +495,52 @@ async def test_chat_execution_bus_adapter_raises_on_error_status(monkeypatch):
             portal_user_id=None,
             portal_user_name=None,
         )
+    body = json.loads(exc_info.value.text)
+    assert body["error"]
+    assert body["detail"] == body["error"]
+    assert body["error_type"] == "truncated_response"
+    assert body["code"] == "max_output_tokens_exceeded"
+    assert body["details"]["incomplete_reason"] == "max_output_tokens"
+    assert body["request_id"] == "chat-structured-1"
+
+
+@pytest.mark.asyncio
+async def test_chat_execution_bus_adapter_raises_on_legacy_string_error(monkeypatch):
+    import json
+    from aiohttp import web
+    from src.gateway import webchat
+
+    async def _fake_execute_chat_orchestration(**kwargs):
+        return type(
+            "R",
+            (),
+            {
+                "status": "error",
+                "request_id": "chat-legacy-1",
+                "output_payload": {"error": "legacy failure"},
+            },
+        )()
+
+    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
+    monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
+
+    with pytest.raises(web.HTTPInternalServerError) as exc_info:
+        await webchat._run_chat_via_execution_bus(
+            agent=object(),
+            session_id="s-chat",
+            message="hello",
+            user_name="u1",
+            portal_user_id=None,
+            portal_user_name=None,
+        )
+
+    body = json.loads(exc_info.value.text)
+    assert body["error"] == "legacy failure"
+    assert body["detail"] == "legacy failure"
+    assert body["error_type"] == ""
+    assert body["code"] == ""
+    assert body["details"] == {}
+    assert body["request_id"] == "chat-legacy-1"
 
 
 @pytest.mark.asyncio

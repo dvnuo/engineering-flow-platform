@@ -74,3 +74,46 @@ def test_agent_process_source_prefers_self_model_in_multiple_paths():
     source = inspect.getsource(core.Agent.process)
     expected = 'self.model or config.llm.get("model", "gpt-5-mini")'
     assert source.count(expected) >= 2
+
+
+def test_tool_feedback_text_preserves_short_text():
+    from src.agents import core
+
+    value = "short tool output"
+    assert core._tool_feedback_text(value) == value
+    assert "chars hidden" not in core._tool_feedback_text(value)
+
+
+def test_tool_feedback_text_truncates_long_text_with_count():
+    from src.agents import core
+
+    long_value = "A" * 5005
+    output = core._tool_feedback_text(long_value)
+
+    assert output.startswith("A" * 20)
+    assert "chars hidden" in output
+    assert len(output) < len(long_value)
+
+
+def test_agent_process_source_uses_tool_feedback_text_for_all_tool_feedback_paths():
+    from src.agents import core
+
+    process_source = inspect.getsource(core.Agent.process)
+    module_source = inspect.getsource(core)
+
+    # Agent.process should cover deny / short-circuit / normal tool result feedback.
+    assert process_source.count("_tool_feedback_text(") >= 3
+    # Module-level coverage also includes skill mode function_call_output feedback.
+    assert module_source.count("_tool_feedback_text(") >= 4
+
+
+def test_to_input_items_source_bounds_historical_function_call_output_content():
+    from src.agents import core
+
+    module_source = inspect.getsource(core)
+    expected = '"output": _tool_feedback_text(content) if content else ""'
+
+    # Historical tool feedback can flow through two branches in _to_input_items:
+    # 1) role == "tool" with tool_call_id
+    # 2) generic fallback with tool_call_id
+    assert module_source.count(expected) >= 2

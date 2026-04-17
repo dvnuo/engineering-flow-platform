@@ -378,16 +378,47 @@ async def _run_chat_via_execution_bus(
     output_payload["_execution_result"] = execution_result
     if execution_result.status == "error" or output_payload.get("error"):
         error_value = output_payload.get("error", "Execution bus error")
-        if isinstance(error_value, dict):
+        structured_error = error_value if isinstance(error_value, dict) else {}
+        status_code = None
+
+        if structured_error:
             error_message = (
-                error_value.get("message")
-                or error_value.get("error")
-                or json.dumps(error_value, ensure_ascii=False)
+                structured_error.get("message")
+                or structured_error.get("error")
+                or json.dumps(structured_error, ensure_ascii=False)
             )
+            error_type = structured_error.get("type")
+            code = structured_error.get("code")
+            details = structured_error.get("details")
+            status_code = structured_error.get("status_code")
         else:
             error_message = str(error_value)
-        raise web.HTTPInternalServerError(
-            text=json.dumps({"error": error_message}, ensure_ascii=False),
+            error_type = output_payload.get("error_type")
+            code = output_payload.get("code")
+            details = output_payload.get("details")
+            status_code = output_payload.get("status_code")
+
+        response_body = {
+            "error": error_message,
+            "detail": error_message,
+            "error_type": error_type if isinstance(error_type, str) else "",
+            "code": code if isinstance(code, str) else "",
+            "details": details if isinstance(details, dict) else {},
+            "request_id": output_payload.get("request_id"),
+        }
+        resolved_status_code = status_code if isinstance(status_code, int) and 400 <= status_code <= 599 else 500
+
+        if resolved_status_code == 500:
+            raise web.HTTPInternalServerError(
+                text=json.dumps(response_body, ensure_ascii=False),
+                content_type="application/json",
+            )
+
+        class _StructuredHTTPError(web.HTTPException):
+            status_code = resolved_status_code
+
+        raise _StructuredHTTPError(
+            text=json.dumps(response_body, ensure_ascii=False),
             content_type="application/json",
         )
     return output_payload

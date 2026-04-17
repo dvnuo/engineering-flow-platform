@@ -693,6 +693,24 @@ class OpenAIProvider(BaseProvider):
                         "cost_usd": estimate_cost(model_name, prompt_tokens, completion_tokens)
                     }
                 }
+            incomplete_reason = data.get("incomplete_details", {}).get("reason")
+            if incomplete_reason == "max_output_tokens":
+                logger.error(
+                    "[LLM] Copilot API returned incomplete response because max_output_tokens was reached. payload=%s response=%s",
+                    safe_preview(payload, 600),
+                    safe_preview(data, 600),
+                )
+                return {
+                    "error": {
+                        "message": "Model output was truncated because max_output_tokens was reached. Reduce context or increase the output token limit and retry.",
+                        "type": "truncated_response",
+                        "code": "max_output_tokens_exceeded",
+                        "details": {
+                            "incomplete_reason": "max_output_tokens"
+                        },
+                        "status_code": 500,
+                    }
+                }
             logger.error("[LLM] Copilot API returned empty content. payload=%s response=%s", safe_preview(payload, 600), safe_preview(data, 600))
             return {"error": {"message": "Copilot API returned empty message. Please try rephrasing your prompt or check your input.", "type": "empty_response", "code": "empty_message"}}
 
@@ -1090,6 +1108,24 @@ class GitHubCopilotProvider(BaseProvider):
                         "completion_tokens": completion_tokens,
                         "total_tokens": prompt_tokens + completion_tokens,
                         "cost_usd": estimate_cost(model_name, prompt_tokens, completion_tokens)
+                    }
+                }
+            incomplete_reason = data.get("incomplete_details", {}).get("reason")
+            if incomplete_reason == "max_output_tokens":
+                logger.error(
+                    "[LLM] Copilot API returned incomplete response because max_output_tokens was reached. payload=%s response=%s",
+                    safe_preview(payload, 600),
+                    safe_preview(data, 600),
+                )
+                return {
+                    "error": {
+                        "message": "Model output was truncated because max_output_tokens was reached. Reduce context or increase the output token limit and retry.",
+                        "type": "truncated_response",
+                        "code": "max_output_tokens_exceeded",
+                        "details": {
+                            "incomplete_reason": "max_output_tokens"
+                        },
+                        "status_code": 500,
                     }
                 }
             logger.error("[LLM] Copilot API returned empty content. payload=%s response=%s", safe_preview(payload, 600), safe_preview(data, 600))

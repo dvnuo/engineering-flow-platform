@@ -132,6 +132,11 @@ _DEBUG_ENABLED = None  # Lazy initialization
 _TOOL_RESULT_GOVERNANCE_ATTR = "_governance"
 
 
+def _tool_feedback_text(value: Any, max_length: int = 4000) -> str:
+    """Build bounded tool feedback text for next-round LLM input only."""
+    return truncate_with_count(str(value), max_length)
+
+
 def _is_debug_enabled() -> bool:
     """Check if debug mode is enabled (logger is DEBUG level)."""
     global _DEBUG_ENABLED
@@ -1069,7 +1074,7 @@ You have access to the following tools. When a user asks you to do something tha
                     items.append({
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": str(content) if content else "",
+                        "output": _tool_feedback_text(content) if content else "",
                     })
                     continue
                 
@@ -1107,7 +1112,7 @@ You have access to the following tools. When a user asks you to do something tha
                     items.append({
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": str(content) if content else "",
+                        "output": _tool_feedback_text(content) if content else "",
                     })
                     continue
                 
@@ -1314,11 +1319,18 @@ You have access to the following tools. When a user asks you to do something tha
                 error_info = llm_result["error"]
                 error_msg = error_info.get("message", "Unknown LLM error")
                 logger.error(f"LLM error: {error_msg}")
-                return {
+                error_response = {
                     "error": error_msg,
                     "error_type": error_info.get("type", "llm_error"),
                     "code": error_info.get("code", "")
                 }
+                details = error_info.get("details")
+                status_code = error_info.get("status_code")
+                if isinstance(details, dict):
+                    error_response["details"] = details
+                if isinstance(status_code, int):
+                    error_response["status_code"] = status_code
+                return error_response
             
             # Debug logging for LLM response
             if _is_debug_enabled():
@@ -1628,7 +1640,7 @@ You have access to the following tools. When a user asks you to do something tha
                         loop_messages.append(
                             {
                                 "role": "tool",
-                                "content": str(deny_result),
+                                "content": _tool_feedback_text(deny_result),
                                 "tool_call_id": call_id,
                             }
                         )
@@ -1663,7 +1675,7 @@ You have access to the following tools. When a user asks you to do something tha
                     loop_messages.append(
                         {
                             "role": "tool",
-                            "content": str(short_result),
+                            "content": _tool_feedback_text(short_result),
                             "tool_call_id": call_id,
                         }
                     )
@@ -1746,7 +1758,7 @@ You have access to the following tools. When a user asks you to do something tha
                 # The tool result naturally comes after the assistant message in the iteration order.
                 tool_result_msg = {
                     "role": "tool",
-                    "content": str(tool_result),
+                    "content": _tool_feedback_text(tool_result),
                     "tool_call_id": call_id,
                 }
                 
@@ -2178,12 +2190,19 @@ You have access to the following tools. When a user asks you to do something tha
                 error_info = llm_result["error"]
                 error_msg = error_info.get("message", "Unknown LLM error")
                 logger.error(f"[SkillMode] LLM error: {error_msg}")
-                return {
+                error_response = {
                     "error": error_msg,
                     "error_type": error_info.get("type", "llm_error"),
                     "code": error_info.get("code", ""),
                     "user_message_id": user_message_id,
                 }
+                details = error_info.get("details")
+                status_code = error_info.get("status_code")
+                if isinstance(details, dict):
+                    error_response["details"] = details
+                if isinstance(status_code, int):
+                    error_response["status_code"] = status_code
+                return error_response
 
             if track_usage:
                 iter_usage = llm_result.get("usage", {}) or {}
@@ -2257,7 +2276,7 @@ You have access to the following tools. When a user asks you to do something tha
                         args=normalized_args,
                         source_ref="agents.core.skill_mode_loop",
                     )
-                    output_text = str(tool_result)
+                    output_text = _tool_feedback_text(tool_result)
                     logger.debug(f"[SkillMode] [TOOL_RESULT] tool={tool_name}, result length={len(output_text)}, preview={safe_preview(output_text, 200)}")
                 except Exception as tool_exc:
                     output_text = f"Error: Tool '{tool_name}' failed with {tool_exc}"
