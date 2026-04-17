@@ -200,13 +200,32 @@ class Config:
         return target
 
     def load(self) -> None:
-        """Load configuration from YAML file."""
+        """Load configuration from config.yaml and clean up legacy sidecar state."""
         self._base_config = self._load_yaml_document(self.config_path)
         self._last_modified = self.config_path.stat().st_mtime if self.config_path.exists() else 0
         
         # Decrypt sensitive fields
         self._decrypt_sensitive_fields(self._base_config)
+        self._cleanup_legacy_runtime_profile_file()
         self._rebuild_effective_config()
+
+    def _cleanup_legacy_runtime_profile_file(self) -> None:
+        """Delete legacy runtime_profile.yaml sidecar if it exists.
+
+        NOTE: runtime_profile.yaml is no longer an active runtime configuration
+        input. Portal bootstrap remains the source of truth for managed fields.
+        """
+        if not self.runtime_profile_path.exists():
+            return
+        try:
+            self.runtime_profile_path.unlink()
+            logger.info("Removed legacy runtime profile sidecar: %s", self.runtime_profile_path)
+        except Exception as exc:
+            logger.warning(
+                "Failed to remove legacy runtime profile sidecar %s: %s",
+                self.runtime_profile_path,
+                exc,
+            )
 
     def _load_yaml_document(self, path: Path) -> Dict[str, Any]:
         if not path.exists():
@@ -280,7 +299,11 @@ class Config:
         self._config = copy.deepcopy(self._base_config)
 
     def load_managed_overlay(self) -> Dict[str, Any]:
-        """Legacy compatibility no-op (overlay file model removed)."""
+        """Legacy compatibility no-op.
+
+        Runtime no longer loads any overlay sidecar file. Managed runtime-profile
+        fields are applied directly into config.yaml via set_managed_overlay().
+        """
         self._managed_overlay_meta = {"runtime_profile_id": None, "revision": None}
         self._managed_sections = []
         return {}
@@ -312,8 +335,7 @@ class Config:
             "revision": revision,
         }
         self._managed_sections = sorted(new_sections)
-        if self.runtime_profile_path.exists():
-            self.runtime_profile_path.unlink()
+        self._cleanup_legacy_runtime_profile_file()
 
         # Use union so section removals (e.g. proxy removed from overlay) still
         # trigger reload/apply side effects for the removed section.
@@ -333,8 +355,7 @@ class Config:
 
         self._managed_overlay_meta = {"runtime_profile_id": None, "revision": None}
         self._managed_sections = []
-        if self.runtime_profile_path.exists():
-            self.runtime_profile_path.unlink()
+        self._cleanup_legacy_runtime_profile_file()
         self.reload(changed_sections=previous_sections)
         if "proxy" in previous_sections:
             self.apply_proxy()

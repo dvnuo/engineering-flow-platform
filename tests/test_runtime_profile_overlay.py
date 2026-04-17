@@ -74,6 +74,40 @@ def test_runtime_profile_apply_preserves_unmanaged_llm_subtree(tmp_path):
     assert effective["llm"]["system-prompt"]["tools"]["enabled"] is True
 
 
+def test_runtime_profile_apply_filters_unmanaged_nested_fields_from_snapshot(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp_filter",
+        9,
+        {
+            "llm": {
+                "provider": "openai",
+                "model": "gpt-5",
+                "api_base": "https://should-not-be-written",
+                "system-prompt": {"tools": {"enabled": False}},
+            },
+            "github": {
+                "enabled": True,
+                "base_url": "https://github.example/api",
+                "unexpected_nested": {"x": 1},
+            },
+        },
+    )
+
+    cfg.load()
+    effective = cfg.get_effective_config()
+    assert effective["llm"]["provider"] == "openai"
+    assert effective["llm"]["model"] == "gpt-5"
+    assert effective["llm"]["api_base"] == "https://api.local"
+    assert effective["llm"]["system-prompt"]["tools"]["enabled"] is True
+    assert effective["github"]["enabled"] is True
+    assert effective["github"]["base_url"] == "https://github.example/api"
+    assert "unexpected_nested" not in effective["github"]
+
+
 def test_runtime_profile_apply_prunes_stale_managed_proxy_fields(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
     _write_base_config(config_path)
@@ -132,3 +166,19 @@ def test_runtime_profile_clear_removes_managed_subtree_and_metadata(tmp_path):
     assert cfg.jira.get("enabled") is None
     assert "proxy" not in cfg.get_effective_config()
     assert not runtime_profile_path.exists()
+
+
+def test_runtime_profile_load_removes_legacy_sidecar_on_startup(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home_efp_dir = tmp_path / ".efp"
+    home_efp_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = home_efp_dir / "config.yaml"
+    runtime_profile_path = home_efp_dir / "runtime_profile.yaml"
+    _write_base_config(config_path)
+    runtime_profile_path.write_text("llm:\n  provider: old\n", encoding="utf-8")
+
+    cfg = Config(str(config_path))
+
+    assert not runtime_profile_path.exists()
+    assert cfg.get_effective_config()["llm"]["provider"] == "openai"
