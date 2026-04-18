@@ -284,6 +284,79 @@ def test_skill_contract_compiler_preserves_priority_sections_when_truncated():
     assert len(compiled) <= 2600
 
 
+def test_skill_contract_compiler_preserves_reference_usage_when_output_contract_is_huge():
+    body = (
+        "# Huge Skill\n"
+        "Intro\n\n"
+        "## Output contract\n"
+        + ("schema detail line\n" * 1000)
+        + "\n## Reference usage\n"
+        "- Cite only provided references\n"
+        "- Do not invent external facts\n\n"
+        "## Constraints\n"
+        "- Stay within provided context\n"
+    )
+    skill = SimpleNamespace(
+        name="huge-output-contract",
+        description="desc",
+        tools=[],
+        task_tools=[],
+        strategy=[],
+        body=body,
+        references=[],
+        model="",
+        hooks=[],
+        path="",
+    )
+
+    compiled = compile_skill_prompt_contract(skill, max_chars=2500)
+
+    assert "Output contract" in compiled
+    assert "Reference usage" in compiled
+    assert "Cite only provided references" in compiled
+    assert "Constraints" in compiled
+    assert "Skill contract truncated" in compiled
+    assert len(compiled) <= 2600
+
+
+def test_skill_contract_compiler_preserves_all_critical_headings_under_tight_budget():
+    body = (
+        "# Huge Skill\n"
+        + ("intro filler\n" * 200)
+        + "\n## Output contract\n"
+        + ("output filler\n" * 300)
+        + "\n## Reference usage\n"
+        + ("reference filler\n" * 300)
+        + "\n## Constraints\n"
+        + ("constraint filler\n" * 300)
+        + "\n## Rules\n"
+        + ("rule filler\n" * 300)
+        + "\n## Tool policy\n"
+        + ("tool policy filler\n" * 300)
+        + "\n## Workflow\n"
+        + ("workflow filler\n" * 1000)
+    )
+    skill = SimpleNamespace(
+        name="tight-budget-skill",
+        description="desc",
+        tools=[],
+        task_tools=[],
+        strategy=[],
+        body=body,
+        references=[],
+        model="",
+        hooks=[],
+        path="",
+    )
+
+    compiled = compile_skill_prompt_contract(skill, max_chars=3500)
+
+    for heading in ["Output contract", "Reference usage", "Constraints", "Rules", "Tool policy"]:
+        assert heading in compiled
+    assert "Skill contract truncated" in compiled
+    assert len(compiled) <= 3600
+
+
 @pytest.mark.asyncio
 async def test_generate_initial_skill_plan_routes_through_execution_bus(monkeypatch):
     skill = SimpleNamespace(name="demo", description="demo desc", strategy=[], path="")

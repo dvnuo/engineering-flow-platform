@@ -72,7 +72,9 @@ _PRIORITY_SECTION_ORDER = [
     "steps",
     "instructions",
 ]
-_HIGH_PRIORITY_TRUNCATABLE_HEADINGS = {"output contract", "reference usage", "constraints", "rules", "tool policy"}
+_CRITICAL_SECTION_KEYWORDS = {"output contract", "reference usage", "constraints", "rules", "tool policy"}
+_MIN_CRITICAL_SECTION_CHARS = 300
+_MAX_INTRO_SECTION_CHARS = 1200
 _SECTION_TRUNCATED_NOTE = "[Section truncated due to skill contract budget.]"
 
 _SKILL_CONTRACT_TRUNCATED_NOTE = (
@@ -138,24 +140,72 @@ def compile_skill_prompt_contract(skill: Skill, *, max_chars: int = 12000) -> st
     compiled_parts: List[str] = []
     used_chars = 0
     truncated = False
+    pending_critical_sections = [section for section in ordered_sections if _is_critical_section(section)]
+    critical_sections_added = 0
+
     for section in ordered_sections:
         section_text = section["text"]
         if not section_text:
             continue
         joiner = "\n\n" if compiled_parts else ""
-        available = max_chars - used_chars - len(joiner)
-        if available <= 0:
+        heading = str(section.get("heading", ""))
+        is_intro = not heading
+        is_critical = _is_critical_section(section)
+        is_low_priority_process = _is_low_priority_process_section(section)
+
+        remaining_critical_count = len(pending_critical_sections) - (1 if is_critical else 0)
+        reserve_for_remaining = remaining_critical_count * _MIN_CRITICAL_SECTION_CHARS
+        available_total = max_chars - used_chars - len(joiner)
+        available_for_this = available_total - reserve_for_remaining
+        if is_critical and available_for_this <= 0:
+            available_for_this = max(0, available_total)
+
+        if available_total <= 0 or available_for_this <= 0:
             truncated = True
-            continue
-        if len(section_text) <= available:
-            compiled_parts.append(f"{joiner}{section_text}" if joiner else section_text)
-            used_chars += len(joiner) + len(section_text)
+            if is_critical and available_total > 0:
+                minimal_text = _truncate_section_text(
+                    section_text,
+                    available_total,
+                    preserve_heading=True,
+                    max_body_chars=max(80, available_total // 3),
+                )
+                if minimal_text:
+                    compiled_parts.append(f"{joiner}{minimal_text}" if joiner else minimal_text)
+                    used_chars += len(joiner) + len(minimal_text)
+                    critical_sections_added += 1
+                    pending_critical_sections = [item for item in pending_critical_sections if item is not section]
             continue
 
-        heading = str(section["heading"] or "")
-        rank = int(section["rank"])
-        if rank < len(_PRIORITY_SECTION_ORDER) and _PRIORITY_SECTION_ORDER[rank] in _HIGH_PRIORITY_TRUNCATABLE_HEADINGS:
-            truncated_text = _truncate_section_text(section_text, available)
+        if is_intro:
+            section_text = _limit_intro_section_text(section_text, cap=_MAX_INTRO_SECTION_CHARS)
+
+        if len(section_text) <= available_for_this:
+            compiled_parts.append(f"{joiner}{section_text}" if joiner else section_text)
+            used_chars += len(joiner) + len(section_text)
+            if is_critical:
+                critical_sections_added += 1
+                pending_critical_sections = [item for item in pending_critical_sections if item is not section]
+            continue
+
+        if is_critical:
+            truncated_text = _truncate_section_text(
+                section_text,
+                available_for_this,
+                preserve_heading=True,
+                max_body_chars=max(120, available_for_this // 2),
+            )
+            if truncated_text:
+                compiled_parts.append(f"{joiner}{truncated_text}" if joiner else truncated_text)
+                used_chars += len(joiner) + len(truncated_text)
+                critical_sections_added += 1
+                pending_critical_sections = [item for item in pending_critical_sections if item is not section]
+                truncated = True
+                continue
+        elif is_low_priority_process and critical_sections_added < len([s for s in ordered_sections if _is_critical_section(s)]):
+            truncated = True
+            continue
+        elif not is_low_priority_process:
+            truncated_text = _truncate_section_text(section_text, available_for_this, preserve_heading=False, max_body_chars=available_for_this)
             if truncated_text:
                 compiled_parts.append(f"{joiner}{truncated_text}" if joiner else truncated_text)
                 used_chars += len(joiner) + len(truncated_text)
@@ -181,7 +231,13 @@ def _section_priority_rank(heading: str) -> int:
     return len(_PRIORITY_SECTION_ORDER) + 10
 
 
-def _truncate_section_text(section_text: str, available: int) -> str:
+def _truncate_section_text(
+    section_text: str,
+    available: int,
+    *,
+    preserve_heading: bool = False,
+    max_body_chars: Optional[int] = None,
+) -> str:
     if available <= 0:
         return ""
     if len(section_text) <= available:
@@ -191,7 +247,44 @@ def _truncate_section_text(section_text: str, available: int) -> str:
     keep_len = available - len(_SECTION_TRUNCATED_NOTE) - 1
     if keep_len <= 0:
         return section_text[:available].rstrip()
+    if preserve_heading:
+        lines = section_text.splitlines()
+        heading_line = lines[0] if lines else ""
+        body_text = "\n".join(lines[1:]).strip()
+        heading_with_newline = f"{heading_line}\n" if heading_line else ""
+        remaining_for_body = keep_len - len(heading_with_newline)
+        if max_body_chars is not None:
+            remaining_for_body = min(remaining_for_body, max_body_chars)
+        if remaining_for_body <= 0:
+            minimal = heading_line[:keep_len].rstrip() if heading_line else section_text[:keep_len].rstrip()
+            return f"{minimal}\n{_SECTION_TRUNCATED_NOTE}"
+        body_part = body_text[:remaining_for_body].rstrip()
+        combined = f"{heading_with_newline}{body_part}".rstrip()
+        return f"{combined}\n{_SECTION_TRUNCATED_NOTE}"
+    truncated_body = section_text[:keep_len].rstrip()
+    return f"{truncated_body}\n{_SECTION_TRUNCATED_NOTE}"
+
+
+def _limit_intro_section_text(section_text: str, *, cap: int) -> str:
+    if cap <= 0 or len(section_text) <= cap:
+        return section_text
+    if cap <= len(_SECTION_TRUNCATED_NOTE) + 1:
+        return section_text[:cap].rstrip()
+    keep_len = cap - len(_SECTION_TRUNCATED_NOTE) - 1
     return f"{section_text[:keep_len].rstrip()}\n{_SECTION_TRUNCATED_NOTE}"
+
+
+def _is_critical_section(section: dict) -> bool:
+    rank = int(section.get("rank", len(_PRIORITY_SECTION_ORDER) + 10))
+    return rank < len(_PRIORITY_SECTION_ORDER) and _PRIORITY_SECTION_ORDER[rank] in _CRITICAL_SECTION_KEYWORDS
+
+
+def _is_low_priority_process_section(section: dict) -> bool:
+    rank = int(section.get("rank", len(_PRIORITY_SECTION_ORDER) + 10))
+    if rank >= len(_PRIORITY_SECTION_ORDER):
+        return False
+    keyword = _PRIORITY_SECTION_ORDER[rank]
+    return keyword in {"workflow", "process", "steps", "instructions"}
 
 
 def _append_contract_truncation_note(compiled: str, *, max_chars: int) -> str:
