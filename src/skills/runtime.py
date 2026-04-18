@@ -58,20 +58,22 @@ class SkillRuntimeConfig:
     references: List[str] = field(default_factory=list)
 
 
-_PRIORITY_SKILL_SECTION_KEYWORDS = (
+_PRIORITY_SECTION_ORDER = [
     "output contract",
     "reference usage",
     "constraints",
     "rules",
+    "tool policy",
+    "acceptance",
+    "quality",
     "strategy",
     "workflow",
     "process",
     "steps",
     "instructions",
-    "tool policy",
-    "quality",
-    "acceptance",
-)
+]
+_HIGH_PRIORITY_TRUNCATABLE_HEADINGS = {"output contract", "reference usage", "constraints", "rules", "tool policy"}
+_SECTION_TRUNCATED_NOTE = "[Section truncated due to skill contract budget.]"
 
 _SKILL_CONTRACT_TRUNCATED_NOTE = (
     "[Skill contract truncated: retained priority sections such as output contract, constraints, "
@@ -90,54 +92,117 @@ def compile_skill_prompt_contract(skill: Skill, *, max_chars: int = 12000) -> st
 
     lines = body.splitlines()
     section_pattern = re.compile(r"^\s{0,3}(#{1,6})\s+(.*\S)\s*$")
-    sections: List[dict] = []
+    parsed_sections: List[dict] = []
     current_lines: List[str] = []
     current_heading = ""
 
     for line in lines:
         match = section_pattern.match(line)
         if match:
-            sections.append({"heading": current_heading, "lines": current_lines})
+            parsed_sections.append({"heading": current_heading, "lines": current_lines})
             current_heading = match.group(2).strip().lower()
             current_lines = [line]
             continue
         current_lines.append(line)
-    sections.append({"heading": current_heading, "lines": current_lines})
+    parsed_sections.append({"heading": current_heading, "lines": current_lines})
 
-    intro_sections = [section for section in sections if not section.get("heading")]
-    heading_sections = [section for section in sections if section.get("heading")]
-    if heading_sections:
-        intro_sections.append(heading_sections[0])
-        heading_sections = heading_sections[1:]
-
-    priority_sections = []
-    remaining_sections = []
-    for section in heading_sections:
+    intro_sections: List[dict] = []
+    remaining_sections: List[dict] = []
+    for index, section in enumerate(parsed_sections):
+        if not section.get("lines"):
+            continue
+        normalized = "\n".join(line.rstrip() for line in section.get("lines", [])).strip("\n")
+        if not normalized:
+            continue
         heading = str(section.get("heading", ""))
-        if any(keyword in heading for keyword in _PRIORITY_SKILL_SECTION_KEYWORDS):
-            priority_sections.append(section)
+        record = {
+            "heading": heading,
+            "text": normalized,
+            "rank": _section_priority_rank(heading),
+            "index": index,
+        }
+        if not heading:
+            intro_sections.append(record)
         else:
-            remaining_sections.append(section)
+            remaining_sections.append(record)
 
-    ordered_sections = intro_sections + priority_sections + remaining_sections
-    compiled = "\n\n".join(
-        "\n".join(line.rstrip() for line in section.get("lines", [])).strip("\n")
-        for section in ordered_sections
-        if section.get("lines")
-    ).strip()
-    if len(compiled) <= max_chars:
+    if remaining_sections:
+        intro_sections.append(remaining_sections[0])
+        remaining_sections = remaining_sections[1:]
+
+    priority_sections = [section for section in remaining_sections if section["rank"] < len(_PRIORITY_SECTION_ORDER)]
+    non_priority_sections = [section for section in remaining_sections if section["rank"] >= len(_PRIORITY_SECTION_ORDER)]
+    priority_sections.sort(key=lambda section: (section["rank"], section["index"]))
+    ordered_sections = intro_sections + priority_sections + non_priority_sections
+
+    compiled_parts: List[str] = []
+    used_chars = 0
+    truncated = False
+    for section in ordered_sections:
+        section_text = section["text"]
+        if not section_text:
+            continue
+        joiner = "\n\n" if compiled_parts else ""
+        available = max_chars - used_chars - len(joiner)
+        if available <= 0:
+            truncated = True
+            continue
+        if len(section_text) <= available:
+            compiled_parts.append(f"{joiner}{section_text}" if joiner else section_text)
+            used_chars += len(joiner) + len(section_text)
+            continue
+
+        heading = str(section["heading"] or "")
+        rank = int(section["rank"])
+        if rank < len(_PRIORITY_SECTION_ORDER) and _PRIORITY_SECTION_ORDER[rank] in _HIGH_PRIORITY_TRUNCATABLE_HEADINGS:
+            truncated_text = _truncate_section_text(section_text, available)
+            if truncated_text:
+                compiled_parts.append(f"{joiner}{truncated_text}" if joiner else truncated_text)
+                used_chars += len(joiner) + len(truncated_text)
+                truncated = True
+                continue
+        truncated = True
+
+    compiled = "".join(compiled_parts).strip()
+    if not truncated:
         return compiled
+    if not compiled:
+        return _SKILL_CONTRACT_TRUNCATED_NOTE[:max_chars].strip()
+    return _append_contract_truncation_note(compiled, max_chars=max_chars)
 
-    truncated = compiled[:max_chars].rstrip()
+
+def _section_priority_rank(heading: str) -> int:
+    heading_text = str(heading or "").strip().lower()
+    if not heading_text:
+        return len(_PRIORITY_SECTION_ORDER) + 10
+    for idx, keyword in enumerate(_PRIORITY_SECTION_ORDER):
+        if keyword in heading_text:
+            return idx
+    return len(_PRIORITY_SECTION_ORDER) + 10
+
+
+def _truncate_section_text(section_text: str, available: int) -> str:
+    if available <= 0:
+        return ""
+    if len(section_text) <= available:
+        return section_text
+    if available <= len(_SECTION_TRUNCATED_NOTE) + 1:
+        return section_text[:available].rstrip()
+    keep_len = available - len(_SECTION_TRUNCATED_NOTE) - 1
+    if keep_len <= 0:
+        return section_text[:available].rstrip()
+    return f"{section_text[:keep_len].rstrip()}\n{_SECTION_TRUNCATED_NOTE}"
+
+
+def _append_contract_truncation_note(compiled: str, *, max_chars: int) -> str:
     note = _SKILL_CONTRACT_TRUNCATED_NOTE
-    if len(note) + 1 >= max_chars:
-        return truncated
-    if len(truncated) + len(note) + 1 <= max_chars:
-        return f"{truncated}\n{note}"
-    keep = max_chars - len(note) - 1
-    if keep <= 0:
-        return truncated
-    return f"{compiled[:keep].rstrip()}\n{note}"
+    combined = f"{compiled}\n{note}"
+    if len(combined) <= max_chars:
+        return combined
+    available = max_chars - len(note) - 1
+    if available <= 0:
+        return compiled[:max_chars].rstrip()
+    return f"{compiled[:available].rstrip()}\n{note}"
 
 
 def summarize_skill_references(skill: Skill) -> List[str]:

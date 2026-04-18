@@ -17,6 +17,7 @@ from src.skills.runtime import (
     attach_skill_references,
     assemble_effective_prompt,
     build_skill_runtime_config,
+    compile_skill_prompt_contract,
     summarize_skill_references,
 )
 from src.agents.skill_mode import generate_initial_skill_plan
@@ -47,6 +48,7 @@ class _SessionManager:
     def __init__(self):
         self.messages = []
         self.active_skill_session = None
+        self.active_skill_sessions = {}
 
     async def add_message(self, session_id, role, content, extra=None, wait_for_save=False):
         self.messages.append({"role": role, "content": content, **(extra or {})})
@@ -56,10 +58,15 @@ class _SessionManager:
         return list(self.messages)
 
     async def get_active_skill_session(self, session_id):
-        return self.active_skill_session
+        if session_id in self.active_skill_sessions:
+            return self.active_skill_sessions.get(session_id)
+        if not self.active_skill_sessions:
+            return self.active_skill_session
+        return None
 
     async def set_active_skill_session(self, session_id, skill_session):
         self.active_skill_session = skill_session
+        self.active_skill_sessions[session_id] = skill_session
 
 
 @pytest.fixture
@@ -247,6 +254,34 @@ def test_skill_contract_compiler_preserves_late_output_contract():
     instructions = runtime_config.prompt_blocks.developer_instructions
     assert "Output contract" in instructions
     assert "Reference usage" in instructions
+
+
+def test_skill_contract_compiler_preserves_priority_sections_when_truncated():
+    body = (
+        "# Huge Skill\n"
+        "Intro\n\n"
+        "## Workflow\n"
+        + ("workflow filler\n" * 2000)
+        + "\n## Output contract\n- Must return exact schema\n\n## Reference usage\n- Cite only provided references\n"
+    )
+    skill = SimpleNamespace(
+        name="huge-skill",
+        description="desc",
+        tools=[],
+        task_tools=[],
+        strategy=[],
+        body=body,
+        references=[],
+        model="",
+        hooks=[],
+        path="",
+    )
+
+    compiled = compile_skill_prompt_contract(skill, max_chars=2500)
+    assert "Output contract" in compiled
+    assert "Reference usage" in compiled
+    assert "Skill contract truncated" in compiled
+    assert len(compiled) <= 2600
 
 
 @pytest.mark.asyncio
@@ -585,7 +620,172 @@ async def test_active_skill_contract_continues_without_rematch(monkeypatch, base
 
 
 @pytest.mark.asyncio
-async def test_clear_active_skill_command_clears_contract_without_llm(monkeypatch, base_agent):
+async def test_active_skill_contract_does_not_soft_switch_on_ordinary_match(monkeypatch, base_agent):
+    agent, sess = base_agent
+    review_skill = SimpleNamespace(
+        name="review-pull-request",
+        description="review",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="Review instructions",
+        references=[],
+        model="",
+        hooks=[],
+        deprecated=False,
+    )
+    create_skill = SimpleNamespace(
+        name="create-pull-request",
+        description="create",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="Create instructions",
+        references=[],
+        model="",
+        hooks=[],
+        deprecated=False,
+    )
+    sess.active_skill_session = {
+        "schema_version": "active_skill_contract.v1",
+        "skill_name": "review-pull-request",
+        "status": "active",
+        "turn_count": 1,
+    }
+
+    class _Registry:
+        _initialized = True
+
+        def match_skill(self, message):
+            if "ordinary message that matches create" in message:
+                return [create_skill]
+            return []
+
+        def get_skill(self, name):
+            if name == review_skill.name:
+                return review_skill
+            if name == create_skill.name:
+                return create_skill
+            return None
+
+        def get_skill_runtime_config(self, skill, globally_allowed_tool_names=None):
+            return build_skill_runtime_config(skill, globally_allowed_tool_names=globally_allowed_tool_names)
+
+    monkeypatch.setattr("src.skills.skill_registry", _Registry())
+    captured_prompts = []
+
+    async def fake_responses(**kwargs):
+        captured_prompts.append(kwargs.get("system_prompt", ""))
+        return {"content": "done", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+
+    result = await agent.process("ordinary message that matches create", session_id="s1")
+    assert result["response"] == "done"
+    assert captured_prompts
+    assert "Active skill: review-pull-request" in captured_prompts[0]
+    assert "Active skill: create-pull-request" not in captured_prompts[0]
+    assert sess.active_skill_session["skill_name"] == "review-pull-request"
+    assert sess.active_skill_session["activation_reason"] == "continued"
+
+
+@pytest.mark.asyncio
+async def test_active_skill_contract_switches_only_on_explicit_skill_command(monkeypatch, base_agent):
+    agent, sess = base_agent
+    review_skill = SimpleNamespace(
+        name="review-pull-request",
+        description="review",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="Review instructions",
+        references=[],
+        model="",
+        hooks=[],
+        deprecated=False,
+    )
+    create_skill = SimpleNamespace(
+        name="create-pull-request",
+        description="create",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="Create instructions",
+        references=[],
+        model="",
+        hooks=[],
+        deprecated=False,
+    )
+    sess.active_skill_session = {
+        "schema_version": "active_skill_contract.v1",
+        "skill_name": "review-pull-request",
+        "status": "active",
+        "turn_count": 1,
+    }
+
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(
+            _initialized=True,
+            load_skills=lambda: None,
+            match_skill=lambda *_: [],
+            get_skill=lambda name: create_skill if name == "create-pull-request" else (review_skill if name == "review-pull-request" else None),
+            get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(
+                s, globally_allowed_tool_names=globally_allowed_tool_names
+            ),
+        ),
+    )
+    captured_prompts = []
+
+    async def fake_responses(**kwargs):
+        captured_prompts.append(kwargs.get("system_prompt", ""))
+        return {"content": "done", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+
+    result = await agent.process("/skill switch create-pull-request", session_id="s1")
+    assert result["response"] == "done"
+    assert "Active skill: create-pull-request" in captured_prompts[0]
+    assert sess.active_skill_session["skill_name"] == "create-pull-request"
+    assert sess.active_skill_session["activation_reason"] == "switched"
+
+
+@pytest.mark.asyncio
+async def test_active_skill_contract_unknown_explicit_switch_returns_without_llm(monkeypatch, base_agent):
+    agent, sess = base_agent
+    sess.active_skill_session = {
+        "schema_version": "active_skill_contract.v1",
+        "skill_name": "review-pull-request",
+        "status": "active",
+        "turn_count": 1,
+    }
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(
+            _initialized=True,
+            load_skills=lambda: None,
+            match_skill=lambda *_: [],
+            get_skill=lambda *_: None,
+            get_skill_runtime_config=lambda *args, **kwargs: None,
+        ),
+    )
+
+    async def fake_responses(**kwargs):
+        raise AssertionError("llm_client.responses should not be called for unknown explicit skill switch")
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+
+    result = await agent.process("/skill switch missing-skill", session_id="s1")
+    assert "Skill not found: missing-skill" in result["response"]
+    assert sess.active_skill_session["skill_name"] == "review-pull-request"
+
+
+@pytest.mark.asyncio
+async def test_clear_active_skill_command_emits_cleared_event_without_llm(monkeypatch, base_agent):
     agent, sess = base_agent
     sess.active_skill_session = {"skill_name": "runtime-skill", "status": "active"}
     monkeypatch.setattr(
@@ -604,9 +804,16 @@ async def test_clear_active_skill_command_clears_contract_without_llm(monkeypatc
 
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
 
-    result = await agent.process("/skill clear", session_id="s1")
+    events = []
+
+    def stream_callback(event_json: str):
+        events.append(event_json)
+
+    result = await agent.process("/skill clear", session_id="s1", stream_callback=stream_callback)
     assert result["response"] == "Active skill cleared."
     assert sess.active_skill_session is None
+    assert any('"type": "skill_contract_cleared"' in item for item in events)
+    assert any('"skill": "runtime-skill"' in item for item in events)
 
 
 @pytest.mark.asyncio

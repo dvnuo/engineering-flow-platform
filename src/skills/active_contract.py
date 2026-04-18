@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -19,6 +20,7 @@ _CLEAR_COMMANDS = {
     "/skill off",
     "/skill done",
 }
+_SKILL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def _utc_now_iso() -> str:
@@ -33,6 +35,34 @@ def _shorten(value: Any, max_len: int) -> str:
 def is_clear_active_skill_command(message: str) -> bool:
     normalized = str(message or "").strip().lower()
     return normalized in _CLEAR_COMMANDS
+
+
+def parse_explicit_skill_switch_name(message: str) -> str:
+    raw = str(message or "").strip()
+    if not raw:
+        return ""
+    if is_clear_active_skill_command(raw):
+        return ""
+
+    lowered = raw.lower()
+    if lowered.startswith("/skill "):
+        remainder = raw[len("/skill ") :].strip()
+        if not remainder:
+            return ""
+        parts = remainder.split()
+        if not parts:
+            return ""
+        command = parts[0].lower()
+        candidate = parts[1] if command in {"switch", "use", "activate"} and len(parts) > 1 else parts[0]
+        candidate = candidate.strip()
+        return candidate if _SKILL_NAME_PATTERN.match(candidate) else ""
+
+    if raw.startswith("/") and not lowered.startswith("/skill"):
+        slash_token = raw.split()[0].strip()
+        candidate = slash_token[1:]
+        return candidate if _SKILL_NAME_PATTERN.match(candidate) else ""
+
+    return ""
 
 
 def get_contract_skill_name(contract: Optional[dict]) -> str:
