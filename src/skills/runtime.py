@@ -177,7 +177,10 @@ def compile_skill_prompt_contract(skill: Skill, *, max_chars: int = 12000) -> st
             continue
 
         if is_intro:
-            section_text = _limit_intro_section_text(section_text, cap=_MAX_INTRO_SECTION_CHARS)
+            limited_intro_text = _limit_intro_section_text(section_text, cap=_MAX_INTRO_SECTION_CHARS)
+            if limited_intro_text != section_text:
+                truncated = True
+            section_text = limited_intro_text
 
         if len(section_text) <= available_for_this:
             compiled_parts.append(f"{joiner}{section_text}" if joiner else section_text)

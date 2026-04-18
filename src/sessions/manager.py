@@ -207,10 +207,10 @@ class SessionManager:
 
     @staticmethod
     def _restore_active_skill_session_from_metadata(session: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Restore legacy active skill session from metadata if needed.
+        """Restore active skill contract from metadata when present.
 
-        Kept for backward compatibility with persisted historical sessions.
-        Runtime skill execution no longer depends on this field.
+        This supports both current Active Skill Contract state and historical
+        sessions that persisted the same field under metadata.
         """
         active = session.get("active_skill_session")
         if active is not None:
@@ -513,7 +513,7 @@ class SessionManager:
     
 
     async def get_active_skill_session(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Get legacy active skill session state for a chat session."""
+        """Get the current Active Skill Contract for a chat session, if any."""
         session = await self.get_session(session_id)
         active = session.get("active_skill_session")
         if active:
@@ -526,7 +526,7 @@ class SessionManager:
         return active
 
     async def set_active_skill_session(self, session_id: str, skill_session: Optional[Dict[str, Any]]) -> None:
-        """Set or clear legacy active skill session state for a chat session."""
+        """Set or clear the current Active Skill Contract for a chat session."""
         session = await self.get_session(session_id)
         session["active_skill_session"] = skill_session
         metadata = session.setdefault("metadata", {})

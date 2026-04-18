@@ -357,6 +357,28 @@ def test_skill_contract_compiler_preserves_all_critical_headings_under_tight_bud
     assert len(compiled) <= 3600
 
 
+def test_skill_contract_compiler_marks_overall_truncated_when_intro_only_body_is_capped():
+    body = "intro line\n" * 2000
+    skill = SimpleNamespace(
+        name="intro-only-huge-skill",
+        description="desc",
+        tools=[],
+        task_tools=[],
+        strategy=[],
+        body=body,
+        references=[],
+        model="",
+        hooks=[],
+        path="",
+    )
+
+    compiled = compile_skill_prompt_contract(skill, max_chars=12000)
+
+    assert "Section truncated due to skill contract budget" in compiled
+    assert "Skill contract truncated" in compiled
+    assert len(compiled) <= 12000
+
+
 @pytest.mark.asyncio
 async def test_generate_initial_skill_plan_routes_through_execution_bus(monkeypatch):
     skill = SimpleNamespace(name="demo", description="demo desc", strategy=[], path="")
