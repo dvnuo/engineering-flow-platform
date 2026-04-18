@@ -5,6 +5,7 @@ from src.runtime.recovery_pipeline import (
     RecoveryHydrationResult,
     build_default_recovery_pipeline,
 )
+from src.sessions.manager import SessionManager
 
 
 @pytest.mark.asyncio
@@ -318,6 +319,33 @@ async def test_recovery_pipeline_handles_missing_session_safely(monkeypatch):
     assert result.recovered is False
     assert "session_not_found" in result.warnings
     assert any(evt.get("event_type") == "recovery.warning" for evt in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_session_manager_recover_session_state_surfaces_recovery_context_message(monkeypatch):
+    import sys
+    import types
+
+    class _StubPipeline:
+        async def hydrate_session_state(self, session_id: str):
+            return RecoveryHydrationResult(
+                session_id=session_id,
+                recovered=True,
+                snapshot_version="phase3.v1",
+                reconstructed_state={"recovery_context_message": "Recovered context: ..."},
+                runtime_state={},
+                warnings=[],
+                runtime_events=[],
+                metadata={},
+            )
+
+    fake_module = types.ModuleType("src.runtime.recovery_pipeline")
+    fake_module.get_recovery_pipeline = lambda: _StubPipeline()
+    monkeypatch.setitem(sys.modules, "src.runtime.recovery_pipeline", fake_module)
+
+    manager = SessionManager(auto_save=False)
+    recovered = await manager.recover_session_state("sess-recovery")
+    assert recovered["recovery_context_message"] == "Recovered context: ..."
 
 
 @pytest.mark.asyncio

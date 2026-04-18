@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from src.agents.core import agent
+from src.agents.core import agent, run_chat_execution
 from src.channels.confluence import confluence_channel
 from src.channels.github import github_channel
 from src.channels.jira import jira_channel
@@ -18,7 +18,13 @@ def _require(payload: Dict[str, Any], key: str) -> Any:
 
 
 async def _run_agent_response(message: str, session_id: str) -> str:
-    result = await agent.process(message=message, session_id=session_id)
+    result = await run_chat_execution(
+        agent=agent,
+        message=message,
+        session_id=session_id,
+        user_name="triggered-event",
+        track_usage=False,
+    )
     response_text = str(result.get("response") or result.get("output") or "").strip()
     if not response_text:
         raise RuntimeError("Agent returned empty response for triggered event")

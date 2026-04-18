@@ -630,8 +630,9 @@ async def compact_skill_session_async(skill_session: SkillSession, budget_tokens
         # Use existing compaction module
         compacted_messages, stats = await compact_messages(
             messages=steps_as_messages,
-            budget_tokens=budget_tokens,
+            max_tokens=budget_tokens,
             context_window=context_window,
+            recent_count=3,
         )
         
         if stats and stats.dropped_messages > 0:

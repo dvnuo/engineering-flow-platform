@@ -687,6 +687,7 @@ class SessionManager:
             "warnings": list(hydration.warnings),
             "runtime_events": list(hydration.runtime_events),
             "metadata": dict(hydration.metadata),
+            "recovery_context_message": hydration.reconstructed_state.get("recovery_context_message"),
         }
 
     async def clear_history(self, session_id: str) -> None:

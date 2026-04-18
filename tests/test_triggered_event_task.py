@@ -7,10 +7,12 @@ async def test_run_triggered_event_task_github_mention_passes_session_id_to_agen
 
     calls = {"agent": 0, "comment": 0}
 
-    async def _fake_process(*, message, session_id):
+    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage):
         calls["agent"] += 1
         assert session_id == "sess-1"
         assert "GitHub" in message
+        assert user_name == "triggered-event"
+        assert track_usage is False
         return {"response": "ok"}
 
     async def _fake_add_comment(owner, repo, issue_number, body):
@@ -20,7 +22,7 @@ async def test_run_triggered_event_task_github_mention_passes_session_id_to_agen
         assert issue_number == 2
         assert body == "ok"
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
     monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task(
@@ -45,10 +47,12 @@ async def test_run_triggered_event_task_jira_assigned_passes_session_id_to_agent
 
     calls = {"agent": 0, "comment": 0}
 
-    async def _fake_process(*, message, session_id):
+    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage):
         calls["agent"] += 1
         assert session_id == "sess-2"
         assert "Jira" in message
+        assert user_name == "triggered-event"
+        assert track_usage is False
         return {"response": "looks good"}
 
     async def _fake_add_comment(issue_key, body):
@@ -56,7 +60,7 @@ async def test_run_triggered_event_task_jira_assigned_passes_session_id_to_agent
         assert issue_key == "ENG-1"
         assert body == "looks good"
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
     monkeypatch.setattr("src.runtime.triggered_event_task.jira_channel.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task(
@@ -81,7 +85,7 @@ async def test_run_triggered_event_task_github_mention_blocked_does_not_writebac
 
     called = {"comment": 0}
 
-    async def _fake_process(*, message, session_id):
+    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage):
         return {"response": "ok"}
 
     async def _fake_add_comment(*args, **kwargs):
@@ -90,7 +94,7 @@ async def test_run_triggered_event_task_github_mention_blocked_does_not_writebac
     def _blocked_gate(action_id, _kwargs):
         return {"blocked": True, "reason": "policy_blocked", "error": f"capability policy blocked for secondary action: {action_id}"}
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
     monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task(
@@ -118,7 +122,7 @@ async def test_run_triggered_event_task_jira_assigned_blocked_does_not_writeback
 
     called = {"comment": 0}
 
-    async def _fake_process(*, message, session_id):
+    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage):
         return {"response": "ok"}
 
     async def _fake_add_comment(*args, **kwargs):
@@ -127,7 +131,7 @@ async def test_run_triggered_event_task_jira_assigned_blocked_does_not_writeback
     def _blocked_gate(action_id, _kwargs):
         return {"blocked": True, "reason": "policy_blocked", "error": f"capability policy blocked for secondary action: {action_id}"}
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
     monkeypatch.setattr("src.runtime.triggered_event_task.jira_channel.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task(
@@ -155,7 +159,7 @@ async def test_run_triggered_event_task_confluence_mention_blocked_does_not_writ
 
     called = {"comment": 0}
 
-    async def _fake_process(*, message, session_id):
+    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage):
         return {"response": "ok"}
 
     async def _fake_add_comment(*args, **kwargs):
@@ -164,7 +168,7 @@ async def test_run_triggered_event_task_confluence_mention_blocked_does_not_writ
     def _blocked_gate(action_id, _kwargs):
         return {"blocked": True, "reason": "policy_blocked", "error": f"capability policy blocked for secondary action: {action_id}"}
 
-    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
     monkeypatch.setattr("src.runtime.triggered_event_task.confluence_channel.add_comment", _fake_add_comment)
 
     result = await run_triggered_event_task(
