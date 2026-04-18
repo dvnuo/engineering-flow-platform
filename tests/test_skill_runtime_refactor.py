@@ -46,6 +46,7 @@ class _Tracer:
 class _SessionManager:
     def __init__(self):
         self.messages = []
+        self.active_skill_session = None
 
     async def add_message(self, session_id, role, content, extra=None, wait_for_save=False):
         self.messages.append({"role": role, "content": content, **(extra or {})})
@@ -53,6 +54,12 @@ class _SessionManager:
 
     async def get_history(self, session_id):
         return list(self.messages)
+
+    async def get_active_skill_session(self, session_id):
+        return self.active_skill_session
+
+    async def set_active_skill_session(self, session_id, skill_session):
+        self.active_skill_session = skill_session
 
 
 @pytest.fixture
@@ -212,30 +219,58 @@ def test_create_pull_request_runtime_config_contains_expected_blocks():
     assert ("STEP 1" in instructions) or ("Phase 1" in instructions)
 
 
+def test_skill_contract_compiler_preserves_late_output_contract():
+    filler = "\n".join(f"- filler line {idx}" for idx in range(1, 65))
+    long_body = (
+        "# Runtime Skill\n"
+        "Intro text.\n\n"
+        "## Workflow\n"
+        f"{filler}\n\n"
+        "## Output contract\n"
+        "- Provide final checklist.\n\n"
+        "## Reference usage\n"
+        "- Cite provided references only.\n"
+    )
+    skill = SimpleNamespace(
+        name="long-skill",
+        description="desc",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body=long_body,
+        references=[],
+        model="",
+        hooks=[],
+        path="",
+    )
+    runtime_config = build_skill_runtime_config(skill)
+    instructions = runtime_config.prompt_blocks.developer_instructions
+    assert "Output contract" in instructions
+    assert "Reference usage" in instructions
+
+
 @pytest.mark.asyncio
 async def test_generate_initial_skill_plan_routes_through_execution_bus(monkeypatch):
     skill = SimpleNamespace(name="demo", description="demo desc", strategy=[], path="")
 
-    class _FakeBus:
-        def __init__(self):
-            self.requests = []
+    calls = {"count": 0, "kwargs": None}
 
-        def register_handler(self, execution_type, handler):
-            self._handler = handler
+    async def _fake_execute_skill_orchestration(**kwargs):
+        calls["count"] += 1
+        calls["kwargs"] = kwargs
+        return SimpleNamespace(
+            status="success",
+            output_payload={"goal": "g", "steps": [{"id": "1", "type": "execute", "title": "t"}], "usage": {}},
+        )
 
-        async def execute(self, request):
-            self.requests.append(request)
-            return type("R", (), {"status": "success", "output_payload": {"goal": "g", "steps": [{"id": "1", "type": "execute", "title": "t"}], "usage": {}}})()
-
-    fake_bus = _FakeBus()
-    monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: fake_bus)
+    monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_skill_orchestration", _fake_execute_skill_orchestration)
 
     goal, steps, usage = await generate_initial_skill_plan(skill, "do work", return_usage=False)
     assert goal == "g"
     assert steps[0]["id"] == "1"
     assert usage == {}
-    assert fake_bus.requests
-    assert fake_bus.requests[0].execution_type == "skill"
+    assert calls["count"] == 1
+    assert calls["kwargs"]["source_ref"] == "skill_mode.generate_initial_skill_plan"
 
     goal2, steps2, usage2 = await generate_initial_skill_plan(skill, "do work", return_usage=True)
     assert goal2 == "g"
@@ -270,14 +305,10 @@ async def test_generate_initial_skill_plan_falls_back_to_direct_on_bus_error(mon
 async def test_generate_initial_skill_plan_normalizes_malformed_payload(monkeypatch):
     skill = SimpleNamespace(name="demo", description="demo desc", strategy=[], path="")
 
-    class _FakeBus:
-        def register_handler(self, execution_type, handler):
-            self._handler = handler
+    async def _fake_execute_skill_orchestration(**kwargs):
+        return SimpleNamespace(status="success", output_payload={"goal": "", "steps": []})
 
-        async def execute(self, request):
-            return type("R", (), {"status": "success", "output_payload": {"goal": "", "steps": []}})()
-
-    monkeypatch.setattr("src.runtime.build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+    monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_skill_orchestration", _fake_execute_skill_orchestration)
     goal, steps, usage = await generate_initial_skill_plan(skill, "do work")
     assert goal == "demo desc"
     assert steps  # fallback from _normalize_plan should not be empty
@@ -482,6 +513,100 @@ async def test_matched_skill_does_not_route_to_legacy_skill_mode(monkeypatch, ba
 
     result = await agent.process("runtime test", session_id="s1")
     assert result["response"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_active_skill_contract_continues_without_rematch(monkeypatch, base_agent):
+    agent, sess = base_agent
+    matched_skill = SimpleNamespace(
+        name="runtime-skill",
+        description="d",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="Follow runtime contract instructions.",
+        references=[],
+        model="",
+        hooks=[],
+        deprecated=False,
+    )
+
+    class _Registry:
+        _initialized = True
+
+        def __init__(self):
+            self.match_calls = 0
+
+        def match_skill(self, *_args, **_kwargs):
+            self.match_calls += 1
+            if self.match_calls == 1:
+                return [matched_skill]
+            return []
+
+        def get_skill(self, name):
+            if name == matched_skill.name:
+                return matched_skill
+            return None
+
+        def get_skill_runtime_config(self, skill, globally_allowed_tool_names=None):
+            return build_skill_runtime_config(skill, globally_allowed_tool_names=globally_allowed_tool_names)
+
+    monkeypatch.setattr("src.skills.skill_registry", _Registry())
+
+    captured_system_prompts = []
+
+    async def fake_responses(**kwargs):
+        captured_system_prompts.append(kwargs.get("system_prompt", ""))
+        return {"content": "done", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+
+    async def fail_start(*args, **kwargs):
+        raise AssertionError("legacy _start_skill_mode should not be called")
+
+    async def fail_continue(*args, **kwargs):
+        raise AssertionError("legacy _continue_skill_mode should not be called")
+
+    monkeypatch.setattr(agent, "_start_skill_mode", fail_start)
+    monkeypatch.setattr(agent, "_continue_skill_mode", fail_continue)
+
+    first = await agent.process("runtime test", session_id="s1")
+    second = await agent.process("continue", session_id="s1")
+
+    assert first["response"] == "done"
+    assert second["response"] == "done"
+    assert len(captured_system_prompts) == 2
+    assert "Active skill: runtime-skill" in captured_system_prompts[1]
+    assert "Skill Developer Instructions" in captured_system_prompts[1]
+    assert "Follow runtime contract instructions." in captured_system_prompts[1]
+    assert isinstance(sess.active_skill_session, dict)
+    assert sess.active_skill_session.get("turn_count", 0) >= 2
+
+
+@pytest.mark.asyncio
+async def test_clear_active_skill_command_clears_contract_without_llm(monkeypatch, base_agent):
+    agent, sess = base_agent
+    sess.active_skill_session = {"skill_name": "runtime-skill", "status": "active"}
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(
+            _initialized=True,
+            load_skills=lambda: None,
+            match_skill=lambda *_: [],
+            get_skill=lambda *_: None,
+            get_skill_runtime_config=lambda *args, **kwargs: None,
+        ),
+    )
+
+    async def fake_responses(**kwargs):
+        raise AssertionError("llm_client.responses should not be called for /skill clear")
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+
+    result = await agent.process("/skill clear", session_id="s1")
+    assert result["response"] == "Active skill cleared."
+    assert sess.active_skill_session is None
 
 
 @pytest.mark.asyncio
@@ -1226,15 +1351,14 @@ def test_review_pull_request_backward_compatible_skill_command_invocation():
 
 @pytest.mark.asyncio
 async def test_core_tool_bus_helper_returns_tool_result_compatible_shape(monkeypatch):
-    class _FakeBus:
-        async def execute(self, request):
-            return make_execution_result(
-                request_id=request.request_id,
-                status="success",
-                output_payload={"success": True, "content": "tool-ok", "error": None},
-            )
+    async def _fake_execute_tool_or_task_orchestration(**kwargs):
+        return make_execution_result(
+            request_id="req-1",
+            status="success",
+            output_payload={"success": True, "content": "tool-ok", "error": None},
+        )
 
-    monkeypatch.setattr("src.agents.core.build_default_execution_bus", lambda *args, **kwargs: _FakeBus())
+    monkeypatch.setattr("src.agents.core.execute_tool_or_task_orchestration", _fake_execute_tool_or_task_orchestration)
     result = await _execute_tool_via_runtime_bus(
         session_id="s1",
         tool_name="demo_tool",
@@ -1252,19 +1376,15 @@ async def test_core_tool_bus_helper_returns_tool_result_compatible_shape(monkeyp
 async def test_core_tool_bus_helper_builds_bus_without_stale_execute_direct_kwarg(monkeypatch):
     captured_kwargs = {}
 
-    class _FakeBus:
-        async def execute(self, request):
-            return make_execution_result(
-                request_id=request.request_id,
-                status="success",
-                output_payload={"success": True, "content": "ok"},
-            )
-
-    def _fake_build_default_execution_bus(*args, **kwargs):
+    async def _fake_execute_tool_or_task_orchestration(**kwargs):
         captured_kwargs.update(kwargs)
-        return _FakeBus()
+        return make_execution_result(
+            request_id="req-2",
+            status="success",
+            output_payload={"success": True, "content": "ok"},
+        )
 
-    monkeypatch.setattr("src.agents.core.build_default_execution_bus", _fake_build_default_execution_bus)
+    monkeypatch.setattr("src.agents.core.execute_tool_or_task_orchestration", _fake_execute_tool_or_task_orchestration)
     await _execute_tool_via_runtime_bus(
         session_id="s1",
         tool_name="demo_tool",
@@ -1273,6 +1393,7 @@ async def test_core_tool_bus_helper_builds_bus_without_stale_execute_direct_kwar
         source_ref="test",
     )
 
+    assert "execute_tool_func" in captured_kwargs
     assert "execute_direct" not in captured_kwargs
 
 

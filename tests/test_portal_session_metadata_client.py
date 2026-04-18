@@ -209,3 +209,33 @@ def test_build_session_metadata_payload_preserves_context_preview_keys():
     assert "context_objective_preview" in metadata_json
     assert "context_summary_preview" in metadata_json
     assert "context_next_step_preview" in metadata_json
+
+
+def test_build_session_metadata_payload_preserves_active_skill_preview_keys():
+    payload = build_session_metadata_payload(
+        last_execution_id="exec-skill",
+        latest_event_type="chat.completed",
+        latest_event_state="success",
+        snapshot_version=None,
+        runtime_events=[],
+        metadata={
+            "active_skill_name": "review-pull-request",
+            "active_skill_status": "active",
+            "active_skill_goal": "Review PR #12",
+            "active_skill_hash": "abc123",
+            "active_skill_turn_count": 2,
+            "active_skill_activation_reason": "continued",
+            "active_skill_tool_policy_declared": True,
+            "active_skill_session": {"should": "not-pass"},
+        },
+    )
+
+    metadata_json = payload.get("metadata_json", "")
+    assert "active_skill_name" in metadata_json
+    assert "active_skill_status" in metadata_json
+    assert "active_skill_goal" in metadata_json
+    assert "active_skill_hash" in metadata_json
+    assert "active_skill_turn_count" in metadata_json
+    assert "active_skill_activation_reason" in metadata_json
+    assert "active_skill_tool_policy_declared" in metadata_json
+    assert "active_skill_session" not in metadata_json

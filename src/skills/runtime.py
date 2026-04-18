@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, List, Optional, Set
@@ -55,6 +56,88 @@ class SkillRuntimeConfig:
     workdir: str = ""
     prompt_blocks: SkillPromptBlocks = field(default_factory=SkillPromptBlocks)
     references: List[str] = field(default_factory=list)
+
+
+_PRIORITY_SKILL_SECTION_KEYWORDS = (
+    "output contract",
+    "reference usage",
+    "constraints",
+    "rules",
+    "strategy",
+    "workflow",
+    "process",
+    "steps",
+    "instructions",
+    "tool policy",
+    "quality",
+    "acceptance",
+)
+
+_SKILL_CONTRACT_TRUNCATED_NOTE = (
+    "[Skill contract truncated: retained priority sections such as output contract, constraints, "
+    "reference usage, and workflow.]"
+)
+
+
+def compile_skill_prompt_contract(skill: Skill, *, max_chars: int = 12000) -> str:
+    body = (skill.body or "").strip()
+    if not body:
+        return ""
+    if max_chars <= 0:
+        max_chars = 12000
+    if len(body) <= max_chars:
+        return body
+
+    lines = body.splitlines()
+    section_pattern = re.compile(r"^\s{0,3}(#{1,6})\s+(.*\S)\s*$")
+    sections: List[dict] = []
+    current_lines: List[str] = []
+    current_heading = ""
+
+    for line in lines:
+        match = section_pattern.match(line)
+        if match:
+            sections.append({"heading": current_heading, "lines": current_lines})
+            current_heading = match.group(2).strip().lower()
+            current_lines = [line]
+            continue
+        current_lines.append(line)
+    sections.append({"heading": current_heading, "lines": current_lines})
+
+    intro_sections = [section for section in sections if not section.get("heading")]
+    heading_sections = [section for section in sections if section.get("heading")]
+    if heading_sections:
+        intro_sections.append(heading_sections[0])
+        heading_sections = heading_sections[1:]
+
+    priority_sections = []
+    remaining_sections = []
+    for section in heading_sections:
+        heading = str(section.get("heading", ""))
+        if any(keyword in heading for keyword in _PRIORITY_SKILL_SECTION_KEYWORDS):
+            priority_sections.append(section)
+        else:
+            remaining_sections.append(section)
+
+    ordered_sections = intro_sections + priority_sections + remaining_sections
+    compiled = "\n\n".join(
+        "\n".join(line.rstrip() for line in section.get("lines", [])).strip("\n")
+        for section in ordered_sections
+        if section.get("lines")
+    ).strip()
+    if len(compiled) <= max_chars:
+        return compiled
+
+    truncated = compiled[:max_chars].rstrip()
+    note = _SKILL_CONTRACT_TRUNCATED_NOTE
+    if len(note) + 1 >= max_chars:
+        return truncated
+    if len(truncated) + len(note) + 1 <= max_chars:
+        return f"{truncated}\n{note}"
+    keep = max_chars - len(note) - 1
+    if keep <= 0:
+        return truncated
+    return f"{compiled[:keep].rstrip()}\n{note}"
 
 
 def summarize_skill_references(skill: Skill) -> List[str]:
@@ -125,13 +208,18 @@ def build_skill_prompt_blocks(
         allowed_tools_text = "all currently available tools"
     task_tools_text = ", ".join(effective_task_tools) if effective_task_tools else "none"
     system_rules = (
-        f"Active skill: {skill.name}. Runtime policy: only use allowed tools ({allowed_tools_text}). "
+        f"Active skill: {skill.name}.\n"
+        "You are operating under this active skill contract until the user explicitly clears or switches skill.\n"
+        "Stay within the skill's instructions, constraints, output contract, reference usage, and allowed tool policy.\n"
+        "If the user request conflicts with the active skill, ask whether to clear/switch the skill instead of silently ignoring it.\n"
+        "Do not invent tool results, references, or external facts that were not provided.\n"
+        f"Runtime policy: only use allowed tools ({allowed_tools_text}).\n"
         f"Task-capable tools: {task_tools_text}."
     )
 
     strategy = "\n".join(f"- {item}" for item in (skill.strategy or []))
     body = (skill.body or "").strip()
-    body_compact = "\n".join(line.rstrip() for line in body.splitlines()[:40]).strip()
+    body_compact = compile_skill_prompt_contract(skill)
 
     developer_parts = [
         f"Skill: {skill.name}",
