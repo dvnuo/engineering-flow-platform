@@ -16,6 +16,7 @@ from src.agents.compaction import (
     prune_history_for_context_share,
     resolve_context_window_tokens,
     normalize_compaction_threshold,
+    generate_summary,
     BASE_CHUNK_RATIO,
     MIN_CHUNK_RATIO,
     SAFETY_MARGIN,
@@ -638,3 +639,19 @@ class TestFixToolCallConsistency:
         assert len(result) == 1
         # Since call_abc has no tool response, tool_calls should be None
         assert result[0].tool_calls is None
+
+
+@pytest.mark.asyncio
+async def test_generate_summary_returns_structured_context_summary():
+    messages = [
+        AgentMessage(role="user", content="Objective: finish migration safely. We must avoid downtime."),
+        AgentMessage(role="assistant", content="Decision: we will run phased rollout."),
+        AgentMessage(role="assistant", content="Next, verify canary metrics."),
+    ]
+
+    summary = await generate_summary(messages)
+
+    assert "Context summary:" in summary
+    assert "Objective:" in summary
+    assert "Next step:" in summary
+    assert "User asked about" not in summary

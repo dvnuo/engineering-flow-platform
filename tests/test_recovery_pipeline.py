@@ -244,6 +244,8 @@ async def test_recovery_snapshot_includes_context_state_hints(monkeypatch):
     assert snapshot.reconstructed_state["has_context_objective"] is True
     assert snapshot.reconstructed_state["has_context_next_step"] is True
     assert snapshot.reconstructed_state["context_summary_preview"] == "Compacted conversation summary"
+    assert "Recovered context:" in snapshot.reconstructed_state["recovery_context_message"]
+    assert snapshot.reconstructed_state["has_session_memory_summary"] is False
     assert snapshot.reconstructed_state["needs_recovery_reconcile"] is True
 
 

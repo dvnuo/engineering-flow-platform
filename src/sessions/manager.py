@@ -590,8 +590,6 @@ class SessionManager:
         summary_preview = truncate(str(context_state.get("summary") or ""), 180)
         _set_or_remove("context_summary_preview", summary_preview)
         _set_or_remove("context_next_step_preview", truncate(str(context_state.get("next_step") or ""), 140))
-
-        _set_or_remove("session_memory_summary", summary_preview)
         if context_state.get("compaction_level") == "full" and summary_preview:
             metadata["compaction_summary"] = summary_preview
         else:

@@ -98,6 +98,44 @@ async def test_prepare_progressive_messages_full_compaction_adds_structured_summ
     assert state["compaction_level"] == "full"
     assert prepared[0]["role"] == "system"
     assert str(prepared[0]["content"]).startswith("Context summary:")
+    assert state["summary_source"] == "full"
+    assert state["history_compacted_from_count"] == len(messages)
+    assert state["history_compacted_to_count"] == len(prepared)
+    assert state["recovery_context_message"].startswith("Recovered context:")
+
+
+@pytest.mark.asyncio
+async def test_prepare_progressive_messages_full_compaction_keeps_earliest_objective(monkeypatch):
+    messages = [
+        {"role": "user", "content": "Primary objective: migrate the billing service with zero downtime."},
+        {"role": "assistant", "content": "Understood."},
+        {"role": "tool", "content": "z" * 5000, "tool_call_id": "tc-1"},
+        {"role": "assistant", "content": "Working on it."},
+        {"role": "assistant", "content": "Next, validate."},
+    ]
+
+    async def _get_context_state(_session_id):
+        return {}
+
+    monkeypatch.setattr(progressive_context.session_manager, "get_context_state", _get_context_state)
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 1000)
+    monkeypatch.setattr(progressive_context, "estimate_messages_tokens", lambda msgs: 900)
+
+    async def _compact_messages(**kwargs):
+        # Drop earliest user message to mimic aggressive compaction output subset
+        return kwargs["messages"][-2:], type("Stats", (), {"summary": "placeholder"})()
+
+    monkeypatch.setattr(progressive_context, "compact_messages", _compact_messages)
+
+    prepared, state = await prepare_progressive_messages(
+        messages=messages,
+        model="gpt-5-mini",
+        session_id="s-obj",
+        stage="tool_loop",
+    )
+
+    assert prepared[0]["role"] == "system"
+    assert "migrate the billing service" in state["objective"].lower()
 
 
 @pytest.mark.asyncio

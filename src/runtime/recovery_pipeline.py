@@ -245,6 +245,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
         has_context_objective = bool(str((context_state or {}).get("objective") or "").strip())
         has_context_next_step = bool(str((context_state or {}).get("next_step") or "").strip())
         context_summary_preview = str((context_state or {}).get("summary") or "").strip()
+        recovery_context_message = _extract_recovery_context_message(context_state)
         # runtime_state = active recoverable execution state
         # reconstructed_state = lightweight derived restore/reconcile hints, including compaction/memory
         reconstructed_state = {
@@ -261,6 +262,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             "has_context_objective": has_context_objective,
             "has_context_next_step": has_context_next_step,
             "context_summary_preview": context_summary_preview,
+            "recovery_context_message": recovery_context_message,
             "needs_recovery_reconcile": any(
                 (
                     has_pending_delegations,
@@ -433,9 +435,6 @@ def _find_compaction_summary(metadata: dict, history: list[dict]) -> Optional[di
 
 
 def _find_session_memory_summary(metadata: dict, history: list[dict]) -> Optional[dict]:
-    context_state = _extract_context_state(metadata)
-    if isinstance(context_state, dict) and str(context_state.get("summary") or "").strip():
-        return {"source": "metadata", "key": "context_state.summary"}
     if isinstance(metadata, dict):
         for key in ("session_memory_summary", "session_memory_file", "session_memory_saved_at"):
             value = metadata.get(key)
@@ -463,6 +462,21 @@ def _extract_context_state(metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]
     if isinstance(context_state, dict):
         return dict(context_state)
     return None
+
+
+def _extract_recovery_context_message(context_state: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(context_state, dict):
+        return None
+    existing = str(context_state.get("recovery_context_message") or "").strip()
+    if existing:
+        return existing
+    try:
+        from src.runtime.context_summary import build_recovery_context_message
+
+        generated = build_recovery_context_message(context_state)
+        return generated or None
+    except Exception:
+        return None
 
 
 def _safe_string(value: Any) -> Optional[str]:

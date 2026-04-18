@@ -42,7 +42,7 @@ async def _execute_with_bus(
     )
     result = await bus.execute(request)
 
-    if session_id and execution_type in {"task", "skill", "subagent"}:
+    if session_id and execution_type in {"task", "skill", "subagent", "event"}:
         try:
             from src.runtime.progressive_context import apply_progressive_context_after_turn
 

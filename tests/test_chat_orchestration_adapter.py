@@ -16,7 +16,7 @@ class _Bus:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("execution_type", ["task", "skill", "subagent"])
+@pytest.mark.parametrize("execution_type", ["task", "skill", "subagent", "event"])
 async def test_execute_with_bus_non_chat_commits_progressive_context(monkeypatch, execution_type):
     result = make_execution_result(request_id="r1", status="success", output_payload={"ok": True})
     bus = _Bus(result)
