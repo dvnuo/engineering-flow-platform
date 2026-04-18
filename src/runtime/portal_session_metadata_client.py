@@ -29,6 +29,10 @@ _CONTROL_PLANE_METADATA_KEYS = {
     "portal_workflow_rule_id",
     "portal_task_source",
     "shared_context_ref",
+    "context_compaction_level",
+    "context_objective_preview",
+    "context_summary_preview",
+    "context_next_step_preview",
 }
 
 

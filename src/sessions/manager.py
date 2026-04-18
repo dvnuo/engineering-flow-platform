@@ -558,6 +558,33 @@ class SessionManager:
         session["updated_at"] = datetime.now().isoformat()
         self._schedule_metadata_persist(session_id, session)
 
+    async def get_context_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get durable progressive context state from session metadata."""
+        if not session_id:
+            return None
+        session = await self.get_session(session_id)
+        metadata = session.get("metadata", {})
+        if not isinstance(metadata, dict):
+            return None
+        context_state = metadata.get("context_state")
+        if isinstance(context_state, dict):
+            return dict(context_state)
+        return None
+
+    async def set_context_state(self, session_id: str, context_state: Dict[str, Any]) -> None:
+        """Persist durable progressive context state and preview metadata keys."""
+        if not session_id or not isinstance(context_state, dict):
+            return
+        session = await self.get_session(session_id)
+        metadata = session.setdefault("metadata", {})
+        metadata["context_state"] = dict(context_state)
+        metadata["context_compaction_level"] = context_state.get("compaction_level")
+        metadata["context_objective_preview"] = truncate(str(context_state.get("objective") or ""), 140)
+        metadata["context_summary_preview"] = truncate(str(context_state.get("summary") or ""), 180)
+        metadata["context_next_step_preview"] = truncate(str(context_state.get("next_step") or ""), 140)
+        session["updated_at"] = datetime.now().isoformat()
+        self._schedule_metadata_persist(session_id, session)
+
     async def add_pending_delegation(self, session_id: str, delegation_record: Dict[str, Any]) -> None:
         """Add a lightweight pending delegation record to session metadata."""
         if not session_id or not isinstance(delegation_record, dict):

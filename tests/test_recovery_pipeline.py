@@ -215,6 +215,34 @@ async def test_recovery_snapshot_includes_compaction_and_session_memory_hints(mo
 
 
 @pytest.mark.asyncio
+async def test_recovery_snapshot_includes_context_state_hints(monkeypatch):
+    class _StubSessionManager:
+        sessions = {
+            "s-context-state": {
+                "history": [{"role": "user", "content": "hi"}],
+                "metadata": {
+                    "context_state": {
+                        "version": "context.v1",
+                        "compaction_level": "micro",
+                        "summary": "Compacted conversation summary",
+                    }
+                },
+            }
+        }
+
+    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.agents.tasks.task_manager.list_task_summaries", lambda session_id=None: [])
+    monkeypatch.setattr("src.agents.subagent.list_active_subagent_summaries", lambda parent_session_id=None: [])
+
+    snapshot = await DefaultRecoveryPipeline().build_snapshot("s-context-state")
+    assert snapshot is not None
+    assert snapshot.runtime_state["context_state"]["version"] == "context.v1"
+    assert snapshot.reconstructed_state["has_context_state"] is True
+    assert snapshot.reconstructed_state["context_compaction_level"] == "micro"
+    assert snapshot.reconstructed_state["needs_recovery_reconcile"] is True
+
+
+@pytest.mark.asyncio
 async def test_recovery_pipeline_hydrates_from_metadata_fallback(monkeypatch):
     class _StubSessionManager:
         sessions = {}
