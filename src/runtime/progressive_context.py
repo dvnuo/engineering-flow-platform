@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from src.agents.compaction import (
     AgentMessage,
@@ -19,19 +19,14 @@ from src.config import config
 from src.sessions.manager import session_manager
 from src.utils.truncate import truncate
 
+logger = logging.getLogger(__name__)
 
 _PREVIEW_LIMIT = 240
 _SUMMARY_LIMIT = 320
 _NEXT_STEP_FALLBACK = "Continue from the latest state and preserve prior constraints."
 _CONSTRAINT_KEYWORDS = ("must", "should", "need to", "do not", "don't", "不要", "不能", "必须")
-
-
-@dataclass
-class ProgressivePreparation:
-    messages: List[Dict[str, Any]]
-    context_state: Dict[str, Any]
-    history_changed: bool
-    full_summary: Optional[str] = None
+_DECISION_HINTS = ("decide", "decided", "decision", "we will", "chosen", "选择", "决定", "采用")
+_OPEN_LOOP_HINTS = ("todo", "follow up", "pending", "next", "blocker", "wait", "待办", "后续", "未完成", "需要")
 
 
 def _to_agent_messages(messages: List[Dict[str, Any]]) -> List[AgentMessage]:
@@ -48,7 +43,7 @@ def _to_agent_messages(messages: List[Dict[str, Any]]) -> List[AgentMessage]:
     ]
 
 
-def _to_dict_messages(messages: List[AgentMessage]) -> List[Dict[str, Any]]:
+def _to_dict_messages(messages: Sequence[AgentMessage]) -> List[Dict[str, Any]]:
     result: List[Dict[str, Any]] = []
     for msg in messages:
         item: Dict[str, Any] = {
@@ -85,6 +80,27 @@ def _truncate(value: str, limit: int) -> str:
     return truncate(value, limit) if value else ""
 
 
+def _collect_protected_tool_chain_ids(messages: Sequence[AgentMessage], recent_count: int) -> Set[str]:
+    protected: Set[str] = set()
+    if not messages:
+        return protected
+
+    tail = list(messages[-max(1, recent_count + 2):])
+    for msg in tail:
+        if msg.role == "tool" and msg.tool_use_id:
+            protected.add(msg.tool_use_id)
+    for msg in reversed(tail):
+        if msg.role != "assistant" or not msg.tool_calls:
+            continue
+        for call in msg.tool_calls:
+            call_id = str(call.get("id") or "").strip()
+            if call_id:
+                protected.add(call_id)
+        if protected:
+            break
+    return protected
+
+
 def _micro_compact_messages(messages: List[AgentMessage], *, recent_count: int) -> List[AgentMessage]:
     if not messages:
         return messages
@@ -92,6 +108,7 @@ def _micro_compact_messages(messages: List[AgentMessage], *, recent_count: int) 
     keep_message_start = max(0, len(messages) - max(1, recent_count))
     tool_indices = [idx for idx, msg in enumerate(messages) if msg.role == "tool"]
     keep_tool_indices = set(tool_indices[-4:])
+    protected_tool_chain_ids = _collect_protected_tool_chain_ids(messages, recent_count)
 
     compacted: List[AgentMessage] = []
     for idx, msg in enumerate(messages):
@@ -101,6 +118,9 @@ def _micro_compact_messages(messages: List[AgentMessage], *, recent_count: int) 
 
         if msg.role == "tool":
             content_text = _safe_text(msg.content)
+            if msg.tool_use_id and msg.tool_use_id in protected_tool_chain_ids:
+                compacted.append(msg)
+                continue
             if idx not in keep_tool_indices and len(content_text) > 800:
                 preview = _truncate(content_text, 240)
                 compacted.append(
@@ -116,6 +136,10 @@ def _micro_compact_messages(messages: List[AgentMessage], *, recent_count: int) 
             continue
 
         if msg.role == "assistant" and msg.tool_calls:
+            call_ids = {str(tc.get("id") or "").strip() for tc in msg.tool_calls if tc.get("id")}
+            if call_ids.intersection(protected_tool_chain_ids):
+                compacted.append(msg)
+                continue
             content_text = _safe_text(msg.content)
             if len(content_text) > 1200:
                 compacted.append(
@@ -134,14 +158,22 @@ def _micro_compact_messages(messages: List[AgentMessage], *, recent_count: int) 
     return fix_tool_call_consistency(compacted)
 
 
-def _extract_objective(messages: List[AgentMessage]) -> str:
-    user_texts = [_safe_text(m.content) for m in messages if m.role == "user" and _safe_text(m.content)]
-    if not user_texts:
-        return ""
-    return _truncate(user_texts[0] or user_texts[-1], _PREVIEW_LIMIT)
+def _extract_objective(messages: Sequence[AgentMessage]) -> str:
+    first_user = ""
+    latest_user = ""
+    for msg in messages:
+        if msg.role != "user":
+            continue
+        text = _safe_text(msg.content)
+        if not text:
+            continue
+        if not first_user:
+            first_user = text
+        latest_user = text
+    return _truncate(first_user or latest_user, _PREVIEW_LIMIT)
 
 
-def _extract_constraints(messages: List[AgentMessage]) -> List[str]:
+def _extract_constraints(messages: Sequence[AgentMessage]) -> List[str]:
     constraints: List[str] = []
     for msg in reversed(messages):
         if msg.role != "user":
@@ -163,58 +195,207 @@ def _extract_constraints(messages: List[AgentMessage]) -> List[str]:
     return constraints
 
 
-def _extract_latest_assistant_preview(messages: List[AgentMessage]) -> str:
+def _extract_current_state(messages: Sequence[AgentMessage]) -> str:
     for msg in reversed(messages):
         if msg.role == "assistant":
             text = _safe_text(msg.content)
             if text:
-                return _truncate(text, 160)
+                return _truncate(text, 220)
+    for msg in reversed(messages):
+        if msg.role == "tool":
+            text = _safe_text(msg.content)
+            if text:
+                return _truncate(f"Latest tool result: {text}", 220)
     return ""
 
 
-def _extract_next_step(messages: List[AgentMessage]) -> str:
-    assistant_text = _extract_latest_assistant_preview(messages)
-    if assistant_text:
+def _extract_next_step(messages: Sequence[AgentMessage]) -> str:
+    for msg in reversed(messages):
+        if msg.role != "assistant":
+            continue
+        assistant_text = _safe_text(msg.content)
+        if not assistant_text:
+            continue
         lowered = assistant_text.lower()
-        if any(token in lowered for token in ("next", "continue", "please", "run", "check", "verify", "then")):
+        if any(token in lowered for token in ("next", "continue", "please", "run", "check", "verify", "then", "should")):
             return _truncate(assistant_text, 180)
     return _NEXT_STEP_FALLBACK
 
 
-def _build_summary(messages: List[AgentMessage], *, objective: str, full_summary: Optional[str]) -> str:
-    if full_summary:
-        return _truncate(full_summary, _SUMMARY_LIMIT)
-    assistant_preview = _extract_latest_assistant_preview(messages)
-    tool_count = sum(1 for msg in messages if msg.role == "tool")
-    parts = [part for part in [objective, assistant_preview] if part]
-    if tool_count:
-        parts.append(f"Tool interactions: {tool_count}.")
-    if not parts:
-        return "Conversation context state updated."
-    return _truncate(" | ".join(parts), _SUMMARY_LIMIT)
+def _extract_decisions(messages: Sequence[AgentMessage]) -> List[str]:
+    decisions: List[str] = []
+    for msg in reversed(messages):
+        if msg.role not in {"assistant", "user"}:
+            continue
+        text = _safe_text(msg.content)
+        if not text:
+            continue
+        for sentence in re.split(r"[\n\.。!！?？]", text):
+            candidate = sentence.strip()
+            if not candidate:
+                continue
+            lowered = candidate.lower()
+            if any(hint in lowered or hint in candidate for hint in _DECISION_HINTS):
+                normalized = _truncate(candidate, 140)
+                if normalized and normalized not in decisions:
+                    decisions.append(normalized)
+                    if len(decisions) >= 5:
+                        return decisions
+    return decisions
 
 
-def _build_context_state(
+def _extract_open_loops(messages: Sequence[AgentMessage]) -> List[str]:
+    open_loops: List[str] = []
+    for msg in reversed(messages):
+        if msg.role not in {"assistant", "user"}:
+            continue
+        text = _safe_text(msg.content)
+        if not text:
+            continue
+        for sentence in re.split(r"[\n\.。!！?？]", text):
+            candidate = sentence.strip()
+            if not candidate:
+                continue
+            lowered = candidate.lower()
+            if "?" in candidate or any(hint in lowered or hint in candidate for hint in _OPEN_LOOP_HINTS):
+                normalized = _truncate(candidate, 140)
+                if normalized and normalized not in open_loops:
+                    open_loops.append(normalized)
+                    if len(open_loops) >= 5:
+                        return open_loops
+    return open_loops
+
+
+def _is_weaker_objective(current: str, prior: str) -> bool:
+    if not prior:
+        return False
+    if not current:
+        return True
+    if len(current.strip()) < 12 <= len(prior.strip()):
+        return True
+    if len(current.strip()) * 2 < len(prior.strip()):
+        return True
+    return False
+
+
+def _merge_unique(prior_values: Any, current_values: Any, *, limit: int = 5) -> List[str]:
+    merged: List[str] = []
+    for raw in list(prior_values or []) + list(current_values or []):
+        text = _truncate(str(raw or "").strip(), 160)
+        if text and text not in merged:
+            merged.append(text)
+            if len(merged) >= limit:
+                break
+    return merged
+
+
+def _build_structured_summary(context_state: Dict[str, Any]) -> str:
+    lines = ["Context summary:"]
+    objective = _truncate(str(context_state.get("objective") or "").strip(), 200)
+    current_state = _truncate(str(context_state.get("current_state") or "").strip(), 220)
+    constraints = "; ".join(_merge_unique([], context_state.get("constraints"), limit=5))
+    decisions = "; ".join(_merge_unique([], context_state.get("decisions"), limit=5))
+    open_loops = "; ".join(_merge_unique([], context_state.get("open_loops"), limit=5))
+    next_step = _truncate(str(context_state.get("next_step") or "").strip(), 180)
+
+    if objective:
+        lines.append(f"- Objective: {objective}")
+    if current_state:
+        lines.append(f"- Current state: {current_state}")
+    if constraints:
+        lines.append(f"- Constraints: {constraints}")
+    if decisions:
+        lines.append(f"- Decisions: {decisions}")
+    if open_loops:
+        lines.append(f"- Open loops: {open_loops}")
+    if next_step:
+        lines.append(f"- Next step: {next_step}")
+
+    if len(lines) == 1:
+        lines.append("- Current state: Context state refreshed.")
+    return _truncate("\n".join(lines), _SUMMARY_LIMIT)
+
+
+def _merge_prior_and_current_context_state(
     *,
-    source_messages: List[AgentMessage],
-    prepared_messages: List[AgentMessage],
+    prior_context_state: Dict[str, Any],
+    current_context_state: Dict[str, Any],
     compaction_level: str,
+    source_message_count: int,
     recent_count: int,
-    full_summary: Optional[str] = None,
 ) -> Dict[str, Any]:
-    objective = _extract_objective(prepared_messages or source_messages)
-    summary = _build_summary(prepared_messages, objective=objective, full_summary=full_summary)
-    return {
+    prior_objective = _truncate(str(prior_context_state.get("objective") or "").strip(), _PREVIEW_LIMIT)
+    current_objective = _truncate(str(current_context_state.get("objective") or "").strip(), _PREVIEW_LIMIT)
+    objective = prior_objective if _is_weaker_objective(current_objective, prior_objective) else current_objective
+
+    next_step = _truncate(str(current_context_state.get("next_step") or "").strip(), 180)
+    if not next_step or next_step == _NEXT_STEP_FALLBACK:
+        prior_next = _truncate(str(prior_context_state.get("next_step") or "").strip(), 180)
+        next_step = prior_next or _NEXT_STEP_FALLBACK
+
+    merged: Dict[str, Any] = {
         "version": "context.v1",
         "compaction_level": compaction_level,
         "objective": objective,
-        "summary": summary,
-        "next_step": _extract_next_step(prepared_messages),
-        "constraints": _extract_constraints(prepared_messages),
-        "source_message_count": len(source_messages),
+        "current_state": _truncate(
+            str(current_context_state.get("current_state") or prior_context_state.get("current_state") or "").strip(),
+            220,
+        ),
+        "next_step": next_step,
+        "constraints": _merge_unique(prior_context_state.get("constraints"), current_context_state.get("constraints")),
+        "decisions": _merge_unique(prior_context_state.get("decisions"), current_context_state.get("decisions")),
+        "open_loops": _merge_unique(prior_context_state.get("open_loops"), current_context_state.get("open_loops")),
+        "source_message_count": source_message_count,
         "recent_window_count": recent_count,
         "last_compacted_at": datetime.now(timezone.utc).isoformat() if compaction_level in {"micro", "full"} else None,
     }
+    merged["summary"] = _build_structured_summary(merged)
+    return merged
+
+
+def _build_current_context_state(messages: Sequence[AgentMessage]) -> Dict[str, Any]:
+    return {
+        "objective": _extract_objective(messages),
+        "current_state": _extract_current_state(messages),
+        "next_step": _extract_next_step(messages),
+        "constraints": _extract_constraints(messages),
+        "decisions": _extract_decisions(messages),
+        "open_loops": _extract_open_loops(messages),
+    }
+
+
+def _resolve_stage_thresholds(*, stage: str, context_window: int, hard_threshold: int) -> tuple[int, int]:
+    if stage == "tool_loop":
+        soft = int(context_window * 0.60)
+        hard = min(hard_threshold, int(context_window * 0.75))
+        return soft, max(soft + 1, hard)
+    return int(context_window * 0.65), hard_threshold
+
+
+def _build_synthetic_summary_message(context_state: Dict[str, Any]) -> AgentMessage:
+    return AgentMessage(
+        role="system",
+        content=_build_structured_summary(context_state),
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def _select_recent_window_for_full(messages: Sequence[AgentMessage], recent_count: int) -> List[AgentMessage]:
+    if not messages:
+        return []
+    start = max(0, len(messages) - max(1, recent_count))
+    selected = list(messages[start:])
+
+    required_tool_ids = {msg.tool_use_id for msg in selected if msg.role == "tool" and msg.tool_use_id}
+    if required_tool_ids:
+        for msg in messages[:start]:
+            if msg.role != "assistant" or not msg.tool_calls:
+                continue
+            call_ids = {str(tc.get("id") or "").strip() for tc in msg.tool_calls if tc.get("id")}
+            if call_ids.intersection(required_tool_ids):
+                selected.insert(0, msg)
+                break
+    return fix_tool_call_consistency(selected)
 
 
 def build_portal_context_preview(context_state: dict | None) -> dict:
@@ -237,57 +418,88 @@ async def prepare_progressive_messages(
     stage: str,
     recent_count: int = 5,
 ) -> tuple[list[dict], dict]:
-    del session_id, stage
+    prior_context_state: Dict[str, Any] = {}
+    if session_id:
+        try:
+            prior = await session_manager.get_context_state(session_id)
+            if isinstance(prior, dict):
+                prior_context_state = dict(prior)
+        except Exception:
+            logger.warning("Failed to load prior context_state", exc_info=True)
+
     source_messages = _to_agent_messages(messages)
     if not source_messages:
-        context_state = _build_context_state(
-            source_messages=[],
-            prepared_messages=[],
+        current_context = _build_current_context_state(source_messages)
+        merged_state = _merge_prior_and_current_context_state(
+            prior_context_state=prior_context_state,
+            current_context_state=current_context,
             compaction_level="none",
+            source_message_count=0,
             recent_count=recent_count,
         )
-        return [], context_state
+        return [], merged_state
 
     context_window = resolve_context_window_tokens(model)
-    soft_threshold = int(context_window * 0.65)
     configured_threshold = normalize_compaction_threshold(config.llm.get("compaction_threshold", 0.8), 0.8)
-    hard_threshold = int(context_window * configured_threshold)
-    current_tokens = estimate_messages_tokens(source_messages)
-
-    if current_tokens <= soft_threshold:
-        context_state = _build_context_state(
-            source_messages=source_messages,
-            prepared_messages=source_messages,
-            compaction_level="none",
-            recent_count=recent_count,
-        )
-        return list(messages), context_state
-
-    micro_messages = _micro_compact_messages(source_messages, recent_count=recent_count)
-    micro_tokens = estimate_messages_tokens(micro_messages)
-    if micro_tokens <= hard_threshold:
-        context_state = _build_context_state(
-            source_messages=source_messages,
-            prepared_messages=micro_messages,
-            compaction_level="micro",
-            recent_count=recent_count,
-        )
-        return _to_dict_messages(micro_messages), context_state
-
-    full_messages, stats = await compact_messages(
-        messages=micro_messages,
-        max_tokens=hard_threshold,
+    soft_threshold, hard_threshold = _resolve_stage_thresholds(
+        stage=stage,
         context_window=context_window,
+        hard_threshold=int(context_window * configured_threshold),
+    )
+
+    current_tokens = estimate_messages_tokens(source_messages)
+    compaction_level = "none"
+    prepared_messages = list(source_messages)
+
+    if current_tokens > soft_threshold:
+        micro_messages = _micro_compact_messages(source_messages, recent_count=recent_count)
+        micro_tokens = estimate_messages_tokens(micro_messages)
+        prepared_messages = micro_messages
+        compaction_level = "micro"
+
+        if micro_tokens > hard_threshold:
+            full_messages, _stats = await compact_messages(
+                messages=micro_messages,
+                max_tokens=hard_threshold,
+                context_window=context_window,
+                recent_count=recent_count,
+            )
+            compaction_level = "full"
+            recent_window = _select_recent_window_for_full(full_messages, recent_count)
+            current_context_for_full = _build_current_context_state(full_messages)
+            merged_for_full = _merge_prior_and_current_context_state(
+                prior_context_state=prior_context_state,
+                current_context_state=current_context_for_full,
+                compaction_level=compaction_level,
+                source_message_count=len(source_messages),
+                recent_count=recent_count,
+            )
+            synthetic_summary_message = _build_synthetic_summary_message(merged_for_full)
+            prepared_messages = fix_tool_call_consistency([synthetic_summary_message] + recent_window)
+
+    current_context = _build_current_context_state(prepared_messages)
+    merged_state = _merge_prior_and_current_context_state(
+        prior_context_state=prior_context_state,
+        current_context_state=current_context,
+        compaction_level=compaction_level,
+        source_message_count=len(source_messages),
         recent_count=recent_count,
     )
-    context_state = _build_context_state(
-        source_messages=source_messages,
-        prepared_messages=full_messages,
-        compaction_level="full",
-        recent_count=recent_count,
-        full_summary=stats.summary,
-    )
-    return _to_dict_messages(full_messages), context_state
+
+    if stage == "post_turn":
+        # Post-turn state should reflect latest run completion, regardless of compaction path.
+        latest_context = _build_current_context_state(source_messages)
+        merged_state = _merge_prior_and_current_context_state(
+            prior_context_state=merged_state,
+            current_context_state=latest_context,
+            compaction_level=compaction_level,
+            source_message_count=len(source_messages),
+            recent_count=recent_count,
+        )
+
+    if compaction_level == "none":
+        return list(messages), merged_state
+    return _to_dict_messages(prepared_messages), merged_state
 
 
 async def apply_progressive_context_after_turn(
@@ -310,21 +522,7 @@ async def apply_progressive_context_after_turn(
 
     if prepared_messages != history:
         session["history"] = prepared_messages
+        session["updated_at"] = datetime.now().isoformat()
 
-    metadata = session.setdefault("metadata", {})
-    metadata["context_state"] = context_state
-    preview = build_portal_context_preview(context_state)
-    metadata.update(preview)
-
-    summary = context_state.get("summary")
-    if summary:
-        metadata["session_memory_summary"] = summary
-    if context_state.get("compaction_level") == "full" and summary:
-        metadata["compaction_summary"] = summary
-
-    session["updated_at"] = datetime.now().isoformat()
-
-    if session_manager.persistence_enabled:
-        session_manager._schedule_metadata_persist(session_id, session)
-
+    await session_manager.set_context_state(session_id, context_state)
     return context_state

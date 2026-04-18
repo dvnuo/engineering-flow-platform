@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Dict, Optional
 
 from src.runtime import build_default_execution_bus, make_execution_request
 from src.runtime.contracts import ExecutionResult
+
+logger = logging.getLogger(__name__)
 
 
 async def _execute_with_bus(
@@ -37,7 +40,24 @@ async def _execute_with_bus(
         input_payload=dict(input_payload or {}),
         metadata=dict(metadata or {}),
     )
-    return await bus.execute(request)
+    result = await bus.execute(request)
+
+    if session_id and execution_type in {"task", "skill", "subagent"}:
+        try:
+            from src.runtime.progressive_context import apply_progressive_context_after_turn
+
+            await apply_progressive_context_after_turn(
+                session_id=session_id,
+                model=None,
+            )
+        except Exception:
+            logger.warning(
+                "Best-effort progressive context commit failed",
+                extra={"session_id": session_id, "execution_type": execution_type},
+                exc_info=True,
+            )
+
+    return result
 
 
 async def execute_chat_orchestration(

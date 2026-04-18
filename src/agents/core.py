@@ -840,7 +840,7 @@ You have access to the following tools. When a user asks you to do something tha
 
         # ===== MESSAGE COMPACTION =====
         model = self.model or config.llm.get("model", "gpt-5-mini")
-        messages, _context_state = await prepare_progressive_messages(
+        messages, _ = await prepare_progressive_messages(
             messages=messages,
             model=model,
             session_id=session_id,
@@ -1090,7 +1090,7 @@ You have access to the following tools. When a user asks you to do something tha
             
             # ===== COMPACTION IN LOOP =====
             if iteration > 1:
-                loop_messages, _loop_context_state = await prepare_progressive_messages(
+                loop_messages, _ = await prepare_progressive_messages(
                     messages=loop_messages,
                     model=self.model or config.llm.get("model", "gpt-5-mini"),
                     session_id=session_id,

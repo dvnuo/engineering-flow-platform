@@ -224,6 +224,8 @@ async def test_recovery_snapshot_includes_context_state_hints(monkeypatch):
                     "context_state": {
                         "version": "context.v1",
                         "compaction_level": "micro",
+                        "objective": "Keep deployment stable",
+                        "next_step": "Run verification tests",
                         "summary": "Compacted conversation summary",
                     }
                 },
@@ -239,6 +241,9 @@ async def test_recovery_snapshot_includes_context_state_hints(monkeypatch):
     assert snapshot.runtime_state["context_state"]["version"] == "context.v1"
     assert snapshot.reconstructed_state["has_context_state"] is True
     assert snapshot.reconstructed_state["context_compaction_level"] == "micro"
+    assert snapshot.reconstructed_state["has_context_objective"] is True
+    assert snapshot.reconstructed_state["has_context_next_step"] is True
+    assert snapshot.reconstructed_state["context_summary_preview"] == "Compacted conversation summary"
     assert snapshot.reconstructed_state["needs_recovery_reconcile"] is True
 
 

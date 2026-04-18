@@ -578,10 +578,25 @@ class SessionManager:
         session = await self.get_session(session_id)
         metadata = session.setdefault("metadata", {})
         metadata["context_state"] = dict(context_state)
-        metadata["context_compaction_level"] = context_state.get("compaction_level")
-        metadata["context_objective_preview"] = truncate(str(context_state.get("objective") or ""), 140)
-        metadata["context_summary_preview"] = truncate(str(context_state.get("summary") or ""), 180)
-        metadata["context_next_step_preview"] = truncate(str(context_state.get("next_step") or ""), 140)
+
+        def _set_or_remove(key: str, value: Optional[str]) -> None:
+            if value in (None, ""):
+                metadata.pop(key, None)
+            else:
+                metadata[key] = value
+
+        _set_or_remove("context_compaction_level", context_state.get("compaction_level"))
+        _set_or_remove("context_objective_preview", truncate(str(context_state.get("objective") or ""), 140))
+        summary_preview = truncate(str(context_state.get("summary") or ""), 180)
+        _set_or_remove("context_summary_preview", summary_preview)
+        _set_or_remove("context_next_step_preview", truncate(str(context_state.get("next_step") or ""), 140))
+
+        _set_or_remove("session_memory_summary", summary_preview)
+        if context_state.get("compaction_level") == "full" and summary_preview:
+            metadata["compaction_summary"] = summary_preview
+        else:
+            metadata.pop("compaction_summary", None)
+
         session["updated_at"] = datetime.now().isoformat()
         self._schedule_metadata_persist(session_id, session)
 

@@ -242,6 +242,9 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
         has_compaction_summary = compaction_summary is not None
         has_session_memory_summary = session_memory_summary is not None
         has_context_state = context_state is not None
+        has_context_objective = bool(str((context_state or {}).get("objective") or "").strip())
+        has_context_next_step = bool(str((context_state or {}).get("next_step") or "").strip())
+        context_summary_preview = str((context_state or {}).get("summary") or "").strip()
         # runtime_state = active recoverable execution state
         # reconstructed_state = lightweight derived restore/reconcile hints, including compaction/memory
         reconstructed_state = {
@@ -255,6 +258,9 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             "has_session_memory_summary": has_session_memory_summary,
             "has_context_state": has_context_state,
             "context_compaction_level": context_state.get("compaction_level") if isinstance(context_state, dict) else None,
+            "has_context_objective": has_context_objective,
+            "has_context_next_step": has_context_next_step,
+            "context_summary_preview": context_summary_preview,
             "needs_recovery_reconcile": any(
                 (
                     has_pending_delegations,
@@ -320,6 +326,8 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                         "has_compaction_summary": has_compaction_summary,
                         "has_session_memory_summary": has_session_memory_summary,
                         "has_context_state": has_context_state,
+                        "has_context_objective": has_context_objective,
+                        "has_context_next_step": has_context_next_step,
                         "needs_recovery_reconcile": reconstructed_state["needs_recovery_reconcile"],
                         "warning_count": len(runtime_warnings),
                     },
