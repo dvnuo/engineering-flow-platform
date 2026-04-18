@@ -828,6 +828,88 @@ async def test_active_skill_contract_switches_only_on_explicit_skill_command(mon
 
 
 @pytest.mark.asyncio
+async def test_explicit_skill_use_starts_skill_without_existing_contract(monkeypatch, base_agent):
+    agent, sess = base_agent
+
+    review_skill = SimpleNamespace(
+        name="review-pull-request",
+        description="review",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="Review instructions",
+        references=[],
+        model="",
+        hooks=[],
+        deprecated=False,
+    )
+
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(
+            _initialized=True,
+            load_skills=lambda: None,
+            match_skill=lambda *_: [],
+            get_skill=lambda name: review_skill if name == "review-pull-request" else None,
+            get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(
+                s, globally_allowed_tool_names=globally_allowed_tool_names
+            ),
+        ),
+    )
+
+    captured_prompts = []
+
+    async def fake_responses(**kwargs):
+        captured_prompts.append(kwargs.get("system_prompt", ""))
+        return {"content": "done", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+
+    result = await agent.process("/skill use review-pull-request", session_id="s1")
+
+    assert result["response"] == "done"
+    assert "Active skill: review-pull-request" in captured_prompts[0]
+    assert sess.active_skill_session["skill_name"] == "review-pull-request"
+    assert sess.active_skill_session["activation_reason"] == "matched"
+
+
+@pytest.mark.asyncio
+async def test_explicit_skill_activate_unknown_without_existing_contract_returns_without_llm(monkeypatch, base_agent):
+    agent, sess = base_agent
+
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(
+            _initialized=True,
+            load_skills=lambda: None,
+            match_skill=lambda *_: [],
+            get_skill=lambda *_: None,
+            get_skill_runtime_config=lambda *args, **kwargs: None,
+        ),
+    )
+
+    async def fake_responses(**kwargs):
+        raise AssertionError("llm_client.responses should not be called for unknown explicit skill command")
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+
+    result = await agent.process("/skill activate missing-skill", session_id="s1")
+
+    assert "Skill not found: missing-skill" in result["response"]
+    assert sess.active_skill_session is None
+
+
+def test_parse_explicit_skill_switch_name_requires_name_for_switch_use_activate():
+    from src.skills.active_contract import parse_explicit_skill_switch_name
+
+    assert parse_explicit_skill_switch_name("/skill switch") == ""
+    assert parse_explicit_skill_switch_name("/skill use") == ""
+    assert parse_explicit_skill_switch_name("/skill activate") == ""
+    assert parse_explicit_skill_switch_name("/skill use review-pull-request") == "review-pull-request"
+
+
+@pytest.mark.asyncio
 async def test_active_skill_contract_unknown_explicit_switch_returns_without_llm(monkeypatch, base_agent):
     agent, sess = base_agent
     sess.active_skill_session = {

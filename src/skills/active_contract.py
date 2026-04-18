@@ -53,7 +53,12 @@ def parse_explicit_skill_switch_name(message: str) -> str:
         if not parts:
             return ""
         command = parts[0].lower()
-        candidate = parts[1] if command in {"switch", "use", "activate"} and len(parts) > 1 else parts[0]
+        if command in {"switch", "use", "activate"}:
+            if len(parts) < 2:
+                return ""
+            candidate = parts[1]
+        else:
+            candidate = parts[0]
         candidate = candidate.strip()
         return candidate if _SKILL_NAME_PATTERN.match(candidate) else ""
 

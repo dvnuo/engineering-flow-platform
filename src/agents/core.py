@@ -891,6 +891,20 @@ You have access to the following tools. When a user asks you to do something tha
                     set_skill_workdir(None)
 
         matched_skills = []
+        if selected_skill is None and explicit_skill_name:
+            explicit_skill = skill_registry.get_skill(explicit_skill_name)
+            if explicit_skill and not getattr(explicit_skill, "deprecated", False):
+                selected_skill = explicit_skill
+                activation_reason = "matched"
+            else:
+                not_found_message = f"Skill not found: {explicit_skill_name}"
+                await self._persist_assistant_message(session_id, not_found_message)
+                return self._build_assistant_result_payload(
+                    not_found_message,
+                    usage=usage_data,
+                    user_message_id=user_message_id,
+                )
+
         if selected_skill is None:
             matched_skills = skill_registry.match_skill(message)
             if matched_skills:
