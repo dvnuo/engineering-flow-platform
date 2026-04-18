@@ -11,6 +11,28 @@ from src.runtime.contracts import ExecutionResult
 logger = logging.getLogger(__name__)
 
 
+def _resolve_effective_model(*, input_payload: Dict[str, Any], metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    resolved_metadata = dict(metadata or {})
+    resolved_payload = dict(input_payload or {})
+    kwargs = resolved_payload.get("kwargs")
+    kwargs = kwargs if isinstance(kwargs, dict) else {}
+    llm_kwargs = kwargs.get("llm_kwargs")
+    llm_kwargs = llm_kwargs if isinstance(llm_kwargs, dict) else {}
+
+    candidates = [
+        resolved_metadata.get("resolved_model"),
+        resolved_metadata.get("model"),
+        resolved_payload.get("model"),
+        kwargs.get("model"),
+        kwargs.get("model_name"),
+        llm_kwargs.get("model"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
 async def _execute_with_bus(
     *,
     request_id: Optional[str],
@@ -45,10 +67,14 @@ async def _execute_with_bus(
     if session_id and execution_type in {"task", "skill", "subagent", "event"}:
         try:
             from src.runtime.progressive_context import apply_progressive_context_after_turn
+            effective_model = _resolve_effective_model(
+                input_payload=dict(input_payload or {}),
+                metadata=dict(metadata or {}),
+            )
 
             await apply_progressive_context_after_turn(
                 session_id=session_id,
-                model=None,
+                model=effective_model,
             )
         except Exception:
             logger.warning(

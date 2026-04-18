@@ -164,6 +164,33 @@ def _select_recent_window_for_full(messages: Sequence[AgentMessage], recent_coun
     return fix_tool_call_consistency(selected)
 
 
+def _trim_full_compaction_result_to_budget(
+    *,
+    summary_message: AgentMessage,
+    recent_window: Sequence[AgentMessage],
+    hard_threshold: int,
+) -> List[AgentMessage]:
+    trimmed_recent_window = list(recent_window)
+    candidate = fix_tool_call_consistency([summary_message] + trimmed_recent_window)
+    if estimate_messages_tokens(candidate) <= hard_threshold:
+        return candidate
+
+    while trimmed_recent_window:
+        trimmed_recent_window = trimmed_recent_window[1:]
+        candidate = fix_tool_call_consistency([summary_message] + trimmed_recent_window)
+        if estimate_messages_tokens(candidate) <= hard_threshold:
+            return candidate
+
+    shortened_summary = AgentMessage(
+        role=summary_message.role,
+        content=truncate(str(summary_message.content or ""), 220),
+        timestamp=summary_message.timestamp,
+        tool_calls=summary_message.tool_calls,
+        tool_use_id=summary_message.tool_use_id,
+    )
+    return fix_tool_call_consistency([shortened_summary])
+
+
 def _annotate_context_state(
     context_state: Dict[str, Any],
     *,
@@ -260,7 +287,11 @@ async def prepare_progressive_messages(
             )
             recent_window = _select_recent_window_for_full(full_messages, recent_count)
             synthetic_summary_message = _build_synthetic_summary_message(source_state)
-            prepared_messages = fix_tool_call_consistency([synthetic_summary_message] + recent_window)
+            prepared_messages = _trim_full_compaction_result_to_budget(
+                summary_message=synthetic_summary_message,
+                recent_window=recent_window,
+                hard_threshold=hard_threshold,
+            )
 
     if compaction_level == "full":
         merged_state = build_context_state_from_messages(

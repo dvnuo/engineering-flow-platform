@@ -178,6 +178,45 @@ async def test_prepare_progressive_messages_preserves_tool_chain_consistency(mon
     assert state["compaction_level"] in {"micro", "full"}
 
 
+@pytest.mark.asyncio
+async def test_prepare_progressive_messages_full_compaction_final_result_respects_hard_threshold(monkeypatch):
+    messages = [
+        {"role": "user", "content": "Need staged migration plan."},
+        {"role": "assistant", "content": "Acknowledged and starting analysis."},
+        {"role": "assistant", "content": "a" * 900},
+        {"role": "tool", "content": "b" * 900, "tool_call_id": "tc-99"},
+        {"role": "assistant", "content": "c" * 900},
+    ]
+
+    async def _get_context_state(_session_id):
+        return {}
+
+    monkeypatch.setattr(progressive_context.session_manager, "get_context_state", _get_context_state)
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 1000)
+
+    def _estimate(msgs):
+        return sum(len(str(m.content or "")) for m in msgs)
+
+    monkeypatch.setattr(progressive_context, "estimate_messages_tokens", _estimate)
+
+    async def _compact_messages(**kwargs):
+        return kwargs["messages"], type("Stats", (), {"summary": "placeholder"})()
+
+    monkeypatch.setattr(progressive_context, "compact_messages", _compact_messages)
+
+    prepared, state = await prepare_progressive_messages(
+        messages=messages,
+        model="gpt-5-mini",
+        session_id="s-budget",
+        stage="tool_loop",
+    )
+
+    assert state["compaction_level"] == "full"
+    assert prepared[0]["role"] == "system"
+    assert _estimate(progressive_context._to_agent_messages(prepared)) <= 750
+    assert state["history_compacted_to_count"] == len(prepared)
+
+
 def test_build_portal_context_preview_returns_preview_keys_only():
     preview = build_portal_context_preview(
         {
