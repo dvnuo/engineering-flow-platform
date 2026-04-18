@@ -33,6 +33,13 @@ _CONTROL_PLANE_METADATA_KEYS = {
     "context_objective_preview",
     "context_summary_preview",
     "context_next_step_preview",
+    "active_skill_name",
+    "active_skill_status",
+    "active_skill_goal",
+    "active_skill_hash",
+    "active_skill_turn_count",
+    "active_skill_activation_reason",
+    "active_skill_tool_policy_declared",
 }
 
 

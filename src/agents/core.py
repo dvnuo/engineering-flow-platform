@@ -53,7 +53,15 @@ from src.agents.skill_runtime import (
     resolve_prompt_execution_boundary,
 )
 from src.skills.runtime import SkillRuntimeConfig
+from src.skills.active_contract import (
+    build_active_skill_contract,
+    get_contract_skill_name,
+    is_active_skill_contract_usable,
+    is_clear_active_skill_command,
+    parse_explicit_skill_switch_name,
+)
 from src.runtime.chat_orchestration_adapter import execute_tool_or_task_orchestration
+from src.runtime import build_default_execution_bus
 from src.runtime.display_blocks import normalize_display_blocks
 from src.runtime.tool_filtering import (
     extract_tool_name,
@@ -801,39 +809,150 @@ You have access to the following tools. When a user asks you to do something tha
         if not skill_registry._initialized:
             skill_registry.load_skills()
 
-        matched_skills = skill_registry.match_skill(message)
         from src.skills import get_tracer
+
+        existing_active_skill_contract = await session_manager.get_active_skill_session(session_id)
+        
+        def emit_skill_contract_cleared_event(previous_skill_name: str) -> None:
+            if not previous_skill_name:
+                return
+            event_data = _enrich_runtime_event_context(
+                {
+                    "skill": previous_skill_name,
+                    "status": "cleared",
+                    "reason": "user_clear_command",
+                },
+                session_id=session_id,
+                agent_id=self.agent_id,
+            )
+            try:
+                from src.gateway.event_bus import emit_agent_event_sync
+
+                emit_agent_event_sync("skill_contract_cleared", event_data)
+            except Exception as event_error:
+                logger.debug(f"Failed to emit skill_contract_cleared to event bus: {event_error}")
+            if not stream_callback:
+                return
+            try:
+                event = json.dumps({"type": "skill_contract_cleared", **event_data})
+                if hasattr(stream_callback, "put"):
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            asyncio.create_task(stream_callback.put(event))
+                        else:
+                            stream_callback.put_nowait(event)
+                    except RuntimeError:
+                        stream_callback.put_nowait(event)
+                else:
+                    stream_callback(event)
+            except Exception as event_error:
+                logger.debug(f"Failed to emit skill_contract_cleared to stream callback: {event_error}")
+
+        if is_clear_active_skill_command(message):
+            previous_skill_name = get_contract_skill_name(existing_active_skill_contract)
+            await session_manager.set_active_skill_session(session_id, None)
+            set_skill_workdir(None)
+            emit_skill_contract_cleared_event(previous_skill_name)
+            cleared_message = "Active skill cleared."
+            await self._persist_assistant_message(session_id, cleared_message)
+            return self._build_assistant_result_payload(
+                cleared_message,
+                usage=usage_data,
+                user_message_id=user_message_id,
+            )
+
+        explicit_skill_name = parse_explicit_skill_switch_name(message)
+        selected_skill = None
+        activation_reason: Optional[str] = None
+        active_skill_contract: Optional[Dict[str, Any]] = None
+        if is_active_skill_contract_usable(existing_active_skill_contract):
+            existing_skill_name = get_contract_skill_name(existing_active_skill_contract)
+            if explicit_skill_name:
+                explicit_skill = skill_registry.get_skill(explicit_skill_name)
+                if explicit_skill and not getattr(explicit_skill, "deprecated", False):
+                    selected_skill = explicit_skill
+                    activation_reason = "switched" if explicit_skill.name != existing_skill_name else "continued"
+                else:
+                    not_found_message = f"Skill not found: {explicit_skill_name}"
+                    await self._persist_assistant_message(session_id, not_found_message)
+                    return self._build_assistant_result_payload(
+                        not_found_message,
+                        usage=usage_data,
+                        user_message_id=user_message_id,
+                    )
+            else:
+                continued_skill = skill_registry.get_skill(existing_skill_name)
+                if continued_skill and not getattr(continued_skill, "deprecated", False):
+                    selected_skill = continued_skill
+                    activation_reason = "continued"
+                else:
+                    await session_manager.set_active_skill_session(session_id, None)
+                    set_skill_workdir(None)
+
+        matched_skills = []
+        if selected_skill is None and explicit_skill_name:
+            explicit_skill = skill_registry.get_skill(explicit_skill_name)
+            if explicit_skill and not getattr(explicit_skill, "deprecated", False):
+                selected_skill = explicit_skill
+                activation_reason = "matched"
+            else:
+                not_found_message = f"Skill not found: {explicit_skill_name}"
+                await self._persist_assistant_message(session_id, not_found_message)
+                return self._build_assistant_result_payload(
+                    not_found_message,
+                    usage=usage_data,
+                    user_message_id=user_message_id,
+                )
+
+        if selected_skill is None:
+            matched_skills = skill_registry.match_skill(message)
+            if matched_skills:
+                selected_skill = matched_skills[0]
+                activation_reason = "matched"
 
         # Start execution tracing
         tracer = get_tracer()
         execution_id = tracer.start_execution(
             session_id=session_id,
             user_message=message,
-            matched_skill=matched_skills[0].name if matched_skills else None,
+            matched_skill=selected_skill.name if selected_skill else None,
         )
         
         active_skill_runtime: Optional[SkillRuntimeConfig] = None
 
-        if matched_skills:
-            # Use the best match
-            best_skill = matched_skills[0]
-            logger.info(f"[Skill] Matched skill: {best_skill.name}")
+        if selected_skill:
+            logger.info(f"[Skill] Active skill selected: {selected_skill.name} ({activation_reason})")
             
             # Set skill workdir for exec tool (async-safe via contextvars)
-            set_skill_workdir(best_skill.path or None)
-            if best_skill.path:
-                logger.info(f"[Skill] Workdir: {best_skill.path}")
+            set_skill_workdir(selected_skill.path or None)
+            if selected_skill.path:
+                logger.info(f"[Skill] Workdir: {selected_skill.path}")
 
             active_skill_runtime = skill_registry.get_skill_runtime_config(
-                best_skill,
+                selected_skill,
                 globally_allowed_tool_names=getattr(self, "allowed_tool_names", set()),
             )
-            # Log matched skill
-            tracer.log_tool_call(
-                tool_name="skill_matched",
-                arguments={"skill": best_skill.name},
-                result=f"Matched skill: {best_skill.name}",
+            active_skill_contract = build_active_skill_contract(
+                skill=selected_skill,
+                runtime_config=active_skill_runtime,
+                user_message=message,
+                existing_contract=existing_active_skill_contract,
+                activation_reason=activation_reason or "matched",
             )
+            await session_manager.set_active_skill_session(session_id, active_skill_contract)
+            if activation_reason in {"matched", "switched"}:
+                tracer.log_tool_call(
+                    tool_name="skill_matched",
+                    arguments={"skill": selected_skill.name, "reason": activation_reason},
+                    result=f"Matched skill: {selected_skill.name}",
+                )
+            else:
+                tracer.log_tool_call(
+                    tool_name="skill_contract_continued",
+                    arguments={"skill": selected_skill.name, "reason": activation_reason},
+                    result=f"Continued active skill contract: {selected_skill.name}",
+                )
         else:
             set_skill_workdir(None)
         # ===== END SKILL MATCHING =====
@@ -961,8 +1080,19 @@ You have access to the following tools. When a user asks you to do something tha
                     logger.debug(f"Stream event error: {e}")
         
         # Send skill matched event
-        if matched_skills:
-            send_event("skill_matched", {"skill": matched_skills[0].name})
+        if selected_skill and activation_reason in {"matched", "switched"}:
+            send_event("skill_matched", {"skill": selected_skill.name})
+        if active_skill_contract:
+            send_event(
+                "skill_contract_active",
+                {
+                    "skill": active_skill_contract.get("skill_name"),
+                    "status": active_skill_contract.get("status"),
+                    "reason": active_skill_contract.get("activation_reason"),
+                    "turn_count": active_skill_contract.get("turn_count"),
+                    "skill_hash": active_skill_contract.get("skill_hash"),
+                },
+            )
         if active_skill_runtime:
             verbose_runtime_event = _is_debug_enabled() or bool(config.session.get("verbose_skill_runtime_events", False))
             send_event(
@@ -1259,6 +1389,8 @@ You have access to the following tools. When a user asks you to do something tha
                         },
                         "thinking_events": all_events,
                     }
+                    if active_skill_contract:
+                        chatlog_data["skill_session"] = active_skill_contract
                     chatlog_dir = os.path.join(session_persistence.storage_dir, "chatlogs")
                     os.makedirs(chatlog_dir, exist_ok=True)
                     # Use raw session_id to match webchat.py's approach

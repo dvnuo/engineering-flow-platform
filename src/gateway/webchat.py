@@ -131,6 +131,19 @@ async def _enrich_publish_metadata_with_context_preview(
     preview = build_portal_context_preview(context_state)
     if preview:
         merged.update(preview)
+    active_skill = await session_manager.get_active_skill_session(session_id)
+    if isinstance(active_skill, dict):
+        merged.update(
+            {
+                "active_skill_name": active_skill.get("skill_name") or active_skill.get("skill"),
+                "active_skill_status": active_skill.get("status"),
+                "active_skill_goal": active_skill.get("goal"),
+                "active_skill_hash": active_skill.get("skill_hash"),
+                "active_skill_turn_count": active_skill.get("turn_count"),
+                "active_skill_activation_reason": active_skill.get("activation_reason"),
+                "active_skill_tool_policy_declared": active_skill.get("tool_policy_declared"),
+            }
+        )
     return merged
 
 
