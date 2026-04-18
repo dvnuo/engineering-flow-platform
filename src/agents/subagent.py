@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.utils.truncate import truncate
+from src.agents.core import run_chat_execution
 
 # Import Agent lazily to avoid circular imports
 _subagent_sessions: Dict[str, Dict[str, Any]] = {}
@@ -69,9 +70,12 @@ class SubAgent:
             logger.info(f"Sub-agent {self.session_key} started - think_level={self.thinking}, model={self.model}")
             logger.debug(f"Task: {truncate(self.task, 200)}")
             
-            result = await self.agent.process(
+            result = await run_chat_execution(
+                agent=self.agent,
                 message=self.task,
                 session_id=self.session_key,
+                user_name=self.session_key,
+                track_usage=False,
             )
             
             self.result = result.get("response", "")

@@ -5,6 +5,7 @@ from src.runtime.recovery_pipeline import (
     RecoveryHydrationResult,
     build_default_recovery_pipeline,
 )
+from src.sessions.manager import SessionManager
 
 
 @pytest.mark.asyncio
@@ -215,6 +216,41 @@ async def test_recovery_snapshot_includes_compaction_and_session_memory_hints(mo
 
 
 @pytest.mark.asyncio
+async def test_recovery_snapshot_includes_context_state_hints(monkeypatch):
+    class _StubSessionManager:
+        sessions = {
+            "s-context-state": {
+                "history": [{"role": "user", "content": "hi"}],
+                "metadata": {
+                    "context_state": {
+                        "version": "context.v1",
+                        "compaction_level": "micro",
+                        "objective": "Keep deployment stable",
+                        "next_step": "Run verification tests",
+                        "summary": "Compacted conversation summary",
+                    }
+                },
+            }
+        }
+
+    monkeypatch.setattr("src.sessions.manager.session_manager", _StubSessionManager)
+    monkeypatch.setattr("src.agents.tasks.task_manager.list_task_summaries", lambda session_id=None: [])
+    monkeypatch.setattr("src.agents.subagent.list_active_subagent_summaries", lambda parent_session_id=None: [])
+
+    snapshot = await DefaultRecoveryPipeline().build_snapshot("s-context-state")
+    assert snapshot is not None
+    assert snapshot.runtime_state["context_state"]["version"] == "context.v1"
+    assert snapshot.reconstructed_state["has_context_state"] is True
+    assert snapshot.reconstructed_state["context_compaction_level"] == "micro"
+    assert snapshot.reconstructed_state["has_context_objective"] is True
+    assert snapshot.reconstructed_state["has_context_next_step"] is True
+    assert snapshot.reconstructed_state["context_summary_preview"] == "Compacted conversation summary"
+    assert "Recovered context:" in snapshot.reconstructed_state["recovery_context_message"]
+    assert snapshot.reconstructed_state["has_session_memory_summary"] is False
+    assert snapshot.reconstructed_state["needs_recovery_reconcile"] is True
+
+
+@pytest.mark.asyncio
 async def test_recovery_pipeline_hydrates_from_metadata_fallback(monkeypatch):
     class _StubSessionManager:
         sessions = {}
@@ -283,6 +319,33 @@ async def test_recovery_pipeline_handles_missing_session_safely(monkeypatch):
     assert result.recovered is False
     assert "session_not_found" in result.warnings
     assert any(evt.get("event_type") == "recovery.warning" for evt in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_session_manager_recover_session_state_surfaces_recovery_context_message(monkeypatch):
+    import sys
+    import types
+
+    class _StubPipeline:
+        async def hydrate_session_state(self, session_id: str):
+            return RecoveryHydrationResult(
+                session_id=session_id,
+                recovered=True,
+                snapshot_version="phase3.v1",
+                reconstructed_state={"recovery_context_message": "Recovered context: ..."},
+                runtime_state={},
+                warnings=[],
+                runtime_events=[],
+                metadata={},
+            )
+
+    fake_module = types.ModuleType("src.runtime.recovery_pipeline")
+    fake_module.get_recovery_pipeline = lambda: _StubPipeline()
+    monkeypatch.setitem(sys.modules, "src.runtime.recovery_pipeline", fake_module)
+
+    manager = SessionManager(auto_save=False)
+    recovered = await manager.recover_session_state("sess-recovery")
+    assert recovered["recovery_context_message"] == "Recovered context: ..."
 
 
 @pytest.mark.asyncio

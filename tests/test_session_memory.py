@@ -88,6 +88,39 @@ class TestSaveSessionSummary:
             # Should return None for empty session
             assert result is None
 
+    @pytest.mark.asyncio
+    async def test_save_session_summary_prefers_context_state(self):
+        """When context_state exists, memory summary should use it over heuristic summary."""
+        with patch('src.hooks.session_memory.session_manager') as mock_manager:
+            mock_session = {
+                "history": [
+                    {"role": "user", "content": "Initial objective"},
+                    {"role": "assistant", "content": "Response"},
+                    {"role": "user", "content": "Follow up"},
+                ],
+                "metadata": {
+                    "context_state": {
+                        "objective": "Migrate service safely",
+                        "current_state": "Validation in progress",
+                        "constraints": ["must avoid downtime"],
+                        "next_step": "Run final verification",
+                    }
+                },
+                "channel": "webchat",
+                "created_at": "2026-02-26T12:00:00",
+            }
+            mock_manager.get_session = AsyncMock(return_value=mock_session)
+
+            from src.hooks.session_memory import save_session_summary
+
+            with patch('src.hooks.session_memory.summarize_session', new=AsyncMock(return_value="heuristic summary")) as mock_summarize:
+                with patch('builtins.open', MagicMock()):
+                    with patch('pathlib.Path.mkdir', MagicMock()):
+                        with patch('pathlib.Path.exists', return_value=False):
+                            await save_session_summary("test-session")
+
+            mock_summarize.assert_not_called()
+
 
 class TestBuildSessionEntry:
     """Tests for _build_session_entry"""

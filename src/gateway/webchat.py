@@ -44,6 +44,7 @@ from src.runtime.portal_session_metadata_client import (
     extract_session_metadata_publish_fields,
     publish_session_metadata,
 )
+from src.runtime.progressive_context import build_portal_context_preview
 from src.gateway.chat_payloads import (
     build_webchat_response_payload,
     normalize_assistant_history_message,
@@ -116,6 +117,21 @@ def _extract_trusted_portal_agent_name(request: web.Request) -> Optional[str]:
     headers = getattr(request, "headers", {}) or {}
     agent_name = _sanitize_portal_identity_value(headers.get("X-Portal-Agent-Name"))
     return agent_name or None
+
+
+async def _enrich_publish_metadata_with_context_preview(
+    metadata: Optional[Dict[str, Any]],
+    *,
+    session_id: Optional[str],
+) -> Dict[str, Any]:
+    merged = dict(metadata or {})
+    if not session_id:
+        return merged
+    context_state = await session_manager.get_context_state(session_id)
+    preview = build_portal_context_preview(context_state)
+    if preview:
+        merged.update(preview)
+    return merged
 
 
 def _is_trusted_portal_request(request: web.Request) -> bool:
@@ -753,9 +769,13 @@ async def api_chat(request: web.Request) -> web.Response:
         )
         execution_result = result.get("_execution_result")
         if runtime_agent_id and execution_result is not None:
+            publish_metadata = await _enrich_publish_metadata_with_context_preview(
+                execution_metadata,
+                session_id=session_id,
+            )
             publish_fields = extract_session_metadata_publish_fields(
                 execution_result,
-                metadata=execution_metadata,
+                metadata=publish_metadata,
                 default_event_type="chat.completed",
                 default_state="success",
             )
@@ -992,9 +1012,13 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         result = await run_task
         execution_result = result.get("_execution_result")
         if runtime_agent_id and execution_result is not None:
+            publish_metadata = await _enrich_publish_metadata_with_context_preview(
+                execution_metadata,
+                session_id=session_id,
+            )
             publish_fields = extract_session_metadata_publish_fields(
                 execution_result,
-                metadata=execution_metadata,
+                metadata=publish_metadata,
                 default_event_type="chat.completed",
                 default_state="success",
             )
@@ -1286,9 +1310,13 @@ async def _run_task_execution_in_background(
             metadata=metadata,
         )
         if runtime_agent_id and session_id:
+            publish_metadata = await _enrich_publish_metadata_with_context_preview(
+                metadata,
+                session_id=session_id,
+            )
             publish_fields = extract_session_metadata_publish_fields(
                 execution_result,
-                metadata=metadata,
+                metadata=publish_metadata,
                 default_event_type="task.completed" if execution_result.status == "success" else "task.failed",
                 default_state="success" if execution_result.status == "success" else "error",
             )

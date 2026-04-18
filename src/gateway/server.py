@@ -17,7 +17,7 @@ import re
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.utils.truncate import truncate
-from src.agents.core import agent
+from src.agents.core import agent, run_chat_execution
 from src.channels.jira import jira_channel
 from src.config import config
 from src.cron.automation_watchers import start_automation_watchers, stop_automation_watchers
@@ -66,7 +66,8 @@ async def handle_jira_message(
             return ""
 
         # Normal conversation
-        result = await agent.process(
+        result = await run_chat_execution(
+            agent=agent,
             message=message,
             session_id=session_id,
             user_name=user_name,
@@ -671,7 +672,8 @@ class Gateway:
                 return web.json_response({"status": "error", "message": "message required"}, status=400)
 
             # Process message through agent
-            result = await agent.process(
+            result = await run_chat_execution(
+                agent=agent,
                 message=message,
                 session_id=session_id,
                 user_name="http-tester",

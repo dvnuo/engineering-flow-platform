@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 from src.sessions.manager import session_manager
+from src.runtime.context_summary import build_structured_summary
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,14 @@ async def summarize_session(
     return "\n".join(summary_parts) if summary_parts else "Session completed."
 
 
+def build_session_memory_summary_from_context_state(context_state: dict) -> str:
+    """Build memory-friendly summary from durable progressive context state."""
+    if not isinstance(context_state, dict) or not context_state:
+        return ""
+    summary = build_structured_summary(context_state)
+    return summary or ""
+
+
 async def save_session_summary(
     session_id: str,
     workspace_dir: Optional[Path] = None,
@@ -138,8 +147,13 @@ async def save_session_summary(
             logger.debug(f"Session {session_id} too short to summarize ({len(user_messages)} user messages)")
             return None
         
-        # Generate summary (heuristic-based, TODO: use LLM)
-        summary = await summarize_session(session_id, history)
+        metadata = session.get("metadata", {}) if isinstance(session.get("metadata"), dict) else {}
+        context_state = metadata.get("context_state")
+
+        summary = build_session_memory_summary_from_context_state(context_state)
+        if not summary:
+            # Generate summary (heuristic fallback)
+            summary = await summarize_session(session_id, history)
         
         if not summary:
             summary = "Session completed."

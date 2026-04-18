@@ -60,6 +60,10 @@ from src.runtime.tool_filtering import (
     filter_tool_schemas_for_llm,
     intersect_tool_schemas_by_names,
 )
+from src.runtime.progressive_context import (
+    apply_progressive_context_after_turn,
+    prepare_progressive_messages,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -835,88 +839,14 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== END SKILL MATCHING =====
 
         # ===== MESSAGE COMPACTION =====
-        # Check if messages need compaction to fit within token limits
-        from src.agents.compaction import (
-            compact_messages,
-            estimate_messages_tokens,
-            resolve_context_window_tokens,
-            normalize_compaction_threshold,
-            CompactionStats,
-        )
-        
-        # Get context window for the model (not max_tokens which is for responses)
         model = self.model or config.llm.get("model", "gpt-5-mini")
-        context_window = resolve_context_window_tokens(model)
-        
-        # Use 80% of context window as the limit for prompt history
-        # This delays compaction by allowing more history before triggering it
-        max_tokens = int(context_window * 0.8)
-        
-        # Estimate current token count
-        # Convert session messages to AgentMessage format
-        from src.agents.compaction import AgentMessage
-        
-        agent_messages = [
-            AgentMessage(
-                role=msg.get("role", "user"),
-                content=msg.get("content", ""),
-                timestamp=msg.get("timestamp"),
-                tool_calls=msg.get("tool_calls"),
-                tool_use_id=msg.get("tool_call_id"),
-            )
-            for msg in messages
-        ]
-        
-        current_tokens = estimate_messages_tokens(agent_messages)
-        
-        # Log compaction info
-        logger.info(
-            f"[{session_id}] Compaction check: "
-            f"current_tokens={current_tokens}, max_tokens={max_tokens}"
+        messages, _ = await prepare_progressive_messages(
+            messages=messages,
+            model=model,
+            session_id=session_id,
+            stage="pre_request",
+            recent_count=5,
         )
-        
-        # Compact messages if over limit
-        compaction_stats: CompactionStats = None
-        if current_tokens > max_tokens:
-            logger.info(
-                f"[{session_id}] Messages exceed token limit, compacting..."
-            )
-            
-            # Get context window for the model
-            model = self.model or config.llm.get("model", "gpt-5-mini")
-            context_window = resolve_context_window_tokens(model)
-            
-            # Compact messages
-            compacted_messages, compaction_stats = await compact_messages(
-                messages=agent_messages,
-                max_tokens=max_tokens,
-                context_window=context_window,
-                recent_count=5,
-            )
-            
-            # Update messages for LLM call
-            # Convert back to dict format for LLM
-            messages = []
-            for msg in compacted_messages:
-                msg_dict = {
-                    "role": msg.role,
-                    "content": msg.content,
-                    "timestamp": msg.timestamp,
-                }
-                # Preserve tool_calls for assistant messages
-                if msg.tool_calls:
-                    msg_dict["tool_calls"] = msg.tool_calls
-                # Preserve tool_call_id for tool messages
-                if msg.tool_use_id:
-                    msg_dict["tool_call_id"] = msg.tool_use_id
-                messages.append(msg_dict)
-            
-            logger.info(
-                f"[{session_id}] Compaction complete: "
-                f"kept_tokens={compaction_stats.kept_tokens}, "
-                f"dropped_messages={compaction_stats.dropped_messages}, "
-                f"summary={truncate(compaction_stats.summary, 100) if compaction_stats.summary else 'N/A'}"
-            )
         # ===== END MESSAGE COMPACTION =====
 
         # Debug logging for message received
@@ -973,11 +903,6 @@ You have access to the following tools. When a user asks you to do something tha
         # Get max iterations from config, default to 30
         max_tool_iterations = config.session.get("max_iterations", 30) if hasattr(config, 'session') else 30
         
-        # Get compaction threshold from config (default 80%)
-        # This determines when to trigger compaction during tool loops
-        # Normalize and validate the threshold value
-        raw_compaction_threshold = config.session.get("compaction_threshold", 0.8) if hasattr(config, 'session') else 0.8
-        compaction_threshold_pct = normalize_compaction_threshold(raw_compaction_threshold)
         iteration = 0
         
         # Helper function to send stream events
@@ -1154,10 +1079,6 @@ You have access to the following tools. When a user asks you to do something tha
         
         input_items = _to_input_items(messages)
         
-        # Token threshold for compaction (configurable, default 80% of context_window)
-        # This is the TRIGGER threshold - compaction runs when token count exceeds this
-        compaction_threshold = int(context_window * compaction_threshold_pct)
-        
         # Keep track of messages for compaction during loop
         # IMPORTANT: Start fresh for each request to avoid carrying over
         # tool_calls and tool_results from previous requests/iterations.
@@ -1168,54 +1089,14 @@ You have access to the following tools. When a user asks you to do something tha
             iteration += 1
             
             # ===== COMPACTION IN LOOP =====
-            # Build AgentMessage list once for token estimation and compaction
-            agent_msgs_for_compact = [
-                AgentMessage(
-                    role=m.get("role", "user"),
-                    content=m.get("content", ""),
-                    timestamp=m.get("timestamp"),
-                    tool_calls=m.get("tool_calls"),
-                    tool_use_id=m.get("tool_call_id"),
-                )
-                for m in loop_messages
-            ]
-            
-            current_tokens = estimate_messages_tokens(agent_msgs_for_compact)
-            
-            if current_tokens > compaction_threshold and iteration > 1:
-                logger.info(
-                    f"[Tool Loop] Iteration {iteration}: Messages ({current_tokens}) exceed "
-                    f"threshold ({compaction_threshold}), compacting..."
-                )
-                
-                compacted_messages, compaction_stats = await compact_messages(
-                    messages=agent_msgs_for_compact,
-                    max_tokens=compaction_threshold,
-                    context_window=context_window,
+            if iteration > 1:
+                loop_messages, _ = await prepare_progressive_messages(
+                    messages=loop_messages,
+                    model=self.model or config.llm.get("model", "gpt-5-mini"),
+                    session_id=session_id,
+                    stage="tool_loop",
                     recent_count=5,
                 )
-                
-                # Convert back to dict format
-                loop_messages = []
-                for msg in compacted_messages:
-                    msg_dict = {
-                        "role": msg.role,
-                        "content": msg.content,
-                        "timestamp": msg.timestamp,
-                    }
-                    if msg.tool_calls:
-                        msg_dict["tool_calls"] = msg.tool_calls
-                    if msg.tool_use_id:
-                        msg_dict["tool_call_id"] = msg.tool_use_id
-                    loop_messages.append(msg_dict)
-                
-                logger.info(
-                    f"[Tool Loop] Compaction complete: "
-                    f"kept_tokens={compaction_stats.kept_tokens}, "
-                    f"dropped_messages={compaction_stats.dropped_messages}"
-                )
-            
-            # Keep input_items in sync with loop_messages (possibly compacted)
             input_items = _to_input_items(loop_messages)
             # ===== END COMPACTION IN LOOP =====
             
@@ -2643,7 +2524,14 @@ async def run_chat_execution(
         "portal_user_id": portal_user_id,
         "portal_user_name": portal_user_name,
     }
-    return await agent.process(**process_kwargs)
+    result = await agent.process(**process_kwargs)
+    context_state = await apply_progressive_context_after_turn(
+        session_id=session_id,
+        model=getattr(agent, "model", None),
+    )
+    if isinstance(result, dict):
+        result["context_state"] = context_state
+    return result
 
 
 # Global agent instance

@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.utils.truncate import truncate
+from src.runtime.context_summary import build_context_state_from_messages, build_structured_summary
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +320,31 @@ def is_oversized_for_summary(message: AgentMessage, context_window: int) -> bool
     return tokens > context_window * 0.5
 
 
-# Summary generation (placeholder - implement with LLM)
+def _parse_previous_summary(previous_summary: Optional[str]) -> Dict[str, Any]:
+    """Light parser for prior structured summary lines."""
+    if not previous_summary or not isinstance(previous_summary, str):
+        return {}
+
+    parsed: Dict[str, Any] = {}
+    for raw_line in previous_summary.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("- "):
+            continue
+        if line.startswith("- Objective:"):
+            parsed["objective"] = line.split(":", 1)[1].strip()
+        elif line.startswith("- Current state:"):
+            parsed["current_state"] = line.split(":", 1)[1].strip()
+        elif line.startswith("- Constraints:"):
+            parsed["constraints"] = [part.strip() for part in line.split(":", 1)[1].split(";") if part.strip()]
+        elif line.startswith("- Decisions:"):
+            parsed["decisions"] = [part.strip() for part in line.split(":", 1)[1].split(";") if part.strip()]
+        elif line.startswith("- Open loops:"):
+            parsed["open_loops"] = [part.strip() for part in line.split(":", 1)[1].split(";") if part.strip()]
+        elif line.startswith("- Next step:"):
+            parsed["next_step"] = line.split(":", 1)[1].strip()
+    return parsed
+
+
 async def generate_summary(
     messages: List[AgentMessage],
     model: Optional[str] = None,
@@ -344,25 +369,18 @@ async def generate_summary(
     if not messages:
         return DEFAULT_SUMMARY_FALLBACK
     
-    # Placeholder: In real implementation, call LLM API
     logger.info(f"Generating summary for {len(messages)} messages")
-    
-    # Simple placeholder - in real implementation, call LLM
-    summary_parts = []
-    
-    if previous_summary:
-        summary_parts.append(f"Previous: {previous_summary}")
-    
-    # Extract key information from messages
-    user_messages = [m for m in messages if m.role == "user"]
-    if user_messages:
-        summary_parts.append(f"User asked about {len(user_messages)} things")
-    
-    assistant_messages = [m for m in messages if m.role == "assistant"]
-    if assistant_messages:
-        summary_parts.append(f"Assistant responded {len(assistant_messages)} times")
-    
-    return " | ".join(summary_parts) if summary_parts else DEFAULT_SUMMARY_FALLBACK
+
+    prior_context_state = _parse_previous_summary(previous_summary)
+    context_state = build_context_state_from_messages(
+        messages,
+        prior_context_state=prior_context_state,
+        compaction_level="full",
+        source_message_count=len(messages),
+        recent_count=min(5, max(1, len(messages))),
+    )
+    summary = build_structured_summary(context_state)
+    return summary or DEFAULT_SUMMARY_FALLBACK
 
 
 async def summarize_chunks(
@@ -787,15 +805,14 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
         "gpt-4o": 128000,
         "gpt-4o-mini": 128000,
         # GPT-5 series
-        "gpt-5": 264000,
-        "gpt-5-mini": 264000,
-        "gpt-5-pro": 264000,
+        "gpt-5": 200000,
+        "gpt-5-mini": 200000,
+        "gpt-5-pro": 200000,
         # GPT-3.5
         "gpt-3.5-turbo": 16385,
         # Gemini series (64K context)
-        "gemini-2.5": 264000,
-        "minimax/MiniMax-M3": 264000,
-        "minimax": 264000,
+        "gemini-2.5": 200000,
+        "minimax/MiniMax-M3": 200000,
         "gemini-2.0": 32000,
         "gemini-1.5": 32000,
         # Claude series
@@ -823,7 +840,7 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
             if key in model_lower:
                 return context_windows[key]
     
-    return 264000  # Default to 264K for gpt-5-mini and unknown models
+    return 4096  # Conservative default for unknown models
 
 
 def normalize_compaction_threshold(raw_value, default_value=0.8):

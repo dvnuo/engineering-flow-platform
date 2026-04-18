@@ -558,6 +558,46 @@ class SessionManager:
         session["updated_at"] = datetime.now().isoformat()
         self._schedule_metadata_persist(session_id, session)
 
+    async def get_context_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get durable progressive context state from session metadata."""
+        if not session_id:
+            return None
+        session = await self.get_session(session_id)
+        metadata = session.get("metadata", {})
+        if not isinstance(metadata, dict):
+            return None
+        context_state = metadata.get("context_state")
+        if isinstance(context_state, dict):
+            return dict(context_state)
+        return None
+
+    async def set_context_state(self, session_id: str, context_state: Dict[str, Any]) -> None:
+        """Persist durable progressive context state and preview metadata keys."""
+        if not session_id or not isinstance(context_state, dict):
+            return
+        session = await self.get_session(session_id)
+        metadata = session.setdefault("metadata", {})
+        metadata["context_state"] = dict(context_state)
+
+        def _set_or_remove(key: str, value: Optional[str]) -> None:
+            if value in (None, ""):
+                metadata.pop(key, None)
+            else:
+                metadata[key] = value
+
+        _set_or_remove("context_compaction_level", context_state.get("compaction_level"))
+        _set_or_remove("context_objective_preview", truncate(str(context_state.get("objective") or ""), 140))
+        summary_preview = truncate(str(context_state.get("summary") or ""), 180)
+        _set_or_remove("context_summary_preview", summary_preview)
+        _set_or_remove("context_next_step_preview", truncate(str(context_state.get("next_step") or ""), 140))
+        if context_state.get("compaction_level") == "full" and summary_preview:
+            metadata["compaction_summary"] = summary_preview
+        else:
+            metadata.pop("compaction_summary", None)
+
+        session["updated_at"] = datetime.now().isoformat()
+        self._schedule_metadata_persist(session_id, session)
+
     async def add_pending_delegation(self, session_id: str, delegation_record: Dict[str, Any]) -> None:
         """Add a lightweight pending delegation record to session metadata."""
         if not session_id or not isinstance(delegation_record, dict):
@@ -647,6 +687,7 @@ class SessionManager:
             "warnings": list(hydration.warnings),
             "runtime_events": list(hydration.runtime_events),
             "metadata": dict(hydration.metadata),
+            "recovery_context_message": hydration.reconstructed_state.get("recovery_context_message"),
         }
 
     async def clear_history(self, session_id: str) -> None:

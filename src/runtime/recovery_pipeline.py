@@ -128,6 +128,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                     "has_last_execution_id": bool(last_execution_id),
                     "has_compaction_summary": bool(snapshot.reconstructed_state.get("has_compaction_summary")),
                     "has_session_memory_summary": bool(snapshot.reconstructed_state.get("has_session_memory_summary")),
+                    "has_context_state": bool(snapshot.reconstructed_state.get("has_context_state")),
                     "needs_recovery_reconcile": bool(snapshot.reconstructed_state.get("needs_recovery_reconcile")),
                     "warning_count": len(warnings),
                 },
@@ -154,6 +155,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             "has_last_execution_id": bool(hydration.last_execution_id),
             "has_compaction_summary": bool(hydration.reconstructed_state.get("has_compaction_summary")),
             "has_session_memory_summary": bool(hydration.reconstructed_state.get("has_session_memory_summary")),
+            "has_context_state": bool(hydration.reconstructed_state.get("has_context_state")),
             "needs_recovery_reconcile": bool(hydration.reconstructed_state.get("needs_recovery_reconcile")),
             "warning_count": len(hydration.warnings),
         }
@@ -223,20 +225,27 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
         pending_tool_tasks = await self._safe_pending_tool_tasks(session_id, runtime_warnings)
         active_subagents = await self._safe_active_subagents(session_id, runtime_warnings)
         pending_delegations = metadata.get("pending_delegations") if isinstance(metadata.get("pending_delegations"), list) else []
-        compaction_summary = _find_compaction_summary(session.get("history") or [])
+        compaction_summary = _find_compaction_summary(metadata, session.get("history") or [])
         session_memory_summary = _find_session_memory_summary(metadata, session.get("history") or [])
+        context_state = _extract_context_state(metadata)
         runtime_state = {
             "active_skill_session": active_skill_session,
             "last_execution_id": last_execution_id,
             "pending_tool_tasks": pending_tool_tasks,
             "active_subagents": active_subagents,
             "pending_delegations": list(pending_delegations),
+            "context_state": context_state,
         }
         has_pending_tool_tasks = bool(pending_tool_tasks)
         has_active_subagents = bool(active_subagents)
         has_pending_delegations = bool(pending_delegations)
         has_compaction_summary = compaction_summary is not None
         has_session_memory_summary = session_memory_summary is not None
+        has_context_state = context_state is not None
+        has_context_objective = bool(str((context_state or {}).get("objective") or "").strip())
+        has_context_next_step = bool(str((context_state or {}).get("next_step") or "").strip())
+        context_summary_preview = str((context_state or {}).get("summary") or "").strip()
+        recovery_context_message = _extract_recovery_context_message(context_state)
         # runtime_state = active recoverable execution state
         # reconstructed_state = lightweight derived restore/reconcile hints, including compaction/memory
         reconstructed_state = {
@@ -248,6 +257,12 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
             "has_pending_delegations": has_pending_delegations,
             "has_compaction_summary": has_compaction_summary,
             "has_session_memory_summary": has_session_memory_summary,
+            "has_context_state": has_context_state,
+            "context_compaction_level": context_state.get("compaction_level") if isinstance(context_state, dict) else None,
+            "has_context_objective": has_context_objective,
+            "has_context_next_step": has_context_next_step,
+            "context_summary_preview": context_summary_preview,
+            "recovery_context_message": recovery_context_message,
             "needs_recovery_reconcile": any(
                 (
                     has_pending_delegations,
@@ -255,6 +270,7 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                     has_active_subagents,
                     has_compaction_summary,
                     has_session_memory_summary,
+                    has_context_state,
                 )
             ),
             "has_shared_context_ref": _has_shared_context_ref(metadata),
@@ -311,6 +327,9 @@ class DefaultRecoveryPipeline(RecoveryPipeline):
                         "has_pending_delegations": bool(pending_delegations),
                         "has_compaction_summary": has_compaction_summary,
                         "has_session_memory_summary": has_session_memory_summary,
+                        "has_context_state": has_context_state,
+                        "has_context_objective": has_context_objective,
+                        "has_context_next_step": has_context_next_step,
                         "needs_recovery_reconcile": reconstructed_state["needs_recovery_reconcile"],
                         "warning_count": len(runtime_warnings),
                     },
@@ -396,7 +415,14 @@ def _has_materialized_context_ref(metadata: Dict[str, Any]) -> bool:
     return False
 
 
-def _find_compaction_summary(history: list[dict]) -> Optional[dict]:
+def _find_compaction_summary(metadata: dict, history: list[dict]) -> Optional[dict]:
+    context_state = _extract_context_state(metadata)
+    if isinstance(context_state, dict) and context_state.get("compaction_level") == "full":
+        summary = str(context_state.get("summary") or "").strip()
+        if summary:
+            return {"source": "metadata", "key": "context_state.summary", "summary": summary}
+    if isinstance(metadata, dict) and metadata.get("compaction_summary"):
+        return {"source": "metadata", "key": "compaction_summary"}
     for item in history:
         if not isinstance(item, dict):
             continue
@@ -427,6 +453,30 @@ def _find_session_memory_summary(metadata: dict, history: list[dict]) -> Optiona
             if marker:
                 return dict(item)
     return None
+
+
+def _extract_context_state(metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(metadata, dict):
+        return None
+    context_state = metadata.get("context_state")
+    if isinstance(context_state, dict):
+        return dict(context_state)
+    return None
+
+
+def _extract_recovery_context_message(context_state: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(context_state, dict):
+        return None
+    existing = str(context_state.get("recovery_context_message") or "").strip()
+    if existing:
+        return existing
+    try:
+        from src.runtime.context_summary import build_recovery_context_message
+
+        generated = build_recovery_context_message(context_state)
+        return generated or None
+    except Exception:
+        return None
 
 
 def _safe_string(value: Any) -> Optional[str]:

@@ -187,3 +187,25 @@ def test_extract_session_metadata_publish_fields_prefers_latest_runtime_event():
     assert extracted["latest_event_state"] == "success"
     assert extracted["snapshot_version"] == "snap-1"
     assert extracted["metadata"]["portal_task_id"] == "pt-1"
+
+
+def test_build_session_metadata_payload_preserves_context_preview_keys():
+    payload = build_session_metadata_payload(
+        last_execution_id="exec-ctx",
+        latest_event_type="chat.completed",
+        latest_event_state="success",
+        snapshot_version="phase3.v1",
+        runtime_events=[],
+        metadata={
+            "context_compaction_level": "micro",
+            "context_objective_preview": "Ship progressive context",
+            "context_summary_preview": "Conversation compacted",
+            "context_next_step_preview": "Proceed with verification",
+        },
+    )
+
+    metadata_json = payload.get("metadata_json", "")
+    assert "context_compaction_level" in metadata_json
+    assert "context_objective_preview" in metadata_json
+    assert "context_summary_preview" in metadata_json
+    assert "context_next_step_preview" in metadata_json
