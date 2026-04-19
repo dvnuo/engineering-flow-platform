@@ -101,3 +101,15 @@ def test_build_webchat_response_payload_includes_context_state():
         "s1",
     )
     assert payload["context_state"]["budget"]["usage_percent"] == 42.0
+
+
+def test_build_webchat_response_payload_includes_runtime_events():
+    mod = _load_chat_payloads_module()
+    payload = mod.build_webchat_response_payload(
+        {
+            "response": "ok",
+            "runtime_events": [{"type": "context_snapshot", "request_id": "r1"}],
+        },
+        "s1",
+    )
+    assert payload["runtime_events"][0]["type"] == "context_snapshot"

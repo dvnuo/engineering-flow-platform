@@ -1027,6 +1027,7 @@ You have access to the following tools. When a user asks you to do something tha
         max_tool_iterations = config.session.get("max_iterations", 30) if hasattr(config, 'session') else 30
         
         iteration = 0
+        runtime_events_for_result: List[Dict[str, Any]] = []
         
         # Helper function to send stream events
         # Supports both simple callbacks and asyncio.Queue
@@ -1040,6 +1041,20 @@ You have access to the following tools. When a user asks you to do something tha
                 task_id=data.get("task_id"),
                 group_id=data.get("group_id") or data.get("portal_group_id"),
                 coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
+            )
+            runtime_events_for_result.append(
+                {
+                    "type": event_type,
+                    "event_type": event_type,
+                    "state": event_data.get("state") or event_data.get("status") or "",
+                    "session_id": event_data.get("session_id"),
+                    "request_id": event_data.get("request_id"),
+                    "agent_id": event_data.get("agent_id"),
+                    "summary": event_data.get("message") or event_data.get("summary") or event_type,
+                    "data": dict(event_data),
+                    "detail_payload": dict(event_data),
+                    "ts": datetime.utcnow().isoformat() + "Z",
+                }
             )
             # Also log to tracer for persistence
             if event_type == 'llm_thinking':
@@ -1083,6 +1098,11 @@ You have access to the following tools. When a user asks you to do something tha
                         stream_callback(event)
                 except Exception as e:
                     logger.debug(f"Stream event error: {e}")
+
+        def attach_runtime_events(payload: Dict[str, Any]) -> Dict[str, Any]:
+            if isinstance(payload, dict):
+                payload["runtime_events"] = list(runtime_events_for_result)
+            return payload
 
         def emit_context_snapshot(
             stage: str,
@@ -1131,6 +1151,17 @@ You have access to the following tools. When a user asks you to do something tha
                     "reason": active_skill_contract.get("activation_reason"),
                     "turn_count": active_skill_contract.get("turn_count"),
                     "skill_hash": active_skill_contract.get("skill_hash"),
+                    "goal": active_skill_contract.get("goal") or active_skill_contract.get("original_user_request"),
+                    "allowed_tools": (
+                        active_skill_runtime.allowed_tools
+                        if active_skill_runtime and isinstance(active_skill_runtime.allowed_tools, list)
+                        else (active_skill_contract.get("allowed_tools") if isinstance(active_skill_contract.get("allowed_tools"), list) else [])
+                    ),
+                    "tool_policy_declared": (
+                        active_skill_runtime.tool_policy_declared
+                        if active_skill_runtime
+                        else active_skill_contract.get("tool_policy_declared")
+                    ),
                 },
             )
         if active_skill_runtime:
@@ -1546,7 +1577,7 @@ You have access to the following tools. When a user asks you to do something tha
                 #     except Exception as e:
                 #         logger.debug(f"Memory update failed: {e}")
                 
-                return result
+                return attach_runtime_events(result)
             
             logger.info(f"[Tool Loop] Iteration {iteration}: LLM requested {len(tool_calls)} tool calls")
             
@@ -1600,7 +1631,7 @@ You have access to the following tools. When a user asks you to do something tha
                         "final_response": content,
                     }
                 
-                return result
+                return attach_runtime_events(result)
             
             # Record tool calls in loop_messages (ALL function calls, not just first);
             # input_items will be rebuilt from loop_messages on next iteration.
@@ -1858,13 +1889,14 @@ You have access to the following tools. When a user asks you to do something tha
                     from src.skills import get_tracer
                     tracer_instance = get_tracer()
                     events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
-                    return self._build_assistant_result_payload(
+                    result = self._build_assistant_result_payload(
                         passthrough_content,
                         usage=usage_data,
                         events=events,
                         user_message_id=user_message_id,
                         extra=assistant_extra,
                     )
+                    return attach_runtime_events(result)
             
             # Send iteration complete event
             send_event("iteration_end", {"iteration": iteration})
@@ -1891,12 +1923,13 @@ You have access to the following tools. When a user asks you to do something tha
         tracer_instance = get_tracer()
         events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
         
-        return self._build_assistant_result_payload(
+        result = self._build_assistant_result_payload(
             max_iterations_text,
             usage=usage_data or {},
             events=events,
             user_message_id=user_message_id,
         )
+        return attach_runtime_events(result)
 
     async def _start_skill_mode(
         self,

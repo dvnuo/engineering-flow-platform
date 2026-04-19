@@ -867,6 +867,10 @@ async def api_chat(request: web.Request) -> web.Response:
                 "metadata": session.get('metadata', {}),
                 "events": events,
             }
+            runtime_events = response_data.get("runtime_events")
+            if isinstance(runtime_events, list):
+                chatlog_data["runtime_events"] = runtime_events
+                chatlog_data.setdefault("metadata", {})["runtime_events_count"] = len(runtime_events)
             if isinstance(context_state, dict):
                 chatlog_data["context_state"] = context_state
                 chatlog_data.setdefault("metadata", {})["context_state"] = context_state
