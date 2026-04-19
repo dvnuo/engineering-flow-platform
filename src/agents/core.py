@@ -94,6 +94,7 @@ def _enrich_runtime_event_context(
     *,
     session_id: str,
     agent_id: Optional[str] = None,
+    request_id: Optional[str] = None,
     task_id: Optional[str] = None,
     group_id: Optional[str] = None,
     coordination_run_id: Optional[str] = None,
@@ -103,6 +104,7 @@ def _enrich_runtime_event_context(
     context_fields = {
         "session_id": session_id,
         "agent_id": agent_id,
+        "request_id": request_id,
         "task_id": task_id,
         "group_id": group_id,
         "coordination_run_id": coordination_run_id,
@@ -732,6 +734,7 @@ You have access to the following tools. When a user asks you to do something tha
         attachments: Optional[List[str]] = None,
         portal_user_id: Optional[str] = None,
         portal_user_name: Optional[str] = None,
+        request_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Process a user message with ReAct pattern.
         
@@ -824,6 +827,7 @@ You have access to the following tools. When a user asks you to do something tha
                 },
                 session_id=session_id,
                 agent_id=self.agent_id,
+                request_id=request_id,
             )
             try:
                 from src.gateway.event_bus import emit_agent_event_sync
@@ -959,7 +963,7 @@ You have access to the following tools. When a user asks you to do something tha
 
         # ===== MESSAGE COMPACTION =====
         model = self.model or config.llm.get("model", "gpt-5-mini")
-        messages, _ = await prepare_progressive_messages(
+        messages, pre_request_context_state = await prepare_progressive_messages(
             messages=messages,
             model=model,
             session_id=session_id,
@@ -1032,6 +1036,7 @@ You have access to the following tools. When a user asks you to do something tha
                 data,
                 session_id=session_id,
                 agent_id=self.agent_id,
+                request_id=request_id,
                 task_id=data.get("task_id"),
                 group_id=data.get("group_id") or data.get("portal_group_id"),
                 coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
@@ -1078,6 +1083,41 @@ You have access to the following tools. When a user asks you to do something tha
                         stream_callback(event)
                 except Exception as e:
                     logger.debug(f"Stream event error: {e}")
+
+        def emit_context_snapshot(
+            stage: str,
+            context_state: Optional[Dict[str, Any]],
+            *,
+            iteration: Optional[int] = None,
+        ) -> None:
+            if not isinstance(context_state, dict) or not context_state:
+                return
+            budget = context_state.get("budget") if isinstance(context_state.get("budget"), dict) else {}
+            payload: Dict[str, Any] = {
+                "stage": stage,
+                "context_state": context_state,
+                "budget": budget,
+            }
+            if iteration is not None:
+                payload["iteration"] = iteration
+            send_event("context_snapshot", payload)
+
+            compaction_level = str(context_state.get("compaction_level") or "").lower()
+            if compaction_level in {"micro", "full"}:
+                send_event(
+                    "context_compaction_applied",
+                    {
+                        "stage": stage,
+                        "iteration": iteration,
+                        "compaction_level": compaction_level,
+                        "budget": budget,
+                        "history_compacted_from_count": context_state.get("history_compacted_from_count"),
+                        "history_compacted_to_count": context_state.get("history_compacted_to_count"),
+                        "summary_source": context_state.get("summary_source"),
+                    },
+                )
+
+        emit_context_snapshot("pre_request", pre_request_context_state)
         
         # Send skill matched event
         if selected_skill and activation_reason in {"matched", "switched"}:
@@ -1220,13 +1260,14 @@ You have access to the following tools. When a user asks you to do something tha
             
             # ===== COMPACTION IN LOOP =====
             if iteration > 1:
-                loop_messages, _ = await prepare_progressive_messages(
+                loop_messages, loop_context_state = await prepare_progressive_messages(
                     messages=loop_messages,
                     model=self.model or config.llm.get("model", "gpt-5-mini"),
                     session_id=session_id,
                     stage="tool_loop",
                     recent_count=5,
                 )
+                emit_context_snapshot("tool_loop", loop_context_state, iteration=iteration)
             input_items = _to_input_items(loop_messages)
             # ===== END COMPACTION IN LOOP =====
             
@@ -1865,6 +1906,7 @@ You have access to the following tools. When a user asks you to do something tha
         skill: Any,
         track_usage: bool = True,
         stream_callback: Optional[Callable[[str], None]] = None,
+        request_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Start a new lightweight skill-mode session."""
         from src.skills import get_tracer
@@ -1883,6 +1925,7 @@ You have access to the following tools. When a user asks you to do something tha
                 data,
                 session_id=session_id,
                 agent_id=self.agent_id,
+                request_id=request_id,
                 task_id=data.get("task_id"),
                 group_id=data.get("group_id") or data.get("portal_group_id"),
                 coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
@@ -1951,6 +1994,7 @@ You have access to the following tools. When a user asks you to do something tha
             usage_data=usage_data,
             skill=skill,
             stream_callback=stream_callback,
+            request_id=request_id,
         )
 
     async def _continue_skill_mode(
@@ -1963,6 +2007,7 @@ You have access to the following tools. When a user asks you to do something tha
         usage_data: Optional[Dict[str, Any]] = None,
         skill: Any = None,
         stream_callback: Optional[Callable[[str], None]] = None,
+        request_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Continue an existing lightweight skill-mode session."""
         from src.skills import get_tracer
@@ -1981,6 +2026,7 @@ You have access to the following tools. When a user asks you to do something tha
                 data,
                 session_id=session_id,
                 agent_id=self.agent_id,
+                request_id=request_id,
                 task_id=data.get("task_id"),
                 group_id=data.get("group_id") or data.get("portal_group_id"),
                 coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
@@ -2642,6 +2688,7 @@ async def run_chat_execution(
     attachments: Optional[List[str]] = None,
     portal_user_id: Optional[str] = None,
     portal_user_name: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Thin adapter for unified runtime bus chat execution."""
     process_kwargs: Dict[str, Any] = {
@@ -2655,6 +2702,7 @@ async def run_chat_execution(
         "attachments": attachments,
         "portal_user_id": portal_user_id,
         "portal_user_name": portal_user_name,
+        "request_id": request_id,
     }
     result = await agent.process(**process_kwargs)
     context_state = await apply_progressive_context_after_turn(
@@ -2663,6 +2711,8 @@ async def run_chat_execution(
     )
     if isinstance(result, dict):
         result["context_state"] = context_state
+        if request_id:
+            result.setdefault("request_id", request_id)
     return result
 
 

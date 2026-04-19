@@ -67,6 +67,60 @@ async def test_prepare_progressive_messages_stage_aware_thresholds(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_prepare_progressive_messages_adds_budget_fields(monkeypatch):
+    messages = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "world"},
+    ]
+
+    async def _get_context_state(_session_id):
+        return {}
+
+    monkeypatch.setattr(progressive_context.session_manager, "get_context_state", _get_context_state)
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 1000)
+    monkeypatch.setattr(progressive_context, "estimate_messages_tokens", lambda msgs: 400)
+
+    _prepared, state = await prepare_progressive_messages(
+        messages=messages,
+        model="gpt-5-mini",
+        session_id="s-budget-fields",
+        stage="pre_request",
+    )
+
+    assert state["budget"]["context_window_tokens"] == 1000
+    assert state["budget"]["estimated_tokens"] == 400
+    assert state["budget"]["usage_percent"] == 40.0
+    assert state["budget"]["soft_threshold_tokens"] == 650
+    assert state["budget"]["hard_threshold_tokens"] == 800
+    assert state["budget"]["tokens_until_soft_threshold"] == 250
+    assert state["budget"]["next_compaction_action"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_prepare_progressive_messages_budget_marks_approaching_soft_threshold(monkeypatch):
+    messages = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "world"},
+    ]
+
+    async def _get_context_state(_session_id):
+        return {}
+
+    monkeypatch.setattr(progressive_context.session_manager, "get_context_state", _get_context_state)
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 1000)
+    monkeypatch.setattr(progressive_context, "estimate_messages_tokens", lambda msgs: 610)
+
+    _prepared, state = await prepare_progressive_messages(
+        messages=messages,
+        model="gpt-5-mini",
+        session_id="s-budget-soft",
+        stage="pre_request",
+    )
+
+    assert state["budget"]["next_compaction_action"] == "approaching_micro_compaction"
+
+
+@pytest.mark.asyncio
 async def test_prepare_progressive_messages_full_compaction_adds_structured_summary(monkeypatch):
     messages = [
         {"role": "user", "content": "We must finish migration safely."},

@@ -67,6 +67,7 @@ def build_webchat_response_payload(result: Optional[Dict[str, Any]], session_id:
     for key in (
         "user_message_id",
         "events",
+        "context_state",
         "_llm_debug",
         "reasoning",
         "author_type",

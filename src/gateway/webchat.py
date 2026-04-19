@@ -359,8 +359,11 @@ async def _run_chat_via_execution_bus(
     agent_id: Optional[str] = None,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    resolved_request_id = request_id or f"chat-{uuid.uuid4()}"
+
     async def _chat_handler(execution_request):
         payload = execution_request.input_payload
+        effective_request_id = getattr(execution_request, "request_id", None) or resolved_request_id
         return await run_chat_execution(
             agent,
             message=payload.get("message", ""),
@@ -373,11 +376,11 @@ async def _run_chat_via_execution_bus(
             track_usage=bool(payload.get("track_usage", True)),
             reasoning_replay=payload.get("reasoning_replay"),
             stream_callback=payload.get("stream_callback"),
+            request_id=effective_request_id,
         )
 
     merged_metadata = dict(execution_metadata or {})
     merged_metadata.pop("path", None)
-    resolved_request_id = request_id or f"chat-{uuid.uuid4()}"
     execution_result = await execute_chat_orchestration(
         request_id=resolved_request_id,
         session_id=session_id,
@@ -393,6 +396,7 @@ async def _run_chat_via_execution_bus(
             "track_usage": True,
             "reasoning_replay": reasoning_replay,
             "stream_callback": stream_callback,
+            "request_id": resolved_request_id,
         },
         metadata={
             "path": request_path,
@@ -854,12 +858,18 @@ async def api_chat(request: web.Request) -> web.Response:
         os.makedirs(chatlog_dir, exist_ok=True)
         chatlog_file = os.path.join(chatlog_dir, f"{session_id}.json")
         try:
+            context_state = response_data.get("context_state") or (
+                result.get("context_state") if isinstance(result, dict) else None
+            )
             chatlog_data = {
                 "session_id": session_id,
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "metadata": session.get('metadata', {}),
                 "events": events,
             }
+            if isinstance(context_state, dict):
+                chatlog_data["context_state"] = context_state
+                chatlog_data.setdefault("metadata", {})["context_state"] = context_state
             if llm_debug:
                 chatlog_data["llm_debug"] = llm_debug
             # Add skill mode info if present

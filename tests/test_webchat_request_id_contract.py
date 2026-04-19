@@ -92,3 +92,12 @@ def test_build_webchat_response_payload_request_id_backfills_from_execution_resu
         "s-backfill",
     )
     assert payload["request_id"] == "exec-1"
+
+
+def test_build_webchat_response_payload_includes_context_state():
+    mod = _load_chat_payloads_module()
+    payload = mod.build_webchat_response_payload(
+        {"response": "ok", "context_state": {"budget": {"usage_percent": 42.0}}},
+        "s1",
+    )
+    assert payload["context_state"]["budget"]["usage_percent"] == 42.0

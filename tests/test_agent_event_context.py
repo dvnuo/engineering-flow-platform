@@ -51,6 +51,9 @@ class _SessionManager:
     async def set_active_skill_session(self, _session_id, _state):
         return None
 
+    async def get_active_skill_session(self, _session_id):
+        return None
+
 
 @pytest.mark.asyncio
 async def test_main_loop_tool_call_event_emits_session_and_agent_context(monkeypatch):
@@ -81,7 +84,8 @@ async def test_main_loop_tool_call_event_emits_session_and_agent_context(monkeyp
     monkeypatch.setattr(core_mod, "memory_system", SimpleNamespace(build_context_with_search=lambda **kwargs: ""))
     monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=_fake_responses, default_provider="openai"))
     monkeypatch.setattr(core_mod, "_execute_tool_via_runtime_bus", _fake_execute_tool)
-    monkeypatch.setattr("src.gateway.event_bus.emit_agent_event_sync", _capture_emit)
+    from src.gateway import event_bus as event_bus_mod
+    monkeypatch.setattr(event_bus_mod, "emit_agent_event_sync", _capture_emit)
     monkeypatch.setattr(
         "src.skills.skill_registry",
         SimpleNamespace(_initialized=True, load_skills=lambda: None, match_skill=lambda *_: []),
@@ -97,12 +101,13 @@ async def test_main_loop_tool_call_event_emits_session_and_agent_context(monkeyp
     agent.agent_id = "agent-ctx"
     agent.agent_name = "AgentCtx"
 
-    result = await agent.process("run tool", session_id="s1")
+    result = await agent.process("run tool", session_id="s1", request_id="req-ctx")
     assert result["response"] == "done"
 
     tool_call_event = next(data for event_type, data in captured_events if event_type == "tool_call" and data.get("status") == "executing")
     assert tool_call_event["session_id"] == "s1"
     assert tool_call_event["agent_id"] == "agent-ctx"
+    assert tool_call_event["request_id"] == "req-ctx"
 
 
 @pytest.mark.asyncio
@@ -124,7 +129,8 @@ async def test_start_skill_mode_events_include_session_and_agent_context(monkeyp
     monkeypatch.setattr("src.skills.get_tracer", lambda: _Tracer())
     monkeypatch.setattr(core_mod, "session_manager", _SessionManager())
     monkeypatch.setattr(core_mod, "generate_initial_skill_plan", _fake_generate_initial_skill_plan)
-    monkeypatch.setattr("src.gateway.event_bus.event_bus", _Bus())
+    from src.gateway import event_bus as event_bus_mod
+    monkeypatch.setattr(event_bus_mod, "event_bus", _Bus())
 
     agent = Agent.__new__(Agent)
     agent.model = None
@@ -139,6 +145,7 @@ async def test_start_skill_mode_events_include_session_and_agent_context(monkeyp
         session_id="s1",
         user_message_id="u1",
         skill=skill,
+        request_id="req-skill",
     )
 
     assert result["response"] == "continued"
@@ -146,6 +153,7 @@ async def test_start_skill_mode_events_include_session_and_agent_context(monkeyp
     assert first_event[0] == "skill_mode_start"
     assert first_event[1]["session_id"] == "s1"
     assert first_event[1]["agent_id"] == "agent-ctx"
+    assert first_event[1]["request_id"] == "req-skill"
 
 
 @pytest.mark.asyncio
@@ -164,7 +172,7 @@ async def test_filtered_event_bus_listener_receives_skill_event_with_session_con
     monkeypatch.setattr(core_mod, "generate_initial_skill_plan", _fake_generate_initial_skill_plan)
 
     queue = asyncio.Queue()
-    await event_bus.add_listener(queue, filters={"session_id": "s1"})
+    await event_bus.add_listener(queue, filters={"session_id": "s1", "request_id": "req-skill"})
 
     agent = Agent.__new__(Agent)
     agent.model = None
@@ -180,6 +188,7 @@ async def test_filtered_event_bus_listener_receives_skill_event_with_session_con
             session_id="s1",
             user_message_id="u1",
             skill=skill,
+            request_id="req-skill",
         )
 
         raw_event = await asyncio.wait_for(queue.get(), timeout=1.0)
@@ -187,5 +196,6 @@ async def test_filtered_event_bus_listener_receives_skill_event_with_session_con
         assert event["type"] == "skill_mode_start"
         assert event["data"]["session_id"] == "s1"
         assert event["data"]["agent_id"] == "agent-ctx"
+        assert event["data"]["request_id"] == "req-skill"
     finally:
         await event_bus.remove_listener(queue)

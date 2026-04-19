@@ -206,6 +206,65 @@ def _annotate_context_state(
     return annotated
 
 
+def _percent(numerator: int, denominator: int) -> float:
+    if not denominator:
+        return 0.0
+    return round((numerator / denominator) * 100, 1)
+
+
+def _resolve_next_compaction_action(*, compaction_level: str, current_tokens: int, soft_threshold: int) -> str:
+    if compaction_level == "full":
+        return "full_compaction_applied"
+    if compaction_level == "micro":
+        return "micro_compaction_applied"
+    if current_tokens >= int(soft_threshold * 0.9):
+        return "approaching_micro_compaction"
+    return "none"
+
+
+def _build_context_budget(
+    *,
+    stage: str,
+    model: str | None,
+    estimated_tokens: int,
+    prepared_tokens: int,
+    context_window: int,
+    configured_threshold: float,
+    soft_threshold: int,
+    hard_threshold: int,
+    compaction_level: str,
+    recent_count: int,
+    source_message_count: int,
+    prepared_message_count: int,
+) -> dict:
+    return {
+        "stage": stage,
+        "model": model,
+        "estimated_tokens": estimated_tokens,
+        "prepared_tokens": prepared_tokens,
+        "context_window_tokens": context_window,
+        "usage_percent": _percent(estimated_tokens, context_window),
+        "prepared_usage_percent": _percent(prepared_tokens, context_window),
+        "configured_threshold_percent": round(configured_threshold * 100, 1),
+        "soft_threshold_tokens": soft_threshold,
+        "hard_threshold_tokens": hard_threshold,
+        "soft_threshold_percent": _percent(soft_threshold, context_window),
+        "hard_threshold_percent": _percent(hard_threshold, context_window),
+        "tokens_until_soft_threshold": max(0, soft_threshold - estimated_tokens),
+        "tokens_until_hard_threshold": max(0, hard_threshold - estimated_tokens),
+        "compaction_level": compaction_level,
+        "next_compaction_action": _resolve_next_compaction_action(
+            compaction_level=compaction_level,
+            current_tokens=estimated_tokens,
+            soft_threshold=soft_threshold,
+        ),
+        "recent_count": recent_count,
+        "source_message_count": source_message_count,
+        "prepared_message_count": prepared_message_count,
+        "token_estimate": True,
+    }
+
+
 def build_portal_context_preview(context_state: dict | None) -> dict:
     if not isinstance(context_state, dict):
         return {}
@@ -215,6 +274,24 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
         "context_summary_preview": truncate(str(context_state.get("summary") or ""), 180),
         "context_next_step_preview": truncate(str(context_state.get("next_step") or ""), 140),
     }
+    budget = context_state.get("budget") if isinstance(context_state.get("budget"), dict) else {}
+    if budget:
+        usage_percent = budget.get("prepared_usage_percent")
+        if usage_percent in (None, ""):
+            usage_percent = budget.get("usage_percent")
+        estimated_tokens = budget.get("prepared_tokens")
+        if estimated_tokens in (None, ""):
+            estimated_tokens = budget.get("estimated_tokens")
+        preview.update(
+            {
+                "context_usage_percent": usage_percent,
+                "context_estimated_tokens": estimated_tokens,
+                "context_window_tokens": budget.get("context_window_tokens"),
+                "context_next_compaction_action": budget.get("next_compaction_action"),
+                "context_tokens_until_soft_threshold": budget.get("tokens_until_soft_threshold"),
+                "context_tokens_until_hard_threshold": budget.get("tokens_until_hard_threshold"),
+            }
+        )
     return {key: value for key, value in preview.items() if value not in (None, "")}
 
 
@@ -237,6 +314,13 @@ async def prepare_progressive_messages(
 
     source_messages = _to_agent_messages(messages)
     source_count = len(source_messages)
+    context_window = resolve_context_window_tokens(model)
+    configured_threshold = normalize_compaction_threshold(config.llm.get("compaction_threshold", 0.8), 0.8)
+    soft_threshold, hard_threshold = _resolve_stage_thresholds(
+        stage=stage,
+        context_window=context_window,
+        hard_threshold=int(context_window * configured_threshold),
+    )
 
     if not source_messages:
         state = build_context_state_from_messages(
@@ -246,15 +330,22 @@ async def prepare_progressive_messages(
             source_message_count=0,
             recent_count=recent_count,
         )
-        return [], _annotate_context_state(state, summary_source="none", history_from_count=0, history_to_count=0)
-
-    context_window = resolve_context_window_tokens(model)
-    configured_threshold = normalize_compaction_threshold(config.llm.get("compaction_threshold", 0.8), 0.8)
-    soft_threshold, hard_threshold = _resolve_stage_thresholds(
-        stage=stage,
-        context_window=context_window,
-        hard_threshold=int(context_window * configured_threshold),
-    )
+        annotated_state = _annotate_context_state(state, summary_source="none", history_from_count=0, history_to_count=0)
+        annotated_state["budget"] = _build_context_budget(
+            stage=stage,
+            model=model,
+            estimated_tokens=0,
+            prepared_tokens=0,
+            context_window=context_window,
+            configured_threshold=configured_threshold,
+            soft_threshold=soft_threshold,
+            hard_threshold=hard_threshold,
+            compaction_level="none",
+            recent_count=recent_count,
+            source_message_count=0,
+            prepared_message_count=0,
+        )
+        return [], annotated_state
 
     current_tokens = estimate_messages_tokens(source_messages)
     compaction_level = "none"
@@ -320,11 +411,26 @@ async def prepare_progressive_messages(
         )
 
     final_messages = list(messages) if compaction_level == "none" else _to_dict_messages(prepared_messages)
+    prepared_tokens = estimate_messages_tokens(_to_agent_messages(final_messages))
     annotated_state = _annotate_context_state(
         merged_state,
         summary_source=summary_source,
         history_from_count=source_count,
         history_to_count=len(final_messages),
+    )
+    annotated_state["budget"] = _build_context_budget(
+        stage=stage,
+        model=model,
+        estimated_tokens=current_tokens,
+        prepared_tokens=prepared_tokens,
+        context_window=context_window,
+        configured_threshold=configured_threshold,
+        soft_threshold=soft_threshold,
+        hard_threshold=hard_threshold,
+        compaction_level=compaction_level,
+        recent_count=recent_count,
+        source_message_count=source_count,
+        prepared_message_count=len(final_messages),
     )
     return final_messages, annotated_state
 
