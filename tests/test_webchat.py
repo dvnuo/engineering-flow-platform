@@ -376,6 +376,37 @@ async def test_chat_execution_bus_adapter_does_not_mutate_execution_output_paylo
 
 
 @pytest.mark.asyncio
+async def test_chat_execution_bus_adapter_backfills_runtime_events_from_execution_result(monkeypatch):
+    from src.gateway import webchat
+
+    async def _fake_execute_chat_orchestration(**kwargs):
+        return type(
+            "R",
+            (),
+            {
+                "status": "success",
+                "output_payload": {"response": "ok"},
+                "request_id": "req-1",
+                "runtime_events": [{"event_type": "context_snapshot"}],
+            },
+        )()
+
+    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
+    monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
+
+    result = await webchat._run_chat_via_execution_bus(
+        agent=object(),
+        session_id="s-chat",
+        message="hello",
+        user_name="u1",
+        portal_user_id=None,
+        portal_user_name=None,
+    )
+
+    assert result["runtime_events"][0]["event_type"] == "context_snapshot"
+
+
+@pytest.mark.asyncio
 async def test_chat_execution_bus_adapter_forwards_agent_id(monkeypatch):
     from src.gateway import webchat
 
@@ -676,6 +707,56 @@ async def test_api_chat_uses_trusted_portal_agent_name_for_assistant_author(monk
     assert captured["agent"].agent_name == "Portal Agent"
     assert payload["author_name"] == "Portal Agent"
     assert payload["author_id"] == captured["agent"].agent_id
+
+
+@pytest.mark.asyncio
+async def test_api_chat_chatlog_includes_request_status_runtime_events_and_context_state(monkeypatch, tmp_path):
+    from src.gateway import webchat
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        return {
+            "response": "ok",
+            "usage": {},
+            "request_id": "req-chatlog-1",
+            "runtime_events": [{"event_type": "context_snapshot"}],
+            "context_state": {"budget": {"usage_percent": 42.0}},
+            "_execution_result": object(),
+        }
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(
+        webchat.global_config,
+        "_config",
+        {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}},
+        raising=False,
+    )
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(
+        webchat.session_manager,
+        "get_session",
+        lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}),
+    )
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat.session_persistence, "storage_dir", tmp_path)
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-chatlog"}
+
+    response = await webchat.api_chat(_Request())
+    assert response.status == 200
+
+    chatlog_file = tmp_path / "chatlogs" / "s-chatlog.json"
+    assert chatlog_file.exists()
+    chatlog = json.loads(chatlog_file.read_text())
+    assert chatlog["request_id"] == "req-chatlog-1"
+    assert chatlog["status"] == "success"
+    assert isinstance(chatlog["runtime_events"], list)
+    assert isinstance(chatlog["context_state"], dict)
 
 
 @pytest.mark.asyncio

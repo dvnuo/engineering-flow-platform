@@ -211,6 +211,36 @@ def test_build_session_metadata_payload_preserves_context_preview_keys():
     assert "context_next_step_preview" in metadata_json
 
 
+def test_build_session_metadata_payload_preserves_context_budget_preview_keys():
+    payload = build_session_metadata_payload(
+        last_execution_id="exec-ctx-budget",
+        latest_event_type="chat.completed",
+        latest_event_state="success",
+        snapshot_version=None,
+        runtime_events=[],
+        metadata={
+            "context_usage_percent": 42.0,
+            "context_estimated_tokens": 4200,
+            "context_window_tokens": 128000,
+            "context_next_compaction_action": "approaching_micro_compaction",
+            "context_next_pruning_policy": "Approaching micro-compaction...",
+            "context_tokens_until_soft_threshold": 1200,
+            "context_tokens_until_hard_threshold": 5600,
+            "context_state": {"budget": {"usage_percent": 42.0}},
+        },
+    )
+
+    metadata_json = payload.get("metadata_json", "")
+    assert "context_usage_percent" in metadata_json
+    assert "context_estimated_tokens" in metadata_json
+    assert "context_window_tokens" in metadata_json
+    assert "context_next_compaction_action" in metadata_json
+    assert "context_next_pruning_policy" in metadata_json
+    assert "context_tokens_until_soft_threshold" in metadata_json
+    assert "context_tokens_until_hard_threshold" in metadata_json
+    assert "context_state" in metadata_json
+
+
 def test_build_session_metadata_payload_preserves_active_skill_preview_keys():
     payload = build_session_metadata_payload(
         last_execution_id="exec-skill",

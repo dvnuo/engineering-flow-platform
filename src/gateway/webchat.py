@@ -359,8 +359,11 @@ async def _run_chat_via_execution_bus(
     agent_id: Optional[str] = None,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    resolved_request_id = request_id or f"chat-{uuid.uuid4()}"
+
     async def _chat_handler(execution_request):
         payload = execution_request.input_payload
+        effective_request_id = getattr(execution_request, "request_id", None) or resolved_request_id
         return await run_chat_execution(
             agent,
             message=payload.get("message", ""),
@@ -373,11 +376,11 @@ async def _run_chat_via_execution_bus(
             track_usage=bool(payload.get("track_usage", True)),
             reasoning_replay=payload.get("reasoning_replay"),
             stream_callback=payload.get("stream_callback"),
+            request_id=effective_request_id,
         )
 
     merged_metadata = dict(execution_metadata or {})
     merged_metadata.pop("path", None)
-    resolved_request_id = request_id or f"chat-{uuid.uuid4()}"
     execution_result = await execute_chat_orchestration(
         request_id=resolved_request_id,
         session_id=session_id,
@@ -393,6 +396,7 @@ async def _run_chat_via_execution_bus(
             "track_usage": True,
             "reasoning_replay": reasoning_replay,
             "stream_callback": stream_callback,
+            "request_id": resolved_request_id,
         },
         metadata={
             "path": request_path,
@@ -404,6 +408,8 @@ async def _run_chat_via_execution_bus(
     original_output_payload = execution_result.output_payload
     output_payload = dict(original_output_payload) if isinstance(original_output_payload, dict) else {}
     output_payload["request_id"] = getattr(execution_result, "request_id", resolved_request_id)
+    if "runtime_events" not in output_payload and isinstance(execution_result.runtime_events, list):
+        output_payload["runtime_events"] = execution_result.runtime_events
     output_payload["_execution_result"] = execution_result
     if execution_result.status == "error" or output_payload.get("error"):
         error_value = output_payload.get("error", "Execution bus error")
@@ -854,12 +860,24 @@ async def api_chat(request: web.Request) -> web.Response:
         os.makedirs(chatlog_dir, exist_ok=True)
         chatlog_file = os.path.join(chatlog_dir, f"{session_id}.json")
         try:
+            context_state = response_data.get("context_state") or (
+                result.get("context_state") if isinstance(result, dict) else None
+            )
             chatlog_data = {
                 "session_id": session_id,
+                "request_id": response_data.get("request_id") or request_id,
+                "status": "error" if response_data.get("error") else "success",
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "metadata": session.get('metadata', {}),
                 "events": events,
             }
+            runtime_events = response_data.get("runtime_events")
+            if isinstance(runtime_events, list):
+                chatlog_data["runtime_events"] = runtime_events
+                chatlog_data.setdefault("metadata", {})["runtime_events_count"] = len(runtime_events)
+            if isinstance(context_state, dict):
+                chatlog_data["context_state"] = context_state
+                chatlog_data.setdefault("metadata", {})["context_state"] = context_state
             if llm_debug:
                 chatlog_data["llm_debug"] = llm_debug
             # Add skill mode info if present

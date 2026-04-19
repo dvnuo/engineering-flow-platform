@@ -579,7 +579,7 @@ class SessionManager:
         metadata = session.setdefault("metadata", {})
         metadata["context_state"] = dict(context_state)
 
-        def _set_or_remove(key: str, value: Optional[str]) -> None:
+        def _set_or_remove(key: str, value: Any) -> None:
             if value in (None, ""):
                 metadata.pop(key, None)
             else:
@@ -590,6 +590,20 @@ class SessionManager:
         summary_preview = truncate(str(context_state.get("summary") or ""), 180)
         _set_or_remove("context_summary_preview", summary_preview)
         _set_or_remove("context_next_step_preview", truncate(str(context_state.get("next_step") or ""), 140))
+        budget = context_state.get("budget") if isinstance(context_state.get("budget"), dict) else {}
+        usage_percent = budget.get("prepared_usage_percent")
+        if usage_percent in (None, ""):
+            usage_percent = budget.get("usage_percent")
+        estimated_tokens = budget.get("prepared_tokens")
+        if estimated_tokens in (None, ""):
+            estimated_tokens = budget.get("estimated_tokens")
+        _set_or_remove("context_usage_percent", usage_percent)
+        _set_or_remove("context_estimated_tokens", estimated_tokens)
+        _set_or_remove("context_window_tokens", budget.get("context_window_tokens"))
+        _set_or_remove("context_next_compaction_action", budget.get("next_compaction_action"))
+        _set_or_remove("context_next_pruning_policy", budget.get("next_pruning_policy"))
+        _set_or_remove("context_tokens_until_soft_threshold", budget.get("tokens_until_soft_threshold"))
+        _set_or_remove("context_tokens_until_hard_threshold", budget.get("tokens_until_hard_threshold"))
         if context_state.get("compaction_level") == "full" and summary_preview:
             metadata["compaction_summary"] = summary_preview
         else:

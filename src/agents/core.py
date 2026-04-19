@@ -94,6 +94,7 @@ def _enrich_runtime_event_context(
     *,
     session_id: str,
     agent_id: Optional[str] = None,
+    request_id: Optional[str] = None,
     task_id: Optional[str] = None,
     group_id: Optional[str] = None,
     coordination_run_id: Optional[str] = None,
@@ -103,6 +104,7 @@ def _enrich_runtime_event_context(
     context_fields = {
         "session_id": session_id,
         "agent_id": agent_id,
+        "request_id": request_id,
         "task_id": task_id,
         "group_id": group_id,
         "coordination_run_id": coordination_run_id,
@@ -119,6 +121,21 @@ def _enrich_runtime_event_context(
                 continue
         merged[key] = value
     return merged
+
+
+def _build_runtime_event_record(event_type: str, event_data: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "type": event_type,
+        "event_type": event_type,
+        "state": event_data.get("state") or event_data.get("status") or "",
+        "session_id": event_data.get("session_id"),
+        "request_id": event_data.get("request_id"),
+        "agent_id": event_data.get("agent_id"),
+        "summary": event_data.get("message") or event_data.get("summary") or event_type,
+        "data": dict(event_data),
+        "detail_payload": dict(event_data),
+        "ts": datetime.utcnow().isoformat() + "Z",
+    }
 
 # Context variable for skill workdir - async-safe
 _skill_workdir: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar('skill_workdir', default=None)
@@ -732,6 +749,7 @@ You have access to the following tools. When a user asks you to do something tha
         attachments: Optional[List[str]] = None,
         portal_user_id: Optional[str] = None,
         portal_user_name: Optional[str] = None,
+        request_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Process a user message with ReAct pattern.
         
@@ -764,6 +782,60 @@ You have access to the following tools. When a user asks you to do something tha
             extra=extra
         )
 
+        def emit_early_runtime_event(event_type: str, event_data: Dict[str, Any]) -> None:
+            try:
+                from src.gateway.event_bus import emit_agent_event_sync
+                emit_agent_event_sync(event_type, event_data)
+            except Exception as event_error:
+                logger.debug(f"Failed to emit early runtime event to event bus: {event_error}")
+
+            if not stream_callback:
+                return
+
+            try:
+                event = json.dumps({"type": event_type, **event_data}, default=str)
+                if hasattr(stream_callback, "put"):
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            asyncio.create_task(stream_callback.put(event))
+                        else:
+                            stream_callback.put_nowait(event)
+                    except RuntimeError:
+                        stream_callback.put_nowait(event)
+                else:
+                    stream_callback(event)
+            except Exception as event_error:
+                logger.debug(f"Failed to emit early runtime event to stream callback: {event_error}")
+
+        def build_early_result(
+            content: str,
+            *,
+            event_type: str = "execution.completed",
+            state: str = "completed",
+            event_data: Optional[Dict[str, Any]] = None,
+        ) -> Dict[str, Any]:
+            enriched_event = _enrich_runtime_event_context(
+                {
+                    "message": content,
+                    "state": state,
+                    **(event_data or {}),
+                },
+                session_id=session_id,
+                agent_id=self.agent_id,
+                request_id=request_id,
+            )
+            result = self._build_assistant_result_payload(
+                content,
+                usage=usage_data,
+                user_message_id=user_message_id,
+            )
+            if request_id:
+                result.setdefault("request_id", request_id)
+            emit_early_runtime_event(event_type, enriched_event)
+            result["runtime_events"] = [_build_runtime_event_record(event_type, enriched_event)]
+            return result
+
         # Get conversation history
         messages = await session_manager.get_history(session_id)
         
@@ -795,10 +867,9 @@ You have access to the following tools. When a user asks you to do something tha
         if fastlane_response:
             # Fast lane command processed, return the response
             await self._persist_assistant_message(session_id, fastlane_response)
-            return self._build_assistant_result_payload(
+            return build_early_result(
                 fastlane_response,
-                usage=usage_data,
-                user_message_id=user_message_id,
+                event_data={"reason": "fastlane_command"},
             )
         # ===== END FAST LANE =====
 
@@ -824,6 +895,7 @@ You have access to the following tools. When a user asks you to do something tha
                 },
                 session_id=session_id,
                 agent_id=self.agent_id,
+                request_id=request_id,
             )
             try:
                 from src.gateway.event_bus import emit_agent_event_sync
@@ -856,10 +928,9 @@ You have access to the following tools. When a user asks you to do something tha
             emit_skill_contract_cleared_event(previous_skill_name)
             cleared_message = "Active skill cleared."
             await self._persist_assistant_message(session_id, cleared_message)
-            return self._build_assistant_result_payload(
+            return build_early_result(
                 cleared_message,
-                usage=usage_data,
-                user_message_id=user_message_id,
+                event_data={"reason": "skill_contract_cleared", "skill": previous_skill_name},
             )
 
         explicit_skill_name = parse_explicit_skill_switch_name(message)
@@ -876,10 +947,11 @@ You have access to the following tools. When a user asks you to do something tha
                 else:
                     not_found_message = f"Skill not found: {explicit_skill_name}"
                     await self._persist_assistant_message(session_id, not_found_message)
-                    return self._build_assistant_result_payload(
+                    return build_early_result(
                         not_found_message,
-                        usage=usage_data,
-                        user_message_id=user_message_id,
+                        state="failed",
+                        event_type="execution.failed",
+                        event_data={"reason": "skill_not_found", "skill": explicit_skill_name},
                     )
             else:
                 continued_skill = skill_registry.get_skill(existing_skill_name)
@@ -899,10 +971,11 @@ You have access to the following tools. When a user asks you to do something tha
             else:
                 not_found_message = f"Skill not found: {explicit_skill_name}"
                 await self._persist_assistant_message(session_id, not_found_message)
-                return self._build_assistant_result_payload(
+                return build_early_result(
                     not_found_message,
-                    usage=usage_data,
-                    user_message_id=user_message_id,
+                    state="failed",
+                    event_type="execution.failed",
+                    event_data={"reason": "skill_not_found", "skill": explicit_skill_name},
                 )
 
         if selected_skill is None:
@@ -959,7 +1032,7 @@ You have access to the following tools. When a user asks you to do something tha
 
         # ===== MESSAGE COMPACTION =====
         model = self.model or config.llm.get("model", "gpt-5-mini")
-        messages, _ = await prepare_progressive_messages(
+        messages, pre_request_context_state = await prepare_progressive_messages(
             messages=messages,
             model=model,
             session_id=session_id,
@@ -1023,6 +1096,7 @@ You have access to the following tools. When a user asks you to do something tha
         max_tool_iterations = config.session.get("max_iterations", 30) if hasattr(config, 'session') else 30
         
         iteration = 0
+        runtime_events_for_result: List[Dict[str, Any]] = []
         
         # Helper function to send stream events
         # Supports both simple callbacks and asyncio.Queue
@@ -1032,10 +1106,12 @@ You have access to the following tools. When a user asks you to do something tha
                 data,
                 session_id=session_id,
                 agent_id=self.agent_id,
+                request_id=request_id,
                 task_id=data.get("task_id"),
                 group_id=data.get("group_id") or data.get("portal_group_id"),
                 coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
             )
+            runtime_events_for_result.append(_build_runtime_event_record(event_type, event_data))
             # Also log to tracer for persistence
             if event_type == 'llm_thinking':
                 try:
@@ -1078,6 +1154,60 @@ You have access to the following tools. When a user asks you to do something tha
                         stream_callback(event)
                 except Exception as e:
                     logger.debug(f"Stream event error: {e}")
+
+        def attach_runtime_events(payload: Dict[str, Any]) -> Dict[str, Any]:
+            if isinstance(payload, dict):
+                payload["runtime_events"] = list(runtime_events_for_result)
+            return payload
+
+        def emit_context_snapshot(
+            stage: str,
+            context_state: Optional[Dict[str, Any]],
+            *,
+            iteration: Optional[int] = None,
+        ) -> None:
+            if not isinstance(context_state, dict) or not context_state:
+                return
+            budget = context_state.get("budget") if isinstance(context_state.get("budget"), dict) else {}
+            payload: Dict[str, Any] = {
+                "stage": stage,
+                "context_state": context_state,
+                "budget": budget,
+            }
+            if iteration is not None:
+                payload["iteration"] = iteration
+            send_event("context_snapshot", payload)
+
+            compaction_level = str(context_state.get("compaction_level") or "").lower()
+            next_action = str(budget.get("next_compaction_action") or "")
+            if next_action == "approaching_micro_compaction" and compaction_level not in {"micro", "full"}:
+                send_event(
+                    "context_compaction_planned",
+                    {
+                        "stage": stage,
+                        "iteration": iteration,
+                        "compaction_level": "micro",
+                        "budget": budget,
+                        "next_pruning_policy": budget.get("next_pruning_policy"),
+                        "message": "Context is approaching micro-compaction threshold.",
+                    },
+                )
+
+            if compaction_level in {"micro", "full"}:
+                send_event(
+                    "context_compaction_applied",
+                    {
+                        "stage": stage,
+                        "iteration": iteration,
+                        "compaction_level": compaction_level,
+                        "budget": budget,
+                        "history_compacted_from_count": context_state.get("history_compacted_from_count"),
+                        "history_compacted_to_count": context_state.get("history_compacted_to_count"),
+                        "summary_source": context_state.get("summary_source"),
+                    },
+                )
+
+        emit_context_snapshot("pre_request", pre_request_context_state)
         
         # Send skill matched event
         if selected_skill and activation_reason in {"matched", "switched"}:
@@ -1091,6 +1221,17 @@ You have access to the following tools. When a user asks you to do something tha
                     "reason": active_skill_contract.get("activation_reason"),
                     "turn_count": active_skill_contract.get("turn_count"),
                     "skill_hash": active_skill_contract.get("skill_hash"),
+                    "goal": active_skill_contract.get("goal") or active_skill_contract.get("original_user_request"),
+                    "allowed_tools": (
+                        active_skill_runtime.allowed_tools
+                        if active_skill_runtime and isinstance(active_skill_runtime.allowed_tools, list)
+                        else (active_skill_contract.get("allowed_tools") if isinstance(active_skill_contract.get("allowed_tools"), list) else [])
+                    ),
+                    "tool_policy_declared": (
+                        active_skill_runtime.tool_policy_declared
+                        if active_skill_runtime
+                        else active_skill_contract.get("tool_policy_declared")
+                    ),
                 },
             )
         if active_skill_runtime:
@@ -1220,13 +1361,14 @@ You have access to the following tools. When a user asks you to do something tha
             
             # ===== COMPACTION IN LOOP =====
             if iteration > 1:
-                loop_messages, _ = await prepare_progressive_messages(
+                loop_messages, loop_context_state = await prepare_progressive_messages(
                     messages=loop_messages,
                     model=self.model or config.llm.get("model", "gpt-5-mini"),
                     session_id=session_id,
                     stage="tool_loop",
                     recent_count=5,
                 )
+                emit_context_snapshot("tool_loop", loop_context_state, iteration=iteration)
             input_items = _to_input_items(loop_messages)
             # ===== END COMPACTION IN LOOP =====
             
@@ -1505,7 +1647,7 @@ You have access to the following tools. When a user asks you to do something tha
                 #     except Exception as e:
                 #         logger.debug(f"Memory update failed: {e}")
                 
-                return result
+                return attach_runtime_events(result)
             
             logger.info(f"[Tool Loop] Iteration {iteration}: LLM requested {len(tool_calls)} tool calls")
             
@@ -1559,7 +1701,7 @@ You have access to the following tools. When a user asks you to do something tha
                         "final_response": content,
                     }
                 
-                return result
+                return attach_runtime_events(result)
             
             # Record tool calls in loop_messages (ALL function calls, not just first);
             # input_items will be rebuilt from loop_messages on next iteration.
@@ -1817,13 +1959,14 @@ You have access to the following tools. When a user asks you to do something tha
                     from src.skills import get_tracer
                     tracer_instance = get_tracer()
                     events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
-                    return self._build_assistant_result_payload(
+                    result = self._build_assistant_result_payload(
                         passthrough_content,
                         usage=usage_data,
                         events=events,
                         user_message_id=user_message_id,
                         extra=assistant_extra,
                     )
+                    return attach_runtime_events(result)
             
             # Send iteration complete event
             send_event("iteration_end", {"iteration": iteration})
@@ -1850,12 +1993,13 @@ You have access to the following tools. When a user asks you to do something tha
         tracer_instance = get_tracer()
         events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
         
-        return self._build_assistant_result_payload(
+        result = self._build_assistant_result_payload(
             max_iterations_text,
             usage=usage_data or {},
             events=events,
             user_message_id=user_message_id,
         )
+        return attach_runtime_events(result)
 
     async def _start_skill_mode(
         self,
@@ -1865,6 +2009,7 @@ You have access to the following tools. When a user asks you to do something tha
         skill: Any,
         track_usage: bool = True,
         stream_callback: Optional[Callable[[str], None]] = None,
+        request_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Start a new lightweight skill-mode session."""
         from src.skills import get_tracer
@@ -1883,6 +2028,7 @@ You have access to the following tools. When a user asks you to do something tha
                 data,
                 session_id=session_id,
                 agent_id=self.agent_id,
+                request_id=request_id,
                 task_id=data.get("task_id"),
                 group_id=data.get("group_id") or data.get("portal_group_id"),
                 coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
@@ -1951,6 +2097,7 @@ You have access to the following tools. When a user asks you to do something tha
             usage_data=usage_data,
             skill=skill,
             stream_callback=stream_callback,
+            request_id=request_id,
         )
 
     async def _continue_skill_mode(
@@ -1963,6 +2110,7 @@ You have access to the following tools. When a user asks you to do something tha
         usage_data: Optional[Dict[str, Any]] = None,
         skill: Any = None,
         stream_callback: Optional[Callable[[str], None]] = None,
+        request_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Continue an existing lightweight skill-mode session."""
         from src.skills import get_tracer
@@ -1981,6 +2129,7 @@ You have access to the following tools. When a user asks you to do something tha
                 data,
                 session_id=session_id,
                 agent_id=self.agent_id,
+                request_id=request_id,
                 task_id=data.get("task_id"),
                 group_id=data.get("group_id") or data.get("portal_group_id"),
                 coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
@@ -2642,6 +2791,7 @@ async def run_chat_execution(
     attachments: Optional[List[str]] = None,
     portal_user_id: Optional[str] = None,
     portal_user_name: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Thin adapter for unified runtime bus chat execution."""
     process_kwargs: Dict[str, Any] = {
@@ -2655,6 +2805,7 @@ async def run_chat_execution(
         "attachments": attachments,
         "portal_user_id": portal_user_id,
         "portal_user_name": portal_user_name,
+        "request_id": request_id,
     }
     result = await agent.process(**process_kwargs)
     context_state = await apply_progressive_context_after_turn(
@@ -2663,6 +2814,8 @@ async def run_chat_execution(
     )
     if isinstance(result, dict):
         result["context_state"] = context_state
+        if request_id:
+            result.setdefault("request_id", request_id)
     return result
 
 
