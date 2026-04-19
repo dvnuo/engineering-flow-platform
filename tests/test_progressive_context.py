@@ -121,6 +121,41 @@ async def test_prepare_progressive_messages_budget_marks_approaching_soft_thresh
 
 
 @pytest.mark.asyncio
+async def test_context_budget_includes_next_pruning_policy(monkeypatch):
+    messages = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "world"},
+    ]
+
+    async def _get_context_state(_session_id):
+        return {}
+
+    monkeypatch.setattr(progressive_context.session_manager, "get_context_state", _get_context_state)
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 1000)
+    monkeypatch.setattr(progressive_context, "estimate_messages_tokens", lambda msgs: 400)
+
+    _prepared, state = await prepare_progressive_messages(
+        messages=messages,
+        model="gpt-5-mini",
+        session_id="s-pruning-none",
+        stage="pre_request",
+    )
+
+    assert state["budget"]["next_compaction_action"] == "none"
+    assert "No compaction planned" in state["budget"]["next_pruning_policy"]
+
+    monkeypatch.setattr(progressive_context, "estimate_messages_tokens", lambda msgs: 610)
+    _prepared, approaching_state = await prepare_progressive_messages(
+        messages=messages,
+        model="gpt-5-mini",
+        session_id="s-pruning-approaching",
+        stage="pre_request",
+    )
+    assert approaching_state["budget"]["next_compaction_action"] == "approaching_micro_compaction"
+    assert "Approaching micro-compaction" in approaching_state["budget"]["next_pruning_policy"]
+
+
+@pytest.mark.asyncio
 async def test_prepare_progressive_messages_full_compaction_adds_structured_summary(monkeypatch):
     messages = [
         {"role": "user", "content": "We must finish migration safely."},

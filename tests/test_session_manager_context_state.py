@@ -17,6 +17,7 @@ async def test_set_context_state_persists_budget_preview_metadata_keys():
                 "prepared_tokens": 98000,
                 "context_window_tokens": 200000,
                 "next_compaction_action": "approaching_micro_compaction",
+                "next_pruning_policy": "Approaching micro-compaction...",
                 "tokens_until_soft_threshold": 7000,
                 "tokens_until_hard_threshold": 37000,
             },
@@ -29,3 +30,4 @@ async def test_set_context_state_persists_budget_preview_metadata_keys():
     assert metadata.get("context_estimated_tokens") == 98000
     assert metadata.get("context_window_tokens") == 200000
     assert metadata.get("context_next_compaction_action") == "approaching_micro_compaction"
+    assert metadata.get("context_next_pruning_policy") == "Approaching micro-compaction..."

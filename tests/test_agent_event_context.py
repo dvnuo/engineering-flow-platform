@@ -301,11 +301,20 @@ async def test_fastlane_early_result_includes_request_id_and_runtime_event(monke
     agent.agent_id = "agent-ctx"
     agent.agent_name = "AgentCtx"
 
-    result = await agent.process("some fastlane", session_id="s1", request_id="req-fastlane")
-    assert result["request_id"] == "req-fastlane"
+    collector = asyncio.Queue()
+    result = await agent.process(
+        "some fastlane command",
+        session_id="s1",
+        request_id="req-fastlane-live",
+        stream_callback=collector,
+    )
+    assert result["request_id"] == "req-fastlane-live"
     assert isinstance(result["runtime_events"], list)
-    assert result["runtime_events"][0]["request_id"] == "req-fastlane"
+    assert result["runtime_events"][0]["request_id"] == "req-fastlane-live"
     assert result["runtime_events"][0]["event_type"] == "execution.completed"
+    callback_event = json.loads(await asyncio.wait_for(collector.get(), timeout=1.0))
+    assert callback_event["type"] == "execution.completed"
+    assert callback_event["request_id"] == "req-fastlane-live"
 
 
 @pytest.mark.asyncio
@@ -364,7 +373,10 @@ async def test_context_snapshot_emits_compaction_planned_when_approaching_thresh
     async def _fake_prepare_progressive_messages(**kwargs):
         return kwargs["messages"], {
             "compaction_level": "none",
-            "budget": {"next_compaction_action": "approaching_micro_compaction"},
+            "budget": {
+                "next_compaction_action": "approaching_micro_compaction",
+                "next_pruning_policy": "Approaching micro-compaction...",
+            },
         }
 
     def _capture_emit(event_type, data):
@@ -395,4 +407,5 @@ async def test_context_snapshot_emits_compaction_planned_when_approaching_thresh
     agent.agent_name = "AgentCtx"
 
     await agent.process("run", session_id="s1", request_id="req-planned")
-    assert any(event_type == "context_compaction_planned" for event_type, _ in captured_events)
+    planned_payload = next(data for event_type, data in captured_events if event_type == "context_compaction_planned")
+    assert planned_payload.get("next_pruning_policy") or planned_payload.get("budget", {}).get("next_pruning_policy")

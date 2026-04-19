@@ -222,6 +222,20 @@ def _resolve_next_compaction_action(*, compaction_level: str, current_tokens: in
     return "none"
 
 
+def _resolve_next_pruning_policy(
+    *,
+    compaction_level: str,
+    next_compaction_action: str,
+) -> str:
+    if compaction_level == "full":
+        return "Full compaction applied: keep a synthetic recovery summary plus the recent message window; older history is represented by the summary."
+    if compaction_level == "micro":
+        return "Micro-compaction applied: summarize older turns and keep the recent message window/tool chain for continuity."
+    if next_compaction_action == "approaching_micro_compaction":
+        return "Approaching micro-compaction: if the request grows past the soft threshold, older turns will be summarized while recent turns and protected tool context are kept."
+    return "No compaction planned yet: keep the prepared conversation as-is."
+
+
 def _build_context_budget(
     *,
     stage: str,
@@ -237,6 +251,11 @@ def _build_context_budget(
     source_message_count: int,
     prepared_message_count: int,
 ) -> dict:
+    next_action = _resolve_next_compaction_action(
+        compaction_level=compaction_level,
+        current_tokens=estimated_tokens,
+        soft_threshold=soft_threshold,
+    )
     return {
         "stage": stage,
         "model": model,
@@ -253,10 +272,10 @@ def _build_context_budget(
         "tokens_until_soft_threshold": max(0, soft_threshold - estimated_tokens),
         "tokens_until_hard_threshold": max(0, hard_threshold - estimated_tokens),
         "compaction_level": compaction_level,
-        "next_compaction_action": _resolve_next_compaction_action(
+        "next_compaction_action": next_action,
+        "next_pruning_policy": _resolve_next_pruning_policy(
             compaction_level=compaction_level,
-            current_tokens=estimated_tokens,
-            soft_threshold=soft_threshold,
+            next_compaction_action=next_action,
         ),
         "recent_count": recent_count,
         "source_message_count": source_message_count,
@@ -288,6 +307,7 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
                 "context_estimated_tokens": estimated_tokens,
                 "context_window_tokens": budget.get("context_window_tokens"),
                 "context_next_compaction_action": budget.get("next_compaction_action"),
+                "context_next_pruning_policy": budget.get("next_pruning_policy"),
                 "context_tokens_until_soft_threshold": budget.get("tokens_until_soft_threshold"),
                 "context_tokens_until_hard_threshold": budget.get("tokens_until_hard_threshold"),
             }

@@ -601,6 +601,7 @@ class SessionManager:
         _set_or_remove("context_estimated_tokens", estimated_tokens)
         _set_or_remove("context_window_tokens", budget.get("context_window_tokens"))
         _set_or_remove("context_next_compaction_action", budget.get("next_compaction_action"))
+        _set_or_remove("context_next_pruning_policy", budget.get("next_pruning_policy"))
         _set_or_remove("context_tokens_until_soft_threshold", budget.get("tokens_until_soft_threshold"))
         _set_or_remove("context_tokens_until_hard_threshold", budget.get("tokens_until_hard_threshold"))
         if context_state.get("compaction_level") == "full" and summary_preview:

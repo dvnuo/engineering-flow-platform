@@ -782,6 +782,32 @@ You have access to the following tools. When a user asks you to do something tha
             extra=extra
         )
 
+        def emit_early_runtime_event(event_type: str, event_data: Dict[str, Any]) -> None:
+            try:
+                from src.gateway.event_bus import emit_agent_event_sync
+                emit_agent_event_sync(event_type, event_data)
+            except Exception as event_error:
+                logger.debug(f"Failed to emit early runtime event to event bus: {event_error}")
+
+            if not stream_callback:
+                return
+
+            try:
+                event = json.dumps({"type": event_type, **event_data}, default=str)
+                if hasattr(stream_callback, "put"):
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            asyncio.create_task(stream_callback.put(event))
+                        else:
+                            stream_callback.put_nowait(event)
+                    except RuntimeError:
+                        stream_callback.put_nowait(event)
+                else:
+                    stream_callback(event)
+            except Exception as event_error:
+                logger.debug(f"Failed to emit early runtime event to stream callback: {event_error}")
+
         def build_early_result(
             content: str,
             *,
@@ -806,6 +832,7 @@ You have access to the following tools. When a user asks you to do something tha
             )
             if request_id:
                 result.setdefault("request_id", request_id)
+            emit_early_runtime_event(event_type, enriched_event)
             result["runtime_events"] = [_build_runtime_event_record(event_type, enriched_event)]
             return result
 
@@ -1161,6 +1188,7 @@ You have access to the following tools. When a user asks you to do something tha
                         "iteration": iteration,
                         "compaction_level": "micro",
                         "budget": budget,
+                        "next_pruning_policy": budget.get("next_pruning_policy"),
                         "message": "Context is approaching micro-compaction threshold.",
                     },
                 )

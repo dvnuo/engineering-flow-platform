@@ -37,6 +37,7 @@ _CONTROL_PLANE_METADATA_KEYS = {
     "context_estimated_tokens",
     "context_window_tokens",
     "context_next_compaction_action",
+    "context_next_pruning_policy",
     "context_tokens_until_soft_threshold",
     "context_tokens_until_hard_threshold",
     "context_state",
