@@ -408,6 +408,8 @@ async def _run_chat_via_execution_bus(
     original_output_payload = execution_result.output_payload
     output_payload = dict(original_output_payload) if isinstance(original_output_payload, dict) else {}
     output_payload["request_id"] = getattr(execution_result, "request_id", resolved_request_id)
+    if "runtime_events" not in output_payload and isinstance(execution_result.runtime_events, list):
+        output_payload["runtime_events"] = execution_result.runtime_events
     output_payload["_execution_result"] = execution_result
     if execution_result.status == "error" or output_payload.get("error"):
         error_value = output_payload.get("error", "Execution bus error")
@@ -863,6 +865,8 @@ async def api_chat(request: web.Request) -> web.Response:
             )
             chatlog_data = {
                 "session_id": session_id,
+                "request_id": response_data.get("request_id") or request_id,
+                "status": "error" if response_data.get("error") else "success",
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "metadata": session.get('metadata', {}),
                 "events": events,

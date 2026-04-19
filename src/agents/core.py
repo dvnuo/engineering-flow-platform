@@ -122,6 +122,21 @@ def _enrich_runtime_event_context(
         merged[key] = value
     return merged
 
+
+def _build_runtime_event_record(event_type: str, event_data: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "type": event_type,
+        "event_type": event_type,
+        "state": event_data.get("state") or event_data.get("status") or "",
+        "session_id": event_data.get("session_id"),
+        "request_id": event_data.get("request_id"),
+        "agent_id": event_data.get("agent_id"),
+        "summary": event_data.get("message") or event_data.get("summary") or event_type,
+        "data": dict(event_data),
+        "detail_payload": dict(event_data),
+        "ts": datetime.utcnow().isoformat() + "Z",
+    }
+
 # Context variable for skill workdir - async-safe
 _skill_workdir: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar('skill_workdir', default=None)
 
@@ -767,6 +782,33 @@ You have access to the following tools. When a user asks you to do something tha
             extra=extra
         )
 
+        def build_early_result(
+            content: str,
+            *,
+            event_type: str = "execution.completed",
+            state: str = "completed",
+            event_data: Optional[Dict[str, Any]] = None,
+        ) -> Dict[str, Any]:
+            enriched_event = _enrich_runtime_event_context(
+                {
+                    "message": content,
+                    "state": state,
+                    **(event_data or {}),
+                },
+                session_id=session_id,
+                agent_id=self.agent_id,
+                request_id=request_id,
+            )
+            result = self._build_assistant_result_payload(
+                content,
+                usage=usage_data,
+                user_message_id=user_message_id,
+            )
+            if request_id:
+                result.setdefault("request_id", request_id)
+            result["runtime_events"] = [_build_runtime_event_record(event_type, enriched_event)]
+            return result
+
         # Get conversation history
         messages = await session_manager.get_history(session_id)
         
@@ -798,10 +840,9 @@ You have access to the following tools. When a user asks you to do something tha
         if fastlane_response:
             # Fast lane command processed, return the response
             await self._persist_assistant_message(session_id, fastlane_response)
-            return self._build_assistant_result_payload(
+            return build_early_result(
                 fastlane_response,
-                usage=usage_data,
-                user_message_id=user_message_id,
+                event_data={"reason": "fastlane_command"},
             )
         # ===== END FAST LANE =====
 
@@ -860,10 +901,9 @@ You have access to the following tools. When a user asks you to do something tha
             emit_skill_contract_cleared_event(previous_skill_name)
             cleared_message = "Active skill cleared."
             await self._persist_assistant_message(session_id, cleared_message)
-            return self._build_assistant_result_payload(
+            return build_early_result(
                 cleared_message,
-                usage=usage_data,
-                user_message_id=user_message_id,
+                event_data={"reason": "skill_contract_cleared", "skill": previous_skill_name},
             )
 
         explicit_skill_name = parse_explicit_skill_switch_name(message)
@@ -880,10 +920,11 @@ You have access to the following tools. When a user asks you to do something tha
                 else:
                     not_found_message = f"Skill not found: {explicit_skill_name}"
                     await self._persist_assistant_message(session_id, not_found_message)
-                    return self._build_assistant_result_payload(
+                    return build_early_result(
                         not_found_message,
-                        usage=usage_data,
-                        user_message_id=user_message_id,
+                        state="failed",
+                        event_type="execution.failed",
+                        event_data={"reason": "skill_not_found", "skill": explicit_skill_name},
                     )
             else:
                 continued_skill = skill_registry.get_skill(existing_skill_name)
@@ -903,10 +944,11 @@ You have access to the following tools. When a user asks you to do something tha
             else:
                 not_found_message = f"Skill not found: {explicit_skill_name}"
                 await self._persist_assistant_message(session_id, not_found_message)
-                return self._build_assistant_result_payload(
+                return build_early_result(
                     not_found_message,
-                    usage=usage_data,
-                    user_message_id=user_message_id,
+                    state="failed",
+                    event_type="execution.failed",
+                    event_data={"reason": "skill_not_found", "skill": explicit_skill_name},
                 )
 
         if selected_skill is None:
@@ -1042,20 +1084,7 @@ You have access to the following tools. When a user asks you to do something tha
                 group_id=data.get("group_id") or data.get("portal_group_id"),
                 coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
             )
-            runtime_events_for_result.append(
-                {
-                    "type": event_type,
-                    "event_type": event_type,
-                    "state": event_data.get("state") or event_data.get("status") or "",
-                    "session_id": event_data.get("session_id"),
-                    "request_id": event_data.get("request_id"),
-                    "agent_id": event_data.get("agent_id"),
-                    "summary": event_data.get("message") or event_data.get("summary") or event_type,
-                    "data": dict(event_data),
-                    "detail_payload": dict(event_data),
-                    "ts": datetime.utcnow().isoformat() + "Z",
-                }
-            )
+            runtime_events_for_result.append(_build_runtime_event_record(event_type, event_data))
             # Also log to tracer for persistence
             if event_type == 'llm_thinking':
                 try:
@@ -1123,6 +1152,19 @@ You have access to the following tools. When a user asks you to do something tha
             send_event("context_snapshot", payload)
 
             compaction_level = str(context_state.get("compaction_level") or "").lower()
+            next_action = str(budget.get("next_compaction_action") or "")
+            if next_action == "approaching_micro_compaction" and compaction_level not in {"micro", "full"}:
+                send_event(
+                    "context_compaction_planned",
+                    {
+                        "stage": stage,
+                        "iteration": iteration,
+                        "compaction_level": "micro",
+                        "budget": budget,
+                        "message": "Context is approaching micro-compaction threshold.",
+                    },
+                )
+
             if compaction_level in {"micro", "full"}:
                 send_event(
                     "context_compaction_applied",
