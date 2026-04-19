@@ -90,10 +90,13 @@ async def test_prepare_progressive_messages_adds_budget_fields(monkeypatch):
     assert state["budget"]["context_window_tokens"] == 1000
     assert state["budget"]["estimated_tokens"] == 400
     assert state["budget"]["usage_percent"] == 40.0
+    assert state["budget"]["prepared_usage_percent"] == 40.0
     assert state["budget"]["soft_threshold_tokens"] == 650
     assert state["budget"]["hard_threshold_tokens"] == 800
     assert state["budget"]["tokens_until_soft_threshold"] == 250
+    assert state["budget"]["tokens_until_hard_threshold"] == 400
     assert state["budget"]["next_compaction_action"] == "none"
+    assert "No compaction planned" in state["budget"]["next_pruning_policy"]
 
 
 @pytest.mark.asyncio

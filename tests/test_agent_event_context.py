@@ -349,6 +349,7 @@ async def test_skill_not_found_early_result_marks_failed_runtime_event(monkeypat
 
     result = await agent.process("use missing skill", session_id="s1", request_id="req-missing")
     assert result["runtime_events"][0]["event_type"] == "execution.failed"
+    assert result["runtime_events"][0]["request_id"] == "req-missing"
 
 
 @pytest.mark.asyncio
