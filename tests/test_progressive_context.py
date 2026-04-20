@@ -1,6 +1,8 @@
 import pytest
+import re
 
 from src.runtime import progressive_context
+from src.context_blob_store import read_ref
 from src.runtime.progressive_context import (
     build_portal_context_preview,
     degrade_projected_context_sources,
@@ -483,6 +485,44 @@ async def test_projects_large_assistant_with_tool_calls_even_when_recent(monkeyp
     assert "ctx://context/" in assistant["content"]
     assert assistant["tool_calls"][0]["id"] == "call_1"
     assert assistant["tool_calls"][0]["function"]["name"] == "jira_get_issue_by_url"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["pre_request", "tool_loop"])
+async def test_projects_recent_plain_assistant_artifact_like_content(monkeypatch, stage):
+    huge = "@MMGFX-13887\nFeature: OCO Order Input Page - Take Profit\n" + ("\nScenario: S\nGiven x\nWhen y\nThen z" * 3000)
+    messages = [
+        {"role": "user", "content": "/mobilex-test-generator"},
+        {"role": "assistant", "content": "Need Jira URL first."},
+        {"role": "user", "content": "https://jira.local/browse/MMGFX-13887"},
+        {"role": "assistant", "content": huge},
+        {"role": "user", "content": "continue"},
+    ]
+
+    async def _get_context_state(_session_id):
+        return {}
+
+    monkeypatch.setattr(progressive_context.session_manager, "get_context_state", _get_context_state)
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 200000)
+    monkeypatch.setattr(progressive_context, "estimate_messages_tokens", lambda msgs: 100)
+
+    prepared, state = await prepare_progressive_messages(
+        messages=messages,
+        model="gpt-5-mini",
+        session_id=f"s-recent-plain-{stage}",
+        stage=stage,
+        recent_count=5,
+    )
+
+    assistant = next(m for m in prepared if m["role"] == "assistant" and "compacted" in str(m.get("content", "")))
+    assert huge not in assistant["content"]
+    assert "ctx://context/" in assistant["content"]
+    assert "[assistant output compacted" in assistant["content"]
+    ref = re.search(r"ref=(ctx://context/[^\s\]]+)", assistant["content"]).group(1)
+    restored = read_ref(ref, session_id=f"s-recent-plain-{stage}", max_chars=len(huge) + 1000)
+    assert restored == huge
+    assert state["budget"]["projected_old_assistant_messages"] >= 1
+    assert messages[3]["content"] == huge
 
 
 def test_degrade_projected_context_sources_keeps_ref_and_call_id():

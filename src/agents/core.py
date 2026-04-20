@@ -430,7 +430,8 @@ def _is_projected_feedback(text: str) -> bool:
     if value.startswith("[large source tool result projected]"):
         return "context_ref: ctx://context/" in value
     if (
-        value.startswith("[old tool output compacted")
+        value.startswith("[assistant output compacted")
+        or value.startswith("[old tool output compacted")
         or value.startswith("[old assistant output compacted")
         or value.startswith("[assistant tool-call content compacted")
         or value.startswith("[assistant skill content compacted")
@@ -592,6 +593,33 @@ def _should_project_assistant_context(content_text: str) -> bool:
         len(text) > DEFAULT_TOOL_FEEDBACK_MAX_LENGTH
         or "```" in text
         or re.search(r"\b(Feature:|Scenario:|Scenario Outline:|class\s+\w+|def\s+\w+)\b", text) is not None
+    )
+
+
+def _large_generation_output_guard(
+    active_skill_runtime: Optional[Any],
+    selected_skill: Optional[Any],
+    active_skill_contract: Optional[Dict[str, Any]],
+) -> str:
+    skill_name = (
+        getattr(active_skill_runtime, "skill_name", None)
+        or getattr(selected_skill, "name", None)
+        or (active_skill_contract or {}).get("skill_name")
+    )
+    normalized = str(skill_name or "").strip().lower()
+    guarded_skills = {
+        "mobilex-test-cases-generator",
+        "java_cucumber_generator",
+        "java-cucumber-generator",
+        "mobilex-test-generator",
+    }
+    if normalized not in guarded_skills:
+        return ""
+    return (
+        "Large generation output guard: For this skill, never emit all generated files or complete multi-file "
+        "implementations in a single chat response. Produce one bounded phase at a time. Prefer writing "
+        "artifacts/files via tools when a repository target is available. In chat, return a concise manifest, "
+        "file paths, and the next recommended step. Keep chat output under 8000 characters."
     )
 
 
@@ -764,7 +792,21 @@ def build_responses_input_items(messages: List[Dict[str, Any]], *, session_id: O
             if role == "user":
                 items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
             else:
-                items.append({"role": role, "content": str(content)})
+                content_text = str(content)
+                if role == "assistant":
+                    if _is_projected_feedback(content_text):
+                        items.append({"role": role, "content": content_text})
+                    elif _should_project_assistant_context(content_text):
+                        content_text = project_skill_assistant_content_for_input_items(
+                            content_text,
+                            session_id=session_id,
+                            round_num=0,
+                        )
+                        items.append({"role": role, "content": content_text})
+                    else:
+                        items.append({"role": role, "content": content_text})
+                else:
+                    items.append({"role": role, "content": content_text})
 
     return items
 
@@ -2053,6 +2095,13 @@ You have access to the following tools. When a user asks you to do something tha
                 tools=loop_tools,
                 reasoning_replay=enable_reasoning,
             )
+            large_generation_guard = _large_generation_output_guard(
+                active_skill_runtime=active_skill_runtime,
+                selected_skill=selected_skill,
+                active_skill_contract=active_skill_contract,
+            )
+            if large_generation_guard:
+                llm_kwargs["system_prompt"] = ((llm_kwargs.get("system_prompt") or "") + "\n\n" + large_generation_guard).strip()
             if effective_model:
                 llm_kwargs["model"] = effective_model
             
@@ -2062,7 +2111,7 @@ You have access to the following tools. When a user asks you to do something tha
 
             request_estimated_tokens = estimate_llm_request_tokens(
                 input_items=input_items,
-                system_prompt=effective_system_prompt or "",
+                system_prompt=llm_kwargs.get("system_prompt", "") or "",
                 tools=loop_tools or [],
             )
             loop_budget = resolve_prompt_budget(stage="tool_loop", model=effective_model)
@@ -2088,7 +2137,7 @@ You have access to the following tools. When a user asks you to do something tha
                 llm_kwargs["input_items"] = input_items
                 request_estimated_tokens = estimate_llm_request_tokens(
                     input_items=input_items,
-                    system_prompt=effective_system_prompt or "",
+                    system_prompt=llm_kwargs.get("system_prompt", "") or "",
                     tools=loop_tools or [],
                 )
             if request_estimated_tokens > int(loop_budget.get("prompt_budget_tokens", 0) or 0):
@@ -2097,7 +2146,7 @@ You have access to the following tools. When a user asks you to do something tha
                 llm_kwargs["input_items"] = input_items
                 request_estimated_tokens = estimate_llm_request_tokens(
                     input_items=input_items,
-                    system_prompt=effective_system_prompt or "",
+                    system_prompt=llm_kwargs.get("system_prompt", "") or "",
                     tools=loop_tools or [],
                 )
             if isinstance(loop_context_state, dict):
@@ -2124,7 +2173,7 @@ You have access to the following tools. When a user asks you to do something tha
                 return attach_runtime_events(error_response)
             if request_estimated_tokens > prompt_budget_tokens:
                 llm_kwargs["system_prompt"] = (
-                    (effective_system_prompt or "")
+                    (llm_kwargs.get("system_prompt") or "")
                     + "\n\nBudget guard: Do not emit all generated files in chat. "
                     "Write artifacts/files via tools when possible; otherwise output a concise manifest and ask to continue file-by-file."
                 )
@@ -3023,12 +3072,19 @@ You have access to the following tools. When a user asks you to do something tha
                 "reasoning_replay": False,
                 "provider": _normalize_provider_key(provider),
             }
+            large_generation_guard = _large_generation_output_guard(
+                active_skill_runtime=skill_runtime_config,
+                selected_skill=skill,
+                active_skill_contract=skill_state if isinstance(skill_state, dict) else None,
+            )
+            if large_generation_guard:
+                llm_kwargs["system_prompt"] = ((llm_kwargs.get("system_prompt") or "") + "\n\n" + large_generation_guard).strip()
             if self.model:
                 llm_kwargs["model"] = self.model
 
             request_estimated_tokens = estimate_llm_request_tokens(
                 input_items=input_items,
-                system_prompt=system_prompt or "",
+                system_prompt=llm_kwargs.get("system_prompt", "") or "",
                 tools=available_tools or [],
             )
             loop_budget = resolve_prompt_budget(stage="skill_generation", model=llm_kwargs.get("model"))
@@ -3051,10 +3107,14 @@ You have access to the following tools. When a user asks you to do something tha
                 system_prompt = _build_skill_mode_system_prompt(skill, skill_session)
                 input_items = degrade_projected_context_sources_in_responses_input_items(input_items)
                 llm_kwargs["system_prompt"] = system_prompt
+                if large_generation_guard:
+                    llm_kwargs["system_prompt"] = (
+                        (llm_kwargs.get("system_prompt") or "") + "\n\n" + large_generation_guard
+                    ).strip()
                 llm_kwargs["input_items"] = input_items
                 request_estimated_tokens = estimate_llm_request_tokens(
                     input_items=input_items,
-                    system_prompt=system_prompt or "",
+                    system_prompt=llm_kwargs.get("system_prompt", "") or "",
                     tools=available_tools or [],
                 )
                 skill_request_budget.update(

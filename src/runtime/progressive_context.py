@@ -208,6 +208,21 @@ def _looks_artifact_like(text: str) -> bool:
     return any(marker in sample for marker in markers)
 
 
+def _is_already_projected_feedback(text: str) -> bool:
+    value = str(text or "").lstrip()
+    marker_prefixes = (
+        "[assistant output compacted",
+        "[old assistant output compacted",
+        "[assistant tool-call content compacted",
+        "[assistant skill content compacted",
+        "[old tool output compacted",
+        "[large source tool result projected]",
+    )
+    if not value.startswith(marker_prefixes):
+        return False
+    return "ctx://context/" in value
+
+
 def _project_large_history_messages(
     messages: List[AgentMessage],
     *,
@@ -233,6 +248,42 @@ def _project_large_history_messages(
     projected: List[AgentMessage] = []
     for idx, msg in enumerate(messages):
         text = str(msg.content or "")
+        if msg.role == "assistant" and not msg.tool_calls:
+            if _is_already_projected_feedback(text):
+                projected.append(msg)
+                continue
+            artifact_like = _looks_artifact_like(text)
+            artifact_limit = int(old_assistant_cfg.get("artifact_like_max_chars", 3000) or 3000)
+            assistant_plain_limit = artifact_limit if artifact_like else assistant_limit
+            if len(text) > assistant_plain_limit:
+                ref = put_text(
+                    session_id=session_id,
+                    kind="assistant_output",
+                    source_id=f"assistant_{idx}",
+                    title="assistant_output",
+                    content=text,
+                    metadata={"stage": stage, "recent_tail": idx >= keep_start, "artifact_like": artifact_like},
+                )
+                refs.append(ref)
+                summary = _extract_deterministic_assistant_summary(text, summary_max_chars=summary_max)
+                compact = (
+                    f"[assistant output compacted | original_chars={len(text)} | ref={ref}]\n"
+                    f"Summary:\n{summary}\n\n"
+                    f"Full assistant output is available through context_read_ref(ref=\"{ref}\")."
+                )
+                saved += max(0, len(text) - len(compact))
+                projected_assistant += 1
+                projected.append(
+                    AgentMessage(
+                        role="assistant",
+                        content=compact,
+                        timestamp=msg.timestamp,
+                        tool_calls=msg.tool_calls,
+                        tool_use_id=msg.tool_use_id,
+                        tool_name=getattr(msg, "tool_name", None),
+                    )
+                )
+                continue
         if msg.role == "assistant" and msg.tool_calls:
             assistant_tool_limit = int(old_assistant_cfg.get("artifact_like_max_chars", assistant_limit) or assistant_limit)
             if not _looks_artifact_like(text):
@@ -268,18 +319,6 @@ def _project_large_history_messages(
                 continue
         if idx >= keep_start:
             projected.append(msg)
-            continue
-        if msg.role == "assistant" and not msg.tool_calls and len(text) > assistant_limit:
-            ref = put_text(session_id=session_id, kind="assistant_output", source_id=f"assistant_{idx}", title="assistant_output", content=text, metadata={"stage": stage})
-            refs.append(ref)
-            summary = _extract_deterministic_assistant_summary(text, summary_max_chars=summary_max)
-            compact = (
-                f"[old assistant output compacted | original_chars={len(text)} | ref={ref}]\n"
-                f"Summary:\n{summary}\n\nFull original assistant output is available in the session transcript/context blob."
-            )
-            saved += max(0, len(text) - len(compact))
-            projected_assistant += 1
-            projected.append(AgentMessage(role="assistant", content=compact, timestamp=msg.timestamp, tool_calls=msg.tool_calls, tool_use_id=msg.tool_use_id, tool_name=getattr(msg, "tool_name", None)))
             continue
         if msg.role == "tool" and msg.tool_use_id and msg.tool_use_id in protected_tool_chain_ids:
             projected.append(msg)
