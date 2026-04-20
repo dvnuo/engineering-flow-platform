@@ -514,3 +514,60 @@ async def test_continue_skill_mode_finalizer_abort_includes_finalizer_request_bu
     assert isinstance(result.get("request_budget"), dict)
     assert result["request_budget"].get("stage") == "skill_finalizer"
     assert result["request_budget"].get("request_over_budget") is True
+
+
+@pytest.mark.asyncio
+async def test_continue_skill_mode_hard_guard_denies_out_of_policy_tool(monkeypatch):
+    from src.agents import core as core_mod
+    from src.skills.runtime import SkillRuntimeConfig
+
+    responses = [
+        {"content": "", "function_calls": [{"id": "c1", "function": {"name": "github_push", "arguments": "{}"}}], "usage": {}},
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[FINISH]\ndone", "function_calls": [], "usage": {}},
+    ]
+    runtime_cfg = SkillRuntimeConfig(
+        skill_name="lookup",
+        allowed_tools=["jira_get_issue_by_url"],
+        allowed_tools_set={"jira_get_issue_by_url"},
+        tool_policy_declared=True,
+    )
+    monkeypatch.setattr("src.skills.skill_registry.get_skill_runtime_config", lambda *args, **kwargs: runtime_cfg)
+
+    async def _forbidden_execute(*args, **kwargs):
+        raise AssertionError("out-of-policy tool execution should not be called")
+
+    monkeypatch.setattr(core_mod, "_execute_tool_via_runtime_bus", _forbidden_execute)
+
+    result, _snapshots, _calls = await run_replay_case(monkeypatch, responses=responses)
+    assert "done" in result["response"] or "fallback" in result["response"].lower()
+
+
+@pytest.mark.asyncio
+async def test_continue_skill_mode_hard_guard_allows_context_read_ref(monkeypatch):
+    from src.agents import core as core_mod
+    from src.skills.runtime import SkillRuntimeConfig
+
+    responses = [
+        {"content": "", "function_calls": [{"id": "c1", "function": {"name": "context_read_ref", "arguments": "{\"ref\":\"ctx://context/s/k/aaaaaaaaaaaa\"}"}}], "usage": {}},
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[FINISH]\ndone", "function_calls": [], "usage": {}},
+    ]
+    runtime_cfg = SkillRuntimeConfig(
+        skill_name="lookup",
+        allowed_tools=["jira_get_issue_by_url"],
+        allowed_tools_set={"jira_get_issue_by_url"},
+        tool_policy_declared=True,
+    )
+    monkeypatch.setattr("src.skills.skill_registry.get_skill_runtime_config", lambda *args, **kwargs: runtime_cfg)
+    called = {"tool": None}
+
+    async def _fake_execute(*, tool_name, **kwargs):
+        called["tool"] = tool_name
+        return core_mod.ToolResult(success=True, content="ok", error=None)
+
+    monkeypatch.setattr(core_mod, "_execute_tool_via_runtime_bus", _fake_execute)
+
+    result, _snapshots, _calls = await run_replay_case(monkeypatch, responses=responses)
+    assert called["tool"] == "context_read_ref"
+    assert "done" in result["response"] or "fallback" in result["response"].lower()

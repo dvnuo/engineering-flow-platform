@@ -457,11 +457,12 @@ def test_merge_request_budget_into_context_state_merges_safe_fields():
 
     merged = core._merge_request_budget_into_context_state(
         {"budget": {"existing": 1}},
-        {"request_estimated_tokens": 123, "request_over_budget": True, "ignored_key": "x"},
+        {"request_estimated_tokens": 123, "request_over_budget": True, "stage": "skill_finalizer", "ignored_key": "x"},
     )
     assert merged["budget"]["existing"] == 1
     assert merged["budget"]["request_estimated_tokens"] == 123
     assert merged["budget"]["request_over_budget"] is True
+    assert merged["budget"]["request_budget_stage"] == "skill_finalizer"
     assert "ignored_key" not in merged["budget"]
 
 

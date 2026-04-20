@@ -532,6 +532,7 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
                 "context_tokens_until_hard_threshold": budget.get("tokens_until_hard_threshold"),
                 "context_prompt_budget_tokens": budget.get("prompt_budget_tokens"),
                 "context_request_estimated_tokens": budget.get("request_estimated_tokens"),
+                "context_request_budget_stage": budget.get("request_budget_stage") or budget.get("stage"),
                 "context_reserved_output_tokens": budget.get("reserved_output_tokens"),
                 "context_safety_margin_tokens": budget.get("safety_margin_tokens"),
                 "context_max_prompt_tokens": budget.get("max_prompt_tokens"),

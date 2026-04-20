@@ -350,6 +350,7 @@ def test_build_portal_context_preview_includes_request_budget_fields():
                 "projected_old_tool_messages": 3,
                 "context_blob_refs_created": ["ctx://context/a", "ctx://context/b"],
                 "request_over_budget": True,
+                "request_budget_stage": "skill_finalizer",
             },
         }
     )
@@ -365,6 +366,7 @@ def test_build_portal_context_preview_includes_request_budget_fields():
     assert preview["context_projected_old_assistant_messages"] == 2
     assert preview["context_projected_old_tool_messages"] == 3
     assert preview["context_context_blob_refs_created"] == 2
+    assert preview["context_request_budget_stage"] == "skill_finalizer"
     assert preview["context_request_over_budget"] is True
     assert "ctx://context/a" not in json.dumps(preview)
 

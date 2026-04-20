@@ -253,9 +253,14 @@ def _merge_request_budget_into_context_state(
         "projected_old_tool_messages",
         "projection_chars_saved",
         "context_blob_refs_created",
+        "request_budget_stage",
     ):
         if key in latest_request_budget:
             merged_budget[key] = latest_request_budget.get(key)
+    if "request_budget_stage" not in merged_budget:
+        stage = latest_request_budget.get("stage")
+        if isinstance(stage, str) and stage.strip():
+            merged_budget["request_budget_stage"] = stage.strip()
     merged["budget"] = merged_budget
     return merged
 
@@ -511,7 +516,13 @@ def _safe_request_budget_fields(budget: Optional[Dict[str, Any]]) -> Dict[str, A
         "max_output_tokens",
         "request_over_budget",
     )
-    return {key: budget.get(key) for key in keys if key in budget}
+    safe = {key: budget.get(key) for key in keys if key in budget}
+    stage = budget.get("request_budget_stage")
+    if not isinstance(stage, str) or not stage.strip():
+        stage = budget.get("stage")
+    if isinstance(stage, str) and stage.strip():
+        safe["request_budget_stage"] = stage.strip()
+    return safe
 
 
 def _merge_budget_into_error_details(error_response: Dict[str, Any], budget: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -3161,6 +3172,42 @@ You have access to the following tools. When a user asks you to do something tha
                 round_tool_calls.append((tool_name, safe_preview(args_str, 100)))
 
                 normalized_args = _normalize_tool_args(args_str)
+                if skill_runtime_config and skill_runtime_config.tool_policy_declared:
+                    if not _is_tool_allowed_by_skill_runtime(tool_name, skill_runtime_config):
+                        deny_result = build_skill_tool_denied_result(skill_runtime_config, tool_name)
+                        output_text = _tool_feedback_text_for_tool(
+                            tool_name,
+                            deny_result,
+                            session_id=session_id,
+                            source_id=call_id or tool_name,
+                        )
+                        input_items.append({
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": output_text,
+                        })
+                        tracer.log_tool_call(
+                            tool_name,
+                            redact_value(normalized_args),
+                            safe_preview(output_text, 500),
+                        )
+                        send_skill_event(
+                            "skill_tool_denied",
+                            {
+                                "tool": tool_name,
+                                "call_id": call_id,
+                                "allowed_tools": skill_runtime_config.allowed_tools,
+                                "internal_support_tools": sorted(INTERNAL_SUPPORT_TOOL_NAMES),
+                                "status": "denied",
+                            },
+                        )
+                        round_tool_calls.append((tool_name, "denied_by_skill_policy"))
+                        logger.warning(
+                            "[SkillMode] Runtime skill policy denied tool '%s' for skill '%s'",
+                            tool_name,
+                            skill_runtime_config.skill_name,
+                        )
+                        continue
                 # ===== CONFIRMATION GATE (skill-mode) =====
                 # Check if this is a write operation that requires confirmation
                 write_tools = {'github_comment_pr', 'github_add_comment', 'jira_add_comment', 
