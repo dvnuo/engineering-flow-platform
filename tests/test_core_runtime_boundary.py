@@ -444,10 +444,12 @@ def test_context_budget_exceeded_error_contains_safe_budget_fields():
         "max_prompt_tokens",
         "max_output_tokens",
         "request_over_budget",
+        "request_budget_stage",
         "stage",
         "suggestion",
     ):
         assert key in details
+    assert details["request_budget_stage"] == "tool_loop"
     for unsafe_key in ("prompt", "payload", "input_items", "tools", "source_docs", "raw_model_response", "api_key"):
         assert unsafe_key not in details
 

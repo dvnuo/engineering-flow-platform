@@ -38,6 +38,7 @@ async def run_replay_case(
     message="search issue",
     initial_session=None,
     capture_llm_kwargs=None,
+    tracer_factory=None,
 ):
     from src.agents import core as core_mod
 
@@ -70,7 +71,8 @@ async def run_replay_case(
     monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
     monkeypatch.setattr(core_mod, "execute_tool_by_name", fake_execute_tool_by_name)
     monkeypatch.setattr(core_mod, "session_manager", FakeSessionManager)
-    monkeypatch.setattr("src.skills.get_tracer", lambda: FakeTracer())
+    tracer_provider = tracer_factory or (lambda: FakeTracer())
+    monkeypatch.setattr("src.skills.get_tracer", tracer_provider)
 
     skill = SimpleNamespace(name="lookup", description="search issue", path="", tools=[], strategy=[])
     agent = make_agent()
@@ -513,6 +515,7 @@ async def test_continue_skill_mode_finalizer_abort_includes_finalizer_request_bu
     )
     assert isinstance(result.get("request_budget"), dict)
     assert result["request_budget"].get("stage") == "skill_finalizer"
+    assert result["request_budget"].get("request_budget_stage") == "skill_finalizer"
     assert result["request_budget"].get("request_over_budget") is True
 
 
@@ -533,14 +536,37 @@ async def test_continue_skill_mode_hard_guard_denies_out_of_policy_tool(monkeypa
         tool_policy_declared=True,
     )
     monkeypatch.setattr("src.skills.skill_registry.get_skill_runtime_config", lambda *args, **kwargs: runtime_cfg)
+    tracer_calls = []
+
+    class CaptureTracer(FakeTracer):
+        def log_tool_call(self, *args, **kwargs):
+            tracer_calls.append({"args": args, "kwargs": kwargs})
+            return None
 
     async def _forbidden_execute(*args, **kwargs):
         raise AssertionError("out-of-policy tool execution should not be called")
 
     monkeypatch.setattr(core_mod, "_execute_tool_via_runtime_bus", _forbidden_execute)
+    captured_llm_kwargs = []
 
-    result, _snapshots, _calls = await run_replay_case(monkeypatch, responses=responses)
+    result, _snapshots, _calls = await run_replay_case(
+        monkeypatch,
+        responses=responses,
+        capture_llm_kwargs=captured_llm_kwargs,
+        tracer_factory=lambda: CaptureTracer(),
+    )
     assert "done" in result["response"] or "fallback" in result["response"].lower()
+    assert tracer_calls
+    denied = tracer_calls[-1]["kwargs"]
+    assert denied.get("success") is False
+    assert denied.get("error") == "denied_by_skill_policy"
+    assert len(captured_llm_kwargs) >= 2
+    feedback_items = [
+        item
+        for item in captured_llm_kwargs[1].get("input_items", [])
+        if isinstance(item, dict) and item.get("type") == "function_call_output"
+    ]
+    assert any(item.get("call_id") == "c1" for item in feedback_items)
 
 
 @pytest.mark.asyncio
@@ -571,3 +597,25 @@ async def test_continue_skill_mode_hard_guard_allows_context_read_ref(monkeypatc
     result, _snapshots, _calls = await run_replay_case(monkeypatch, responses=responses)
     assert called["tool"] == "context_read_ref"
     assert "done" in result["response"] or "fallback" in result["response"].lower()
+
+
+@pytest.mark.asyncio
+async def test_continue_skill_mode_error_response_includes_skill_generation_budget_stage(monkeypatch):
+    from src.agents import core as core_mod
+    monkeypatch.setattr(
+        core_mod,
+        "resolve_prompt_budget",
+        lambda **kwargs: {
+            "prompt_budget_tokens": 50000,
+            "max_output_tokens": 4096,
+            "reserved_output_tokens": 1000,
+            "safety_margin_tokens": 500,
+            "max_prompt_tokens": 50000,
+        },
+    )
+
+    result, _snapshots, _calls = await run_replay_case(
+        monkeypatch,
+        responses=[{"error": {"message": "boom", "type": "llm_error"}}],
+    )
+    assert result["request_budget"].get("request_budget_stage") == "skill_generation"

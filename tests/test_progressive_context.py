@@ -371,6 +371,11 @@ def test_build_portal_context_preview_includes_request_budget_fields():
     assert "ctx://context/a" not in json.dumps(preview)
 
 
+def test_build_portal_context_preview_uses_request_budget_stage_when_present():
+    preview = build_portal_context_preview({"budget": {"request_budget_stage": "skill_generation"}})
+    assert preview["context_request_budget_stage"] == "skill_generation"
+
+
 def test_progressive_context_dict_roundtrip_preserves_tool_name():
     messages = [
         {

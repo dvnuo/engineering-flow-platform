@@ -498,6 +498,7 @@ def _build_context_budget_exceeded_error(
             "max_prompt_tokens": loop_budget.get("max_prompt_tokens"),
             "max_output_tokens": loop_budget.get("max_output_tokens"),
             "request_over_budget": True,
+            "request_budget_stage": stage,
             "stage": stage,
             "suggestion": "Split generation into smaller steps or write artifacts/files instead of emitting full content in chat.",
         },
@@ -1083,6 +1084,7 @@ async def _run_skill_finalizer(
             "max_prompt_tokens": loop_budget.get("max_prompt_tokens"),
             "max_output_tokens": budget_max_tokens,
             "request_over_budget": request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False,
+            "request_budget_stage": "skill_finalizer",
             "stage": "skill_finalizer",
         }
         if request_estimated_tokens > prompt_budget_tokens:
@@ -2108,6 +2110,7 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["max_prompt_tokens"] = loop_budget.get("max_prompt_tokens")
                 budget_state["max_output_tokens"] = loop_budget.get("max_output_tokens")
                 budget_state["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
+                budget_state["request_budget_stage"] = "tool_loop"
                 latest_request_budget = dict(budget_state)
                 emit_context_snapshot("tool_loop_budget", loop_context_state, iteration=iteration)
             prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
@@ -3040,6 +3043,8 @@ You have access to the following tools. When a user asks you to do something tha
                 "max_prompt_tokens": loop_budget.get("max_prompt_tokens"),
                 "max_output_tokens": loop_budget.get("max_output_tokens"),
                 "request_over_budget": request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False,
+                "request_budget_stage": "skill_generation",
+                "stage": "skill_generation",
             }
             if request_estimated_tokens > prompt_budget_tokens:
                 skill_session = compact_skill_session_sync(skill_session, max_chars=4000)
@@ -3190,6 +3195,8 @@ You have access to the following tools. When a user asks you to do something tha
                             tool_name,
                             redact_value(normalized_args),
                             safe_preview(output_text, 500),
+                            success=False,
+                            error="denied_by_skill_policy",
                         )
                         send_skill_event(
                             "skill_tool_denied",
