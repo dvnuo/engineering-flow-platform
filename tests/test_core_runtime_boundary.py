@@ -384,3 +384,60 @@ async def test_run_chat_execution_uses_result_request_id_fallback_for_terminal_e
     assert terminal_events[0]["request_id"] == "req-from-result"
     assert terminal_events[0]["data"]["request_id"] == "req-from-result"
     assert terminal_events[0]["detail_payload"]["request_id"] == "req-from-result"
+
+
+@pytest.mark.asyncio
+async def test_run_chat_execution_appends_when_existing_terminal_snapshot_has_no_meaningful_context(monkeypatch):
+    from src.agents import core
+
+    class _FakeAgent:
+        model = "gpt-5-mini"
+        agent_id = "agent-1"
+
+        async def process(self, **kwargs):
+            return {
+                "response": "ok",
+                "runtime_events": [
+                    {
+                        "type": "context_snapshot",
+                        "event_type": "context_snapshot",
+                        "data": {
+                            "stage": "post_turn",
+                            "terminal": True,
+                            "context_state": {},
+                        },
+                        "detail_payload": {
+                            "stage": "post_turn",
+                            "terminal": True,
+                        },
+                    }
+                ],
+            }
+
+    async def _fake_apply_progressive_context_after_turn(*, session_id, model):
+        return {
+            "summary": "Real final context",
+            "next_step": "Render final snapshot",
+            "budget": {"usage_percent": 20.0},
+        }
+
+    monkeypatch.setattr(core, "apply_progressive_context_after_turn", _fake_apply_progressive_context_after_turn)
+
+    result = await core.run_chat_execution(
+        _FakeAgent(),
+        message="hello",
+        session_id="s-1",
+        request_id="req-1",
+    )
+
+    terminal_events = [
+        event
+        for event in result["runtime_events"]
+        if event.get("type") == "context_snapshot"
+        and (event.get("data") or {}).get("stage") == "post_turn"
+        and (event.get("data") or {}).get("terminal") is True
+    ]
+
+    assert len(terminal_events) == 2
+    assert terminal_events[-1]["data"]["context_state"]["summary"] == "Real final context"
+    assert terminal_events[-1]["data"]["request_id"] == "req-1"

@@ -219,7 +219,10 @@ def _has_terminal_post_turn_context_snapshot(events: Any) -> bool:
         terminal = data_payload.get("terminal")
         if terminal is None:
             terminal = detail_payload.get("terminal")
-        if stage == "post_turn" and terminal is True:
+        context_state = data_payload.get("context_state")
+        if not _is_meaningful_context_state(context_state):
+            context_state = detail_payload.get("context_state")
+        if stage == "post_turn" and terminal is True and _is_meaningful_context_state(context_state):
             return True
     return False
 
