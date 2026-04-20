@@ -423,3 +423,65 @@ async def test_github_review_task_non_dict_skill_kwargs_returns_structured_failu
     assert called["skill"] is False
     assert result["success"] is False
     assert result["error_code"] == "invalid_skill_kwargs_type"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_accepts_portal_automation_payload_shape(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    captured = {}
+
+    async def _fake_execute_skill(skill_name, **kwargs):
+        captured["skill_name"] = skill_name
+        captured["kwargs"] = kwargs
+        return _SkillResult(success=True, output="Automated review", data={"review_event": "COMMENT"})
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
+        captured["action_id"] = action_id
+        captured["action_kwargs"] = kwargs
+        return {"success": True, "error": None, "result": {"id": 88}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {
+            "source": "automation_rule",
+            "rule_id": "rule-1",
+            "provider": "github",
+            "owner": "acme",
+            "repo": "engineering-flow-platform",
+            "pull_number": "123",
+            "head_sha": "abc123",
+            "review_target": {"type": "team", "name": "acme/platform-reviewers"},
+            "task_type": "github_review_task",
+            "skill_name": "review-pull-request",
+            "review_event": "COMMENT",
+            "dedupe_key": "dedupe-1",
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["skill_name"] == "review-pull-request"
+    assert captured["kwargs"]["pull_number"] == 123
+    assert captured["action_id"] == "adapter:github:review_pull_request"
+    assert captured["action_kwargs"]["pull_number"] == 123
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_invalid_pull_number_returns_clear_error(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    called = {"skill": False}
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        called["skill"] = True
+        return _SkillResult(success=True, output="unused", data={})
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+
+    result = await run_github_review_task({"owner": "acme", "repo": "demo", "pull_number": "abc"})
+
+    assert called["skill"] is False
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_pull_number"

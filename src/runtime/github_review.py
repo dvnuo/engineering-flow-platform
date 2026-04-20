@@ -110,13 +110,41 @@ async def execute_github_review_action(action_id: str, kwargs: Dict[str, Any], p
 async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     owner = str(payload.get("owner") or "").strip()
     repo = str(payload.get("repo") or "").strip()
-    pull_number = payload.get("pull_number")
-    if not owner or not repo or pull_number is None:
+    raw_pull_number = payload.get("pull_number")
+    if not owner or not repo or raw_pull_number is None:
         return {
             "success": False,
             "error": "owner, repo, and pull_number are required",
             "review_summary": None,
             "runtime_events": [_event("task.github_review.failed", "failed", {"error": "missing_required_fields"})],
+            "secondary_action_attempted": False,
+            "secondary_action_success": False,
+            "actions_applied": [],
+            "result": {},
+            "skill_name": str(payload.get("skill_name") or "review-pull-request"),
+        }
+    try:
+        pull_number = int(raw_pull_number)
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "error": "pull_number must be an integer",
+            "error_code": "invalid_pull_number",
+            "review_summary": None,
+            "runtime_events": [_event("task.github_review.failed", "failed", {"error_code": "invalid_pull_number"})],
+            "secondary_action_attempted": False,
+            "secondary_action_success": False,
+            "actions_applied": [],
+            "result": {},
+            "skill_name": str(payload.get("skill_name") or "review-pull-request"),
+        }
+    if pull_number <= 0:
+        return {
+            "success": False,
+            "error": "pull_number must be a positive integer",
+            "error_code": "invalid_pull_number",
+            "review_summary": None,
+            "runtime_events": [_event("task.github_review.failed", "failed", {"error_code": "invalid_pull_number"})],
             "secondary_action_attempted": False,
             "secondary_action_success": False,
             "actions_applied": [],

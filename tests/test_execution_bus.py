@@ -3586,7 +3586,7 @@ async def test_execution_bus_triggered_event_task_derives_source_kind_from_porta
 
 @pytest.mark.asyncio
 async def test_execution_bus_triggered_event_task_github_secondary_action_blocked(monkeypatch):
-    async def _fake_process(*, message, session_id):
+    async def _fake_process(*, message, session_id, **_kwargs):
         return {"response": "ok"}
 
     async def _fake_add_comment(*args, **kwargs):
@@ -3617,7 +3617,7 @@ async def test_execution_bus_triggered_event_task_github_secondary_action_blocke
 
 @pytest.mark.asyncio
 async def test_execution_bus_triggered_event_task_jira_secondary_action_blocked(monkeypatch):
-    async def _fake_process(*, message, session_id):
+    async def _fake_process(*, message, session_id, **_kwargs):
         return {"response": "ok"}
 
     async def _fake_add_comment(*args, **kwargs):
@@ -3648,7 +3648,7 @@ async def test_execution_bus_triggered_event_task_jira_secondary_action_blocked(
 
 @pytest.mark.asyncio
 async def test_execution_bus_triggered_event_task_confluence_secondary_action_blocked(monkeypatch):
-    async def _fake_process(*, message, session_id):
+    async def _fake_process(*, message, session_id, **_kwargs):
         return {"response": "ok"}
 
     async def _fake_add_comment(*args, **kwargs):
@@ -3679,7 +3679,7 @@ async def test_execution_bus_triggered_event_task_confluence_secondary_action_bl
 
 @pytest.mark.asyncio
 async def test_execution_bus_triggered_event_task_success_includes_secondary_governance_summary(monkeypatch):
-    async def _fake_process(*, message, session_id):
+    async def _fake_process(*, message, session_id, **_kwargs):
         return {"response": "ok"}
 
     async def _fake_add_comment(owner, repo, issue_number, body):
