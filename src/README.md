@@ -23,7 +23,8 @@ src/
 │   └── confluence.py    # Confluence
 │
 ├── cron/                 # Scheduled tasks
-│   └── automation_watchers.py
+│   ├── automation_watchers.py  # Deprecated compatibility shim; Portal owns automation monitoring rules
+│   └── jira_reconciliation.py  # Legacy/separate reconciliation workflow (not GitHub PR automation monitoring)
 │
 ├── gateway/              # Web API server
 │   ├── server.py        # Main gateway
@@ -56,3 +57,10 @@ src/
 - Single responsibility per file
 - Clean imports via `from src.<module> import ...`
 - Skills in `skills/` use YAML frontmatter (.md files)
+
+## Runtime / Portal boundary (important)
+
+- Portal (control plane) owns automation monitoring rules and GitHub PR review-request polling.
+- EFP runtime (execution plane) receives dispatched tasks via `/api/tasks/execute`.
+- `github_review_task` remains a runtime execution path.
+- Do **not** add new runtime-side automation polling in EFP.

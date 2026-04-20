@@ -1,30 +1,20 @@
 # cron/ - Scheduled Tasks
 
-## Structure
+## Runtime automation watcher status
 
-```
-cron/
-└── automation_watchers.py    # Main runtime-profile automation ingress watchers
-```
+Runtime-side automation watchers are **deprecated/removed**.
 
-## Components
+- Automation monitoring and polling now run in **Portal** (control plane).
+- EFP runtime no longer polls GitHub/Jira/Confluence for automation discovery.
+- EFP runtime no longer pulls runtime profile/identity bindings for automation and no longer ingests discovered automation events back to Portal.
+- EFP runtime now focuses on task execution dispatched by Portal, especially through `/api/tasks/execute`.
 
-### Automation Watchers (Primary runtime automation watcher)
-Pulls runtime context + identity bindings from Portal internal APIs, builds in-memory automation rules, discovers external signals, and ingests normalized external events back to Portal.
-Poll ingress metadata is minimal and focused on trigger/binding/source traceability.
+## Compatibility note
 
-## Usage
+`src.cron.automation_watchers` remains as a no-op compatibility shim:
 
-```python
-import asyncio
-from src.cron.automation_watchers import (
-    start_automation_watchers,
-    stop_automation_watchers,
-)
+- `is_enabled()` always returns `False`
+- `start_automation_watchers()` is a no-op
+- `stop_automation_watchers()` is a no-op
 
-async def main():
-    watcher_task = asyncio.create_task(start_automation_watchers())
-    ...
-    await stop_automation_watchers()
-    await watcher_task
-```
+This prevents legacy imports from breaking while ensuring polling is inactive.

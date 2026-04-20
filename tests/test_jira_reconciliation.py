@@ -1,5 +1,6 @@
 import json
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -330,6 +331,11 @@ def test_jira_reconciliation_disabled_flag(monkeypatch):
 
     monkeypatch.setattr(jira_reconciliation.config, "get", lambda key, default=None: False if key == "server.jira_reconciliation_enabled" else default)
     assert jira_reconciliation.is_enabled() is False
+
+
+def test_jira_reconciliation_default_disabled_in_example_config():
+    source = Path("config.yaml.example").read_text(encoding="utf-8")
+    assert "jira_reconciliation_enabled: false" in source
 
 
 @pytest.mark.asyncio

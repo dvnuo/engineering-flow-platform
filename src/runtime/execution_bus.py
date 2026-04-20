@@ -2039,6 +2039,20 @@ def build_default_execution_bus(
             current_head_sha = review_result.get("current_head_sha")
             secondary_action_attempted = bool(review_result.get("secondary_action_attempted"))
             secondary_action_success = bool(review_result.get("secondary_action_success"))
+            automation_trace = {
+                "source": review_result.get("source") or request.input_payload.get("source"),
+                "rule_id": review_result.get("rule_id") or request.input_payload.get("rule_id"),
+                "automation_rule_id": review_result.get("automation_rule_id")
+                or request.input_payload.get("automation_rule_id")
+                or request.input_payload.get("rule_id"),
+                "dedupe_key": review_result.get("dedupe_key") or request.input_payload.get("dedupe_key"),
+                "review_target": review_result.get("review_target") or request.input_payload.get("review_target"),
+            }
+            automation_trace = {
+                key: value
+                for key, value in automation_trace.items()
+                if value is not None and (not isinstance(value, str) or value.strip())
+            }
             if secondary_action_attempted and not secondary_action_success and error_value and "capability policy blocked" in str(error_value):
                 blocked_secondary_action_ids.append(secondary_action_id)
                 _append_secondary_governance_audit_event(
@@ -2123,6 +2137,7 @@ def build_default_execution_bus(
                         "stale": stale,
                         "expected_head_sha": expected_head_sha,
                         "current_head_sha": current_head_sha,
+                        **automation_trace,
                     },
                     legacy_payload={"legacy_type": "task_github_review"},
                 )
@@ -2145,6 +2160,7 @@ def build_default_execution_bus(
                     "stale": stale,
                     "expected_head_sha": expected_head_sha,
                     "current_head_sha": current_head_sha,
+                    **automation_trace,
                     "task_boundary": True,
                     "capability_id": capability.get("capability_id"),
                     "capability_type": capability.get("capability_type"),

@@ -4,6 +4,7 @@ This module provides the ability to execute skills and tools based on user reque
 """
 
 import asyncio
+import importlib.util
 import json
 import logging
 import os
@@ -148,18 +149,28 @@ class SkillsExecutor:
                 logger.debug(f"Found skill file: {skill_file}")
                 # Import skill in isolated try-except to avoid failing entire load
                 try:
-                    self._import_skill(skill_dir.name)
+                    self._import_skill(skill_dir.name, skill_file)
                 except Exception as e:
                     logger.warning(f"Failed to load skill {skill_dir.name}: {e}")
                     continue
 
-    def _import_skill(self, skill_name: str):
+    def _import_skill(self, skill_name: str, skill_file: Path | None = None):
         """Import a skill module."""
         try:
-            module = __import__(
-                f"skills.{skill_name}.skill",
-                fromlist=[skill_name],
-            )
+            try:
+                module = __import__(
+                    f"skills.{skill_name}.skill",
+                    fromlist=[skill_name],
+                )
+            except Exception:
+                if skill_file is None:
+                    raise
+                module_name = f"skills.dynamic_{skill_name.replace('-', '_')}.skill"
+                spec = importlib.util.spec_from_file_location(module_name, str(skill_file))
+                if spec is None or spec.loader is None:
+                    raise ImportError(f"Cannot build import spec for {skill_file}")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
 
             # Get the skill - could be a class or a decorated function
             # Try lowercase (for @skill decorated functions) first
