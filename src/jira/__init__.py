@@ -413,7 +413,7 @@ def _get_all_schemas() -> list:
                         },
                         "max_chars": {
                             "type": "integer",
-                            "description": "Maximum characters to return"
+                            "description": "Optional explicit response shortening. Leave unset for full Jira issue content; do not set when generating requirements/features unless the user explicitly asks for a shortened response."
                         },
                         "max_comments": {
                             "type": "integer",
@@ -455,7 +455,10 @@ def _get_all_schemas() -> list:
                             "default": "markdown",
                             "description": "Output format: markdown, wiki, or raw"
                         },
-                        "max_chars": {"type": "integer", "description": "Maximum characters to return"},
+                        "max_chars": {
+                            "type": "integer",
+                            "description": "Optional explicit response shortening. Leave unset for full Jira issue content; do not set when generating requirements/features unless the user explicitly asks for a shortened response."
+                        },
                         "max_comments": {"type": "integer", "description": "Maximum comments to include", "default": 5},
                         "include_comments": {"type": "boolean", "description": "Include comments", "default": True},
                         "include_attachment_urls": {

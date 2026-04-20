@@ -566,7 +566,7 @@ def get_tools_schemas() -> list:
                         },
                         "max_chars": {
                             "type": "integer",
-                            "description": "Maximum characters to return (avoid token overflow)"
+                            "description": "Optional explicit response shortening. Leave unset for full Confluence page content; do not set unless the user explicitly asks for a shortened response."
                         }
                     },
                     "required": ["page_id"]
@@ -590,7 +590,7 @@ def get_tools_schemas() -> list:
                         },
                         "max_chars": {
                             "type": "integer",
-                            "description": "Maximum characters to return (avoid token overflow)"
+                            "description": "Optional explicit response shortening. Leave unset for full Confluence page content; do not set unless the user explicitly asks for a shortened response."
                         }
                     },
                     "required": ["url"]

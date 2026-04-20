@@ -251,6 +251,7 @@ class TestToolSchemas:
         props = get_page_schema["function"]["parameters"]["properties"]
         
         assert "max_chars" in props
+        assert "Leave unset for full Confluence page content" in props["max_chars"]["description"]
     
     def test_create_page_schema_has_body_format(self):
         """Test confluence_create_page schema includes body_format parameter."""
