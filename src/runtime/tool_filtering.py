@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
+INTERNAL_SUPPORT_TOOL_NAMES = {"context_read_ref"}
+
+
+def is_internal_support_tool_name(tool_name: str) -> bool:
+    return isinstance(tool_name, str) and tool_name.strip().lower() in INTERNAL_SUPPORT_TOOL_NAMES
+
 
 @dataclass(frozen=True)
 class LlmToolsSpec:
@@ -145,6 +151,17 @@ def filter_tool_schemas_for_llm(
 
     unmatched_patterns = [pattern for pattern in spec.patterns if pattern.lower() not in matched_patterns]
 
+    # Internal support tools should remain available unless tools are explicitly disabled.
+    matched_names_set = {name.lower() for name in matched_names}
+    for schema in tool_schemas:
+        name = extract_tool_name(schema)
+        if not name or name.lower() in matched_names_set:
+            continue
+        if is_internal_support_tool_name(name):
+            matched_schemas.append(schema)
+            matched_names.append(name)
+            matched_names_set.add(name.lower())
+
     return FilteredToolSchemasResult(
         filtered_schemas=matched_schemas,
         allowed_tool_names=matched_names,
@@ -165,6 +182,8 @@ def is_tool_name_enabled_for_llm(tool_name: str, llm_config: Dict[str, Any]) -> 
         return True
     if spec.mode == "none":
         return False
+    if is_internal_support_tool_name(tool_name):
+        return True
     lowered_name = tool_name.strip().lower()
     return any(fnmatchcase(lowered_name, pattern.lower()) for pattern in spec.patterns)
 

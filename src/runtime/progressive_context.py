@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
-from typing import Any, Dict, List, Sequence, Set
+import re
+from typing import Any, Dict, List, Sequence, Set, Tuple
 
 from src.agents.compaction import (
     AgentMessage,
@@ -21,6 +22,7 @@ from src.runtime.context_summary import (
 )
 from src.sessions.manager import session_manager
 from src.utils.truncate import truncate
+from src.context_blob_store import build_section_map, put_text
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +146,193 @@ def _resolve_stage_thresholds(*, stage: str, context_window: int, hard_threshold
     return int(context_window * 0.65), hard_threshold
 
 
+def resolve_prompt_budget(*, stage: str, model: str | None) -> Dict[str, int]:
+    llm_cfg = config.llm if isinstance(config.llm, dict) else {}
+    budget_cfg = llm_cfg.get("context_budget") if isinstance(llm_cfg.get("context_budget"), dict) else {}
+    default_cfg = budget_cfg.get("default") if isinstance(budget_cfg.get("default"), dict) else {}
+    stage_cfg = budget_cfg.get(stage) if isinstance(budget_cfg.get(stage), dict) else {}
+    merged = {**default_cfg, **stage_cfg}
+    context_window = int(resolve_context_window_tokens(model))
+    configured_reserved = int(merged.get("reserved_output_tokens", 8000) or 8000)
+    configured_safety = int(merged.get("safety_margin_tokens", 4000) or 4000)
+    max_prompt_tokens = int(merged.get("max_prompt_tokens", 50000) or 50000)
+    actual_max_output_tokens = int(config.llm.get("max_tokens", 64000) or 64000)
+    effective_reserved = min(configured_reserved, actual_max_output_tokens, int(context_window * 0.25))
+    effective_safety = min(configured_safety, int(context_window * 0.05))
+    context_based_prompt_cap = context_window - effective_reserved - effective_safety
+    base_prompt = min(max_prompt_tokens, context_based_prompt_cap)
+    if context_window < 4000:
+        prompt_budget_tokens = max(1, base_prompt)
+    else:
+        prompt_budget_tokens = max(4000, base_prompt)
+    return {
+        "context_window_tokens": context_window,
+        "prompt_budget_tokens": int(prompt_budget_tokens),
+        "reserved_output_tokens": int(effective_reserved),
+        "safety_margin_tokens": int(effective_safety),
+        "max_prompt_tokens": int(max_prompt_tokens),
+        "max_output_tokens": int(actual_max_output_tokens),
+    }
+
+
+def _extract_deterministic_assistant_summary(text: str, *, summary_max_chars: int = 2000) -> str:
+    lines = str(text or "").splitlines()
+    picks: List[str] = []
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        if re.match(r"^#{1,6}\s+", s):
+            picks.append(s)
+        elif s.lower().startswith(("feature:", "scenario:", "scenario outline:")):
+            picks.append(s)
+        elif re.search(r"\b(class|def|function|method)\s+[A-Za-z_][A-Za-z0-9_]*", s):
+            picks.append(s)
+        elif re.search(r"(error|exception|failed|traceback)", s, re.IGNORECASE):
+            picks.append(s)
+        elif re.search(r"[A-Za-z0-9_/.-]+\.[a-zA-Z0-9]{1,8}", s):
+            picks.append(s)
+        if len("\n".join(picks)) >= summary_max_chars:
+            break
+    if not picks:
+        head = text[: min(600, len(text))]
+        tail = text[-min(600, len(text)) :] if len(text) > 600 else ""
+        picks = [head] + ([f"...\n{tail}"] if tail else [])
+    summary = "\n".join(picks)
+    return truncate(summary, summary_max_chars)
+
+
+def _looks_artifact_like(text: str) -> bool:
+    sample = str(text or "")[:4000].lower()
+    markers = ("```", "feature:", "scenario:", "scenario outline:", "class ", "def ", "function ", "| ---")
+    return any(marker in sample for marker in markers)
+
+
+def _project_large_history_messages(
+    messages: List[AgentMessage],
+    *,
+    session_id: str,
+    recent_count: int,
+    stage: str,
+) -> Tuple[List[AgentMessage], Dict[str, Any]]:
+    if stage not in {"pre_request", "tool_loop", "skill_generation", "tool_loop_aggressive", "post_turn"}:
+        return list(messages), {"changed": False}
+    projection_cfg = (config.llm.get("context_projection") if isinstance(config.llm, dict) else {}) or {}
+    old_assistant_cfg = projection_cfg.get("old_assistant") if isinstance(projection_cfg.get("old_assistant"), dict) else {}
+    assistant_limit = int(old_assistant_cfg.get("max_chars", 6000) or 6000)
+    summary_max = int(old_assistant_cfg.get("summary_max_chars", 2000) or 2000)
+    tool_cfg = projection_cfg.get("old_tool") if isinstance(projection_cfg.get("old_tool"), dict) else {}
+    tool_limit = int(tool_cfg.get("max_chars", 8000) or 8000)
+    preview_chars = int(tool_cfg.get("preview_chars", 2000) or 2000)
+    keep_start = max(0, len(messages) - max(1, recent_count))
+    protected_tool_chain_ids = _collect_protected_tool_chain_ids(messages, recent_count)
+    refs: List[str] = []
+    saved = 0
+    projected_assistant = 0
+    projected_tool = 0
+    projected: List[AgentMessage] = []
+    for idx, msg in enumerate(messages):
+        text = str(msg.content or "")
+        if msg.role == "assistant" and msg.tool_calls:
+            assistant_tool_limit = int(old_assistant_cfg.get("artifact_like_max_chars", assistant_limit) or assistant_limit)
+            if not _looks_artifact_like(text):
+                assistant_tool_limit = assistant_limit
+            if len(text) > assistant_tool_limit:
+                ref = put_text(
+                    session_id=session_id,
+                    kind="assistant_output",
+                    source_id=f"assistant_tool_calls_{idx}",
+                    title="assistant_tool_call_content",
+                    content=text,
+                    metadata={"stage": stage, "tool_calls": True},
+                )
+                refs.append(ref)
+                summary = _extract_deterministic_assistant_summary(text, summary_max_chars=summary_max)
+                compact = (
+                    f"[assistant tool-call content compacted | original_chars={len(text)} | ref={ref}]\n"
+                    f"Summary:\n{summary}\n\n"
+                    f"Tool calls are preserved below; full assistant text is available through context_read_ref(ref=\"{ref}\")."
+                )
+                saved += max(0, len(text) - len(compact))
+                projected_assistant += 1
+                projected.append(
+                    AgentMessage(
+                        role="assistant",
+                        content=compact,
+                        timestamp=msg.timestamp,
+                        tool_calls=msg.tool_calls,
+                        tool_use_id=msg.tool_use_id,
+                        tool_name=getattr(msg, "tool_name", None),
+                    )
+                )
+                continue
+        if idx >= keep_start:
+            projected.append(msg)
+            continue
+        if msg.role == "assistant" and not msg.tool_calls and len(text) > assistant_limit:
+            ref = put_text(session_id=session_id, kind="assistant_output", source_id=f"assistant_{idx}", title="assistant_output", content=text, metadata={"stage": stage})
+            refs.append(ref)
+            summary = _extract_deterministic_assistant_summary(text, summary_max_chars=summary_max)
+            compact = (
+                f"[old assistant output compacted | original_chars={len(text)} | ref={ref}]\n"
+                f"Summary:\n{summary}\n\nFull original assistant output is available in the session transcript/context blob."
+            )
+            saved += max(0, len(text) - len(compact))
+            projected_assistant += 1
+            projected.append(AgentMessage(role="assistant", content=compact, timestamp=msg.timestamp, tool_calls=msg.tool_calls, tool_use_id=msg.tool_use_id, tool_name=getattr(msg, "tool_name", None)))
+            continue
+        if msg.role == "tool" and msg.tool_use_id and msg.tool_use_id in protected_tool_chain_ids:
+            projected.append(msg)
+            continue
+        if msg.role == "tool" and len(text) > tool_limit:
+            ref = put_text(session_id=session_id, kind="tool_output", source_id=msg.tool_use_id or f"tool_{idx}", title=msg.tool_name or "tool_output", content=text, metadata={"tool_name": msg.tool_name, "stage": stage})
+            refs.append(ref)
+            toc = build_section_map(text)
+            toc_text = "\n".join(f"- {t.get('heading')} [{t.get('start')}..{t.get('end')}]" for t in toc[:10]) or "(no headings)"
+            compact = (
+                f"[old tool output compacted | original_chars={len(text)} | ref={ref}]\n"
+                f"Section map:\n{toc_text}\nPreview:\n{truncate(text, preview_chars)}\n"
+                f"Use context_read_ref(ref=\"{ref}\", section=\"raw\", max_chars=6000) for full text."
+            )
+            saved += max(0, len(text) - len(compact))
+            projected_tool += 1
+            projected.append(AgentMessage(role="tool", content=compact, timestamp=msg.timestamp, tool_use_id=msg.tool_use_id, tool_name=getattr(msg, "tool_name", None)))
+            continue
+        projected.append(msg)
+    projected = fix_tool_call_consistency(projected)
+    return projected, {
+        "changed": projected != messages,
+        "projected_old_assistant_messages": projected_assistant,
+        "projected_old_tool_messages": projected_tool,
+        "projection_chars_saved": saved,
+        "context_blob_refs_created": refs,
+    }
+
+
+def degrade_projected_context_sources(messages: List[Dict[str, Any]], *, max_envelope_chars: int = 2500) -> List[Dict[str, Any]]:
+    degraded: List[Dict[str, Any]] = []
+    for msg in messages:
+        item = dict(msg)
+        if item.get("role") != "tool":
+            degraded.append(item)
+            continue
+        content = str(item.get("content") or "")
+        if not content.lstrip().startswith("[large source tool result projected]"):
+            degraded.append(item)
+            continue
+        lines = [line for line in content.splitlines() if line.strip()]
+        keep_prefixes = ("[large source tool result projected]", "tool_name:", "kind:", "context_ref:", "original_chars:", "model_view_chars:", "full_content_available:")
+        kept = [line for line in lines if line.startswith(keep_prefixes)]
+        section_lines = [line for line in lines if line.startswith("- ")]
+        instruction = [line for line in lines if "context_read_ref(" in line]
+        compact = "\n".join(kept + ["section_map:"] + section_lines[:8] + instruction[:2])
+        if len(compact) > max_envelope_chars:
+            compact = truncate(compact, max_envelope_chars)
+        item["content"] = compact
+        degraded.append(item)
+    return degraded
+
+
 def _build_synthetic_summary_message(context_state: Dict[str, Any]) -> AgentMessage:
     return AgentMessage(
         role="system",
@@ -256,13 +445,16 @@ def _build_context_budget(
     recent_count: int,
     source_message_count: int,
     prepared_message_count: int,
+    prompt_budget: Dict[str, int] | None = None,
+    projection_stats: Dict[str, Any] | None = None,
+    request_estimated_tokens: int | None = None,
 ) -> dict:
     next_action = _resolve_next_compaction_action(
         compaction_level=compaction_level,
         current_tokens=estimated_tokens,
         soft_threshold=soft_threshold,
     )
-    return {
+    budget = {
         "stage": stage,
         "model": model,
         "estimated_tokens": estimated_tokens,
@@ -288,6 +480,28 @@ def _build_context_budget(
         "prepared_message_count": prepared_message_count,
         "token_estimate": True,
     }
+    if isinstance(prompt_budget, dict):
+        budget.update(
+            {
+                "prompt_budget_tokens": prompt_budget.get("prompt_budget_tokens"),
+                "reserved_output_tokens": prompt_budget.get("reserved_output_tokens"),
+                "safety_margin_tokens": prompt_budget.get("safety_margin_tokens"),
+                "max_prompt_tokens": prompt_budget.get("max_prompt_tokens"),
+                "max_output_tokens": prompt_budget.get("max_output_tokens"),
+            }
+        )
+    if request_estimated_tokens is not None:
+        budget["request_estimated_tokens"] = request_estimated_tokens
+    if isinstance(projection_stats, dict):
+        budget.update(
+            {
+                "projected_old_assistant_messages": projection_stats.get("projected_old_assistant_messages", 0),
+                "projected_old_tool_messages": projection_stats.get("projected_old_tool_messages", 0),
+                "projection_chars_saved": projection_stats.get("projection_chars_saved", 0),
+                "context_blob_refs_created": projection_stats.get("context_blob_refs_created", []),
+            }
+        )
+    return budget
 
 
 def build_portal_context_preview(context_state: dict | None) -> dict:
@@ -316,6 +530,22 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
                 "context_next_pruning_policy": budget.get("next_pruning_policy"),
                 "context_tokens_until_soft_threshold": budget.get("tokens_until_soft_threshold"),
                 "context_tokens_until_hard_threshold": budget.get("tokens_until_hard_threshold"),
+                "context_prompt_budget_tokens": budget.get("prompt_budget_tokens"),
+                "context_request_estimated_tokens": budget.get("request_estimated_tokens"),
+                "context_request_budget_stage": budget.get("request_budget_stage") or budget.get("stage"),
+                "context_reserved_output_tokens": budget.get("reserved_output_tokens"),
+                "context_safety_margin_tokens": budget.get("safety_margin_tokens"),
+                "context_max_prompt_tokens": budget.get("max_prompt_tokens"),
+                "context_max_output_tokens": budget.get("max_output_tokens"),
+                "context_projection_chars_saved": budget.get("projection_chars_saved"),
+                "context_projected_old_assistant_messages": budget.get("projected_old_assistant_messages"),
+                "context_projected_old_tool_messages": budget.get("projected_old_tool_messages"),
+                "context_context_blob_refs_created": (
+                    len(budget.get("context_blob_refs_created"))
+                    if isinstance(budget.get("context_blob_refs_created"), list)
+                    else budget.get("context_blob_refs_created")
+                ),
+                "context_request_over_budget": budget.get("request_over_budget"),
             }
         )
     return {key: value for key, value in preview.items() if value not in (None, "")}
@@ -340,13 +570,17 @@ async def prepare_progressive_messages(
 
     source_messages = _to_agent_messages(messages)
     source_count = len(source_messages)
-    context_window = resolve_context_window_tokens(model)
+    prompt_budget = resolve_prompt_budget(stage=stage, model=model)
+    context_window = int(prompt_budget.get("context_window_tokens") or resolve_context_window_tokens(model))
     configured_threshold = normalize_compaction_threshold(config.llm.get("compaction_threshold", 0.8), 0.8)
-    soft_threshold, hard_threshold = _resolve_stage_thresholds(
+    percentage_soft, percentage_hard = _resolve_stage_thresholds(
         stage=stage,
         context_window=context_window,
         hard_threshold=int(context_window * configured_threshold),
     )
+    prompt_budget_tokens = int(prompt_budget.get("prompt_budget_tokens", percentage_hard))
+    soft_threshold = min(percentage_soft, prompt_budget_tokens)
+    hard_threshold = min(percentage_hard, prompt_budget_tokens)
 
     if not source_messages:
         state = build_context_state_from_messages(
@@ -370,18 +604,26 @@ async def prepare_progressive_messages(
             recent_count=recent_count,
             source_message_count=0,
             prepared_message_count=0,
+            prompt_budget=prompt_budget,
         )
         return [], annotated_state
 
-    current_tokens = estimate_messages_tokens(source_messages)
+    projected_messages, projection_stats = _project_large_history_messages(
+        source_messages,
+        session_id=session_id,
+        recent_count=recent_count,
+        stage=stage,
+    )
+    projection_changed = bool(projection_stats.get("changed"))
+    current_tokens = estimate_messages_tokens(projected_messages)
     compaction_level = "none"
-    prepared_messages = list(source_messages)
+    prepared_messages = list(projected_messages)
     summary_source = "none"
 
     if current_tokens > soft_threshold:
-        micro_messages = _micro_compact_messages(source_messages, recent_count=recent_count)
+        micro_messages = _micro_compact_messages(projected_messages, recent_count=recent_count)
         prepared_messages = micro_messages
-        compaction_level = "micro"
+        compaction_level = "micro" if not projection_changed else "projection_micro"
         summary_source = "micro"
 
         micro_tokens = estimate_messages_tokens(micro_messages)
@@ -396,7 +638,7 @@ async def prepare_progressive_messages(
             summary_source = "full"
 
             source_state = build_context_state_from_messages(
-                source_messages,
+                projected_messages,
                 prior_context_state=prior_context_state,
                 compaction_level=compaction_level,
                 source_message_count=source_count,
@@ -412,7 +654,7 @@ async def prepare_progressive_messages(
 
     if compaction_level == "full":
         merged_state = build_context_state_from_messages(
-            source_messages,
+            projected_messages,
             prior_context_state=prior_context_state,
             compaction_level=compaction_level,
             source_message_count=source_count,
@@ -436,7 +678,10 @@ async def prepare_progressive_messages(
             recent_count=recent_count,
         )
 
-    final_messages = list(messages) if compaction_level == "none" else _to_dict_messages(prepared_messages)
+    if projection_changed and compaction_level == "none":
+        compaction_level = "projection"
+        summary_source = "projection"
+    final_messages = _to_dict_messages(prepared_messages) if (compaction_level != "none" or projection_changed) else list(messages)
     prepared_tokens = estimate_messages_tokens(_to_agent_messages(final_messages))
     annotated_state = _annotate_context_state(
         merged_state,
@@ -457,6 +702,8 @@ async def prepare_progressive_messages(
         recent_count=recent_count,
         source_message_count=source_count,
         prepared_message_count=len(final_messages),
+        prompt_budget=prompt_budget,
+        projection_stats=projection_stats,
     )
     return final_messages, annotated_state
 
@@ -478,10 +725,6 @@ async def apply_progressive_context_after_turn(
         stage="post_turn",
         recent_count=5,
     )
-
-    if prepared_messages != history:
-        session["history"] = prepared_messages
-        session["updated_at"] = datetime.now().isoformat()
 
     await session_manager.set_context_state(session_id, context_state)
     return context_state

@@ -1079,6 +1079,7 @@ def build_default_execution_bus(
     async def tool_handler(request: ExecutionRequest) -> ExecutionResult:
         tool_name = _get_required(request.input_payload, "tool_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
+        kwargs.setdefault("_session_id", request.session_id)
         raw_tool_result = await execute_tool_callable(tool_name, **kwargs)
         normalized = _normalize_tool_execution_outcome(
             tool_name=tool_name,
@@ -2417,6 +2418,7 @@ def build_default_execution_bus(
             )
         tool_name = _get_required(request.input_payload, "tool_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
+        kwargs.setdefault("_session_id", request.session_id)
         event_callback = request.input_payload.get("event_callback")
         raw_task_result = await task_manager.run_tool_task(
             session_id=request.session_id or request.request_id,

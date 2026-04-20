@@ -3,6 +3,7 @@ import pytest
 from src.runtime import progressive_context
 from src.runtime.progressive_context import (
     build_portal_context_preview,
+    degrade_projected_context_sources,
     prepare_progressive_messages,
 )
 
@@ -92,9 +93,11 @@ async def test_prepare_progressive_messages_adds_budget_fields(monkeypatch):
     assert state["budget"]["usage_percent"] == 40.0
     assert state["budget"]["prepared_usage_percent"] == 40.0
     assert state["budget"]["soft_threshold_tokens"] == 650
-    assert state["budget"]["hard_threshold_tokens"] == 800
+    assert state["budget"]["hard_threshold_tokens"] == 700
     assert state["budget"]["tokens_until_soft_threshold"] == 250
-    assert state["budget"]["tokens_until_hard_threshold"] == 400
+    assert state["budget"]["tokens_until_hard_threshold"] == 300
+    assert state["budget"]["prompt_budget_tokens"] == 700
+    assert state["budget"]["reserved_output_tokens"] == 250
     assert state["budget"]["next_compaction_action"] == "none"
     assert "No compaction planned" in state["budget"]["next_pruning_policy"]
 
@@ -267,7 +270,7 @@ async def test_prepare_progressive_messages_preserves_tool_chain_consistency(mon
     tool_ids = [item.get("tool_call_id") for item in prepared if item.get("role") == "tool"]
     assert "tc-1" in tool_ids
     assert any(item.get("tool_calls") for item in prepared if item.get("role") == "assistant")
-    assert state["compaction_level"] in {"micro", "full"}
+    assert state["compaction_level"] in {"micro", "full", "projection_micro"}
 
 
 @pytest.mark.asyncio
@@ -329,6 +332,50 @@ def test_build_portal_context_preview_returns_preview_keys_only():
     }
 
 
+def test_build_portal_context_preview_includes_request_budget_fields():
+    preview = build_portal_context_preview(
+        {
+            "compaction_level": "projection",
+            "summary": "s",
+            "budget": {
+                "prepared_usage_percent": 12.0,
+                "prompt_budget_tokens": 32000,
+                "request_estimated_tokens": 40000,
+                "reserved_output_tokens": 16000,
+                "safety_margin_tokens": 4000,
+                "max_prompt_tokens": 32000,
+                "max_output_tokens": 64000,
+                "projection_chars_saved": 12345,
+                "projected_old_assistant_messages": 2,
+                "projected_old_tool_messages": 3,
+                "context_blob_refs_created": ["ctx://context/a", "ctx://context/b"],
+                "request_over_budget": True,
+                "request_budget_stage": "skill_finalizer",
+            },
+        }
+    )
+    import json
+
+    assert preview["context_prompt_budget_tokens"] == 32000
+    assert preview["context_request_estimated_tokens"] == 40000
+    assert preview["context_reserved_output_tokens"] == 16000
+    assert preview["context_safety_margin_tokens"] == 4000
+    assert preview["context_max_prompt_tokens"] == 32000
+    assert preview["context_max_output_tokens"] == 64000
+    assert preview["context_projection_chars_saved"] == 12345
+    assert preview["context_projected_old_assistant_messages"] == 2
+    assert preview["context_projected_old_tool_messages"] == 3
+    assert preview["context_context_blob_refs_created"] == 2
+    assert preview["context_request_budget_stage"] == "skill_finalizer"
+    assert preview["context_request_over_budget"] is True
+    assert "ctx://context/a" not in json.dumps(preview)
+
+
+def test_build_portal_context_preview_uses_request_budget_stage_when_present():
+    preview = build_portal_context_preview({"budget": {"request_budget_stage": "skill_generation"}})
+    assert preview["context_request_budget_stage"] == "skill_generation"
+
+
 def test_progressive_context_dict_roundtrip_preserves_tool_name():
     messages = [
         {
@@ -344,3 +391,111 @@ def test_progressive_context_dict_roundtrip_preserves_tool_name():
 
     assert restored[0]["tool_name"] == "jira_get_issue"
     assert restored[0]["tool_call_id"] == "call_1"
+
+
+def test_resolve_prompt_budget_caps_large_context_window(monkeypatch):
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 200000)
+    budget = progressive_context.resolve_prompt_budget(stage="tool_loop", model="gpt-5-mini")
+    assert budget["prompt_budget_tokens"] == 32000
+    assert budget["reserved_output_tokens"] == 16000
+
+
+@pytest.mark.asyncio
+async def test_projection_runs_before_threshold_checks_and_compacts_old_assistant(monkeypatch):
+    old = "Feature: Big\n" + ("\nScenario: very long\nGiven x" * 4000)
+    messages = [
+        {"role": "assistant", "content": old},
+        {"role": "user", "content": "latest"},
+    ]
+
+    async def _get_context_state(_session_id):
+        return {}
+
+    monkeypatch.setattr(progressive_context.session_manager, "get_context_state", _get_context_state)
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 200000)
+    monkeypatch.setattr(progressive_context, "estimate_messages_tokens", lambda msgs: 100)
+
+    prepared, state = await prepare_progressive_messages(
+        messages=messages,
+        model="gpt-5-mini",
+        session_id="s-proj",
+        stage="tool_loop",
+        recent_count=1,
+    )
+    assert prepared != messages
+    assert "ctx://context/" in prepared[0]["content"]
+    assert state["budget"]["projected_old_assistant_messages"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_apply_progressive_context_after_turn_does_not_overwrite_history(monkeypatch):
+    session = {
+        "history": [{"role": "assistant", "content": "x" * 20000}, {"role": "user", "content": "next"}],
+        "metadata": {},
+    }
+
+    async def _get_session(_session_id):
+        return session
+
+    saved = {}
+
+    async def _set_context_state(_session_id, state):
+        saved["state"] = state
+
+    monkeypatch.setattr(progressive_context.session_manager, "get_session", _get_session)
+    monkeypatch.setattr(progressive_context.session_manager, "set_context_state", _set_context_state)
+
+    result = await progressive_context.apply_progressive_context_after_turn(session_id="s1", model="gpt-5-mini")
+    assert session["history"][0]["content"] == "x" * 20000
+    assert isinstance(result, dict)
+    assert "state" in saved
+
+
+@pytest.mark.asyncio
+async def test_projects_large_assistant_with_tool_calls_even_when_recent(monkeypatch):
+    huge = "```gherkin\n" + ("\nScenario: S\nGiven x\nWhen y\nThen z" * 2500)
+    messages = [
+        {"role": "user", "content": "generate tests"},
+        {
+            "role": "assistant",
+            "content": huge,
+            "tool_calls": [{"id": "call_1", "function": {"name": "jira_get_issue_by_url", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "tool_name": "jira_get_issue_by_url", "content": "short result"},
+    ]
+
+    async def _get_context_state(_session_id):
+        return {}
+
+    monkeypatch.setattr(progressive_context.session_manager, "get_context_state", _get_context_state)
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 200000)
+    monkeypatch.setattr(progressive_context, "estimate_messages_tokens", lambda msgs: 100)
+
+    prepared, _state = await prepare_progressive_messages(
+        messages=messages,
+        model="gpt-5-mini",
+        session_id="s-assistant-toolcalls",
+        stage="tool_loop",
+        recent_count=5,
+    )
+    assistant = next(m for m in prepared if m["role"] == "assistant")
+    assert "[assistant tool-call content compacted" in assistant["content"]
+    assert "ctx://context/" in assistant["content"]
+    assert assistant["tool_calls"][0]["id"] == "call_1"
+    assert assistant["tool_calls"][0]["function"]["name"] == "jira_get_issue_by_url"
+
+
+def test_degrade_projected_context_sources_keeps_ref_and_call_id():
+    messages = [
+        {"role": "user", "content": "u"},
+        {
+            "role": "tool",
+            "tool_call_id": "call_9",
+            "content": "[large source tool result projected]\ntool_name: jira_get_issue\nkind: jira_issue\ncontext_ref: ctx://context/s/jira_issue/aaaaaaaaaaaa\noriginal_chars: 12000\nmodel_view_chars: 8000\nfull_content_available: true\nsection_map:\n- A\n- B\npreview:\n" + ("x" * 5000) + "\nTo read more, call: context_read_ref(ref=\"ctx://context/s/jira_issue/aaaaaaaaaaaa\", section=\"raw\", max_chars=6000)",
+        },
+    ]
+    degraded = degrade_projected_context_sources(messages, max_envelope_chars=600)
+    tool = degraded[1]
+    assert tool["tool_call_id"] == "call_9"
+    assert "context_ref: ctx://context/s/jira_issue/aaaaaaaaaaaa" in tool["content"]
+    assert "context_read_ref(" in tool["content"]

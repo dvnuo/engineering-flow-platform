@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 # Models that don't support Responses API and should use Chat API instead
 # Pre-compute lowercase set for O(1) lookup
 USE_CHAT_API_MODELS = {
-    "openai": {"gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-4", "gpt-4-turbo", "gpt-4o",  "gpt-4.1"},
-    "github_copilot": {"gpt-4.1", "gpt-4o", "gemini-2.5-pro"},  # All Copilot models support Responses API
+    "openai": {"gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-4", "gpt-4-turbo", "gpt-4.1"},
+    "github_copilot": {"gpt-4.1", "gemini-2.5-pro"},
     "claude": set(),  # Claude uses its own format
     "ollama": set(),  # Ollama uses its own API
 }
@@ -644,6 +644,7 @@ class OpenAIProvider(BaseProvider):
                     "name": item.get("name", ""),
                     "arguments": item.get("arguments", {}),
                 })
+        incomplete_reason = data.get("incomplete_details", {}).get("reason")
 
         # Prioritize function_call: if there are function_calls/tool_calls_compat, return directly to the upper layer
         if not content.strip():
@@ -693,7 +694,6 @@ class OpenAIProvider(BaseProvider):
                         "cost_usd": estimate_cost(model_name, prompt_tokens, completion_tokens)
                     }
                 }
-            incomplete_reason = data.get("incomplete_details", {}).get("reason")
             if incomplete_reason == "max_output_tokens":
                 logger.error(
                     "[LLM] Copilot API returned incomplete response because max_output_tokens was reached. payload=%s response=%s",
@@ -706,7 +706,10 @@ class OpenAIProvider(BaseProvider):
                         "type": "truncated_response",
                         "code": "max_output_tokens_exceeded",
                         "details": {
-                            "incomplete_reason": "max_output_tokens"
+                            "incomplete_reason": "max_output_tokens",
+                            "max_output_tokens": payload.get("max_output_tokens"),
+                            "request_estimated_tokens": data.get("usage", {}).get("input_tokens"),
+                            "suggestion": "Context was compacted but model output still reached max_output_tokens; split generation or write artifacts/files instead of emitting all content in chat.",
                         },
                         "status_code": 500,
                     }
@@ -760,6 +763,13 @@ class OpenAIProvider(BaseProvider):
                 "total_tokens": prompt_tokens + completion_tokens,
             }
         }
+        if incomplete_reason == "max_output_tokens":
+            result["truncated"] = True
+            result["warning"] = {
+                "type": "truncated_response",
+                "code": "max_output_tokens_exceeded",
+                "incomplete_reason": incomplete_reason,
+            }
         
         # Add _llm_debug for sidebar display (using base method)
         self._add_llm_debug(result, {
@@ -1062,6 +1072,8 @@ class GitHubCopilotProvider(BaseProvider):
                     "arguments": item.get("arguments", {}),
                 })
 
+        incomplete_reason = data.get("incomplete_details", {}).get("reason")
+
         # Priority: handle function_call first. If there are function_calls/tool_calls_compat, return directly to the upper layer.
         if not content.strip():
             # Pre-assign all return fields in advance to ensure robustness
@@ -1110,7 +1122,6 @@ class GitHubCopilotProvider(BaseProvider):
                         "cost_usd": estimate_cost(model_name, prompt_tokens, completion_tokens)
                     }
                 }
-            incomplete_reason = data.get("incomplete_details", {}).get("reason")
             if incomplete_reason == "max_output_tokens":
                 logger.error(
                     "[LLM] Copilot API returned incomplete response because max_output_tokens was reached. payload=%s response=%s",
@@ -1123,7 +1134,10 @@ class GitHubCopilotProvider(BaseProvider):
                         "type": "truncated_response",
                         "code": "max_output_tokens_exceeded",
                         "details": {
-                            "incomplete_reason": "max_output_tokens"
+                            "incomplete_reason": "max_output_tokens",
+                            "max_output_tokens": payload.get("max_output_tokens"),
+                            "request_estimated_tokens": data.get("usage", {}).get("input_tokens"),
+                            "suggestion": "Context was compacted but model output still reached max_output_tokens; split generation or write artifacts/files instead of emitting all content in chat.",
                         },
                         "status_code": 500,
                     }
@@ -1177,6 +1191,13 @@ class GitHubCopilotProvider(BaseProvider):
                 "total_tokens": prompt_tokens + completion_tokens,
             }
         }
+        if incomplete_reason == "max_output_tokens":
+            result["truncated"] = True
+            result["warning"] = {
+                "type": "truncated_response",
+                "code": "max_output_tokens_exceeded",
+                "incomplete_reason": incomplete_reason,
+            }
 
         # Add _llm_debug for sidebar display (using base method)
         self._add_llm_debug(result, {
@@ -1184,7 +1205,7 @@ class GitHubCopilotProvider(BaseProvider):
             "instructions": system_prompt,
             "input": input_items,
             "tools": converted_tools,
-            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),
         })
 
         # Calculate cost and record usage
@@ -1916,8 +1937,8 @@ service_reload_manager.register('llm', llm_client.reinit)
 
 # Models that support vision/image input
 USE_VISION_MODELS = {
-    "openai": {"gpt-5-mini", "gpt-5"},
-    "github_copilot": {"gpt-5-mini", "gpt-5", "gemini-2.5-pro"},
+    "openai": {"gpt-5-mini", "gpt-5", "gpt-4o"},
+    "github_copilot": {"gpt-5-mini", "gpt-5", "gemini-2.5-pro", "gpt-4o"},
     "claude": {"claude-sonnet", "claude-haiku", "claude-opus"},
     "ollama": set(),  # Ollama vision support varies
 }

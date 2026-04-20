@@ -107,3 +107,19 @@ async def test_confluence_search_by_title(mock_confluence_channel):
     result = await confluence_search_by_title("Search Term")
     mock_confluence_channel._request.assert_called()
     assert "result" in result.lower() or "Error" in result
+
+
+def test_confluence_get_page_schema_does_not_expose_max_chars():
+    from src.confluence import get_tools_schemas
+
+    schemas = get_tools_schemas()
+    schema = next(s for s in schemas if s["function"]["name"] == "confluence_get_page")
+    assert "max_chars" not in schema["function"]["parameters"]["properties"]
+
+
+def test_confluence_get_page_by_url_schema_does_not_expose_max_chars():
+    from src.confluence import get_tools_schemas
+
+    schemas = get_tools_schemas()
+    schema = next(s for s in schemas if s["function"]["name"] == "confluence_get_page_by_url")
+    assert "max_chars" not in schema["function"]["parameters"]["properties"]

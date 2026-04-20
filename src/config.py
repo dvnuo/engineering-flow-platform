@@ -110,6 +110,8 @@ class Config:
             "temperature": True,
             "max_tokens": True,
             "tools": True,
+            "context_budget": True,
+            "context_projection": True,
         },
         "proxy": {
             "enabled": True,

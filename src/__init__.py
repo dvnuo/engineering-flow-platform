@@ -56,6 +56,7 @@ from .jira import get_tools_schemas as get_jira_tools
 from .confluence import get_tools_schemas as get_confluence_tools
 from .git import get_tools_schemas as get_git_tools
 from .bash_tools import get_tools_schemas as get_bash_tools
+from .context_tools import get_tools_schemas as get_context_tools
 
 # Also export raw functions for backward compatibility
 from . import github
@@ -63,6 +64,7 @@ from . import jira
 from . import confluence
 from . import git
 from . import bash_tools
+from . import context_tools
 
 
 def get_all_tools() -> list:
@@ -73,6 +75,7 @@ def get_all_tools() -> list:
     tools.extend(get_jira_tools())
     tools.extend(get_confluence_tools())
     tools.extend(get_git_tools())
+    tools.extend(get_context_tools())
     return tools
 
 
@@ -106,6 +109,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     from . import jira as jira_module
     from . import github as github_module
     from . import confluence as confluence_module
+    from . import context_tools as context_tools_module
     kwargs = _strip_none_values(kwargs)
     
     # Bash/Shell tools
@@ -492,6 +496,21 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         max_chars = kwargs.get("max_chars")
         result = await confluence_module.confluence_get_page_by_url(url, format=format, max_chars=max_chars)
         return ToolResult(success="Error" not in result, content=result)
+
+    elif name == "context_read_ref":
+        ref = kwargs.get("ref", "")
+        section = kwargs.get("section")
+        start = kwargs.get("start")
+        max_chars = kwargs.get("max_chars", 6000)
+        _session_id = kwargs.get("_session_id")
+        result = await context_tools_module.context_read_ref(
+            ref=ref,
+            section=section,
+            start=start,
+            max_chars=max_chars,
+            _session_id=_session_id,
+        )
+        return ToolResult(success=True, content=result)
     
     elif name == "confluence_create_page":
         space_key = kwargs.get("space_key", "")

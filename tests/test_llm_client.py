@@ -467,6 +467,33 @@ class TestResponsesAPI:
         assert result["error"]["details"]["incomplete_reason"] == "max_output_tokens"
 
     @pytest.mark.asyncio
+    async def test_openai_responses_partial_content_with_max_output_tokens_returns_warning(self, openai_provider):
+        mock_response = MockResponse({
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "partial"}]}],
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        })
+        mock_client = MockHttpClient(mock_response)
+        with patch('httpx.AsyncClient', return_value=mock_client):
+            result = await openai_provider.responses(messages=[{"role": "user", "content": "hello"}])
+        assert result["content"] == "partial"
+        assert result["truncated"] is True
+        assert result["warning"]["code"] == "max_output_tokens_exceeded"
+
+    @pytest.mark.asyncio
+    async def test_openai_responses_empty_content_with_function_call_not_error_even_if_truncated(self, openai_provider):
+        mock_response = MockResponse({
+            "output": [{"type": "function_call", "call_id": "c1", "name": "read", "arguments": {}}],
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {"input_tokens": 10, "output_tokens": 0},
+        })
+        mock_client = MockHttpClient(mock_response)
+        with patch('httpx.AsyncClient', return_value=mock_client):
+            result = await openai_provider.responses(messages=[{"role": "user", "content": "hello"}])
+        assert "error" not in result
+        assert result["function_calls"][0]["call_id"] == "c1"
+
+    @pytest.mark.asyncio
     async def test_responses_tool_calls(self, openai_provider):
         """Test responses() parses tool calls correctly."""
         # Response with function call
@@ -659,7 +686,6 @@ class TestChatAPIFallback:
             # Verify provider.responses was called (no fallback)
             mock_responses.assert_called_once()
             assert result["content"] == "test response"
-
     @pytest.mark.asyncio
     async def test_responses_fallback_preserves_function_calls(self):
         """Test that fallback converts function_calls correctly."""
@@ -1057,3 +1083,12 @@ class TestVisionModelSelection:
         from src.agents.llm import get_vision_fallback_model
         assert get_vision_fallback_model("unknown") is None
         assert get_vision_fallback_model(None) is None
+
+
+def test_openai_provider_debug_fallback_max_tokens_matches_responses_default():
+    import inspect
+    from src.agents.llm import OpenAIProvider
+
+    source = inspect.getsource(OpenAIProvider.responses)
+    assert "config.llm.get('max_tokens', 1000)" not in source
+    assert "config.llm.get('max_tokens', 64000)" in source

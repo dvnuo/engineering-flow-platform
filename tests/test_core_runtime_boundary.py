@@ -1,4 +1,5 @@
 import inspect
+import re
 
 import pytest
 
@@ -95,25 +96,20 @@ def test_tool_feedback_text_truncates_long_text_with_count_at_default_8000():
     assert len(output) < len(long_value)
 
 
-@pytest.mark.parametrize(
-    "tool_name",
-    [
-        "jira_get_issue",
-        "jira_get_issue_by_url",
-        "jira_search",
-        "confluence_get_page",
-        "confluence_get_page_by_url",
-        "confluence_get_comments",
-    ],
-)
-def test_tool_feedback_text_for_jira_and_confluence_is_unbounded(tool_name):
+@pytest.mark.parametrize("tool_name", ["jira_get_issue", "confluence_get_page"])
+def test_tool_feedback_text_for_large_jira_confluence_is_bounded_with_ref(tool_name):
     from src.agents import core
+    from src.context_blob_store import read_ref
 
     long_value = "A" * 20000
-    output = core._tool_feedback_text_for_tool(tool_name, long_value)
-
-    assert output == long_value
-    assert "chars hidden" not in output
+    output = core._tool_feedback_text_for_tool(tool_name, long_value, session_id="s-core")
+    assert "context_ref: ctx://context/" in output
+    assert "original_chars: 20000" in output
+    assert "full_content_available: true" in output
+    assert len(output) < len(long_value)
+    ref_match = re.search(r"context_ref:\s*(ctx://context/[^\s]+)", output)
+    assert ref_match
+    assert read_ref(ref_match.group(1), session_id="s-core", max_chars=22000) == long_value
 
 
 def test_tool_feedback_text_for_non_jira_confluence_uses_default_8000_limit():
@@ -127,16 +123,11 @@ def test_tool_feedback_text_for_non_jira_confluence_uses_default_8000_limit():
     assert len(output) < len(long_value)
 
 
-def test_unbounded_tool_feedback_prefix_policy_is_prefix_based():
+def test_large_source_feedback_prefix_policy_is_prefix_based():
     from src.agents import core
 
-    assert core._is_unbounded_tool_feedback("jira_get_issue") is True
-    assert core._is_unbounded_tool_feedback("jira_future_bundle") is True
-    assert core._is_unbounded_tool_feedback("confluence_get_page") is True
-    assert core._is_unbounded_tool_feedback("confluence_future_tool") is True
-    assert core._is_unbounded_tool_feedback("github_get_pull_request") is False
-    assert core._is_unbounded_tool_feedback("") is False
-    assert core._is_unbounded_tool_feedback(None) is False
+    assert "jira_" in core.LARGE_SOURCE_TOOL_PREFIXES
+    assert "confluence_" in core.LARGE_SOURCE_TOOL_PREFIXES
 
 
 def test_tool_feedback_text_allows_explicit_unbounded_max_length():
@@ -145,6 +136,41 @@ def test_tool_feedback_text_allows_explicit_unbounded_max_length():
     value = "A" * 20000
     assert core._tool_feedback_text(value, max_length=None) == value
     assert core._tool_feedback_text(value, max_length=0) == value
+
+
+def test_tool_feedback_text_for_short_jira_confluence_keeps_full_text():
+    from src.agents import core
+
+    value = "short jira body"
+    output = core._tool_feedback_text_for_tool("jira_get_issue", value, session_id="s-core")
+    assert output == value
+
+
+def test_large_source_feedback_projection_is_idempotent():
+    from src.agents import core
+    from src.context_blob_store import read_ref
+
+    raw = "# MMGFX-1\n## Description\nA\n" + ("x" * 20000)
+    first = core._tool_feedback_text_for_tool("jira_get_issue", raw, session_id="s1")
+    second = core._tool_feedback_text_for_tool("jira_get_issue", first, session_id="s1")
+    assert second == first
+    assert second.count("[large source tool result projected]") == 1
+    ref = re.search(r"context_ref:\s*(ctx://context/[^\s]+)", first).group(1)
+    restored = read_ref(ref, session_id="s1", max_chars=26000)
+    assert restored == raw
+
+
+def test_jira_envelope_prioritizes_acceptance_criteria_even_when_late():
+    from src.agents import core
+
+    jira_text = (
+        "# MMGFX-9: Title\n**Status:** Open\n## Description\nShort desc\n"
+        + ("noise\n" * 4000)
+        + "## Acceptance Criteria\n- Must validate AC path\n- Another AC\n"
+    )
+    output = core._tool_feedback_text_for_tool("jira_get_issue", jira_text, session_id="s-ac")
+    assert "Acceptance Criteria" in output
+    assert "ctx://context/" in output
 
 
 def test_agent_process_source_uses_per_tool_feedback_policy_for_all_tool_feedback_paths():
@@ -166,6 +192,295 @@ def test_to_input_items_source_uses_per_tool_feedback_policy():
     assert '"output": _tool_feedback_text(content) if content else ""' not in module_source
     assert "_tool_feedback_text_for_tool(" in module_source
     assert "tool_names_by_call_id" in module_source
+    assert "build_responses_input_items(" in module_source
+
+
+def test_to_input_items_path_has_projected_feedback_guard():
+    from src.agents import core
+
+    module_source = inspect.getsource(core)
+    assert "_is_projected_large_source_feedback" in module_source
+
+
+def test_projected_marker_without_ctx_ref_is_still_bounded_for_non_large_source():
+    from src.agents import core
+
+    malicious = "[old assistant output compacted | ref=none]\n" + ("x" * 50000)
+    output = core._tool_feedback_text_for_tool("github_get_pull_request", malicious)
+    assert len(output) < len(malicious)
+    assert "chars hidden" in output
+
+
+def test_real_projected_marker_with_ctx_ref_passes_through():
+    from src.agents import core
+
+    projected = (
+        "[old assistant output compacted | original_chars=20000 | ref=ctx://context/s/k/aaaaaaaaaaaa]\n"
+        "Summary:\nhello"
+    )
+    assert core._tool_feedback_text_for_tool("github_get_pull_request", projected) == projected
+
+
+def test_assistant_skill_projected_marker_is_recognized_and_idempotent():
+    from src.agents import core
+
+    projected = (
+        "[assistant skill content compacted | original_chars=20000 | ref=ctx://context/s/k/aaaaaaaaaaaa]\n"
+        "Summary:\nFeature: Y"
+    )
+    assert core._is_projected_feedback(projected) is True
+    assert core.project_skill_assistant_content_for_input_items(projected, session_id="s", round_num=1) == projected
+
+
+def test_assistant_skill_marker_without_ctx_ref_still_truncates():
+    from src.agents import core
+
+    malicious = "[assistant skill content compacted | ref=none]\n" + ("x" * 50000)
+    output = core._tool_feedback_text_for_tool("github_get_pull_request", malicious)
+    assert "chars hidden" in output
+    assert len(output) < len(malicious)
+
+
+def test_build_responses_input_items_mobilex_shape_projects_large_assistant_and_jira_content():
+    from src.agents import core
+    from src.context_blob_store import read_ref
+
+    long_gherkin = "Feature: MobileX\n" + ("Scenario: Long\nGiven step\nWhen step\nThen step\n" * 500)
+    long_jira = (
+        "# MMGFX-123: Generator\n**Status:** Open\n## Description\n"
+        + ("noise\n" * 3500)
+        + "## Acceptance Criteria\n- AC one\n- AC two\n"
+    )
+    messages = [
+        {"role": "user", "content": "/mobilex-test-generator build tests"},
+        {"role": "assistant", "content": long_gherkin, "tool_calls": [
+            {"id": "call_1", "function": {"name": "jira_get_issue", "arguments": "{\"issue_key\":\"MMGFX-123\"}"}}
+        ]},
+        {"role": "tool", "tool_call_id": "call_1", "tool_name": "jira_get_issue", "content": long_jira},
+    ]
+
+    items = core.build_responses_input_items(messages, session_id="s-mobilex")
+    assistant_item = next(item for item in items if item.get("role") == "assistant")
+    tool_output_item = next(item for item in items if item.get("type") == "function_call_output")
+    function_call = next(item for item in items if item.get("type") == "function_call")
+
+    assert function_call["call_id"] == "call_1"
+    assert tool_output_item["call_id"] == "call_1"
+    assert assistant_item["content"] != long_gherkin
+    assert assistant_item["content"].count("[assistant skill content compacted") == 1
+    assert tool_output_item["output"] != long_jira
+    assert "ctx://context/" in assistant_item["content"]
+    assert "context_ref: ctx://context/" in tool_output_item["output"]
+    assert "Acceptance Criteria" in tool_output_item["output"]
+    jira_ref = re.search(r"context_ref:\s*(ctx://context/[^\s]+)", tool_output_item["output"]).group(1)
+    assert read_ref(jira_ref, session_id="s-mobilex", max_chars=30000) == long_jira
+
+
+def test_build_responses_input_items_keeps_already_projected_assistant_tool_call_content():
+    from src.agents import core
+
+    projected = (
+        "[assistant tool-call content compacted | original_chars=20000 | ref=ctx://context/s/assistant_output/aaaaaaaaaaaa]\n"
+        "Summary:\nFeature: X\nScenario: Y"
+    )
+    messages = [
+        {
+            "role": "assistant",
+            "content": projected,
+            "tool_calls": [{"id": "call_proj", "function": {"name": "jira_get_issue", "arguments": "{}"}}],
+        }
+    ]
+    items = core.build_responses_input_items(messages, session_id="s")
+    assistant_item = next(item for item in items if item.get("role") == "assistant")
+    function_call = next(item for item in items if item.get("type") == "function_call")
+    assert assistant_item["content"] == projected
+    assert function_call["call_id"] == "call_proj"
+    assert "[assistant skill content compacted" not in assistant_item["content"]
+
+
+def test_degrade_projected_context_sources_in_responses_input_items_preserves_call_id():
+    from src.agents import core
+
+    large_projected = (
+        "[large source tool result projected]\n"
+        "context_ref: ctx://context/s/k/aaaaaaaaaaaa\n"
+        + ("Z" * 6000)
+    )
+    items = [{"type": "function_call_output", "call_id": "abc123", "output": large_projected}]
+    degraded = core.degrade_projected_context_sources_in_responses_input_items(items, max_envelope_chars=500)
+    assert degraded[0]["call_id"] == "abc123"
+    assert len(degraded[0]["output"]) < len(large_projected)
+
+
+def test_degrade_projected_context_sources_in_responses_preserves_ref_and_read_instruction():
+    from src.agents import core
+
+    large_envelope = (
+        "[large source tool result projected]\n"
+        "tool_name: jira_get_issue\n"
+        "kind: jira_issue\n"
+        "context_ref: ctx://context/s/k/aaaaaaaaaaaa\n"
+        "original_chars: 22000\n"
+        "model_view_chars: 7000\n"
+        "full_content_available: true\n"
+        "section_map:\n- One\n- Two\n\n"
+        "preview:\n" + ("X" * 8000) + "\n\n"
+        "To read more, call: context_read_ref(ref=\"ctx://context/s/k/aaaaaaaaaaaa\", section=\"raw\", max_chars=6000)\n"
+    )
+    items = [{"type": "function_call_output", "call_id": "call_1", "output": large_envelope}]
+    degraded = core.degrade_projected_context_sources_in_responses_input_items(items, max_envelope_chars=700)
+    output = degraded[0]["output"]
+    assert degraded[0]["call_id"] == "call_1"
+    assert len(output) < len(large_envelope)
+    assert "context_ref: ctx://context/" in output
+    assert "original_chars:" in output
+    assert "context_read_ref(" in output
+
+
+def test_degrade_projected_context_sources_keeps_assistant_skill_ref():
+    from src.agents import core
+
+    projected = (
+        "[assistant skill content compacted | original_chars=21000 | ref=ctx://context/s/k/bbbbbbbbbbbb]\n"
+        "Summary:\nFeature: Y\n" + ("extra\n" * 500)
+    )
+    items = [{"type": "function_call_output", "call_id": "call_2", "output": projected}]
+    degraded = core.degrade_projected_context_sources_in_responses_input_items(items, max_envelope_chars=300)
+    assert degraded[0]["call_id"] == "call_2"
+    assert "ref=ctx://context/" in degraded[0]["output"]
+
+
+def test_tool_loop_budget_updates_include_request_estimation_fields():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent.process)
+    assert 'budget_state["request_estimated_tokens"]' in source
+    assert 'budget_state["request_over_budget"]' in source
+    assert 'emit_context_snapshot("tool_loop_budget"' in source
+
+
+def test_tool_loop_over_budget_path_applies_real_degradation_before_guard_prompt():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent.process)
+    assert "degrade_projected_context_sources(loop_messages)" in source
+
+
+def test_continue_skill_mode_source_uses_budget_estimation_and_skill_generation_budget():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent._continue_skill_mode)
+    assert "estimate_llm_request_tokens(" in source
+    assert 'resolve_prompt_budget(stage="skill_generation"' in source
+    assert "degrade_projected_context_sources_in_responses_input_items(input_items)" in source
+
+
+def test_is_tool_allowed_by_skill_runtime_allows_internal_support_tools():
+    from src.agents import core
+    from src.skills.runtime import SkillRuntimeConfig
+
+    runtime_cfg = SkillRuntimeConfig(
+        skill_name="demo",
+        allowed_tools=["jira_get_issue"],
+        allowed_tools_set={"jira_get_issue"},
+        tool_policy_declared=True,
+    )
+    assert core._is_tool_allowed_by_skill_runtime("jira_get_issue", runtime_cfg) is True
+    assert core._is_tool_allowed_by_skill_runtime("context_read_ref", runtime_cfg) is True
+    assert core._is_tool_allowed_by_skill_runtime("github_push", runtime_cfg) is False
+
+
+def test_skill_schema_list_branch_keeps_context_read_ref_if_globally_available():
+    from src.agents import core
+
+    self_tools = [
+        {"type": "function", "function": {"name": "context_read_ref"}},
+        {"type": "function", "function": {"name": "jira_get_issue_by_url"}},
+    ]
+    skill_tool_schemas = [{"type": "function", "function": {"name": "jira_get_issue_by_url"}}]
+    globally_allowed_tool_names = {"jira_get_issue_by_url", "context_read_ref"}
+
+    available_tools = [
+        schema for schema in skill_tool_schemas
+        if (core.extract_tool_name(schema) or "") in globally_allowed_tool_names
+    ]
+    support_tool_schemas = [
+        schema
+        for schema in self_tools
+        if (core.extract_tool_name(schema) or "").lower() in {name.lower() for name in core.INTERNAL_SUPPORT_TOOL_NAMES}
+    ]
+    existing_tool_names = {(core.extract_tool_name(schema) or "").lower() for schema in available_tools}
+    for schema in support_tool_schemas:
+        support_name = (core.extract_tool_name(schema) or "").lower()
+        if support_name and support_name not in existing_tool_names:
+            available_tools.append(schema)
+            existing_tool_names.add(support_name)
+
+    names = {core.extract_tool_name(schema) for schema in available_tools}
+    assert "jira_get_issue_by_url" in names
+    assert "context_read_ref" in names
+
+
+def test_context_budget_exceeded_error_contains_safe_budget_fields():
+    from src.agents import core
+
+    err = core._build_context_budget_exceeded_error(
+        request_estimated_tokens=12000,
+        loop_budget={
+            "prompt_budget_tokens": 10000,
+            "reserved_output_tokens": 2000,
+            "safety_margin_tokens": 500,
+            "max_prompt_tokens": 10000,
+            "max_output_tokens": 4000,
+        },
+        stage="tool_loop",
+    )
+    details = err["details"]
+    for key in (
+        "request_estimated_tokens",
+        "prompt_budget_tokens",
+        "reserved_output_tokens",
+        "safety_margin_tokens",
+        "max_prompt_tokens",
+        "max_output_tokens",
+        "request_over_budget",
+        "request_budget_stage",
+        "stage",
+        "suggestion",
+    ):
+        assert key in details
+    assert details["request_budget_stage"] == "tool_loop"
+    for unsafe_key in ("prompt", "payload", "input_items", "tools", "source_docs", "raw_model_response", "api_key"):
+        assert unsafe_key not in details
+
+
+def test_merge_request_budget_into_context_state_merges_safe_fields():
+    from src.agents import core
+
+    merged = core._merge_request_budget_into_context_state(
+        {"budget": {"existing": 1}},
+        {"request_estimated_tokens": 123, "request_over_budget": True, "stage": "skill_finalizer", "ignored_key": "x"},
+    )
+    assert merged["budget"]["existing"] == 1
+    assert merged["budget"]["request_estimated_tokens"] == 123
+    assert merged["budget"]["request_over_budget"] is True
+    assert merged["budget"]["request_budget_stage"] == "skill_finalizer"
+    assert "ignored_key" not in merged["budget"]
+
+
+def test_agent_process_source_attaches_runtime_events_for_early_budget_and_llm_errors():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent.process)
+    assert "return attach_runtime_events(error_response)" in source
+    assert "_merge_budget_into_error_details(error_response, latest_request_budget)" in source
+
+
+def test_continue_skill_mode_source_merges_budget_into_llm_errors():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent._continue_skill_mode)
+    assert "_merge_budget_into_error_details(error_response, skill_request_budget)" in source
 
 
 def test_is_meaningful_context_state_rules():

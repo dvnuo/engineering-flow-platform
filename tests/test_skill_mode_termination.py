@@ -26,10 +26,20 @@ def make_agent():
     agent = Agent.__new__(Agent)
     agent.model = None
     agent.tools = [{"function": {"name": "search"}}]
+    agent.agent_id = None
     return agent
 
 
-async def run_replay_case(monkeypatch, *, responses, tool_output="lookup output", message="search issue", initial_session=None):
+async def run_replay_case(
+    monkeypatch,
+    *,
+    responses,
+    tool_output="lookup output",
+    message="search issue",
+    initial_session=None,
+    capture_llm_kwargs=None,
+    tracer_factory=None,
+):
     from src.agents import core as core_mod
 
     call_counter = {"n": 0}
@@ -38,6 +48,8 @@ async def run_replay_case(monkeypatch, *, responses, tool_output="lookup output"
     async def fake_responses(**kwargs):
         idx = call_counter["n"]
         call_counter["n"] += 1
+        if isinstance(capture_llm_kwargs, list):
+            capture_llm_kwargs.append(dict(kwargs))
         return responses[min(idx, len(responses) - 1)]
 
     async def fake_execute_tool_by_name(name, **kwargs):
@@ -59,7 +71,8 @@ async def run_replay_case(monkeypatch, *, responses, tool_output="lookup output"
     monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
     monkeypatch.setattr(core_mod, "execute_tool_by_name", fake_execute_tool_by_name)
     monkeypatch.setattr(core_mod, "session_manager", FakeSessionManager)
-    monkeypatch.setattr("src.skills.get_tracer", lambda: FakeTracer())
+    tracer_provider = tracer_factory or (lambda: FakeTracer())
+    monkeypatch.setattr("src.skills.get_tracer", tracer_provider)
 
     skill = SimpleNamespace(name="lookup", description="search issue", path="", tools=[], strategy=[])
     agent = make_agent()
@@ -316,3 +329,326 @@ def test_skill_session_from_dict_backward_compatible():
     assert sess.tool_round_count == 0
     assert sess.finalizer_state == "idle"
     assert sess.termination_reason == ""
+
+
+@pytest.mark.asyncio
+async def test_run_skill_finalizer_uses_passed_max_tokens(monkeypatch):
+    from src.agents import core as core_mod
+
+    captured = {}
+    original_max = core_mod.config.llm.get("max_tokens")
+    core_mod.config.llm["max_tokens"] = 64000
+
+    async def fake_responses(**kwargs):
+        captured["max_tokens"] = kwargs.get("max_tokens")
+        return {"content": "[FINISH]\ndone", "usage": {}}
+
+    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
+
+    try:
+        result, _usage = await core_mod._run_skill_finalizer(
+            input_items=[{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+            system_prompt="sys",
+            provider="openai",
+            model="gpt-5-mini",
+            skill_session=SkillSession(skill_name="lookup", original_user_request="x"),
+            track_usage=False,
+            usage_data={},
+            remaining_llm_budget=1,
+            max_tokens=4096,
+        )
+    finally:
+        if original_max is None:
+            core_mod.config.llm.pop("max_tokens", None)
+        else:
+            core_mod.config.llm["max_tokens"] = original_max
+
+    assert result.state == "succeeded"
+    assert captured["max_tokens"] == 4096
+
+
+@pytest.mark.asyncio
+async def test_run_skill_finalizer_caps_to_config_when_config_smaller(monkeypatch):
+    from src.agents import core as core_mod
+
+    captured = {}
+    original_max = core_mod.config.llm.get("max_tokens")
+    core_mod.config.llm["max_tokens"] = 2048
+
+    async def fake_responses(**kwargs):
+        captured["max_tokens"] = kwargs.get("max_tokens")
+        return {"content": "[FINISH]\ndone", "usage": {}}
+
+    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
+    try:
+        result, _usage = await core_mod._run_skill_finalizer(
+            input_items=[{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+            system_prompt="sys",
+            provider="openai",
+            model="gpt-5-mini",
+            skill_session=SkillSession(skill_name="lookup", original_user_request="x"),
+            track_usage=False,
+            usage_data={},
+            remaining_llm_budget=1,
+            max_tokens=4096,
+        )
+    finally:
+        if original_max is None:
+            core_mod.config.llm.pop("max_tokens", None)
+        else:
+            core_mod.config.llm["max_tokens"] = original_max
+
+    assert result.state == "succeeded"
+    assert captured["max_tokens"] == 2048
+
+
+@pytest.mark.asyncio
+async def test_run_skill_finalizer_aborts_when_request_over_budget(monkeypatch):
+    from src.agents import core as core_mod
+
+    calls = {"llm": 0}
+
+    async def fake_responses(**kwargs):
+        calls["llm"] += 1
+        return {"content": "[FINISH]\nshould-not-happen", "usage": {}}
+
+    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
+    monkeypatch.setattr(
+        core_mod,
+        "estimate_llm_request_tokens",
+        lambda **kwargs: 50000 if not kwargs.get("tools") else 100,
+    )
+    monkeypatch.setattr(
+        core_mod,
+        "resolve_prompt_budget",
+        lambda **kwargs: {
+            "prompt_budget_tokens": 28000,
+            "max_output_tokens": 4096,
+            "reserved_output_tokens": 1000,
+            "safety_margin_tokens": 500,
+            "max_prompt_tokens": 28000,
+        },
+    )
+
+    finalizer_result, _usage = await core_mod._run_skill_finalizer(
+        input_items=[{"type": "function_call_output", "call_id": "c1", "output": "[large source tool result projected]\ncontext_ref: ctx://context/s/k/aaaaaaaaaaaa\n" + ("X" * 6000)}],
+        system_prompt="sys",
+        provider="openai",
+        model="gpt-5-mini",
+        skill_session=SkillSession(skill_name="lookup", original_user_request="x"),
+        track_usage=False,
+        usage_data={},
+        remaining_llm_budget=1,
+        max_tokens=4096,
+    )
+
+    assert calls["llm"] == 0
+    assert finalizer_result.state == "terminal_failed"
+    assert finalizer_result.termination_reason == "finalizer_context_budget_exceeded"
+    assert finalizer_result.request_budget.get("request_over_budget") is True
+    assert finalizer_result.request_budget.get("stage") == "skill_finalizer"
+
+
+@pytest.mark.asyncio
+async def test_continue_skill_mode_uses_budget_max_output_tokens_for_llm_calls(monkeypatch):
+    from src.agents import core as core_mod
+
+    captured = []
+    original_max = core_mod.config.llm.get("max_tokens")
+    core_mod.config.llm["max_tokens"] = 4096
+
+    monkeypatch.setattr(
+        core_mod,
+        "resolve_prompt_budget",
+        lambda **kwargs: {
+            "prompt_budget_tokens": 50000,
+            "max_output_tokens": 4096,
+            "reserved_output_tokens": 2000,
+            "safety_margin_tokens": 500,
+            "max_prompt_tokens": 50000,
+        },
+    )
+    responses = [
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[FINISH]\ndone", "function_calls": [], "usage": {}},
+    ]
+    try:
+        await run_replay_case(monkeypatch, responses=responses, capture_llm_kwargs=captured)
+    finally:
+        if original_max is None:
+            core_mod.config.llm.pop("max_tokens", None)
+        else:
+            core_mod.config.llm["max_tokens"] = original_max
+
+    assert captured
+    assert captured[0].get("max_tokens") == 4096
+
+
+@pytest.mark.asyncio
+async def test_continue_skill_mode_finalizer_abort_includes_finalizer_request_budget(monkeypatch):
+    from src.agents import core as core_mod
+
+    async def fake_responses(**kwargs):
+        return {"content": "", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
+    monkeypatch.setattr(
+        core_mod,
+        "estimate_llm_request_tokens",
+        lambda **kwargs: 50000 if not kwargs.get("tools") else 100,
+    )
+    monkeypatch.setattr(
+        core_mod,
+        "resolve_prompt_budget",
+        lambda **kwargs: {
+            "prompt_budget_tokens": 28000,
+            "max_output_tokens": 4096,
+            "reserved_output_tokens": 1000,
+            "safety_margin_tokens": 500,
+            "max_prompt_tokens": 28000,
+        },
+    )
+
+    result, _snapshots, _calls = await run_replay_case(
+        monkeypatch,
+        responses=[{"content": "", "function_calls": [], "usage": {}}],
+    )
+    assert isinstance(result.get("request_budget"), dict)
+    assert result["request_budget"].get("stage") == "skill_finalizer"
+    assert result["request_budget"].get("request_budget_stage") == "skill_finalizer"
+    assert result["request_budget"].get("request_over_budget") is True
+
+
+@pytest.mark.asyncio
+async def test_continue_skill_mode_hard_guard_denies_out_of_policy_tool(monkeypatch):
+    from src.agents import core as core_mod
+    from src.skills.runtime import SkillRuntimeConfig
+
+    responses = [
+        {"content": "", "function_calls": [{"id": "c1", "function": {"name": "github_push", "arguments": "{}"}}], "usage": {}},
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[FINISH]\ndone", "function_calls": [], "usage": {}},
+    ]
+    runtime_cfg = SkillRuntimeConfig(
+        skill_name="lookup",
+        allowed_tools=["jira_get_issue_by_url"],
+        allowed_tools_set={"jira_get_issue_by_url"},
+        tool_policy_declared=True,
+    )
+    monkeypatch.setattr("src.skills.skill_registry.get_skill_runtime_config", lambda *args, **kwargs: runtime_cfg)
+    tracer_calls = []
+
+    class CaptureTracer(FakeTracer):
+        def log_tool_call(self, *args, **kwargs):
+            tracer_calls.append({"args": args, "kwargs": kwargs})
+            return None
+
+    async def _forbidden_execute(*args, **kwargs):
+        raise AssertionError("out-of-policy tool execution should not be called")
+
+    monkeypatch.setattr(core_mod, "_execute_tool_via_runtime_bus", _forbidden_execute)
+    captured_llm_kwargs = []
+
+    result, _snapshots, _calls = await run_replay_case(
+        monkeypatch,
+        responses=responses,
+        capture_llm_kwargs=captured_llm_kwargs,
+        tracer_factory=lambda: CaptureTracer(),
+    )
+    assert "done" in result["response"] or "fallback" in result["response"].lower()
+    assert tracer_calls
+    denied = tracer_calls[-1]["kwargs"]
+    assert denied.get("success") is False
+    assert denied.get("error") == "denied_by_skill_policy"
+    assert len(captured_llm_kwargs) >= 2
+    feedback_items = [
+        item
+        for item in captured_llm_kwargs[1].get("input_items", [])
+        if isinstance(item, dict) and item.get("type") == "function_call_output"
+    ]
+    assert any(item.get("call_id") == "c1" for item in feedback_items)
+
+
+@pytest.mark.asyncio
+async def test_continue_skill_mode_hard_guard_allows_context_read_ref(monkeypatch):
+    from src.agents import core as core_mod
+    from src.skills.runtime import SkillRuntimeConfig
+
+    responses = [
+        {"content": "", "function_calls": [{"id": "c1", "function": {"name": "context_read_ref", "arguments": "{\"ref\":\"ctx://context/s/k/aaaaaaaaaaaa\"}"}}], "usage": {}},
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[FINISH]\ndone", "function_calls": [], "usage": {}},
+    ]
+    runtime_cfg = SkillRuntimeConfig(
+        skill_name="lookup",
+        allowed_tools=["jira_get_issue_by_url"],
+        allowed_tools_set={"jira_get_issue_by_url"},
+        tool_policy_declared=True,
+    )
+    monkeypatch.setattr("src.skills.skill_registry.get_skill_runtime_config", lambda *args, **kwargs: runtime_cfg)
+    called = {"tool": None}
+
+    async def _fake_execute(*, tool_name, **kwargs):
+        called["tool"] = tool_name
+        return core_mod.ToolResult(success=True, content="ok", error=None)
+
+    monkeypatch.setattr(core_mod, "_execute_tool_via_runtime_bus", _fake_execute)
+
+    result, _snapshots, _calls = await run_replay_case(monkeypatch, responses=responses)
+    assert called["tool"] == "context_read_ref"
+    assert "done" in result["response"] or "fallback" in result["response"].lower()
+
+
+@pytest.mark.asyncio
+async def test_continue_skill_mode_error_response_includes_skill_generation_budget_stage(monkeypatch):
+    from src.agents import core as core_mod
+    monkeypatch.setattr(
+        core_mod,
+        "resolve_prompt_budget",
+        lambda **kwargs: {
+            "prompt_budget_tokens": 50000,
+            "max_output_tokens": 4096,
+            "reserved_output_tokens": 1000,
+            "safety_margin_tokens": 500,
+            "max_prompt_tokens": 50000,
+        },
+    )
+
+    result, _snapshots, _calls = await run_replay_case(
+        monkeypatch,
+        responses=[{"error": {"message": "boom", "type": "llm_error"}}],
+    )
+    assert result["request_budget"].get("request_budget_stage") == "skill_generation"
+
+
+@pytest.mark.asyncio
+async def test_continue_skill_mode_over_budget_error_includes_skill_generation_stage_fields(monkeypatch):
+    from src.agents import core as core_mod
+
+    monkeypatch.setattr(
+        core_mod,
+        "estimate_llm_request_tokens",
+        lambda **kwargs: 60000,
+    )
+    monkeypatch.setattr(
+        core_mod,
+        "resolve_prompt_budget",
+        lambda **kwargs: {
+            "prompt_budget_tokens": 28000,
+            "max_output_tokens": 4096,
+            "reserved_output_tokens": 1000,
+            "safety_margin_tokens": 500,
+            "max_prompt_tokens": 28000,
+        },
+    )
+
+    result, _snapshots, calls = await run_replay_case(
+        monkeypatch,
+        responses=[{"content": "", "function_calls": [], "usage": {}}],
+    )
+
+    assert calls == 0
+    assert result["error_type"] == "context_budget_exceeded"
+    assert result["details"]["request_budget_stage"] == "skill_generation"
+    assert result["details"]["stage"] == "skill_generation"
+    assert result["request_budget"]["request_budget_stage"] == "skill_generation"
