@@ -252,6 +252,16 @@ class TestToolSchemas:
         
         assert "max_chars" in props
         assert "Leave unset for full Confluence page content" in props["max_chars"]["description"]
+
+    def test_confluence_get_page_by_url_schema_max_chars_description_prefers_unset_default(self):
+        from src.confluence import get_tools_schemas
+
+        schemas = get_tools_schemas()
+        schema = next(s for s in schemas if s["function"]["name"] == "confluence_get_page_by_url")
+        desc = schema["function"]["parameters"]["properties"]["max_chars"]["description"]
+
+        assert "Leave unset for full Confluence page content" in desc
+        assert "do not set unless the user explicitly asks" in desc
     
     def test_create_page_schema_has_body_format(self):
         """Test confluence_create_page schema includes body_format parameter."""

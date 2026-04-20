@@ -127,6 +127,26 @@ def test_tool_feedback_text_for_non_jira_confluence_uses_default_8000_limit():
     assert len(output) < len(long_value)
 
 
+def test_unbounded_tool_feedback_prefix_policy_is_prefix_based():
+    from src.agents import core
+
+    assert core._is_unbounded_tool_feedback("jira_get_issue") is True
+    assert core._is_unbounded_tool_feedback("jira_future_bundle") is True
+    assert core._is_unbounded_tool_feedback("confluence_get_page") is True
+    assert core._is_unbounded_tool_feedback("confluence_future_tool") is True
+    assert core._is_unbounded_tool_feedback("github_get_pull_request") is False
+    assert core._is_unbounded_tool_feedback("") is False
+    assert core._is_unbounded_tool_feedback(None) is False
+
+
+def test_tool_feedback_text_allows_explicit_unbounded_max_length():
+    from src.agents import core
+
+    value = "A" * 20000
+    assert core._tool_feedback_text(value, max_length=None) == value
+    assert core._tool_feedback_text(value, max_length=0) == value
+
+
 def test_agent_process_source_uses_per_tool_feedback_policy_for_all_tool_feedback_paths():
     from src.agents import core
 

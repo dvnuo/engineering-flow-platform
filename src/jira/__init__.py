@@ -118,7 +118,7 @@ async def jira_get_issue(
     Args:
         issue_key: Jira issue key (e.g., 'PROJ-123')
         format: Output format - "markdown" (default), "wiki", or "raw"
-        max_chars: Maximum characters to return
+        max_chars: Optional explicit response shortening. Leave None for full Jira issue content.
         max_comments: Maximum number of comments to include
         include_fields: Fields to include (default: summary, status, description, comments)
         include_comments: Whether to include comments
@@ -183,7 +183,7 @@ async def jira_get_issue_by_url(
     Args:
         url: Full Jira issue URL (e.g., https://company.atlassian.net/browse/PROJ-123)
         format: Output format - "markdown" (default), "wiki", or "raw"
-        max_chars: Maximum characters to return
+        max_chars: Optional explicit response shortening. Leave None for full Jira issue content.
         max_comments: Maximum number of comments to include
         include_fields: Fields to include
         include_comments: Whether to include comments
