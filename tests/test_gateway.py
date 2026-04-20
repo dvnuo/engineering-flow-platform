@@ -206,6 +206,11 @@ class TestGatewayLifecycle:
         await gateway.stop()
         assert not hasattr(gateway, "_automation_watchers_task")
 
+    def test_gateway_source_does_not_reference_automation_watcher_lifecycle(self):
+        source = Path("src/gateway/server.py").read_text(encoding="utf-8")
+        assert "start_automation_watchers(" not in source
+        assert "_automation_watchers_task" not in source
+
 
 class TestHandleMessageFunctions:
     """Tests for message handler functions."""

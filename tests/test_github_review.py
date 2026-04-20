@@ -306,12 +306,16 @@ async def test_github_review_task_head_sha_mismatch_suppresses_writeback(monkeyp
         called["adapter"] = True
         return {"success": True, "error": None, "result": {"id": 5}, "runtime_events": []}
 
+    async def _unexpected_execute_github_review_action(*_args, **_kwargs):
+        raise AssertionError("writeback helper should not run when head_sha is stale")
+
     async def _fake_get_current_pr_head_sha(_owner, _repo, _pull_number):
         return "sha-new"
 
     monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
     monkeypatch.setattr("src.runtime.github_review._get_current_pr_head_sha", _fake_get_current_pr_head_sha)
+    monkeypatch.setattr("src.runtime.github_review.execute_github_review_action", _unexpected_execute_github_review_action)
 
     result = await run_github_review_task(
         {"owner": "acme", "repo": "demo", "pull_number": 12, "head_sha": "sha-old"}
@@ -343,11 +347,16 @@ async def test_github_review_task_precheck_freshness_failure_does_not_block_skil
         called["adapter"] = True
         return {"success": True, "error": None, "result": {"id": 51}, "runtime_events": []}
 
+    async def _fake_execute_github_review_action(action_id, kwargs, payload):
+        called["adapter"] = True
+        return {"success": True, "error": None, "result": {"id": 51}, "runtime_events": []}
+
     async def _flaky_get_current_pr_head_sha(_owner, _repo, _pull_number):
         raise RuntimeError("temporary api failure")
 
     monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+    monkeypatch.setattr("src.runtime.github_review.execute_github_review_action", _fake_execute_github_review_action)
     monkeypatch.setattr("src.runtime.github_review._get_current_pr_head_sha", _flaky_get_current_pr_head_sha)
 
     result = await run_github_review_task(

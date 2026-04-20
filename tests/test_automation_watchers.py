@@ -15,5 +15,5 @@ async def test_start_automation_watchers_is_noop():
 
 @pytest.mark.asyncio
 async def test_stop_automation_watchers_handles_none_task():
-    result = await automation_watchers.stop_automation_watchers()
+    result = await automation_watchers.stop_automation_watchers(None)
     assert result is None
