@@ -70,6 +70,7 @@ from src.runtime.tool_filtering import (
 )
 from src.runtime.progressive_context import (
     apply_progressive_context_after_turn,
+    degrade_projected_context_sources,
     prepare_progressive_messages,
     resolve_prompt_budget,
 )
@@ -285,6 +286,45 @@ def _build_large_source_envelope(
     session_id: Optional[str],
     source_id: Optional[str],
 ) -> str:
+    def _extract_markdown_section(raw: str, patterns: tuple[str, ...], max_chars: int) -> str:
+        lines = raw.splitlines()
+        starts = []
+        for i, line in enumerate(lines):
+            if line.strip().startswith("#"):
+                lowered = line.strip().lower()
+                if any(p in lowered for p in patterns):
+                    starts.append(i)
+        if not starts:
+            return ""
+        s = starts[0]
+        e = len(lines)
+        for i in range(s + 1, len(lines)):
+            if lines[i].strip().startswith("#"):
+                e = i
+                break
+        return truncate_with_count("\n".join(lines[s:e]).strip(), max_chars)
+
+    def _build_jira_model_view(raw: str, budget: int) -> str:
+        chunks = []
+        for patterns in (
+            ("acceptance criteria", "requirements", "business rules", " ac"),
+            ("description",),
+            ("comments", "recent comments"),
+            ("attachments",),
+        ):
+            section = _extract_markdown_section(raw, patterns, max(400, budget // 3))
+            if section:
+                chunks.append(section)
+        if not chunks:
+            chunks.append(truncate_with_count(raw, budget))
+        return truncate_with_count("\n\n".join(chunks), budget)
+
+    def _build_confluence_model_view(raw: str, budget: int) -> str:
+        toc = build_section_map(raw)
+        toc_text = "\n".join(f"- {item.get('heading')}" for item in toc[:12])
+        opening = truncate_with_count(raw, max(600, budget // 2))
+        return truncate_with_count(f"TOC:\n{toc_text or '(no headings)'}\n\nOpening preview:\n{opening}", budget)
+
     kind = "jira_issue" if tool_name.startswith("jira_") else "confluence_page" if tool_name.startswith("confluence_") else "large_source"
     session_key = session_id or "unknown_session"
     ref = put_text(
@@ -296,7 +336,12 @@ def _build_large_source_envelope(
         metadata={"tool_name": tool_name},
     )
     section_map = build_section_map(text)
-    preview = truncate_with_count(text, max_chars)
+    if kind == "jira_issue":
+        preview = _build_jira_model_view(text, max_chars)
+    elif kind == "confluence_page":
+        preview = _build_confluence_model_view(text, max_chars)
+    else:
+        preview = truncate_with_count(text, max_chars)
     toc = "\n".join(f"- {item.get('heading')} (chars {item.get('start')}..{item.get('end')})" for item in section_map[:16]) or "(no headings found)"
     model_view_chars = len(preview)
     return (
@@ -314,6 +359,24 @@ def _build_large_source_envelope(
     )
 
 
+def _is_projected_large_source_feedback(text: str) -> bool:
+    value = str(text or "").lstrip()
+    return value.startswith("[large source tool result projected]") and "context_ref: ctx://context/" in value
+
+
+def _is_projected_feedback(text: str) -> bool:
+    value = str(text or "").lstrip()
+    return any(
+        value.startswith(prefix)
+        for prefix in (
+            "[large source tool result projected]",
+            "[old tool output compacted",
+            "[old assistant output compacted",
+            "[assistant tool-call content compacted",
+        )
+    )
+
+
 def _tool_feedback_text_for_tool(
     tool_name: Optional[str],
     value: Any,
@@ -323,8 +386,12 @@ def _tool_feedback_text_for_tool(
 ) -> str:
     """Build tool feedback for the next LLM call using per-tool truncation policy."""
     text = str(value)
+    if _is_projected_feedback(text):
+        return text
     if not (tool_name and tool_name.startswith(LARGE_SOURCE_TOOL_PREFIXES)):
         return _tool_feedback_text(text, max_length=DEFAULT_TOOL_FEEDBACK_MAX_LENGTH)
+    if _is_projected_large_source_feedback(text):
+        return text
     projection_cfg = _resolve_context_projection_cfg()
     jira_conf_cfg = projection_cfg.get("jira_confluence") if isinstance(projection_cfg.get("jira_confluence"), dict) else {}
     max_chars = int(jira_conf_cfg.get("model_feedback_max_chars", DEFAULT_TOOL_FEEDBACK_MAX_LENGTH) or DEFAULT_TOOL_FEEDBACK_MAX_LENGTH)
@@ -1553,6 +1620,7 @@ You have access to the following tools. When a user asks you to do something tha
         # tool_calls and tool_results from previous requests/iterations.
         # loop_messages will be rebuilt as we go through the tool loop.
         loop_messages = messages.copy()
+        loop_context_state = dict(pre_request_context_state or {})
         
         while iteration < max_tool_iterations:
             iteration += 1
@@ -1672,6 +1740,15 @@ You have access to the following tools. When a user asks you to do something tha
                 tools=loop_tools or [],
             )
             loop_budget = resolve_prompt_budget(stage="tool_loop", model=effective_model)
+            if isinstance(loop_context_state, dict):
+                budget_state = loop_context_state.setdefault("budget", {})
+                prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
+                budget_state["request_estimated_tokens"] = request_estimated_tokens
+                budget_state["prompt_budget_tokens"] = prompt_budget_tokens
+                budget_state["reserved_output_tokens"] = loop_budget.get("reserved_output_tokens")
+                budget_state["safety_margin_tokens"] = loop_budget.get("safety_margin_tokens")
+                budget_state["max_prompt_tokens"] = loop_budget.get("max_prompt_tokens")
+                budget_state["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
             if request_estimated_tokens > int(loop_budget.get("prompt_budget_tokens", 0) or 0):
                 loop_messages, loop_context_state = await prepare_progressive_messages(
                     messages=loop_messages,
@@ -1688,6 +1765,25 @@ You have access to the following tools. When a user asks you to do something tha
                     system_prompt=effective_system_prompt or "",
                     tools=loop_tools or [],
                 )
+            if request_estimated_tokens > int(loop_budget.get("prompt_budget_tokens", 0) or 0):
+                loop_messages = degrade_projected_context_sources(loop_messages)
+                input_items = _to_input_items(loop_messages)
+                llm_kwargs["input_items"] = input_items
+                request_estimated_tokens = estimate_llm_request_tokens(
+                    input_items=input_items,
+                    system_prompt=effective_system_prompt or "",
+                    tools=loop_tools or [],
+                )
+            if isinstance(loop_context_state, dict):
+                budget_state = loop_context_state.setdefault("budget", {})
+                prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
+                budget_state["request_estimated_tokens"] = request_estimated_tokens
+                budget_state["prompt_budget_tokens"] = prompt_budget_tokens
+                budget_state["reserved_output_tokens"] = loop_budget.get("reserved_output_tokens")
+                budget_state["safety_margin_tokens"] = loop_budget.get("safety_margin_tokens")
+                budget_state["max_prompt_tokens"] = loop_budget.get("max_prompt_tokens")
+                budget_state["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
+                emit_context_snapshot("tool_loop_budget", loop_context_state, iteration=iteration)
             if request_estimated_tokens > int(loop_budget.get("prompt_budget_tokens", 0) or 0):
                 llm_kwargs["system_prompt"] = (
                     (effective_system_prompt or "")

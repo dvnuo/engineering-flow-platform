@@ -200,6 +200,12 @@ def _extract_deterministic_assistant_summary(text: str, *, summary_max_chars: in
     return truncate(summary, summary_max_chars)
 
 
+def _looks_artifact_like(text: str) -> bool:
+    sample = str(text or "")[:4000].lower()
+    markers = ("```", "feature:", "scenario:", "scenario outline:", "class ", "def ", "function ", "| ---")
+    return any(marker in sample for marker in markers)
+
+
 def _project_large_history_messages(
     messages: List[AgentMessage],
     *,
@@ -224,10 +230,43 @@ def _project_large_history_messages(
     projected_tool = 0
     projected: List[AgentMessage] = []
     for idx, msg in enumerate(messages):
+        text = str(msg.content or "")
+        if msg.role == "assistant" and msg.tool_calls:
+            assistant_tool_limit = int(old_assistant_cfg.get("artifact_like_max_chars", assistant_limit) or assistant_limit)
+            if not _looks_artifact_like(text):
+                assistant_tool_limit = assistant_limit
+            if len(text) > assistant_tool_limit:
+                ref = put_text(
+                    session_id=session_id,
+                    kind="assistant_output",
+                    source_id=f"assistant_tool_calls_{idx}",
+                    title="assistant_tool_call_content",
+                    content=text,
+                    metadata={"stage": stage, "tool_calls": True},
+                )
+                refs.append(ref)
+                summary = _extract_deterministic_assistant_summary(text, summary_max_chars=summary_max)
+                compact = (
+                    f"[assistant tool-call content compacted | original_chars={len(text)} | ref={ref}]\n"
+                    f"Summary:\n{summary}\n\n"
+                    f"Tool calls are preserved below; full assistant text is available through context_read_ref(ref=\"{ref}\")."
+                )
+                saved += max(0, len(text) - len(compact))
+                projected_assistant += 1
+                projected.append(
+                    AgentMessage(
+                        role="assistant",
+                        content=compact,
+                        timestamp=msg.timestamp,
+                        tool_calls=msg.tool_calls,
+                        tool_use_id=msg.tool_use_id,
+                        tool_name=getattr(msg, "tool_name", None),
+                    )
+                )
+                continue
         if idx >= keep_start:
             projected.append(msg)
             continue
-        text = str(msg.content or "")
         if msg.role == "assistant" and not msg.tool_calls and len(text) > assistant_limit:
             ref = put_text(session_id=session_id, kind="assistant_output", source_id=f"assistant_{idx}", title="assistant_output", content=text, metadata={"stage": stage})
             refs.append(ref)
@@ -266,6 +305,30 @@ def _project_large_history_messages(
         "projection_chars_saved": saved,
         "context_blob_refs_created": refs,
     }
+
+
+def degrade_projected_context_sources(messages: List[Dict[str, Any]], *, max_envelope_chars: int = 2500) -> List[Dict[str, Any]]:
+    degraded: List[Dict[str, Any]] = []
+    for msg in messages:
+        item = dict(msg)
+        if item.get("role") != "tool":
+            degraded.append(item)
+            continue
+        content = str(item.get("content") or "")
+        if not content.lstrip().startswith("[large source tool result projected]"):
+            degraded.append(item)
+            continue
+        lines = [line for line in content.splitlines() if line.strip()]
+        keep_prefixes = ("[large source tool result projected]", "tool_name:", "kind:", "context_ref:", "original_chars:", "model_view_chars:", "full_content_available:")
+        kept = [line for line in lines if line.startswith(keep_prefixes)]
+        section_lines = [line for line in lines if line.startswith("- ")]
+        instruction = [line for line in lines if "context_read_ref(" in line]
+        compact = "\n".join(kept + ["section_map:"] + section_lines[:8] + instruction[:2])
+        if len(compact) > max_envelope_chars:
+            compact = truncate(compact, max_envelope_chars)
+        item["content"] = compact
+        degraded.append(item)
+    return degraded
 
 
 def _build_synthetic_summary_message(context_state: Dict[str, Any]) -> AgentMessage:
@@ -464,6 +527,8 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
                 "context_next_pruning_policy": budget.get("next_pruning_policy"),
                 "context_tokens_until_soft_threshold": budget.get("tokens_until_soft_threshold"),
                 "context_tokens_until_hard_threshold": budget.get("tokens_until_hard_threshold"),
+                "context_request_estimated_tokens": budget.get("request_estimated_tokens"),
+                "context_request_over_budget": budget.get("request_over_budget"),
             }
         )
     return {key: value for key, value in preview.items() if value not in (None, "")}

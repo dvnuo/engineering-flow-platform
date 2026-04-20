@@ -146,6 +146,33 @@ def test_tool_feedback_text_for_short_jira_confluence_keeps_full_text():
     assert output == value
 
 
+def test_large_source_feedback_projection_is_idempotent():
+    from src.agents import core
+    from src.context_blob_store import read_ref
+
+    raw = "# MMGFX-1\n## Description\nA\n" + ("x" * 20000)
+    first = core._tool_feedback_text_for_tool("jira_get_issue", raw, session_id="s1")
+    second = core._tool_feedback_text_for_tool("jira_get_issue", first, session_id="s1")
+    assert second == first
+    assert second.count("[large source tool result projected]") == 1
+    ref = re.search(r"context_ref:\s*(ctx://context/[^\s]+)", first).group(1)
+    restored = read_ref(ref, session_id="s1", max_chars=26000)
+    assert restored == raw
+
+
+def test_jira_envelope_prioritizes_acceptance_criteria_even_when_late():
+    from src.agents import core
+
+    jira_text = (
+        "# MMGFX-9: Title\n**Status:** Open\n## Description\nShort desc\n"
+        + ("noise\n" * 4000)
+        + "## Acceptance Criteria\n- Must validate AC path\n- Another AC\n"
+    )
+    output = core._tool_feedback_text_for_tool("jira_get_issue", jira_text, session_id="s-ac")
+    assert "Acceptance Criteria" in output
+    assert "ctx://context/" in output
+
+
 def test_agent_process_source_uses_per_tool_feedback_policy_for_all_tool_feedback_paths():
     from src.agents import core
 
@@ -165,6 +192,29 @@ def test_to_input_items_source_uses_per_tool_feedback_policy():
     assert '"output": _tool_feedback_text(content) if content else ""' not in module_source
     assert "_tool_feedback_text_for_tool(" in module_source
     assert "tool_names_by_call_id" in module_source
+
+
+def test_to_input_items_path_has_projected_feedback_guard():
+    from src.agents import core
+
+    module_source = inspect.getsource(core)
+    assert "_is_projected_large_source_feedback" in module_source
+
+
+def test_tool_loop_budget_updates_include_request_estimation_fields():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent.process)
+    assert 'budget_state["request_estimated_tokens"]' in source
+    assert 'budget_state["request_over_budget"]' in source
+    assert 'emit_context_snapshot("tool_loop_budget"' in source
+
+
+def test_tool_loop_over_budget_path_applies_real_degradation_before_guard_prompt():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent.process)
+    assert "degrade_projected_context_sources(loop_messages)" in source
 
 
 def test_is_meaningful_context_state_rules():
