@@ -230,6 +230,34 @@ def _has_terminal_post_turn_context_snapshot(events: Any) -> bool:
             return True
     return False
 
+
+def _merge_request_budget_into_context_state(
+    context_state: Dict[str, Any],
+    latest_request_budget: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    merged = dict(context_state or {})
+    if not isinstance(latest_request_budget, dict) or not latest_request_budget:
+        return merged
+    budget = merged.get("budget") if isinstance(merged.get("budget"), dict) else {}
+    merged_budget = dict(budget)
+    for key in (
+        "request_estimated_tokens",
+        "prompt_budget_tokens",
+        "reserved_output_tokens",
+        "safety_margin_tokens",
+        "max_prompt_tokens",
+        "max_output_tokens",
+        "request_over_budget",
+        "projected_old_assistant_messages",
+        "projected_old_tool_messages",
+        "projection_chars_saved",
+        "context_blob_refs_created",
+    ):
+        if key in latest_request_budget:
+            merged_budget[key] = latest_request_budget.get(key)
+    merged["budget"] = merged_budget
+    return merged
+
 # Context variable for skill workdir - async-safe
 _skill_workdir: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar('skill_workdir', default=None)
 
@@ -305,7 +333,34 @@ def _build_large_source_envelope(
         return truncate_with_count("\n".join(lines[s:e]).strip(), max_chars)
 
     def _build_jira_model_view(raw: str, budget: int) -> str:
+        title = ""
+        status = ""
+        issue_key = ""
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not title and stripped.startswith("# "):
+                title = stripped[2:].strip()
+                key_match = re.search(r"\b([A-Z][A-Z0-9_]+-\d+)\b", title)
+                if key_match:
+                    issue_key = key_match.group(1)
+            if not status and stripped.lower().startswith("**status:**"):
+                status = stripped.split(":", 1)[1].strip() if ":" in stripped else stripped
+            if not issue_key:
+                m = re.search(r"\b([A-Z][A-Z0-9_]+-\d+)\b", stripped)
+                if m:
+                    issue_key = m.group(1)
+            if title and status and issue_key:
+                break
         chunks = []
+        metadata_lines = ["Metadata:"]
+        if title:
+            metadata_lines.append(f"- title: {title}")
+        if status:
+            metadata_lines.append(f"- status: {status}")
+        if issue_key:
+            metadata_lines.append(f"- issue_key: {issue_key}")
+        if len(metadata_lines) > 1:
+            chunks.append("\n".join(metadata_lines))
         for patterns in (
             ("acceptance criteria", "requirements", "business rules", " ac"),
             ("description",),
@@ -366,15 +421,11 @@ def _is_projected_large_source_feedback(text: str) -> bool:
 
 def _is_projected_feedback(text: str) -> bool:
     value = str(text or "").lstrip()
-    return any(
-        value.startswith(prefix)
-        for prefix in (
-            "[large source tool result projected]",
-            "[old tool output compacted",
-            "[old assistant output compacted",
-            "[assistant tool-call content compacted",
-        )
-    )
+    if value.startswith("[large source tool result projected]"):
+        return "context_ref: ctx://context/" in value
+    if value.startswith("[old tool output compacted") or value.startswith("[old assistant output compacted") or value.startswith("[assistant tool-call content compacted"):
+        return "ref=ctx://context/" in value or "ctx://context/" in value
+    return False
 
 
 def _tool_feedback_text_for_tool(
@@ -409,6 +460,34 @@ def _tool_feedback_text_for_tool(
 def estimate_llm_request_tokens(input_items: List[Dict[str, Any]], system_prompt: str, tools: List[Dict[str, Any]]) -> int:
     raw = json.dumps({"input_items": input_items, "system_prompt": system_prompt or "", "tools": tools or []}, ensure_ascii=False, default=str)
     return estimate_tokens(raw)
+
+
+def _should_abort_over_budget(request_estimated_tokens: int, prompt_budget_tokens: int, *, tolerance_ratio: float = 0.05) -> bool:
+    if prompt_budget_tokens <= 0:
+        return False
+    allowed = int(prompt_budget_tokens * (1.0 + max(0.0, tolerance_ratio)))
+    return request_estimated_tokens > allowed
+
+
+def _build_context_budget_exceeded_error(
+    *,
+    request_estimated_tokens: int,
+    loop_budget: Dict[str, Any],
+    stage: str = "tool_loop",
+) -> Dict[str, Any]:
+    return {
+        "error": "LLM request remains over prompt budget after context projection.",
+        "error_type": "context_budget_exceeded",
+        "code": "context_budget_exceeded",
+        "details": {
+            "request_estimated_tokens": request_estimated_tokens,
+            "prompt_budget_tokens": loop_budget.get("prompt_budget_tokens"),
+            "reserved_output_tokens": loop_budget.get("reserved_output_tokens"),
+            "max_output_tokens": loop_budget.get("max_output_tokens"),
+            "stage": stage,
+            "suggestion": "Split generation into smaller steps or write artifacts/files instead of emitting full content in chat.",
+        },
+    }
 
 
 def _is_debug_enabled() -> bool:
@@ -1342,6 +1421,7 @@ You have access to the following tools. When a user asks you to do something tha
         
         iteration = 0
         runtime_events_for_result: List[Dict[str, Any]] = []
+        latest_request_budget: Dict[str, Any] = {}
         
         # Helper function to send stream events
         # Supports both simple callbacks and asyncio.Queue
@@ -1403,6 +1483,8 @@ You have access to the following tools. When a user asks you to do something tha
         def attach_runtime_events(payload: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(payload, dict):
                 payload["runtime_events"] = list(runtime_events_for_result)
+                if latest_request_budget:
+                    payload["request_budget"] = dict(latest_request_budget)
             return payload
 
         def emit_context_snapshot(
@@ -1782,9 +1864,19 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["reserved_output_tokens"] = loop_budget.get("reserved_output_tokens")
                 budget_state["safety_margin_tokens"] = loop_budget.get("safety_margin_tokens")
                 budget_state["max_prompt_tokens"] = loop_budget.get("max_prompt_tokens")
+                budget_state["max_output_tokens"] = loop_budget.get("max_output_tokens")
                 budget_state["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
+                latest_request_budget = dict(budget_state)
                 emit_context_snapshot("tool_loop_budget", loop_context_state, iteration=iteration)
-            if request_estimated_tokens > int(loop_budget.get("prompt_budget_tokens", 0) or 0):
+            prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
+            if _should_abort_over_budget(request_estimated_tokens, prompt_budget_tokens):
+                error_response = _build_context_budget_exceeded_error(
+                    request_estimated_tokens=request_estimated_tokens,
+                    loop_budget=loop_budget,
+                    stage="tool_loop",
+                )
+                return error_response
+            if request_estimated_tokens > prompt_budget_tokens:
                 llm_kwargs["system_prompt"] = (
                     (effective_system_prompt or "")
                     + "\n\nBudget guard: Do not emit all generated files in chat. "
@@ -3149,6 +3241,8 @@ async def run_chat_execution(
         model=getattr(agent, "model", None),
     )
     if isinstance(result, dict):
+        request_budget = result.get("request_budget") if isinstance(result.get("request_budget"), dict) else {}
+        context_state = _merge_request_budget_into_context_state(context_state or {}, request_budget)
         effective_request_id = request_id
         if not effective_request_id:
             candidate_request_id = result.get("request_id")

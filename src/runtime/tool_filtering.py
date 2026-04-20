@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
+INTERNAL_SUPPORT_TOOL_NAMES = {"context_read_ref"}
+
 
 @dataclass(frozen=True)
 class LlmToolsSpec:
@@ -176,6 +178,8 @@ def is_tool_name_enabled_for_llm(tool_name: str, llm_config: Dict[str, Any]) -> 
         return True
     if spec.mode == "none":
         return False
+    if tool_name.strip() in INTERNAL_SUPPORT_TOOL_NAMES:
+        return True
     lowered_name = tool_name.strip().lower()
     return any(fnmatchcase(lowered_name, pattern.lower()) for pattern in spec.patterns)
 
@@ -191,4 +195,3 @@ def intersect_tool_schemas_by_names(
         for tool_schema in tool_schemas
         if (extract_tool_name(tool_schema) or "") in allowed_name_set
     ]
-INTERNAL_SUPPORT_TOOL_NAMES = {"context_read_ref"}

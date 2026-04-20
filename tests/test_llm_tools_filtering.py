@@ -67,6 +67,30 @@ def test_filter_explicit_none_does_not_include_internal_support_tools():
     assert _names(result) == []
 
 
+def test_is_tool_name_enabled_allows_internal_support_tool_in_pattern_mode():
+    assert is_tool_name_enabled_for_llm("context_read_ref", {"tools": "jira_*"}) is True
+    assert is_tool_name_enabled_for_llm("context_read_ref", {"tools": []}) is False
+    assert is_tool_name_enabled_for_llm("read", {"tools": "jira_*"}) is False
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_by_name_allows_context_read_ref_under_pattern_mode(monkeypatch):
+    from src.agents import executor as executor_module
+
+    class _Cfg:
+        llm = {"tools": ["jira_*"]}
+
+    async def _fake_execute_tool(name, **kwargs):
+        assert name == "context_read_ref"
+        return executor_module.ToolResult(success=True, content="ok")
+
+    monkeypatch.setattr(executor_module, "config", _Cfg())
+    monkeypatch.setattr(executor_module, "execute_tool", _fake_execute_tool)
+
+    result = await executor_module.execute_tool_by_name("context_read_ref", ref="ctx://context/s/k/aaaaaaaaaaaa")
+    assert result.success is True
+
+
 def test_normalize_list_non_string_raises():
     with pytest.raises(ValueError):
         normalize_llm_tools_spec({"tools": ["jira_*", 1]})

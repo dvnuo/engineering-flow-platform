@@ -206,7 +206,9 @@ async def confluence_get_page(
     Args:
         page_id: Page ID
         format: "markdown" (default) or "storage"
-        max_chars: Optional explicit response shortening. Leave None for full Confluence page content.
+        max_chars: Optional explicit response shortening for programmatic callers.
+            This option is intentionally not exposed in LLM tool schemas; runtime
+            context projection controls model-facing size.
     """
     try:
         if not confluence_channel.is_configured():
@@ -253,7 +255,9 @@ async def confluence_get_page_by_url(
     Args:
         url: Full Confluence page URL
         format: "markdown" (default) or "storage"
-        max_chars: Optional explicit response shortening. Leave None for full Confluence page content.
+        max_chars: Optional explicit response shortening for programmatic callers.
+            This option is intentionally not exposed in LLM tool schemas; runtime
+            context projection controls model-facing size.
     """
     try:
         page_id = _extract_page_id_from_url(url)

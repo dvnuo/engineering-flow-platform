@@ -156,7 +156,8 @@ def resolve_prompt_budget(*, stage: str, model: str | None) -> Dict[str, int]:
     configured_reserved = int(merged.get("reserved_output_tokens", 8000) or 8000)
     configured_safety = int(merged.get("safety_margin_tokens", 4000) or 4000)
     max_prompt_tokens = int(merged.get("max_prompt_tokens", 50000) or 50000)
-    effective_reserved = min(configured_reserved, int(context_window * 0.25))
+    actual_max_output_tokens = int(config.llm.get("max_tokens", 64000) or 64000)
+    effective_reserved = min(configured_reserved, actual_max_output_tokens, int(context_window * 0.25))
     effective_safety = min(configured_safety, int(context_window * 0.05))
     context_based_prompt_cap = context_window - effective_reserved - effective_safety
     base_prompt = min(max_prompt_tokens, context_based_prompt_cap)
@@ -170,6 +171,7 @@ def resolve_prompt_budget(*, stage: str, model: str | None) -> Dict[str, int]:
         "reserved_output_tokens": int(effective_reserved),
         "safety_margin_tokens": int(effective_safety),
         "max_prompt_tokens": int(max_prompt_tokens),
+        "max_output_tokens": int(actual_max_output_tokens),
     }
 
 
@@ -485,6 +487,7 @@ def _build_context_budget(
                 "reserved_output_tokens": prompt_budget.get("reserved_output_tokens"),
                 "safety_margin_tokens": prompt_budget.get("safety_margin_tokens"),
                 "max_prompt_tokens": prompt_budget.get("max_prompt_tokens"),
+                "max_output_tokens": prompt_budget.get("max_output_tokens"),
             }
         )
     if request_estimated_tokens is not None:

@@ -7,25 +7,25 @@ def test_convert_tools_schema_preserves_optional_semantics_with_nullable():
     tools = [{
         "type": "function",
         "function": {
-            "name": "jira_get_issue",
-            "description": "Get issue",
+            "name": "dummy_optional_tool",
+            "description": "dummy",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "issue_key": {"type": "string"},
-                    "max_chars": {"type": "integer"},
+                    "required_id": {"type": "string"},
+                    "optional_int": {"type": "integer"},
                     "include_comments": {"type": "boolean"},
                 },
-                "required": ["issue_key"],
+                "required": ["required_id"],
             },
         },
     }]
 
     converted = _convert_tools_schema(tools)
     params = converted[0]["parameters"]
-    assert params["required"] == ["issue_key", "max_chars", "include_comments"]
-    assert params["properties"]["issue_key"]["type"] == "string"
-    assert params["properties"]["max_chars"]["type"] == ["integer", "null"]
+    assert params["required"] == ["required_id", "optional_int", "include_comments"]
+    assert params["properties"]["required_id"]["type"] == "string"
+    assert params["properties"]["optional_int"]["type"] == ["integer", "null"]
     assert params["properties"]["include_comments"]["type"] == ["boolean", "null"]
     assert params["additionalProperties"] is False
 
@@ -84,25 +84,25 @@ def test_convert_tools_schema_run_command_keeps_cmd_non_nullable():
     assert params["properties"]["timeout_ms"]["type"] == ["integer", "null"]
 
 
-def test_convert_tools_schema_jira_get_issue_optional_fields_nullable():
+def test_convert_tools_schema_optional_fields_nullable_generic():
     from src.agents.llm import _convert_tools_schema
 
     tools = [{
         "type": "function",
         "function": {
-            "name": "jira_get_issue",
+            "name": "dummy_optional_tool",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "issue_key": {"type": "string"},
                     "format": {"type": "string", "enum": ["markdown", "wiki", "raw"]},
-                    "max_chars": {"type": "integer"},
+                    "optional_int": {"type": "integer"},
                     "max_comments": {"type": "integer"},
                     "include_fields": {"type": "array", "items": {"type": "string"}},
                     "include_comments": {"type": "boolean"},
                     "include_attachment_urls": {"type": "boolean"},
                 },
-                "required": ["issue_key"],
+                    "required": ["issue_key"],
             },
         },
     }]
@@ -111,7 +111,7 @@ def test_convert_tools_schema_jira_get_issue_optional_fields_nullable():
     assert params["required"] == [
         "issue_key",
         "format",
-        "max_chars",
+        "optional_int",
         "max_comments",
         "include_fields",
         "include_comments",
@@ -121,7 +121,7 @@ def test_convert_tools_schema_jira_get_issue_optional_fields_nullable():
     assert params["properties"]["issue_key"]["type"] != ["string", "null"]
     assert params["properties"]["format"]["type"] == ["string", "null"]
     assert params["properties"]["format"]["enum"] == ["markdown", "wiki", "raw", None]
-    assert params["properties"]["max_chars"]["type"] == ["integer", "null"]
+    assert params["properties"]["optional_int"]["type"] == ["integer", "null"]
     assert params["properties"]["max_comments"]["type"] == ["integer", "null"]
     assert params["properties"]["include_fields"]["type"] == ["array", "null"]
     assert params["properties"]["include_comments"]["type"] == ["boolean", "null"]
