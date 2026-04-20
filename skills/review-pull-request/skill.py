@@ -8,6 +8,7 @@ from src.agents.llm import llm_client
 from src.github.api import github_channel
 
 logger = logging.getLogger(__name__)
+_ALLOWED_REVIEW_EVENTS = {"COMMENT", "APPROVE", "REQUEST_CHANGES"}
 
 
 async def _safe_fetch_pr_context(owner: str, repo: str, pull_number: int) -> dict[str, Any]:
@@ -36,6 +37,7 @@ async def review_pull_request(
     pull_number: int,
     head_sha: str | None = None,
     review_target: Dict[str, Any] | None = None,
+    review_event: str | None = None,
     max_files: int = 80,
     max_diff_chars: int = 60000,
 ) -> SkillResult:
@@ -59,6 +61,13 @@ async def review_pull_request(
         return SkillResult(success=False, error=f"Failed to fetch pull request context: {exc}")
 
     pr = context["pr"]
+    normalized_review_event = (
+        str(review_event).strip().upper()
+        if isinstance(review_event, str) and str(review_event).strip()
+        else "COMMENT"
+    )
+    if normalized_review_event not in _ALLOWED_REVIEW_EVENTS:
+        normalized_review_event = "COMMENT"
     files = context["files"][: max(max_files, 1)]
     diff_text = str(context["diff"] or "")
     truncated = len(diff_text) > max(max_diff_chars, 1000)
@@ -84,6 +93,8 @@ async def review_pull_request(
         f"Head branch: {(pr.get('head') or {}).get('ref', '')}\n"
         f"Head SHA (task): {head_sha or ''}\n"
         f"Review target: {review_target or {}}\n\n"
+        f"Requested review event default: {normalized_review_event}\n"
+        "Do not approve unless confidence is very high; default to COMMENT-style actionable feedback.\n\n"
         f"Changed files ({len(file_lines)} shown):\n" + ("\n".join(file_lines) or "- none") + "\n\n"
         f"Existing review comments count: {len(context['comments'])}\n"
         f"Existing review entries count: {len(context['reviews'])}\n\n"
@@ -112,7 +123,7 @@ async def review_pull_request(
         output=review_text,
         data={
             "review_summary": review_text,
-            "review_event": "COMMENT",
+            "review_event": normalized_review_event,
             "context": {
                 "owner": owner,
                 "repo": repo,

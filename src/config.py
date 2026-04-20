@@ -120,42 +120,15 @@ class Config:
         "jira": {
             "enabled": True,
             "instances": True,
-            "automation": {
-                "assignments": {
-                    "enabled": True,
-                    "projects": True,
-                },
-                "mentions": {
-                    "enabled": True,
-                    "projects": True,
-                },
-            },
         },
         "confluence": {
             "enabled": True,
             "instances": True,
-            "automation": {
-                "mentions": {
-                    "enabled": True,
-                    "spaces": True,
-                },
-            },
         },
         "github": {
             "enabled": True,
             "api_token": True,
             "base_url": True,
-            "automation": {
-                "review_requests": {
-                    "enabled": True,
-                    "repos": True,
-                },
-                "mentions": {
-                    "enabled": True,
-                    "repos": True,
-                    "include_review_comments": True,
-                },
-            },
         },
         "git": {
             "user": {

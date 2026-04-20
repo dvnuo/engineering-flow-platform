@@ -56,7 +56,19 @@ def _normalize_skill_kwargs(raw_value: Any) -> tuple[Dict[str, Any] | None, str 
     return None, "invalid_skill_kwargs_type", "skill_kwargs must be a dict or JSON object string"
 
 
-def _normalize_review_writeback(skill_output: Any, skill_data: Dict[str, Any], fallback_comment: Optional[str]) -> tuple[str, str | None]:
+def _normalize_requested_review_event(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().upper()
+    return normalized if normalized in {"COMMENT", "APPROVE", "REQUEST_CHANGES"} else None
+
+
+def _normalize_review_writeback(
+    skill_output: Any,
+    skill_data: Dict[str, Any],
+    fallback_comment: Optional[str],
+    requested_event: str | None = None,
+) -> tuple[str, str | None]:
     review_body = _normalize_review_summary(skill_output, skill_data, fallback_comment)
 
     raw_event = (
@@ -80,7 +92,7 @@ def _normalize_review_writeback(skill_output: Any, skill_data: Dict[str, Any], f
     if "request_changes" in skill_data and isinstance(skill_data.get("request_changes"), bool) and skill_data.get("request_changes"):
         return "REQUEST_CHANGES", review_body or None
 
-    return "COMMENT", review_body or None
+    return (requested_event or "COMMENT"), review_body or None
 
 
 async def _get_current_pr_head_sha(owner: str, repo: str, pull_number: int) -> str | None:
@@ -180,6 +192,21 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
     review_comment_input = payload.get("comment")
     review_metadata = payload.get("metadata")
+    requested_event = _normalize_requested_review_event(payload.get("review_event"))
+
+    default_skill_kwargs: Dict[str, Any] = {}
+    raw_head_sha = payload.get("head_sha")
+    if isinstance(raw_head_sha, str) and raw_head_sha.strip():
+        default_skill_kwargs["head_sha"] = raw_head_sha.strip()
+    if isinstance(payload.get("review_target"), dict):
+        default_skill_kwargs["review_target"] = dict(payload.get("review_target") or {})
+    if payload.get("max_files") is not None:
+        default_skill_kwargs["max_files"] = payload.get("max_files")
+    if payload.get("max_diff_chars") is not None:
+        default_skill_kwargs["max_diff_chars"] = payload.get("max_diff_chars")
+    if requested_event is not None:
+        default_skill_kwargs["review_event"] = requested_event
+    resolved_skill_kwargs = {**default_skill_kwargs, **skill_kwargs}
 
     skill_result = await execute_skill(
         skill_name,
@@ -188,7 +215,7 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
         repo=repo,
         pull_number=pull_number,
         metadata=review_metadata,
-        **skill_kwargs,
+        **resolved_skill_kwargs,
     )
 
     skill_success = bool(getattr(skill_result, "success", False))
@@ -216,7 +243,12 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
         "error": normalized_skill_error,
     })]
 
-    review_event, review_summary = _normalize_review_writeback(skill_output, skill_data, review_comment_input)
+    review_event, review_summary = _normalize_review_writeback(
+        skill_output,
+        skill_data,
+        review_comment_input,
+        requested_event=requested_event,
+    )
     writeback_mode = str(payload.get("writeback_mode") or "").strip().lower()
     secondary_action_id = "adapter:github:add_comment" if writeback_mode == "issue_comment" else "adapter:github:review_pull_request"
     action_gate = payload.get("_action_gate") if callable(payload.get("_action_gate")) else None

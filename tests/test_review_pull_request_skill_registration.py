@@ -30,12 +30,16 @@ async def test_review_pull_request_skill_is_registered_and_executable(monkeypatc
     async def _fake_responses(*args, **kwargs):
         return {"content": "## Pull Request Summary\nLooks good with suggestions."}
 
+    async def _unexpected_writeback(*args, **kwargs):
+        raise AssertionError("skill shim must not submit GitHub review writeback directly")
+
     monkeypatch.setattr("src.github.api.github_channel.get_pull_request", _fake_get_pull_request)
     monkeypatch.setattr("src.github.api.github_channel.get_pr_files", _fake_get_pr_files)
     monkeypatch.setattr("src.github.api.github_channel.get_pr_diff", _fake_get_pr_diff)
     monkeypatch.setattr("src.github.api.github_channel.get_pr_comments", _fake_get_pr_comments)
     monkeypatch.setattr("src.github.api.github_channel.list_pr_reviews", _fake_list_pr_reviews)
     monkeypatch.setattr("src.agents.llm.llm_client.responses", _fake_responses)
+    monkeypatch.setattr("src.github.api.github_channel.add_pr_review_comment", _unexpected_writeback)
 
     result = await execute_skill(
         "review-pull-request",
@@ -43,6 +47,7 @@ async def test_review_pull_request_skill_is_registered_and_executable(monkeypatc
         owner="acme",
         repo="repo",
         pull_number=1,
+        review_event="COMMENT",
     )
 
     assert result.success is True

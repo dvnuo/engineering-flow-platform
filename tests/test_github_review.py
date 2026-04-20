@@ -83,6 +83,107 @@ async def test_github_review_task_plain_summary_defaults_to_comment_event(monkey
 
 
 @pytest.mark.asyncio
+async def test_github_review_task_uses_payload_review_event_when_skill_has_no_event(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(success=True, output="Summary only", data={})
+
+    captured = {}
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
+        captured["action_id"] = action_id
+        captured["kwargs"] = kwargs
+        return {"success": True, "error": None, "result": {"id": 31}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {"owner": "acme", "repo": "demo", "pull_number": 3, "review_event": "COMMENT"}
+    )
+
+    assert result["success"] is True
+    assert captured["kwargs"]["review_event"] == "COMMENT"
+    assert result["review_event"] == "COMMENT"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_invalid_payload_review_event_falls_back_to_comment(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(success=True, output="Summary only", data={})
+
+    captured = {}
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
+        captured["kwargs"] = kwargs
+        return {"success": True, "error": None, "result": {"id": 32}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {"owner": "acme", "repo": "demo", "pull_number": 3, "review_event": "bad"}
+    )
+
+    assert result["success"] is True
+    assert captured["kwargs"]["review_event"] == "COMMENT"
+    assert result["review_event"] == "COMMENT"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_skill_event_overrides_payload_default(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(success=True, output="Needs changes", data={"review_event": "REQUEST_CHANGES"})
+
+    captured = {}
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
+        captured["kwargs"] = kwargs
+        return {"success": True, "error": None, "result": {"id": 33}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {"owner": "acme", "repo": "demo", "pull_number": 3, "review_event": "COMMENT"}
+    )
+
+    assert result["success"] is True
+    assert captured["kwargs"]["review_event"] == "REQUEST_CHANGES"
+    assert result["review_event"] == "REQUEST_CHANGES"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_skill_approved_inference_overrides_payload_default(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(success=True, output="Looks good", data={"approved": True})
+
+    captured = {}
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
+        captured["kwargs"] = kwargs
+        return {"success": True, "error": None, "result": {"id": 34}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {"owner": "acme", "repo": "demo", "pull_number": 3, "review_event": "COMMENT"}
+    )
+
+    assert result["success"] is True
+    assert captured["kwargs"]["review_event"] == "APPROVE"
+    assert result["review_event"] == "APPROVE"
+
+
+@pytest.mark.asyncio
 async def test_github_review_task_explicit_issue_comment_fallback(monkeypatch):
     from src.runtime.github_review import run_github_review_task
 
@@ -464,8 +565,43 @@ async def test_github_review_task_accepts_portal_automation_payload_shape(monkey
     assert result["success"] is True
     assert captured["skill_name"] == "review-pull-request"
     assert captured["kwargs"]["pull_number"] == 123
+    assert captured["kwargs"]["head_sha"] == "abc123"
+    assert captured["kwargs"]["review_target"] == {"type": "team", "name": "acme/platform-reviewers"}
+    assert captured["kwargs"]["review_event"] == "COMMENT"
     assert captured["action_id"] == "adapter:github:review_pull_request"
     assert captured["action_kwargs"]["pull_number"] == 123
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_explicit_skill_kwargs_override_payload_defaults(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    captured = {}
+
+    async def _fake_execute_skill(skill_name, **kwargs):
+        captured["kwargs"] = kwargs
+        return _SkillResult(success=True, output="Automated review", data={"review_event": "COMMENT"})
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
+        return {"success": True, "error": None, "result": {"id": 89}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {
+            "owner": "acme",
+            "repo": "engineering-flow-platform",
+            "pull_number": "123",
+            "head_sha": "abc123",
+            "review_target": {"type": "team", "name": "acme/platform-reviewers"},
+            "skill_kwargs": {"head_sha": "override-sha", "review_target": {"type": "user", "name": "alice"}},
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["kwargs"]["head_sha"] == "override-sha"
+    assert captured["kwargs"]["review_target"] == {"type": "user", "name": "alice"}
 
 
 @pytest.mark.asyncio
