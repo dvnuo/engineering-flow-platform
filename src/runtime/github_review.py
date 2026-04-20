@@ -28,6 +28,22 @@ def _event(event_type: str, state: str, detail_payload: Dict[str, Any]) -> Dict[
     )
 
 
+def _automation_trace_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    source = str(payload.get("source") or "").strip() or None
+    rule_id = str(payload.get("rule_id") or "").strip() or None
+    automation_rule_id = str(payload.get("automation_rule_id") or payload.get("rule_id") or "").strip() or None
+    dedupe_key = str(payload.get("dedupe_key") or "").strip() or None
+    review_target = payload.get("review_target") if isinstance(payload.get("review_target"), dict) else None
+    trace = {
+        "source": source,
+        "rule_id": rule_id,
+        "automation_rule_id": automation_rule_id,
+        "dedupe_key": dedupe_key,
+        "review_target": review_target,
+    }
+    return {key: value for key, value in trace.items() if value is not None}
+
+
 def _normalize_review_summary(skill_output: Any, skill_data: Dict[str, Any], fallback_comment: Optional[str]) -> str:
     if isinstance(skill_data.get("review_summary"), str) and skill_data.get("review_summary").strip():
         return skill_data["review_summary"].strip()
@@ -120,6 +136,13 @@ async def execute_github_review_action(action_id: str, kwargs: Dict[str, Any], p
 
 
 async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
+    source = str(payload.get("source") or "").strip() or None
+    rule_id = str(payload.get("rule_id") or "").strip() or None
+    automation_rule_id = str(payload.get("automation_rule_id") or payload.get("rule_id") or "").strip() or None
+    dedupe_key = str(payload.get("dedupe_key") or "").strip() or None
+    review_target = payload.get("review_target") if isinstance(payload.get("review_target"), dict) else None
+    automation_trace = _automation_trace_payload(payload)
+
     owner = str(payload.get("owner") or "").strip()
     repo = str(payload.get("repo") or "").strip()
     raw_pull_number = payload.get("pull_number")
@@ -128,12 +151,17 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             "success": False,
             "error": "owner, repo, and pull_number are required",
             "review_summary": None,
-            "runtime_events": [_event("task.github_review.failed", "failed", {"error": "missing_required_fields"})],
+            "runtime_events": [_event("task.github_review.failed", "failed", {"error": "missing_required_fields", **automation_trace})],
             "secondary_action_attempted": False,
             "secondary_action_success": False,
             "actions_applied": [],
             "result": {},
             "skill_name": str(payload.get("skill_name") or "review-pull-request"),
+            "source": source,
+            "rule_id": rule_id,
+            "automation_rule_id": automation_rule_id,
+            "dedupe_key": dedupe_key,
+            "review_target": review_target,
         }
     try:
         pull_number = int(raw_pull_number)
@@ -143,12 +171,17 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             "error": "pull_number must be an integer",
             "error_code": "invalid_pull_number",
             "review_summary": None,
-            "runtime_events": [_event("task.github_review.failed", "failed", {"error_code": "invalid_pull_number"})],
+            "runtime_events": [_event("task.github_review.failed", "failed", {"error_code": "invalid_pull_number", **automation_trace})],
             "secondary_action_attempted": False,
             "secondary_action_success": False,
             "actions_applied": [],
             "result": {},
             "skill_name": str(payload.get("skill_name") or "review-pull-request"),
+            "source": source,
+            "rule_id": rule_id,
+            "automation_rule_id": automation_rule_id,
+            "dedupe_key": dedupe_key,
+            "review_target": review_target,
         }
     if pull_number <= 0:
         return {
@@ -156,12 +189,17 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             "error": "pull_number must be a positive integer",
             "error_code": "invalid_pull_number",
             "review_summary": None,
-            "runtime_events": [_event("task.github_review.failed", "failed", {"error_code": "invalid_pull_number"})],
+            "runtime_events": [_event("task.github_review.failed", "failed", {"error_code": "invalid_pull_number", **automation_trace})],
             "secondary_action_attempted": False,
             "secondary_action_success": False,
             "actions_applied": [],
             "result": {},
             "skill_name": str(payload.get("skill_name") or "review-pull-request"),
+            "source": source,
+            "rule_id": rule_id,
+            "automation_rule_id": automation_rule_id,
+            "dedupe_key": dedupe_key,
+            "review_target": review_target,
         }
 
     skill_name = str(payload.get("skill_name") or "review-pull-request").strip() or "review-pull-request"
@@ -186,9 +224,15 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                         "error_code": skill_kwargs_error_code,
                         "error": skill_kwargs_error,
                         "skill_name": skill_name,
+                        **automation_trace,
                     },
                 )
             ],
+            "source": source,
+            "rule_id": rule_id,
+            "automation_rule_id": automation_rule_id,
+            "dedupe_key": dedupe_key,
+            "review_target": review_target,
         }
     review_comment_input = payload.get("comment")
     review_metadata = payload.get("metadata")
@@ -226,7 +270,7 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                 _event(
                     "task.github_review.freshness_guard.warning",
                     "warning",
-                    {"expected_head_sha": requested_head_sha, "error": str(exc)},
+                    {"expected_head_sha": requested_head_sha, "error": str(exc), **automation_trace},
                 )
             )
             freshness_warning_emitted = True
@@ -242,6 +286,7 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                             "expected_head_sha": requested_head_sha,
                             "current_head_sha": current_head_sha,
                             "secondary_action_id": "adapter:github:review_pull_request",
+                            **automation_trace,
                         },
                     )
                 )
@@ -267,6 +312,11 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "result": {},
                     "skill_name": skill_name,
                     "runtime_events": runtime_events,
+                    "source": source,
+                    "rule_id": rule_id,
+                    "automation_rule_id": automation_rule_id,
+                    "dedupe_key": dedupe_key,
+                    "review_target": review_target,
                 }
 
     skill_result = await execute_skill(
@@ -302,6 +352,7 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
         "skill_name": skill_name,
         "success": skill_success,
         "error": normalized_skill_error,
+        **automation_trace,
     }))
 
     review_event, review_summary = _normalize_review_writeback(
@@ -346,7 +397,7 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                         _event(
                             "task.github_review.freshness_guard.warning",
                             "warning",
-                            {"expected_head_sha": requested_head_sha, "error": str(exc)},
+                            {"expected_head_sha": requested_head_sha, "error": str(exc), **automation_trace},
                         )
                     )
             if current_head_sha and current_head_sha != requested_head_sha:
@@ -360,6 +411,7 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                             "expected_head_sha": requested_head_sha,
                             "current_head_sha": current_head_sha,
                             "secondary_action_id": secondary_action_id,
+                            **automation_trace,
                         },
                     )
                 )
@@ -393,6 +445,11 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                         }
                     },
                     "skill_name": skill_name,
+                    "source": source,
+                    "rule_id": rule_id,
+                    "automation_rule_id": automation_rule_id,
+                    "dedupe_key": dedupe_key,
+                    "review_target": review_target,
                 }
 
         secondary_action_attempted = True
@@ -430,6 +487,7 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                         "secondary_action_id": secondary_action_id,
                         "reason": gate_reason,
                         "message": gate_message,
+                        **automation_trace,
                     },
                 )
             )
@@ -450,6 +508,7 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                         "secondary_action_id": secondary_action_id,
                         "success": secondary_action_success,
                         "error": add_comment_result.get("error"),
+                        **automation_trace,
                     },
                 )
             )
@@ -472,6 +531,7 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "review_event": review_event,
                 "success": success,
                 "error": error_value,
+                **automation_trace,
             },
         )
     )
@@ -502,4 +562,9 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             }
         },
         "skill_name": skill_name,
+        "source": source,
+        "rule_id": rule_id,
+        "automation_rule_id": automation_rule_id,
+        "dedupe_key": dedupe_key,
+        "review_target": review_target,
     }

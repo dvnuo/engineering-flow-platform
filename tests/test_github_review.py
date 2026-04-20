@@ -318,7 +318,17 @@ async def test_github_review_task_head_sha_mismatch_suppresses_writeback(monkeyp
     monkeypatch.setattr("src.runtime.github_review.execute_github_review_action", _unexpected_execute_github_review_action)
 
     result = await run_github_review_task(
-        {"owner": "acme", "repo": "demo", "pull_number": 12, "head_sha": "sha-old"}
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 12,
+            "head_sha": "sha-old",
+            "source": "automation_rule",
+            "rule_id": "rule-12",
+            "automation_rule_id": "ar-12",
+            "dedupe_key": "dedupe-12",
+            "review_target": {"type": "team", "name": "acme/reviewers"},
+        }
     )
 
     assert called["skill"] is False
@@ -330,6 +340,8 @@ async def test_github_review_task_head_sha_mismatch_suppresses_writeback(monkeyp
     assert result["secondary_action_attempted"] is False
     assert result["expected_head_sha"] == "sha-old"
     assert result["current_head_sha"] == "sha-new"
+    assert result["automation_rule_id"] == "ar-12"
+    assert result["dedupe_key"] == "dedupe-12"
     assert any(evt.get("event_type") == "task.github_review.superseded" for evt in result["runtime_events"])
 
 
@@ -669,11 +681,16 @@ async def test_github_review_task_accepts_portal_automation_payload_shape(monkey
 
     monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+    async def _same_head_sha(_owner, _repo, _pull_number):
+        return "abc123"
+
+    monkeypatch.setattr("src.runtime.github_review._get_current_pr_head_sha", _same_head_sha)
 
     result = await run_github_review_task(
         {
             "source": "automation_rule",
             "rule_id": "rule-1",
+            "automation_rule_id": "auto-1",
             "provider": "github",
             "owner": "acme",
             "repo": "engineering-flow-platform",
@@ -695,6 +712,14 @@ async def test_github_review_task_accepts_portal_automation_payload_shape(monkey
     assert captured["kwargs"]["review_event"] == "COMMENT"
     assert captured["action_id"] == "adapter:github:review_pull_request"
     assert captured["action_kwargs"]["pull_number"] == 123
+    assert result["rule_id"] == "rule-1"
+    assert result["automation_rule_id"] == "auto-1"
+    assert result["dedupe_key"] == "dedupe-1"
+    assert result["review_target"] == {"type": "team", "name": "acme/platform-reviewers"}
+    assert any(
+        (evt.get("detail_payload") or {}).get("automation_rule_id") == "auto-1"
+        for evt in result["runtime_events"]
+    )
 
 
 @pytest.mark.asyncio
@@ -712,6 +737,10 @@ async def test_github_review_task_explicit_skill_kwargs_override_payload_default
 
     monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+    async def _same_head_sha(_owner, _repo, _pull_number):
+        return "abc123"
+
+    monkeypatch.setattr("src.runtime.github_review._get_current_pr_head_sha", _same_head_sha)
 
     result = await run_github_review_task(
         {
@@ -741,8 +770,42 @@ async def test_github_review_task_invalid_pull_number_returns_clear_error(monkey
 
     monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
 
-    result = await run_github_review_task({"owner": "acme", "repo": "demo", "pull_number": "abc"})
+    result = await run_github_review_task(
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": "abc",
+            "source": "automation_rule",
+            "rule_id": "rule-err",
+            "automation_rule_id": "auto-err",
+            "dedupe_key": "dedupe-err",
+        }
+    )
 
     assert called["skill"] is False
     assert result["success"] is False
     assert result["error_code"] == "invalid_pull_number"
+    assert result["rule_id"] == "rule-err"
+    assert result["automation_rule_id"] == "auto-err"
+    assert result["dedupe_key"] == "dedupe-err"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_missing_required_fields_preserves_trace_fields():
+    from src.runtime.github_review import run_github_review_task
+
+    result = await run_github_review_task(
+        {
+            "source": "automation_rule",
+            "rule_id": "rule-missing",
+            "automation_rule_id": "auto-missing",
+            "dedupe_key": "dedupe-missing",
+            "pull_number": 1,
+        }
+    )
+
+    assert result["success"] is False
+    assert result["error"] == "owner, repo, and pull_number are required"
+    assert result["rule_id"] == "rule-missing"
+    assert result["automation_rule_id"] == "auto-missing"
+    assert result["dedupe_key"] == "dedupe-missing"
