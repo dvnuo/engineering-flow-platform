@@ -22,6 +22,7 @@ def test_portal_managed_field_tree_provider_sections_do_not_include_automation()
     managed_tree_repr = repr(Config.PORTAL_MANAGED_FIELD_TREE)
     assert "review_requests" not in managed_tree_repr
     assert "assignments" not in managed_tree_repr
+    assert "mentions" not in managed_tree_repr
 
 
 def test_set_managed_overlay_ignores_provider_automation_subtrees(tmp_path):

@@ -17,3 +17,11 @@ async def test_start_automation_watchers_is_noop():
 async def test_stop_automation_watchers_handles_none_task():
     result = await automation_watchers.stop_automation_watchers(None)
     assert result is None
+
+
+def test_automation_watchers_shim_source_has_no_polling_or_http_dependencies():
+    source = automation_watchers.__loader__.get_source(automation_watchers.__name__)
+    assert source is not None
+    assert "ClientSession" not in source
+    assert "/api/internal/external-events/ingest" not in source
+    assert "agent-identity-bindings" not in source
