@@ -47,9 +47,10 @@ async def test_review_pull_request_skill_is_registered_and_executable(monkeypatc
         owner="acme",
         repo="repo",
         pull_number=1,
-        review_event="COMMENT",
+        review_event="APPROVE",
     )
 
     assert result.success is True
     assert "Pull Request Summary" in result.output
-    assert result.data["review_event"] == "COMMENT"
+    assert result.data["requested_review_event"] == "APPROVE"
+    assert "review_event" not in result.data

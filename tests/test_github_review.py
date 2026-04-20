@@ -109,6 +109,89 @@ async def test_github_review_task_uses_payload_review_event_when_skill_has_no_ev
 
 
 @pytest.mark.asyncio
+async def test_github_review_task_payload_approve_used_as_fallback_default(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(success=True, output="Looks fine", data={"review_summary": "Looks fine"})
+
+    captured = {}
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
+        captured["kwargs"] = kwargs
+        return {"success": True, "error": None, "result": {"id": 35}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {"owner": "acme", "repo": "demo", "pull_number": 3, "review_event": "APPROVE"}
+    )
+
+    assert result["success"] is True
+    assert captured["kwargs"]["review_event"] == "APPROVE"
+    assert result["review_event"] == "APPROVE"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_explicit_skill_review_event_wins_over_payload_default(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(
+            success=True,
+            output="Needs work",
+            data={"review_summary": "Needs work", "review_event": "REQUEST_CHANGES"},
+        )
+
+    captured = {}
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
+        captured["kwargs"] = kwargs
+        return {"success": True, "error": None, "result": {"id": 36}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {"owner": "acme", "repo": "demo", "pull_number": 3, "review_event": "APPROVE"}
+    )
+
+    assert result["success"] is True
+    assert captured["kwargs"]["review_event"] == "REQUEST_CHANGES"
+    assert result["review_event"] == "REQUEST_CHANGES"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_requested_review_event_field_does_not_override_decision_logic(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _SkillResult(
+            success=True,
+            output="Looks fine",
+            data={"review_summary": "Looks fine", "requested_review_event": "APPROVE"},
+        )
+
+    captured = {}
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
+        captured["kwargs"] = kwargs
+        return {"success": True, "error": None, "result": {"id": 37}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {"owner": "acme", "repo": "demo", "pull_number": 3, "review_event": "APPROVE"}
+    )
+
+    assert result["success"] is True
+    assert captured["kwargs"]["review_event"] == "APPROVE"
+    assert result["review_event"] == "APPROVE"
+
+
+@pytest.mark.asyncio
 async def test_github_review_task_invalid_payload_review_event_falls_back_to_comment(monkeypatch):
     from src.runtime.github_review import run_github_review_task
 
@@ -213,10 +296,11 @@ async def test_github_review_task_explicit_issue_comment_fallback(monkeypatch):
 async def test_github_review_task_head_sha_mismatch_suppresses_writeback(monkeypatch):
     from src.runtime.github_review import run_github_review_task
 
-    async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(success=True, output="Looks stale now", data={"approved": True})
+    called = {"skill": False, "adapter": False}
 
-    called = {"adapter": False}
+    async def _fake_execute_skill(*_args, **_kwargs):
+        called["skill"] = True
+        return _SkillResult(success=True, output="Looks stale now", data={"approved": True})
 
     async def _fake_execute_adapter_action_via_bus(_action_id, _kwargs, **_meta):
         called["adapter"] = True
@@ -233,6 +317,7 @@ async def test_github_review_task_head_sha_mismatch_suppresses_writeback(monkeyp
         {"owner": "acme", "repo": "demo", "pull_number": 12, "head_sha": "sha-old"}
     )
 
+    assert called["skill"] is False
     assert called["adapter"] is False
     assert result["success"] is False
     assert result["error_code"] == "superseded_by_new_head_sha"
@@ -242,6 +327,37 @@ async def test_github_review_task_head_sha_mismatch_suppresses_writeback(monkeyp
     assert result["expected_head_sha"] == "sha-old"
     assert result["current_head_sha"] == "sha-new"
     assert any(evt.get("event_type") == "task.github_review.superseded" for evt in result["runtime_events"])
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_precheck_freshness_failure_does_not_block_skill(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    called = {"skill": False, "adapter": False}
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        called["skill"] = True
+        return _SkillResult(success=True, output="Review content", data={})
+
+    async def _fake_execute_adapter_action_via_bus(_action_id, _kwargs, **_meta):
+        called["adapter"] = True
+        return {"success": True, "error": None, "result": {"id": 51}, "runtime_events": []}
+
+    async def _flaky_get_current_pr_head_sha(_owner, _repo, _pull_number):
+        raise RuntimeError("temporary api failure")
+
+    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+    monkeypatch.setattr("src.runtime.github_review._get_current_pr_head_sha", _flaky_get_current_pr_head_sha)
+
+    result = await run_github_review_task(
+        {"owner": "acme", "repo": "demo", "pull_number": 12, "head_sha": "sha-old"}
+    )
+
+    assert called["skill"] is True
+    assert called["adapter"] is True
+    assert result["success"] is True
+    assert any(evt.get("event_type") == "task.github_review.freshness_guard.warning" for evt in result["runtime_events"])
 
 
 @pytest.mark.asyncio

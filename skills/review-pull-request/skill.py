@@ -94,6 +94,8 @@ async def review_pull_request(
         f"Head SHA (task): {head_sha or ''}\n"
         f"Review target: {review_target or {}}\n\n"
         f"Requested review event default: {normalized_review_event}\n"
+        "Default writeback event is controlled by runtime policy.\n"
+        "Produce review content only, and do not decide approval unless future structured decision support is added.\n"
         "Do not approve unless confidence is very high; default to COMMENT-style actionable feedback.\n\n"
         f"Changed files ({len(file_lines)} shown):\n" + ("\n".join(file_lines) or "- none") + "\n\n"
         f"Existing review comments count: {len(context['comments'])}\n"
@@ -123,7 +125,7 @@ async def review_pull_request(
         output=review_text,
         data={
             "review_summary": review_text,
-            "review_event": normalized_review_event,
+            "requested_review_event": normalized_review_event,
             "context": {
                 "owner": owner,
                 "repo": repo,

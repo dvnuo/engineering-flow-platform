@@ -207,6 +207,67 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     if requested_event is not None:
         default_skill_kwargs["review_event"] = requested_event
     resolved_skill_kwargs = {**default_skill_kwargs, **skill_kwargs}
+    runtime_events: list[Dict[str, Any]] = []
+    requested_head_sha = str(payload.get("head_sha") or "").strip()
+    freshness_warning_emitted = False
+
+    if requested_head_sha:
+        try:
+            current_head_sha = await _get_current_pr_head_sha(owner, repo, pull_number)
+        except Exception as exc:
+            logger.warning(
+                "github_review_task pre-skill freshness guard fetch failed for %s/%s#%s: %s",
+                owner,
+                repo,
+                pull_number,
+                exc,
+            )
+            runtime_events.append(
+                _event(
+                    "task.github_review.freshness_guard.warning",
+                    "warning",
+                    {"expected_head_sha": requested_head_sha, "error": str(exc)},
+                )
+            )
+            freshness_warning_emitted = True
+        else:
+            if current_head_sha and current_head_sha != requested_head_sha:
+                runtime_events.append(
+                    _event(
+                        "task.github_review.superseded",
+                        "stale",
+                        {
+                            "error_code": "superseded_by_new_head_sha",
+                            "stale": True,
+                            "expected_head_sha": requested_head_sha,
+                            "current_head_sha": current_head_sha,
+                            "secondary_action_id": "adapter:github:review_pull_request",
+                        },
+                    )
+                )
+                return {
+                    "task_type": "github_review_task",
+                    "success": False,
+                    "stale": True,
+                    "error": "superseded_by_new_head_sha",
+                    "error_code": "superseded_by_new_head_sha",
+                    "expected_head_sha": requested_head_sha,
+                    "current_head_sha": current_head_sha,
+                    "owner": owner,
+                    "repo": repo,
+                    "pull_number": pull_number,
+                    "review_summary": None,
+                    "review_event": requested_event or "COMMENT",
+                    "review_written": False,
+                    "comment_written": False,
+                    "secondary_action_attempted": False,
+                    "secondary_action_success": False,
+                    "secondary_action_id": "adapter:github:review_pull_request",
+                    "actions_applied": [],
+                    "result": {},
+                    "skill_name": skill_name,
+                    "runtime_events": runtime_events,
+                }
 
     skill_result = await execute_skill(
         skill_name,
@@ -237,11 +298,11 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 normalized_skill_error = f"GitHub review skill '{skill_name}' failed without an explicit error"
 
-    runtime_events = [_event("task.github_review.skill.completed" if skill_success else "task.github_review.skill.failed", "completed" if skill_success else "failed", {
+    runtime_events.append(_event("task.github_review.skill.completed" if skill_success else "task.github_review.skill.failed", "completed" if skill_success else "failed", {
         "skill_name": skill_name,
         "success": skill_success,
         "error": normalized_skill_error,
-    })]
+    }))
 
     review_event, review_summary = _normalize_review_writeback(
         skill_output,
@@ -268,7 +329,6 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
         if secondary_action_id == "adapter:github:review_pull_request":
             action_payload["review_event"] = review_event
 
-        requested_head_sha = str(payload.get("head_sha") or "").strip()
         if requested_head_sha:
             current_head_sha: str | None = None
             try:
@@ -281,13 +341,14 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                     pull_number,
                     exc,
                 )
-                runtime_events.append(
-                    _event(
-                        "task.github_review.freshness_guard.warning",
-                        "warning",
-                        {"expected_head_sha": requested_head_sha, "error": str(exc)},
+                if not freshness_warning_emitted:
+                    runtime_events.append(
+                        _event(
+                            "task.github_review.freshness_guard.warning",
+                            "warning",
+                            {"expected_head_sha": requested_head_sha, "error": str(exc)},
+                        )
                     )
-                )
             if current_head_sha and current_head_sha != requested_head_sha:
                 runtime_events.append(
                     _event(
