@@ -2258,6 +2258,62 @@ async def test_execution_bus_task_handler_github_review_task_success(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_execution_bus_github_review_task_propagates_automation_trace(monkeypatch):
+    async def _fake_run_github_review_task(_payload):
+        return {
+            "success": True,
+            "error": None,
+            "review_summary": "ok",
+            "review_event": "COMMENT",
+            "review_written": True,
+            "comment_written": True,
+            "secondary_action_attempted": True,
+            "secondary_action_success": True,
+            "secondary_action_id": "adapter:github:review_pull_request",
+            "source": "automation_rule",
+            "rule_id": "rule-1",
+            "automation_rule_id": "rule-1",
+            "dedupe_key": "dedupe-full",
+            "review_target": {"type": "team", "name": "acme/reviewers"},
+            "runtime_events": [],
+            "result": {},
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        execution_type="task",
+        input_payload={
+            "task_type": "github_review_task",
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 42,
+            "source": "automation_rule",
+            "rule_id": "rule-1",
+            "automation_rule_id": "rule-1",
+            "dedupe_key": "dedupe-full",
+            "review_target": {"type": "team", "name": "acme/reviewers"},
+        },
+    )
+    result = await bus.execute(req)
+
+    assert result.status == "success"
+    assert result.output_payload["source"] == "automation_rule"
+    assert result.output_payload["rule_id"] == "rule-1"
+    assert result.output_payload["automation_rule_id"] == "rule-1"
+    assert result.output_payload["dedupe_key"] == "dedupe-full"
+    assert result.output_payload["review_target"] == {"type": "team", "name": "acme/reviewers"}
+    task_events = [evt for evt in result.runtime_events if evt.get("event_type") == "task.github_review.completed"]
+    assert task_events
+    detail = task_events[-1].get("detail_payload") or {}
+    assert detail.get("automation_rule_id") == "rule-1"
+    assert detail.get("dedupe_key") == "dedupe-full"
+    assert detail.get("rule_id") == "rule-1"
+    assert detail.get("source") == "automation_rule"
+
+
+@pytest.mark.asyncio
 async def test_execution_bus_github_review_task_approved_event_reflected_in_output(monkeypatch):
     async def _fake_run_github_review_task(_payload):
         return {
@@ -3218,6 +3274,11 @@ async def test_github_review_task_superseded_fields_passthrough(monkeypatch):
             "secondary_action_attempted": False,
             "secondary_action_success": False,
             "secondary_action_id": "adapter:github:review_pull_request",
+            "source": "automation_rule",
+            "rule_id": "rule-2",
+            "automation_rule_id": "rule-2",
+            "dedupe_key": "dedupe-stale",
+            "review_target": {"type": "team", "name": "acme/reviewers"},
             "runtime_events": [{"event_type": "task.github_review.superseded", "state": "stale"}],
         }
 
@@ -3234,11 +3295,18 @@ async def test_github_review_task_superseded_fields_passthrough(monkeypatch):
     assert result.output_payload["stale"] is True
     assert result.output_payload["expected_head_sha"] == "sha-old"
     assert result.output_payload["current_head_sha"] == "sha-new"
+    assert result.output_payload["automation_rule_id"] == "rule-2"
+    assert result.output_payload["rule_id"] == "rule-2"
+    assert result.output_payload["dedupe_key"] == "dedupe-stale"
+    assert result.output_payload["review_target"] == {"type": "team", "name": "acme/reviewers"}
+    assert result.output_payload["source"] == "automation_rule"
     task_events = [evt for evt in result.runtime_events if evt.get("event_type") == "task.github_review.failed"]
     assert task_events
     detail = task_events[-1].get("detail_payload") or {}
     assert detail.get("error_code") == "superseded_by_new_head_sha"
     assert detail.get("stale") is True
+    assert detail.get("automation_rule_id") == "rule-2"
+    assert detail.get("dedupe_key") == "dedupe-stale"
 
 
 @pytest.mark.asyncio
