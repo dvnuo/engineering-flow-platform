@@ -166,3 +166,87 @@ def test_to_input_items_source_uses_per_tool_feedback_policy():
     assert '"output": _tool_feedback_text(content) if content else ""' not in module_source
     assert "_tool_feedback_text_for_tool(" in module_source
     assert "tool_names_by_call_id" in module_source
+
+
+def test_is_meaningful_context_state_rules():
+    from src.agents import core
+
+    assert core._is_meaningful_context_state({}) is False
+    assert core._is_meaningful_context_state({"objective": ""}) is False
+    assert core._is_meaningful_context_state({"objective": "Ship final snapshot"}) is True
+    assert core._is_meaningful_context_state({"constraints": [""]}) is False
+    assert core._is_meaningful_context_state({"constraints": ["must preserve context"]}) is True
+    assert core._is_meaningful_context_state({"budget": {"usage_percent": 42.0}}) is True
+
+
+def test_build_terminal_context_snapshot_event_builds_standard_event():
+    from src.agents import core
+
+    event = core._build_terminal_context_snapshot_event(
+        context_state={"summary": "Final summary", "budget": {"usage_percent": 42.0}},
+        session_id="s-1",
+        agent_id="agent-1",
+        request_id="req-1",
+        status="completed",
+    )
+
+    assert event is not None
+    assert event["type"] == "context_snapshot"
+    assert event["event_type"] == "context_snapshot"
+    assert event["state"] == "completed"
+    assert event["session_id"] == "s-1"
+    assert event["request_id"] == "req-1"
+    assert event["agent_id"] == "agent-1"
+    assert event["data"]["stage"] == "post_turn"
+    assert event["data"]["terminal"] is True
+    assert event["data"]["context_state"]["summary"] == "Final summary"
+    assert event["data"]["budget"]["usage_percent"] == 42.0
+    assert event["detail_payload"]["terminal"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_chat_execution_appends_terminal_context_snapshot(monkeypatch):
+    from src.agents import core
+
+    class _FakeAgent:
+        model = "gpt-5-mini"
+        agent_id = "agent-1"
+
+        async def process(self, **kwargs):
+            return {
+                "response": "ok",
+                "runtime_events": [
+                    {
+                        "type": "execution.started",
+                        "event_type": "execution.started",
+                        "data": {"message": "started"},
+                    }
+                ],
+            }
+
+    async def _fake_apply_progressive_context_after_turn(*, session_id, model):
+        assert session_id == "s-1"
+        assert model == "gpt-5-mini"
+        return {"summary": "Final context", "budget": {"usage_percent": 12.5}}
+
+    monkeypatch.setattr(core, "apply_progressive_context_after_turn", _fake_apply_progressive_context_after_turn)
+
+    result = await core.run_chat_execution(
+        _FakeAgent(),
+        message="hello",
+        session_id="s-1",
+        request_id="req-1",
+    )
+
+    assert result["context_state"]["summary"] == "Final context"
+    assert result["request_id"] == "req-1"
+    assert result["runtime_events"][0]["type"] == "execution.started"
+    terminal_events = [
+        event
+        for event in result["runtime_events"]
+        if event.get("type") == "context_snapshot"
+        and (event.get("data") or {}).get("stage") == "post_turn"
+        and (event.get("data") or {}).get("terminal") is True
+    ]
+    assert len(terminal_events) == 1
+    assert terminal_events[0]["data"]["context_state"]["summary"] == "Final context"
