@@ -298,6 +298,98 @@ def test_build_responses_input_items_keeps_already_projected_assistant_tool_call
     assert "[assistant skill content compacted" not in assistant_item["content"]
 
 
+def test_build_responses_input_items_projects_plain_assistant_large_gherkin():
+    from src.agents import core
+
+    long_gherkin = "@MMGFX-13887\nFeature: OCO TP\n" + ("\nScenario: L\nGiven a\nWhen b\nThen c" * 3000)
+    messages = [
+        {"role": "assistant", "content": long_gherkin},
+        {"role": "user", "content": "continue"},
+    ]
+    items = core.build_responses_input_items(messages, session_id="s-plain")
+    assistant_item = next(item for item in items if item.get("role") == "assistant")
+    assert assistant_item["content"] != long_gherkin
+    assert "ctx://context/" in assistant_item["content"]
+    assert "[assistant skill content compacted" in assistant_item["content"]
+    assert long_gherkin[:200] not in assistant_item["content"]
+
+
+def test_build_responses_input_items_keeps_already_projected_plain_assistant_unchanged():
+    from src.agents import core
+
+    projected = (
+        "[assistant output compacted | original_chars=20000 | ref=ctx://context/s/assistant_output/aaaaaaaaaaaa]\n"
+        "Summary:\nFeature: X"
+    )
+    messages = [{"role": "assistant", "content": projected}]
+    items = core.build_responses_input_items(messages, session_id="s")
+    assistant_item = next(item for item in items if item.get("role") == "assistant")
+    assert assistant_item["content"] == projected
+
+
+def test_mobilex_large_generation_output_guard_is_unconditional_in_tool_loop_and_skill_mode():
+    from src.agents import core
+
+    process_source = inspect.getsource(core.Agent.process)
+    continue_source = inspect.getsource(core.Agent._continue_skill_mode)
+    assert "_large_generation_output_guard(" in process_source
+    assert "_large_generation_output_guard(" in continue_source
+    assert "Large generation output guard:" in inspect.getsource(core._large_generation_output_guard)
+
+
+def test_mobilex_skill_prompt_contains_hard_output_constraints():
+    from pathlib import Path
+
+    skill_text = Path("skills/mobilex-test-cases-generator/skill.md").read_text(encoding="utf-8")
+    assert "## Hard Output Constraints" in skill_text
+    assert "Never generate full multi-file Java implementation in one response." in skill_text
+    assert "one file at a time" in skill_text
+
+
+def test_mobilex_continuation_regression_shape_projects_plain_assistant_and_jira():
+    from src.agents import core
+
+    long_gherkin = "@MMGFX-13887\nFeature: OCO TP\n" + ("\nScenario: L\nGiven a\nWhen b\nThen c" * 3000)
+    long_jira = (
+        "# MMGFX-13887: OCO\n## Description\n"
+        + ("noise\n" * 3500)
+        + "## Acceptance Criteria\n- ac1\n- ac2\n"
+    )
+    messages = [
+        {"role": "assistant", "content": long_gherkin},
+        {"role": "user", "content": "continue"},
+        {
+            "role": "assistant",
+            "content": "calling jira",
+            "tool_calls": [{"id": "call_1", "function": {"name": "jira_get_issue", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "tool_name": "jira_get_issue", "content": long_jira},
+    ]
+
+    raw_items = [
+        {"role": "assistant", "content": long_gherkin},
+        {"role": "user", "content": [{"type": "input_text", "text": "continue"}]},
+        {"role": "assistant", "content": "calling jira"},
+        {"type": "function_call", "call_id": "call_1", "name": "jira_get_issue", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_1", "output": long_jira},
+    ]
+    raw_tokens = core.estimate_llm_request_tokens(raw_items, "", [])
+
+    items = core.build_responses_input_items(messages, session_id="s-regress")
+    new_tokens = core.estimate_llm_request_tokens(items, "", [])
+    assistant_item = next(item for item in items if item.get("role") == "assistant" and isinstance(item.get("content"), str))
+    tool_output_item = next(item for item in items if item.get("type") == "function_call_output")
+    function_call = next(item for item in items if item.get("type") == "function_call")
+
+    assert long_gherkin[:200] not in assistant_item["content"]
+    assert "ctx://context/" in assistant_item["content"]
+    assert "context_ref: ctx://context/" in tool_output_item["output"]
+    assert "context_read_ref(" in tool_output_item["output"]
+    assert long_jira[:500] not in tool_output_item["output"]
+    assert new_tokens < raw_tokens
+    assert tool_output_item["call_id"] == function_call["call_id"]
+
+
 def test_degrade_projected_context_sources_in_responses_input_items_preserves_call_id():
     from src.agents import core
 

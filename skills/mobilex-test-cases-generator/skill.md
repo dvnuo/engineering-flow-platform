@@ -21,12 +21,13 @@ tools:
 strategy:
   - "1. Parse Jira ticket(s) - supports single or multiple (e.g., EFP-123 or EFP-123,EFP-456)"
   - "2. Call jira_get_issue_by_url to fetch each ticket's details"
-  - "3. After getting result, respond with [FINISH] + summary of what was fetched"
-  - "4. Include in [FINISH]: summary, description (key points), acceptance criteria"
-  - "5. Wait for user confirmation before generating test code"
-  - "6. After confirmation, generate test scenarios (scenario outline + examples)"
-  - "7. Generate Cucumber feature file + Step Definitions + Java implementations"
-  - "8. Commit code to GitHub"
+  - "3. After Jira fetch, respond with [FINISH] + summary/description(key points)/acceptance criteria only (no Gherkin/code)"
+  - "4. Wait for user confirmation before generation"
+  - "5. Generate phase 1 scenario manifest only"
+  - "6. Generate phase 2 feature file only"
+  - "7. Generate phase 3 step definitions only"
+  - "8. Generate phase 4+ Java drivers one file at a time"
+  - "9. Commit only after files are written and user confirms"
 output_format: markdown
 ---
 
@@ -34,18 +35,23 @@ output_format: markdown
 
 Generate mobile automation test cases from Jira tickets.
 
+## Hard Output Constraints
+
+- Never generate full multi-file Java implementation in one response.
+- Never dump all generated artifacts in chat; use file/write tools when a repository target is known.
+- Never repeat previously generated Gherkin in full; summarize prior output and continue from the next phase.
+- Always produce one file/phase at a time and keep each chat response bounded (target under ~8000 characters).
+- If no repository target is available, return a concise manifest and ask the user which next phase/file to generate.
+- Commit only after files are actually written and user confirmation is received.
+
 ## Overview
 
-1. **Jira Parsing** - Fetch requirement details from Jira (summary, description, AC, comments)
-2. **Scenario Generation** - Generate test scenarios covering requirements (Gherkin/Cucumber)
-3. **Code Generation** - Create complete test code:
-   - Cucumber Feature files
-   - Java Step Definitions
-   - Java DeviceStepDriver Interface
-   - Common Implementation
-   - iOS Implementation
-   - Android Implementation
-4. **Git Commit** - Commit code to GitHub
+1. **Jira Parsing (phase 0)** - Fetch requirement details from Jira (summary, key description points, AC) and stop with `[FINISH]`. Do not generate Gherkin/code yet.
+2. **Scenario Manifest (phase 1)** - After user says continue, provide scenario manifest / feature outline only.
+3. **Feature File (phase 2)** - Generate only the `.feature` file content.
+4. **Step Definitions (phase 3)** - Generate only step definition file(s).
+5. **Driver Implementations (phase 4+)** - Generate interfaces/implementations one file at a time (common, iOS, Android).
+6. **Git Commit (final)** - Commit only after files are written and user confirms.
 
 ## Output File Structure
 
@@ -131,8 +137,8 @@ public interface DeviceStepDriver {
 2. **Confirm Info** → Display summary + AC, user confirms/supplements
 3. **Generate Scenarios** → Create feature draft
 4. **Review Scenarios** → User confirms or modifies scenarios
-5. **Generate Code** → One-click generate complete test code
-6. **Submit Code** → Git push + PR link
+5. **Generate Code** → Continue phase-by-phase and file-by-file
+6. **Submit Code** → Git push + PR link only after explicit user confirmation
 
 ## Notes
 
