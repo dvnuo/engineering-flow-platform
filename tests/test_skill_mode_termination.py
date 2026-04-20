@@ -39,6 +39,7 @@ async def run_replay_case(
     initial_session=None,
     capture_llm_kwargs=None,
     tracer_factory=None,
+    skill_name="lookup",
 ):
     from src.agents import core as core_mod
 
@@ -74,10 +75,10 @@ async def run_replay_case(
     tracer_provider = tracer_factory or (lambda: FakeTracer())
     monkeypatch.setattr("src.skills.get_tracer", tracer_provider)
 
-    skill = SimpleNamespace(name="lookup", description="search issue", path="", tools=[], strategy=[])
+    skill = SimpleNamespace(name=skill_name, description="search issue", path="", tools=[], strategy=[])
     agent = make_agent()
 
-    skill_session = initial_session or SkillSession(skill_name="lookup", original_user_request=message)
+    skill_session = initial_session or SkillSession(skill_name=skill_name, original_user_request=message)
     result = await agent._continue_skill_mode(
         message=message,
         session_id="s-replay",
@@ -619,6 +620,8 @@ async def test_continue_skill_mode_error_response_includes_skill_generation_budg
         responses=[{"error": {"message": "boom", "type": "llm_error"}}],
     )
     assert result["request_budget"].get("request_budget_stage") == "skill_generation"
+    assert result["request_budget"].get("large_generation_guard_applied") is False
+    assert result["request_budget"].get("output_size_guard_applied") is False
 
 
 @pytest.mark.asyncio
@@ -652,3 +655,16 @@ async def test_continue_skill_mode_over_budget_error_includes_skill_generation_s
     assert result["details"]["request_budget_stage"] == "skill_generation"
     assert result["details"]["stage"] == "skill_generation"
     assert result["request_budget"]["request_budget_stage"] == "skill_generation"
+
+
+@pytest.mark.asyncio
+async def test_continue_skill_mode_mobilex_budget_marks_large_generation_guard_applied(monkeypatch):
+    result, _snapshots, _calls = await run_replay_case(
+        monkeypatch,
+        responses=[{"error": {"message": "boom", "type": "llm_error"}}],
+        skill_name="mobilex-test-cases-generator",
+    )
+
+    assert result["request_budget"].get("request_budget_stage") == "skill_generation"
+    assert result["request_budget"].get("large_generation_guard_applied") is True
+    assert result["request_budget"].get("output_size_guard_applied") is True

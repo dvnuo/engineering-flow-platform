@@ -250,9 +250,14 @@ def _merge_request_budget_into_context_state(
         "max_output_tokens",
         "request_over_budget",
         "projected_old_assistant_messages",
+        "projected_recent_assistant_messages",
+        "projected_plain_assistant_messages",
         "projected_old_tool_messages",
         "projection_chars_saved",
+        "assistant_projection_chars_saved",
         "context_blob_refs_created",
+        "output_size_guard_applied",
+        "large_generation_guard_applied",
         "request_budget_stage",
     ):
         if key in latest_request_budget:
@@ -517,6 +522,8 @@ def _safe_request_budget_fields(budget: Optional[Dict[str, Any]]) -> Dict[str, A
         "max_prompt_tokens",
         "max_output_tokens",
         "request_over_budget",
+        "output_size_guard_applied",
+        "large_generation_guard_applied",
     )
     safe = {key: budget.get(key) for key in keys if key in budget}
     stage = budget.get("request_budget_stage")
@@ -2102,6 +2109,7 @@ You have access to the following tools. When a user asks you to do something tha
             )
             if large_generation_guard:
                 llm_kwargs["system_prompt"] = ((llm_kwargs.get("system_prompt") or "") + "\n\n" + large_generation_guard).strip()
+            large_generation_guard_applied = bool(large_generation_guard)
             if effective_model:
                 llm_kwargs["model"] = effective_model
             
@@ -2124,6 +2132,8 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["safety_margin_tokens"] = loop_budget.get("safety_margin_tokens")
                 budget_state["max_prompt_tokens"] = loop_budget.get("max_prompt_tokens")
                 budget_state["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
+                budget_state["large_generation_guard_applied"] = large_generation_guard_applied
+                budget_state["output_size_guard_applied"] = large_generation_guard_applied
             if request_estimated_tokens > int(loop_budget.get("prompt_budget_tokens", 0) or 0):
                 loop_messages, loop_context_state = await prepare_progressive_messages(
                     messages=loop_messages,
@@ -2159,6 +2169,8 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["max_prompt_tokens"] = loop_budget.get("max_prompt_tokens")
                 budget_state["max_output_tokens"] = loop_budget.get("max_output_tokens")
                 budget_state["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
+                budget_state["large_generation_guard_applied"] = large_generation_guard_applied
+                budget_state["output_size_guard_applied"] = large_generation_guard_applied
                 budget_state["request_budget_stage"] = "tool_loop"
                 latest_request_budget = dict(budget_state)
                 emit_context_snapshot("tool_loop_budget", loop_context_state, iteration=iteration)
@@ -3079,6 +3091,7 @@ You have access to the following tools. When a user asks you to do something tha
             )
             if large_generation_guard:
                 llm_kwargs["system_prompt"] = ((llm_kwargs.get("system_prompt") or "") + "\n\n" + large_generation_guard).strip()
+            large_generation_guard_applied = bool(large_generation_guard)
             if self.model:
                 llm_kwargs["model"] = self.model
 
@@ -3099,6 +3112,8 @@ You have access to the following tools. When a user asks you to do something tha
                 "max_prompt_tokens": loop_budget.get("max_prompt_tokens"),
                 "max_output_tokens": loop_budget.get("max_output_tokens"),
                 "request_over_budget": request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False,
+                "large_generation_guard_applied": large_generation_guard_applied,
+                "output_size_guard_applied": large_generation_guard_applied,
                 "request_budget_stage": "skill_generation",
                 "stage": "skill_generation",
             }

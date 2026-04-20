@@ -243,7 +243,10 @@ def _project_large_history_messages(
     protected_tool_chain_ids = _collect_protected_tool_chain_ids(messages, recent_count)
     refs: List[str] = []
     saved = 0
+    assistant_saved = 0
     projected_assistant = 0
+    projected_recent_assistant = 0
+    projected_plain_assistant = 0
     projected_tool = 0
     projected: List[AgentMessage] = []
     for idx, msg in enumerate(messages):
@@ -272,7 +275,11 @@ def _project_large_history_messages(
                     f"Full assistant output is available through context_read_ref(ref=\"{ref}\")."
                 )
                 saved += max(0, len(text) - len(compact))
+                assistant_saved += max(0, len(text) - len(compact))
                 projected_assistant += 1
+                projected_plain_assistant += 1
+                if idx >= keep_start:
+                    projected_recent_assistant += 1
                 projected.append(
                     AgentMessage(
                         role="assistant",
@@ -305,6 +312,7 @@ def _project_large_history_messages(
                     f"Tool calls are preserved below; full assistant text is available through context_read_ref(ref=\"{ref}\")."
                 )
                 saved += max(0, len(text) - len(compact))
+                assistant_saved += max(0, len(text) - len(compact))
                 projected_assistant += 1
                 projected.append(
                     AgentMessage(
@@ -342,8 +350,11 @@ def _project_large_history_messages(
     return projected, {
         "changed": projected != messages,
         "projected_old_assistant_messages": projected_assistant,
+        "projected_recent_assistant_messages": projected_recent_assistant,
+        "projected_plain_assistant_messages": projected_plain_assistant,
         "projected_old_tool_messages": projected_tool,
         "projection_chars_saved": saved,
+        "assistant_projection_chars_saved": assistant_saved,
         "context_blob_refs_created": refs,
     }
 
@@ -535,8 +546,11 @@ def _build_context_budget(
         budget.update(
             {
                 "projected_old_assistant_messages": projection_stats.get("projected_old_assistant_messages", 0),
+                "projected_recent_assistant_messages": projection_stats.get("projected_recent_assistant_messages", 0),
+                "projected_plain_assistant_messages": projection_stats.get("projected_plain_assistant_messages", 0),
                 "projected_old_tool_messages": projection_stats.get("projected_old_tool_messages", 0),
                 "projection_chars_saved": projection_stats.get("projection_chars_saved", 0),
+                "assistant_projection_chars_saved": projection_stats.get("assistant_projection_chars_saved", 0),
                 "context_blob_refs_created": projection_stats.get("context_blob_refs_created", []),
             }
         )
@@ -577,8 +591,13 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
                 "context_max_prompt_tokens": budget.get("max_prompt_tokens"),
                 "context_max_output_tokens": budget.get("max_output_tokens"),
                 "context_projection_chars_saved": budget.get("projection_chars_saved"),
+                "context_assistant_projection_chars_saved": budget.get("assistant_projection_chars_saved"),
                 "context_projected_old_assistant_messages": budget.get("projected_old_assistant_messages"),
+                "context_projected_recent_assistant_messages": budget.get("projected_recent_assistant_messages"),
+                "context_projected_plain_assistant_messages": budget.get("projected_plain_assistant_messages"),
                 "context_projected_old_tool_messages": budget.get("projected_old_tool_messages"),
+                "context_output_size_guard_applied": budget.get("output_size_guard_applied"),
+                "context_large_generation_guard_applied": budget.get("large_generation_guard_applied"),
                 "context_context_blob_refs_created": (
                     len(budget.get("context_blob_refs_created"))
                     if isinstance(budget.get("context_blob_refs_created"), list)
