@@ -2,6 +2,7 @@ import pytest
 
 from src.runtime.tool_filtering import (
     filter_tool_schemas_for_llm,
+    is_internal_support_tool_name,
     is_tool_name_enabled_for_llm,
     normalize_llm_tools_spec,
 )
@@ -72,6 +73,12 @@ def test_is_tool_name_enabled_allows_internal_support_tool_in_pattern_mode():
     assert is_tool_name_enabled_for_llm("Context_Read_Ref", {"tools": "jira_*"}) is True
     assert is_tool_name_enabled_for_llm("context_read_ref", {"tools": []}) is False
     assert is_tool_name_enabled_for_llm("read", {"tools": "jira_*"}) is False
+
+
+def test_is_internal_support_tool_name_case_insensitive():
+    assert is_internal_support_tool_name("context_read_ref") is True
+    assert is_internal_support_tool_name("Context_Read_Ref") is True
+    assert is_internal_support_tool_name("jira_get_issue") is False
 
 
 @pytest.mark.asyncio

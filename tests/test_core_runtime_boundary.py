@@ -221,6 +221,26 @@ def test_real_projected_marker_with_ctx_ref_passes_through():
     assert core._tool_feedback_text_for_tool("github_get_pull_request", projected) == projected
 
 
+def test_assistant_skill_projected_marker_is_recognized_and_idempotent():
+    from src.agents import core
+
+    projected = (
+        "[assistant skill content compacted | original_chars=20000 | ref=ctx://context/s/k/aaaaaaaaaaaa]\n"
+        "Summary:\nFeature: Y"
+    )
+    assert core._is_projected_feedback(projected) is True
+    assert core.project_skill_assistant_content_for_input_items(projected, session_id="s", round_num=1) == projected
+
+
+def test_assistant_skill_marker_without_ctx_ref_still_truncates():
+    from src.agents import core
+
+    malicious = "[assistant skill content compacted | ref=none]\n" + ("x" * 50000)
+    output = core._tool_feedback_text_for_tool("github_get_pull_request", malicious)
+    assert "chars hidden" in output
+    assert len(output) < len(malicious)
+
+
 def test_build_responses_input_items_mobilex_shape_projects_large_assistant_and_jira_content():
     from src.agents import core
     from src.context_blob_store import read_ref
@@ -353,6 +373,52 @@ def test_continue_skill_mode_source_uses_budget_estimation_and_skill_generation_
     assert "estimate_llm_request_tokens(" in source
     assert 'resolve_prompt_budget(stage="skill_generation"' in source
     assert "degrade_projected_context_sources_in_responses_input_items(input_items)" in source
+
+
+def test_is_tool_allowed_by_skill_runtime_allows_internal_support_tools():
+    from src.agents import core
+    from src.skills.runtime import SkillRuntimeConfig
+
+    runtime_cfg = SkillRuntimeConfig(
+        skill_name="demo",
+        allowed_tools=["jira_get_issue"],
+        allowed_tools_set={"jira_get_issue"},
+        tool_policy_declared=True,
+    )
+    assert core._is_tool_allowed_by_skill_runtime("jira_get_issue", runtime_cfg) is True
+    assert core._is_tool_allowed_by_skill_runtime("context_read_ref", runtime_cfg) is True
+    assert core._is_tool_allowed_by_skill_runtime("github_push", runtime_cfg) is False
+
+
+def test_skill_schema_list_branch_keeps_context_read_ref_if_globally_available():
+    from src.agents import core
+
+    self_tools = [
+        {"type": "function", "function": {"name": "context_read_ref"}},
+        {"type": "function", "function": {"name": "jira_get_issue_by_url"}},
+    ]
+    skill_tool_schemas = [{"type": "function", "function": {"name": "jira_get_issue_by_url"}}]
+    globally_allowed_tool_names = {"jira_get_issue_by_url", "context_read_ref"}
+
+    available_tools = [
+        schema for schema in skill_tool_schemas
+        if (core.extract_tool_name(schema) or "") in globally_allowed_tool_names
+    ]
+    support_tool_schemas = [
+        schema
+        for schema in self_tools
+        if (core.extract_tool_name(schema) or "").lower() in {name.lower() for name in core.INTERNAL_SUPPORT_TOOL_NAMES}
+    ]
+    existing_tool_names = {(core.extract_tool_name(schema) or "").lower() for schema in available_tools}
+    for schema in support_tool_schemas:
+        support_name = (core.extract_tool_name(schema) or "").lower()
+        if support_name and support_name not in existing_tool_names:
+            available_tools.append(schema)
+            existing_tool_names.add(support_name)
+
+    names = {core.extract_tool_name(schema) for schema in available_tools}
+    assert "jira_get_issue_by_url" in names
+    assert "context_read_ref" in names
 
 
 def test_context_budget_exceeded_error_contains_safe_budget_fields():

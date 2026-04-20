@@ -9,7 +9,7 @@ import os
 import platform
 import re
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from src.agents.skill_mode import (
@@ -64,6 +64,7 @@ from src.runtime.chat_orchestration_adapter import execute_tool_or_task_orchestr
 from src.runtime import build_default_execution_bus
 from src.runtime.display_blocks import normalize_display_blocks
 from src.runtime.tool_filtering import (
+    INTERNAL_SUPPORT_TOOL_NAMES,
     extract_tool_name,
     filter_tool_schemas_for_llm,
     intersect_tool_schemas_by_names,
@@ -423,7 +424,12 @@ def _is_projected_feedback(text: str) -> bool:
     value = str(text or "").lstrip()
     if value.startswith("[large source tool result projected]"):
         return "context_ref: ctx://context/" in value
-    if value.startswith("[old tool output compacted") or value.startswith("[old assistant output compacted") or value.startswith("[assistant tool-call content compacted"):
+    if (
+        value.startswith("[old tool output compacted")
+        or value.startswith("[old assistant output compacted")
+        or value.startswith("[assistant tool-call content compacted")
+        or value.startswith("[assistant skill content compacted")
+    ):
         return "ref=ctx://context/" in value or "ctx://context/" in value
     return False
 
@@ -532,6 +538,8 @@ def project_skill_assistant_content_for_input_items(
     text = str(raw_output or "")
     if not text:
         return ""
+    if _is_projected_feedback(text):
+        return text
     summary_lines: List[str] = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -976,6 +984,18 @@ class FinalizerResult:
     raw_output: str
     termination_reason: str
     fallback_used: bool = False
+    request_budget: Dict[str, Any] = field(default_factory=dict)
+
+
+def _is_tool_allowed_by_skill_runtime(tool_name: str, runtime_config: Optional[SkillRuntimeConfig]) -> bool:
+    if not runtime_config or not runtime_config.tool_policy_declared:
+        return True
+    lowered_tool = str(tool_name or "").strip().lower()
+    if not lowered_tool:
+        return False
+    allowed = {str(name).strip().lower() for name in (runtime_config.allowed_tools_set or set()) if str(name).strip()}
+    allowed.update({name.lower() for name in INTERNAL_SUPPORT_TOOL_NAMES})
+    return lowered_tool in allowed
 
 
 def _evaluate_skill_progress(
@@ -1022,6 +1042,7 @@ async def _run_skill_finalizer(
     fallback_used = False
     parsed_action = "execute"
     termination_reason = "finalizer_terminal_failed"
+    finalizer_request_budget: Dict[str, Any] = {}
     max_attempts = min(2, max(0, remaining_llm_budget))
     for attempt in range(max_attempts):
         skill_session.finalizer_state = "running"
@@ -1034,13 +1055,25 @@ async def _run_skill_finalizer(
         items.append({"role": "user", "content": [{"type": "input_text", "text": prompt}]})
         loop_budget = resolve_prompt_budget(stage="skill_generation", model=model)
         prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
-        budget_max_tokens = int(loop_budget.get("max_output_tokens") or max_tokens or 64000)
+        configured_max = int(loop_budget.get("max_output_tokens") or config.llm.get("max_tokens", 64000) or 64000)
+        requested_max = int(max_tokens or configured_max)
+        budget_max_tokens = min(requested_max, configured_max)
         items_for_call = items
         request_estimated_tokens = estimate_llm_request_tokens(
             input_items=items_for_call,
             system_prompt=system_prompt or "",
             tools=[],
         )
+        finalizer_request_budget = {
+            "request_estimated_tokens": request_estimated_tokens,
+            "prompt_budget_tokens": prompt_budget_tokens,
+            "reserved_output_tokens": min(int(loop_budget.get("reserved_output_tokens", 0) or 0), budget_max_tokens),
+            "safety_margin_tokens": loop_budget.get("safety_margin_tokens"),
+            "max_prompt_tokens": loop_budget.get("max_prompt_tokens"),
+            "max_output_tokens": budget_max_tokens,
+            "request_over_budget": request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False,
+            "stage": "skill_finalizer",
+        }
         if request_estimated_tokens > prompt_budget_tokens:
             items_for_call = degrade_projected_context_sources_in_responses_input_items(items_for_call)
             request_estimated_tokens = estimate_llm_request_tokens(
@@ -1048,6 +1081,8 @@ async def _run_skill_finalizer(
                 system_prompt=system_prompt or "",
                 tools=[],
             )
+            finalizer_request_budget["request_estimated_tokens"] = request_estimated_tokens
+            finalizer_request_budget["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
         if _should_abort_over_budget(request_estimated_tokens, prompt_budget_tokens):
             skill_session.finalizer_state = "terminal_failed"
             logger.warning("[SkillMode][Finalizer] state=terminal_failed reason=finalizer_context_budget_exceeded")
@@ -1059,6 +1094,7 @@ async def _run_skill_finalizer(
                     "[ASK_USER]\nI need to continue in smaller steps because the context is too large to finalize safely.",
                     "finalizer_context_budget_exceeded",
                     True,
+                    finalizer_request_budget,
                 ),
                 usage_data,
             )
@@ -1087,7 +1123,15 @@ async def _run_skill_finalizer(
                 termination_reason = "finalizer_succeeded"
                 raw_output = candidate
                 logger.info("[SkillMode][Finalizer] state=succeeded")
-                return FinalizerResult("succeeded", skill_session.finalizer_attempts, parsed_action, raw_output, termination_reason, False), usage_data
+                return FinalizerResult(
+                    "succeeded",
+                    skill_session.finalizer_attempts,
+                    parsed_action,
+                    raw_output,
+                    termination_reason,
+                    False,
+                    finalizer_request_budget,
+                ), usage_data
         skill_session.finalizer_state = "retryable_failed" if skill_session.finalizer_attempts < 2 else "terminal_failed"
         logger.warning("[SkillMode][Finalizer] state=%s", skill_session.finalizer_state)
     skill_session.finalizer_state = "terminal_failed"
@@ -1100,7 +1144,15 @@ async def _run_skill_finalizer(
     else:
         raw_output = "[FINISH]\nSkill execution completed with fallback summary."
     parsed_action, _ = _parse_skill_control_marker(raw_output)
-    return FinalizerResult("terminal_failed", skill_session.finalizer_attempts, parsed_action, raw_output, termination_reason, fallback_used), usage_data
+    return FinalizerResult(
+        "terminal_failed",
+        skill_session.finalizer_attempts,
+        parsed_action,
+        raw_output,
+        termination_reason,
+        fallback_used,
+        finalizer_request_budget,
+    ), usage_data
 
 
 class Agent:
@@ -2359,7 +2411,7 @@ You have access to the following tools. When a user asks you to do something tha
 
                 # Runtime skill policy enforcement (hard guard, not prompt-only)
                 if active_skill_runtime and active_skill_runtime.tool_policy_declared:
-                    if tool_name not in active_skill_runtime.allowed_tools_set:
+                    if not _is_tool_allowed_by_skill_runtime(tool_name, active_skill_runtime):
                         deny_result = build_skill_tool_denied_result(active_skill_runtime, tool_name)
                         logger.warning(
                             "[Skill] Runtime tool policy denied tool '%s' for skill '%s'",
@@ -2373,6 +2425,7 @@ You have access to the following tools. When a user asks you to do something tha
                                 "tool": tool_name,
                                 "call_id": call_id,
                                 "allowed_tools": active_skill_runtime.allowed_tools,
+                                "internal_support_tools": sorted(INTERNAL_SUPPORT_TOOL_NAMES),
                             },
                         )
                         send_event(
@@ -2928,6 +2981,17 @@ You have access to the following tools. When a user asks you to do something tha
                     schema for schema in skill_tool_schemas
                     if (extract_tool_name(schema) or "") in globally_allowed_tool_names
                 ]
+                support_tool_schemas = [
+                    schema
+                    for schema in (self.tools or [])
+                    if (extract_tool_name(schema) or "").lower() in {name.lower() for name in INTERNAL_SUPPORT_TOOL_NAMES}
+                ]
+                existing_tool_names = {(extract_tool_name(schema) or "").lower() for schema in available_tools}
+                for schema in support_tool_schemas:
+                    support_name = (extract_tool_name(schema) or "").lower()
+                    if support_name and support_name not in existing_tool_names:
+                        available_tools.append(schema)
+                        existing_tool_names.add(support_name)
                 logger.debug(
                     "[SkillMode] Intersected skill tool schemas with llm.tools policy: declared=%s available=%s",
                     len(skill_tool_schemas),
@@ -3223,6 +3287,8 @@ You have access to the following tools. When a user asks you to do something tha
                 remaining_llm_budget=remaining_llm_budget,
                 max_tokens=int(skill_request_budget.get("max_output_tokens") or config.llm.get("max_tokens", 64000) or 64000),
             )
+            if isinstance(finalizer_result.request_budget, dict) and finalizer_result.request_budget:
+                skill_request_budget.update(finalizer_result.request_budget)
             raw_output = finalizer_result.raw_output
             if finalizer_result.state == "terminal_failed":
                 turn_state.transition = "terminal_failed"

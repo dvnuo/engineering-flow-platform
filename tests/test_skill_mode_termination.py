@@ -26,6 +26,7 @@ def make_agent():
     agent = Agent.__new__(Agent)
     agent.model = None
     agent.tools = [{"function": {"name": "search"}}]
+    agent.agent_id = None
     return agent
 
 
@@ -333,6 +334,8 @@ async def test_run_skill_finalizer_uses_passed_max_tokens(monkeypatch):
     from src.agents import core as core_mod
 
     captured = {}
+    original_max = core_mod.config.llm.get("max_tokens")
+    core_mod.config.llm["max_tokens"] = 64000
 
     async def fake_responses(**kwargs):
         captured["max_tokens"] = kwargs.get("max_tokens")
@@ -340,20 +343,61 @@ async def test_run_skill_finalizer_uses_passed_max_tokens(monkeypatch):
 
     monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
 
-    result, _usage = await core_mod._run_skill_finalizer(
-        input_items=[{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
-        system_prompt="sys",
-        provider="openai",
-        model="gpt-5-mini",
-        skill_session=SkillSession(skill_name="lookup", original_user_request="x"),
-        track_usage=False,
-        usage_data={},
-        remaining_llm_budget=1,
-        max_tokens=4096,
-    )
+    try:
+        result, _usage = await core_mod._run_skill_finalizer(
+            input_items=[{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+            system_prompt="sys",
+            provider="openai",
+            model="gpt-5-mini",
+            skill_session=SkillSession(skill_name="lookup", original_user_request="x"),
+            track_usage=False,
+            usage_data={},
+            remaining_llm_budget=1,
+            max_tokens=4096,
+        )
+    finally:
+        if original_max is None:
+            core_mod.config.llm.pop("max_tokens", None)
+        else:
+            core_mod.config.llm["max_tokens"] = original_max
 
     assert result.state == "succeeded"
     assert captured["max_tokens"] == 4096
+
+
+@pytest.mark.asyncio
+async def test_run_skill_finalizer_caps_to_config_when_config_smaller(monkeypatch):
+    from src.agents import core as core_mod
+
+    captured = {}
+    original_max = core_mod.config.llm.get("max_tokens")
+    core_mod.config.llm["max_tokens"] = 2048
+
+    async def fake_responses(**kwargs):
+        captured["max_tokens"] = kwargs.get("max_tokens")
+        return {"content": "[FINISH]\ndone", "usage": {}}
+
+    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
+    try:
+        result, _usage = await core_mod._run_skill_finalizer(
+            input_items=[{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+            system_prompt="sys",
+            provider="openai",
+            model="gpt-5-mini",
+            skill_session=SkillSession(skill_name="lookup", original_user_request="x"),
+            track_usage=False,
+            usage_data={},
+            remaining_llm_budget=1,
+            max_tokens=4096,
+        )
+    finally:
+        if original_max is None:
+            core_mod.config.llm.pop("max_tokens", None)
+        else:
+            core_mod.config.llm["max_tokens"] = original_max
+
+    assert result.state == "succeeded"
+    assert captured["max_tokens"] == 2048
 
 
 @pytest.mark.asyncio
@@ -367,7 +411,11 @@ async def test_run_skill_finalizer_aborts_when_request_over_budget(monkeypatch):
         return {"content": "[FINISH]\nshould-not-happen", "usage": {}}
 
     monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
-    monkeypatch.setattr(core_mod, "estimate_llm_request_tokens", lambda **kwargs: 50000)
+    monkeypatch.setattr(
+        core_mod,
+        "estimate_llm_request_tokens",
+        lambda **kwargs: 50000 if not kwargs.get("tools") else 100,
+    )
     monkeypatch.setattr(
         core_mod,
         "resolve_prompt_budget",
@@ -395,6 +443,8 @@ async def test_run_skill_finalizer_aborts_when_request_over_budget(monkeypatch):
     assert calls["llm"] == 0
     assert finalizer_result.state == "terminal_failed"
     assert finalizer_result.termination_reason == "finalizer_context_budget_exceeded"
+    assert finalizer_result.request_budget.get("request_over_budget") is True
+    assert finalizer_result.request_budget.get("stage") == "skill_finalizer"
 
 
 @pytest.mark.asyncio
@@ -430,3 +480,37 @@ async def test_continue_skill_mode_uses_budget_max_output_tokens_for_llm_calls(m
 
     assert captured
     assert captured[0].get("max_tokens") == 4096
+
+
+@pytest.mark.asyncio
+async def test_continue_skill_mode_finalizer_abort_includes_finalizer_request_budget(monkeypatch):
+    from src.agents import core as core_mod
+
+    async def fake_responses(**kwargs):
+        return {"content": "", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
+    monkeypatch.setattr(
+        core_mod,
+        "estimate_llm_request_tokens",
+        lambda **kwargs: 50000 if not kwargs.get("tools") else 100,
+    )
+    monkeypatch.setattr(
+        core_mod,
+        "resolve_prompt_budget",
+        lambda **kwargs: {
+            "prompt_budget_tokens": 28000,
+            "max_output_tokens": 4096,
+            "reserved_output_tokens": 1000,
+            "safety_margin_tokens": 500,
+            "max_prompt_tokens": 28000,
+        },
+    )
+
+    result, _snapshots, _calls = await run_replay_case(
+        monkeypatch,
+        responses=[{"content": "", "function_calls": [], "usage": {}}],
+    )
+    assert isinstance(result.get("request_budget"), dict)
+    assert result["request_budget"].get("stage") == "skill_finalizer"
+    assert result["request_budget"].get("request_over_budget") is True
