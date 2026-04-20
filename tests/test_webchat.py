@@ -325,7 +325,7 @@ async def test_chat_execution_bus_adapter_sets_request_path_metadata(monkeypatch
     captured = {}
     async def _fake_execute_chat_orchestration(**kwargs):
         captured.update(kwargs)
-        return type("R", (), {"status": "success", "output_payload": {"response": "ok"}})()
+        return type("R", (), {"status": "success", "output_payload": {"response": "ok"}, "runtime_events": []})()
 
     monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
     async def _fake_run_chat_execution(*args, **kwargs):
@@ -353,7 +353,7 @@ async def test_chat_execution_bus_adapter_does_not_mutate_execution_output_paylo
     original_payload = {"response": "ok"}
 
     async def _fake_execute_chat_orchestration(**kwargs):
-        execution_result = type("R", (), {"status": "success", "output_payload": original_payload})()
+        execution_result = type("R", (), {"status": "success", "output_payload": original_payload, "runtime_events": []})()
         captured["execution_result"] = execution_result
         return execution_result
 
@@ -414,7 +414,7 @@ async def test_chat_execution_bus_adapter_forwards_agent_id(monkeypatch):
 
     async def _fake_execute_chat_orchestration(**kwargs):
         captured.update(kwargs)
-        return type("R", (), {"status": "success", "output_payload": {"response": "ok"}})()
+        return type("R", (), {"status": "success", "output_payload": {"response": "ok"}, "runtime_events": []})()
 
     monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
     monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
@@ -439,7 +439,7 @@ async def test_chat_execution_bus_adapter_merges_execution_metadata_without_over
 
     async def _fake_execute_chat_orchestration(**kwargs):
         captured.update(kwargs)
-        return type("R", (), {"status": "success", "output_payload": {"response": "ok"}})()
+        return type("R", (), {"status": "success", "output_payload": {"response": "ok"}, "runtime_events": []})()
 
     monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
     monkeypatch.setattr(webchat, "run_chat_execution", lambda *args, **kwargs: {"response": "ignored"})
@@ -507,6 +507,7 @@ async def test_chat_execution_bus_adapter_raises_on_error_status(monkeypatch):
                     "details": {"incomplete_reason": "max_output_tokens"},
                     "status_code": 500,
                 },
+                "runtime_events": [],
             },
         )()
 
@@ -549,6 +550,7 @@ async def test_chat_execution_bus_adapter_raises_on_legacy_string_error(monkeypa
                 "status": "error",
                 "request_id": "chat-legacy-1",
                 "output_payload": {"error": "legacy failure"},
+                "runtime_events": [],
             },
         )()
 
@@ -3401,7 +3403,7 @@ def test_webchat_js_tool_result_richer_renderer_present():
     assert "message-tool-result" in chunk
     assert "message-tool-result-title" in chunk
     assert "is-${" in chunk
-    assert "getBlockText(block)" in chunk or "block.output" in js
+    assert "getBlockText(block" in chunk or "block.output" in js
 
 
 def test_webchat_js_callout_richer_renderer_present():
@@ -3416,7 +3418,7 @@ def test_webchat_js_callout_richer_renderer_present():
     assert "message-callout" in chunk
     assert "message-callout-title" in chunk
     assert "is-${" in chunk
-    assert "getBlockText(block)" in chunk or "block.message" in js
+    assert "getBlockText(block" in chunk or "block.message" in js
 
 
 def test_webchat_css_richer_block_variant_classes_present():
@@ -3437,7 +3439,7 @@ def test_webchat_js_renders_tool_result_output_and_callout_message():
     js_path = repo_root / "src" / "gateway" / "static" / "js" / "webchat.js"
     js = js_path.read_text(encoding="utf-8")
 
-    start_get = js.find("function getBlockText(block)")
+    start_get = js.find("function getBlockText(")
     start_single = js.find("function renderSingleDisplayBlock(block)")
     start_code = js.find("function renderCodeBlock(block)")
     start_table = js.find("function renderTableBlock(block)")
