@@ -2441,6 +2441,93 @@ async def test_api_tasks_execute_github_review_task_reaches_execution_bus(monkey
 
 
 @pytest.mark.asyncio
+async def test_api_tasks_execute_github_review_task_portal_automation_payload_trace(monkeypatch):
+    from src.gateway import webchat
+
+    webchat.runtime_task_tracker.reset()
+    spawned = []
+
+    async def _fake_run_github_review_task(_payload):
+        return {
+            "success": True,
+            "error": None,
+            "review_summary": "ok",
+            "review_event": "COMMENT",
+            "review_written": True,
+            "comment_written": True,
+            "secondary_action_attempted": True,
+            "secondary_action_success": True,
+            "secondary_action_id": "adapter:github:review_pull_request",
+            "source": "automation_rule",
+            "rule_id": "rule-1",
+            "automation_rule_id": "rule-1",
+            "dedupe_key": "github:pr_review_requested:rule-1:Acme/Portal:42:sha:team:Acme/Reviewers",
+            "review_target": {"type": "team", "name": "Acme/Reviewers"},
+            "runtime_events": [],
+            "result": {"id": 123},
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
+    monkeypatch.setattr(webchat, "_spawn_runtime_background_task", lambda coro: spawned.append(asyncio.create_task(coro)) or spawned[-1])
+
+    class _Request:
+        headers = INTERNAL_HEADERS
+
+        async def json(self):
+            return {
+                "task_id": "task-1",
+                "task_type": "github_review_task",
+                "input_payload": {
+                    "source": "automation_rule",
+                    "automation_rule": "github.pr_review_requested",
+                    "automation_rule_id": "rule-1",
+                    "rule_id": "rule-1",
+                    "provider": "github",
+                    "owner": "Acme",
+                    "repo": "Portal",
+                    "pull_number": 42,
+                    "head_sha": "sha-contract",
+                    "review_target": {"type": "team", "name": "Acme/Reviewers"},
+                    "task_type": "github_review_task",
+                    "skill_name": "review-pull-request",
+                    "review_event": "COMMENT",
+                    "dedupe_key": "github:pr_review_requested:rule-1:Acme/Portal:42:sha:team:Acme/Reviewers",
+                },
+            }
+
+    response = await webchat.api_tasks_execute(_Request())
+    body = json.loads(response.body)
+    await spawned[0]
+
+    assert response.status == 202
+    assert body["ok"] is True
+    assert body["accepted"] is True
+    assert body["task_id"] == "task-1"
+
+    class _StatusRequest:
+        headers = INTERNAL_HEADERS
+        match_info = {"task_id": "task-1"}
+
+    status_response = await webchat.api_task_status(_StatusRequest())
+    status_body = json.loads(status_response.body)
+    assert status_response.status == 200
+    assert status_body["status"] == "success"
+    assert status_body["output_payload"]["task_type"] == "github_review_task"
+    assert status_body["output_payload"]["review_event"] == "COMMENT"
+    assert status_body["output_payload"]["source"] == "automation_rule"
+    assert status_body["output_payload"]["rule_id"] == "rule-1"
+    assert status_body["output_payload"]["automation_rule_id"] == "rule-1"
+    assert status_body["output_payload"]["dedupe_key"] == "github:pr_review_requested:rule-1:Acme/Portal:42:sha:team:Acme/Reviewers"
+    assert status_body["output_payload"]["review_target"] == {"type": "team", "name": "Acme/Reviewers"}
+
+    final_events = [evt for evt in status_body["runtime_events"] if evt.get("event_type") == "task.github_review.completed"]
+    assert final_events
+    detail_payload = final_events[-1].get("detail_payload") or {}
+    assert detail_payload.get("automation_rule_id") == "rule-1"
+    assert detail_payload.get("dedupe_key") == "github:pr_review_requested:rule-1:Acme/Portal:42:sha:team:Acme/Reviewers"
+
+
+@pytest.mark.asyncio
 async def test_api_tasks_execute_missing_task_type_returns_400(monkeypatch):
     from src.gateway import webchat
 
