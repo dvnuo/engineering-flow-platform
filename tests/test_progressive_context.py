@@ -327,3 +327,20 @@ def test_build_portal_context_preview_returns_preview_keys_only():
         "context_summary_preview": "A concise summary",
         "context_next_step_preview": "Continue",
     }
+
+
+def test_progressive_context_dict_roundtrip_preserves_tool_name():
+    messages = [
+        {
+            "role": "tool",
+            "content": "full jira content",
+            "tool_call_id": "call_1",
+            "tool_name": "jira_get_issue",
+        }
+    ]
+
+    agent_messages = progressive_context._to_agent_messages(messages)
+    restored = progressive_context._to_dict_messages(agent_messages)
+
+    assert restored[0]["tool_name"] == "jira_get_issue"
+    assert restored[0]["tool_call_id"] == "call_1"

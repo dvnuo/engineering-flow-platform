@@ -21,6 +21,27 @@ async def test_jira_update_issue(mock_jira_channel):
     assert "updated successfully" in result or "Error" in result
 
 
+def test_jira_get_issue_schema_max_chars_description_prefers_unset_default():
+    from src.jira import get_tools_schemas
+
+    schemas = get_tools_schemas()
+    get_issue_schema = next(s for s in schemas if s["function"]["name"] == "jira_get_issue")
+    max_chars_desc = get_issue_schema["function"]["parameters"]["properties"]["max_chars"]["description"]
+
+    assert "Leave unset for full Jira issue content" in max_chars_desc
+
+
+def test_jira_get_issue_by_url_schema_max_chars_description_prefers_unset_default():
+    from src.jira import get_tools_schemas
+
+    schemas = get_tools_schemas()
+    schema = next(s for s in schemas if s["function"]["name"] == "jira_get_issue_by_url")
+    desc = schema["function"]["parameters"]["properties"]["max_chars"]["description"]
+
+    assert "Leave unset for full Jira issue content" in desc
+    assert "do not set when generating requirements/features" in desc
+
+
 @pytest.mark.asyncio
 async def test_jira_update_issue_summary_only(mock_jira_channel):
     """Test jira_update_issue with summary only"""

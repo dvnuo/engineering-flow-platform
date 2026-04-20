@@ -84,36 +84,85 @@ def test_tool_feedback_text_preserves_short_text():
     assert "chars hidden" not in core._tool_feedback_text(value)
 
 
-def test_tool_feedback_text_truncates_long_text_with_count():
+def test_tool_feedback_text_truncates_long_text_with_count_at_default_8000():
     from src.agents import core
 
-    long_value = "A" * 5005
+    long_value = "A" * 9005
     output = core._tool_feedback_text(long_value)
 
-    assert output.startswith("A" * 20)
-    assert "chars hidden" in output
+    assert output.startswith("A" * 8000)
+    assert "1005 chars hidden" in output
     assert len(output) < len(long_value)
 
 
-def test_agent_process_source_uses_tool_feedback_text_for_all_tool_feedback_paths():
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "jira_get_issue",
+        "jira_get_issue_by_url",
+        "jira_search",
+        "confluence_get_page",
+        "confluence_get_page_by_url",
+        "confluence_get_comments",
+    ],
+)
+def test_tool_feedback_text_for_jira_and_confluence_is_unbounded(tool_name):
+    from src.agents import core
+
+    long_value = "A" * 20000
+    output = core._tool_feedback_text_for_tool(tool_name, long_value)
+
+    assert output == long_value
+    assert "chars hidden" not in output
+
+
+def test_tool_feedback_text_for_non_jira_confluence_uses_default_8000_limit():
+    from src.agents import core
+
+    long_value = "A" * 9005
+    output = core._tool_feedback_text_for_tool("github_get_pull_request", long_value)
+
+    assert output.startswith("A" * 8000)
+    assert "1005 chars hidden" in output
+    assert len(output) < len(long_value)
+
+
+def test_unbounded_tool_feedback_prefix_policy_is_prefix_based():
+    from src.agents import core
+
+    assert core._is_unbounded_tool_feedback("jira_get_issue") is True
+    assert core._is_unbounded_tool_feedback("jira_future_bundle") is True
+    assert core._is_unbounded_tool_feedback("confluence_get_page") is True
+    assert core._is_unbounded_tool_feedback("confluence_future_tool") is True
+    assert core._is_unbounded_tool_feedback("github_get_pull_request") is False
+    assert core._is_unbounded_tool_feedback("") is False
+    assert core._is_unbounded_tool_feedback(None) is False
+
+
+def test_tool_feedback_text_allows_explicit_unbounded_max_length():
+    from src.agents import core
+
+    value = "A" * 20000
+    assert core._tool_feedback_text(value, max_length=None) == value
+    assert core._tool_feedback_text(value, max_length=0) == value
+
+
+def test_agent_process_source_uses_per_tool_feedback_policy_for_all_tool_feedback_paths():
     from src.agents import core
 
     process_source = inspect.getsource(core.Agent.process)
     module_source = inspect.getsource(core)
 
     # Agent.process should cover deny / short-circuit / normal tool result feedback.
-    assert process_source.count("_tool_feedback_text(") >= 3
+    assert process_source.count("_tool_feedback_text_for_tool(") >= 3
     # Module-level coverage also includes skill mode function_call_output feedback.
-    assert module_source.count("_tool_feedback_text(") >= 4
+    assert module_source.count("_tool_feedback_text_for_tool(") >= 4
 
 
-def test_to_input_items_source_bounds_historical_function_call_output_content():
+def test_to_input_items_source_uses_per_tool_feedback_policy():
     from src.agents import core
 
     module_source = inspect.getsource(core)
-    expected = '"output": _tool_feedback_text(content) if content else ""'
-
-    # Historical tool feedback can flow through two branches in _to_input_items:
-    # 1) role == "tool" with tool_call_id
-    # 2) generic fallback with tool_call_id
-    assert module_source.count(expected) >= 2
+    assert '"output": _tool_feedback_text(content) if content else ""' not in module_source
+    assert "_tool_feedback_text_for_tool(" in module_source
+    assert "tool_names_by_call_id" in module_source

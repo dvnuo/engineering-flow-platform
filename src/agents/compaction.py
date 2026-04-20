@@ -54,21 +54,26 @@ class AgentMessage:
         timestamp: Optional[int] = None,
         tool_calls: Optional[List[Dict]] = None,
         tool_use_id: Optional[str] = None,
+        tool_name: Optional[str] = None,
     ):
         self.role = role
         self.content = content
         self.timestamp = timestamp or int(__import__("time").time())
         self.tool_calls = tool_calls
         self.tool_use_id = tool_use_id
+        self.tool_name = tool_name
     
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data = {
             "role": self.role,
             "content": self.content,
             "timestamp": self.timestamp,
             "tool_calls": self.tool_calls,
             "tool_use_id": self.tool_use_id,
         }
+        if self.tool_name:
+            data["tool_name"] = self.tool_name
+        return data
     
     @classmethod
     def from_dict(cls, data: Dict) -> "AgentMessage":
@@ -78,6 +83,7 @@ class AgentMessage:
             timestamp=data.get("timestamp"),
             tool_calls=data.get("tool_calls"),
             tool_use_id=data.get("tool_use_id"),
+            tool_name=data.get("tool_name"),
         )
     
     def __repr__(self) -> str:
@@ -644,6 +650,7 @@ def fix_tool_call_consistency(messages: List[AgentMessage]) -> List[AgentMessage
                 timestamp=msg.timestamp,
                 tool_calls=valid_calls if valid_calls else None,
                 tool_use_id=msg.tool_use_id,
+                tool_name=getattr(msg, "tool_name", None),
             ))
         elif msg.role == "tool":
             # Keep only tool responses whose tool_use_id appears in some assistant.tool_calls

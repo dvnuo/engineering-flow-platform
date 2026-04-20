@@ -655,3 +655,46 @@ async def test_generate_summary_returns_structured_context_summary():
     assert "Objective:" in summary
     assert "Next step:" in summary
     assert "User asked about" not in summary
+
+
+def test_agent_message_preserves_tool_name_metadata():
+    from src.agents.compaction import AgentMessage
+
+    msg = AgentMessage(
+        role="tool",
+        content="result",
+        timestamp=12345,
+        tool_use_id="call_1",
+        tool_name="jira_get_issue",
+    )
+
+    data = msg.to_dict()
+    assert data["tool_name"] == "jira_get_issue"
+
+    restored = AgentMessage.from_dict(data)
+    assert restored.tool_name == "jira_get_issue"
+    assert restored.tool_use_id == "call_1"
+
+
+def test_fix_tool_call_consistency_preserves_tool_name_metadata_on_rebuilt_messages():
+    from src.agents.compaction import AgentMessage, fix_tool_call_consistency
+
+    messages = [
+        AgentMessage(
+            role="assistant",
+            content="Calling Jira",
+            tool_calls=[{"id": "call_1", "function": {"name": "jira_get_issue", "arguments": "{}"}}],
+            tool_name="jira_get_issue",
+        ),
+        AgentMessage(
+            role="tool",
+            content="full jira content",
+            tool_use_id="call_1",
+            tool_name="jira_get_issue",
+        ),
+    ]
+
+    result = fix_tool_call_consistency(messages)
+
+    assert result[0].tool_name == "jira_get_issue"
+    assert result[1].tool_name == "jira_get_issue"

@@ -159,11 +159,35 @@ def get_skill_workdir() -> Optional[str]:
 
 _DEBUG_ENABLED = None  # Lazy initialization
 _TOOL_RESULT_GOVERNANCE_ATTR = "_governance"
+DEFAULT_TOOL_FEEDBACK_MAX_LENGTH = 8000
+UNBOUNDED_TOOL_FEEDBACK_PREFIXES = ("jira_", "confluence_")
 
 
-def _tool_feedback_text(value: Any, max_length: int = 4000) -> str:
-    """Build bounded tool feedback text for next-round LLM input only."""
-    return truncate_with_count(str(value), max_length)
+def _is_unbounded_tool_feedback(tool_name: Optional[str]) -> bool:
+    """Return True when tool feedback should skip core truncation."""
+    return bool(tool_name) and tool_name.startswith(UNBOUNDED_TOOL_FEEDBACK_PREFIXES)
+
+
+def _tool_feedback_text(
+    value: Any,
+    max_length: Optional[int] = DEFAULT_TOOL_FEEDBACK_MAX_LENGTH,
+) -> str:
+    """Build bounded tool feedback text for next-round LLM input only.
+
+    max_length <= 0 or None means no core-level truncation.
+    """
+    text = str(value)
+    if not text:
+        return "(empty)"
+    if max_length is None or max_length <= 0:
+        return text
+    return truncate_with_count(text, max_length)
+
+
+def _tool_feedback_text_for_tool(tool_name: Optional[str], value: Any) -> str:
+    """Build tool feedback for the next LLM call using per-tool truncation policy."""
+    max_length = None if _is_unbounded_tool_feedback(tool_name) else DEFAULT_TOOL_FEEDBACK_MAX_LENGTH
+    return _tool_feedback_text(value, max_length=max_length)
 
 
 def _is_debug_enabled() -> bool:
@@ -1260,6 +1284,19 @@ You have access to the following tools. When a user asks you to do something tha
         # Convert messages to input_items for Responses API
         def _to_input_items(msgs):
             items = []
+            tool_names_by_call_id = {}
+
+            def _feedback_output_for_message(msg: Dict[str, Any], content: Any) -> str:
+                if not content:
+                    return ""
+                call_id = msg.get("tool_call_id", "")
+                tool_name = (
+                    msg.get("tool_name")
+                    or msg.get("name")
+                    or tool_names_by_call_id.get(call_id)
+                )
+                return _tool_feedback_text_for_tool(tool_name, content)
+
             for msg in msgs:
                 role = msg.get("role", "user")
                 
@@ -1270,7 +1307,7 @@ You have access to the following tools. When a user asks you to do something tha
                     items.append({
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": _tool_feedback_text(content) if content else "",
+                        "output": _feedback_output_for_message(msg, content),
                     })
                     continue
                 
@@ -1294,6 +1331,8 @@ You have access to the following tools. When a user asks you to do something tha
                         name = func.get("name", "")
                         args = func.get("arguments", {})
                         args_str = args if isinstance(args, str) else json.dumps(args)
+                        if call_id and name:
+                            tool_names_by_call_id[call_id] = name
                         items.append({
                             "type": "function_call",
                             "call_id": call_id,
@@ -1308,7 +1347,7 @@ You have access to the following tools. When a user asks you to do something tha
                     items.append({
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": _tool_feedback_text(content) if content else "",
+                        "output": _feedback_output_for_message(msg, content),
                     })
                     continue
                 
@@ -1795,8 +1834,9 @@ You have access to the following tools. When a user asks you to do something tha
                         loop_messages.append(
                             {
                                 "role": "tool",
-                                "content": _tool_feedback_text(deny_result),
+                                "content": _tool_feedback_text_for_tool(tool_name, deny_result),
                                 "tool_call_id": call_id,
+                                "tool_name": tool_name,
                             }
                         )
                         executed_tool_results.append((tool_name, deny_result))
@@ -1830,8 +1870,9 @@ You have access to the following tools. When a user asks you to do something tha
                     loop_messages.append(
                         {
                             "role": "tool",
-                            "content": _tool_feedback_text(short_result),
+                            "content": _tool_feedback_text_for_tool(tool_name, short_result),
                             "tool_call_id": call_id,
+                            "tool_name": tool_name,
                         }
                     )
                     send_event("tool_result", {
@@ -1913,8 +1954,9 @@ You have access to the following tools. When a user asks you to do something tha
                 # The tool result naturally comes after the assistant message in the iteration order.
                 tool_result_msg = {
                     "role": "tool",
-                    "content": _tool_feedback_text(tool_result),
+                    "content": _tool_feedback_text_for_tool(tool_name, tool_result),
                     "tool_call_id": call_id,
+                    "tool_name": tool_name,
                 }
                 
                 # Append tool result to end of loop_messages
@@ -2438,7 +2480,7 @@ You have access to the following tools. When a user asks you to do something tha
                         args=normalized_args,
                         source_ref="agents.core.skill_mode_loop",
                     )
-                    output_text = _tool_feedback_text(tool_result)
+                    output_text = _tool_feedback_text_for_tool(tool_name, tool_result)
                     logger.debug(f"[SkillMode] [TOOL_RESULT] tool={tool_name}, result length={len(output_text)}, preview={safe_preview(output_text, 200)}")
                 except Exception as tool_exc:
                     output_text = f"Error: Tool '{tool_name}' failed with {tool_exc}"

@@ -118,7 +118,7 @@ async def jira_get_issue(
     Args:
         issue_key: Jira issue key (e.g., 'PROJ-123')
         format: Output format - "markdown" (default), "wiki", or "raw"
-        max_chars: Maximum characters to return
+        max_chars: Optional explicit response shortening. Leave None for full Jira issue content.
         max_comments: Maximum number of comments to include
         include_fields: Fields to include (default: summary, status, description, comments)
         include_comments: Whether to include comments
@@ -183,7 +183,7 @@ async def jira_get_issue_by_url(
     Args:
         url: Full Jira issue URL (e.g., https://company.atlassian.net/browse/PROJ-123)
         format: Output format - "markdown" (default), "wiki", or "raw"
-        max_chars: Maximum characters to return
+        max_chars: Optional explicit response shortening. Leave None for full Jira issue content.
         max_comments: Maximum number of comments to include
         include_fields: Fields to include
         include_comments: Whether to include comments
@@ -413,7 +413,7 @@ def _get_all_schemas() -> list:
                         },
                         "max_chars": {
                             "type": "integer",
-                            "description": "Maximum characters to return"
+                            "description": "Optional explicit response shortening. Leave unset for full Jira issue content; do not set when generating requirements/features unless the user explicitly asks for a shortened response."
                         },
                         "max_comments": {
                             "type": "integer",
@@ -455,7 +455,10 @@ def _get_all_schemas() -> list:
                             "default": "markdown",
                             "description": "Output format: markdown, wiki, or raw"
                         },
-                        "max_chars": {"type": "integer", "description": "Maximum characters to return"},
+                        "max_chars": {
+                            "type": "integer",
+                            "description": "Optional explicit response shortening. Leave unset for full Jira issue content; do not set when generating requirements/features unless the user explicitly asks for a shortened response."
+                        },
                         "max_comments": {"type": "integer", "description": "Maximum comments to include", "default": 5},
                         "include_comments": {"type": "boolean", "description": "Include comments", "default": True},
                         "include_attachment_urls": {

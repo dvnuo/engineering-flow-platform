@@ -64,7 +64,7 @@ class ConfluenceFormatAdapter:
         Args:
             page_id: Page ID
             format: "markdown" (default) or "storage"
-            max_chars: Limit response length (avoid token overflow)
+            max_chars: Optional explicit response shortening. Leave None for full Confluence page content.
             
         Returns:
             Page content in requested format
@@ -98,7 +98,7 @@ class ConfluenceFormatAdapter:
         Args:
             url: Full Confluence page URL
             format: "markdown" (default) or "storage"
-            max_chars: Limit response length
+            max_chars: Optional explicit response shortening. Leave None for full Confluence page content.
             
         Returns:
             Page content in requested format
