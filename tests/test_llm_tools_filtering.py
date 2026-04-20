@@ -11,6 +11,7 @@ TOOL_SCHEMAS = [
     {"type": "function", "function": {"name": "git_clone", "description": "clone"}},
     {"type": "function", "function": {"name": "jira_get_issue", "description": "jira"}},
     {"type": "function", "function": {"name": "jira_search", "description": "jira"}},
+    {"type": "function", "function": {"name": "context_read_ref", "description": "internal"}},
     {"type": "function", "function": {"name": "read", "description": "read"}},
 ]
 
@@ -43,22 +44,27 @@ def test_normalize_wildcard_all(tools_value):
 
 def test_filter_single_pattern_jira_prefix():
     result = filter_tool_schemas_for_llm(TOOL_SCHEMAS, {"tools": "jira_*"})
-    assert _names(result) == ["jira_get_issue", "jira_search"]
+    assert _names(result) == ["jira_get_issue", "jira_search", "context_read_ref"]
 
 
 def test_filter_union_exact_and_wildcard():
     result = filter_tool_schemas_for_llm(TOOL_SCHEMAS, {"tools": ["git_clone", "jira_*"]})
-    assert _names(result) == ["git_clone", "jira_get_issue", "jira_search"]
+    assert _names(result) == ["git_clone", "jira_get_issue", "jira_search", "context_read_ref"]
 
 
 def test_filter_case_insensitive_pattern():
     result = filter_tool_schemas_for_llm(TOOL_SCHEMAS, {"tools": ["JIRA_*", "Git_Clone"]})
-    assert _names(result) == ["git_clone", "jira_get_issue", "jira_search"]
+    assert _names(result) == ["git_clone", "jira_get_issue", "jira_search", "context_read_ref"]
 
 
 def test_filter_unmatched_patterns_reported():
     result = filter_tool_schemas_for_llm(TOOL_SCHEMAS, {"tools": ["jira_*", "unknown_*"]})
     assert result.unmatched_patterns == ["unknown_*"]
+
+
+def test_filter_explicit_none_does_not_include_internal_support_tools():
+    result = filter_tool_schemas_for_llm(TOOL_SCHEMAS, {"tools": []})
+    assert _names(result) == []
 
 
 def test_normalize_list_non_string_raises():

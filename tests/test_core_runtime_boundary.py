@@ -1,4 +1,5 @@
 import inspect
+import re
 
 import pytest
 
@@ -95,25 +96,20 @@ def test_tool_feedback_text_truncates_long_text_with_count_at_default_8000():
     assert len(output) < len(long_value)
 
 
-@pytest.mark.parametrize(
-    "tool_name",
-    [
-        "jira_get_issue",
-        "jira_get_issue_by_url",
-        "jira_search",
-        "confluence_get_page",
-        "confluence_get_page_by_url",
-        "confluence_get_comments",
-    ],
-)
-def test_tool_feedback_text_for_jira_and_confluence_is_unbounded(tool_name):
+@pytest.mark.parametrize("tool_name", ["jira_get_issue", "confluence_get_page"])
+def test_tool_feedback_text_for_large_jira_confluence_is_bounded_with_ref(tool_name):
     from src.agents import core
+    from src.context_blob_store import read_ref
 
     long_value = "A" * 20000
-    output = core._tool_feedback_text_for_tool(tool_name, long_value)
-
-    assert output == long_value
-    assert "chars hidden" not in output
+    output = core._tool_feedback_text_for_tool(tool_name, long_value, session_id="s-core")
+    assert "context_ref: ctx://context/" in output
+    assert "original_chars: 20000" in output
+    assert "full_content_available: true" in output
+    assert len(output) < len(long_value)
+    ref_match = re.search(r"context_ref:\s*(ctx://context/[^\s]+)", output)
+    assert ref_match
+    assert read_ref(ref_match.group(1), session_id="s-core", max_chars=22000) == long_value
 
 
 def test_tool_feedback_text_for_non_jira_confluence_uses_default_8000_limit():
@@ -127,16 +123,11 @@ def test_tool_feedback_text_for_non_jira_confluence_uses_default_8000_limit():
     assert len(output) < len(long_value)
 
 
-def test_unbounded_tool_feedback_prefix_policy_is_prefix_based():
+def test_large_source_feedback_prefix_policy_is_prefix_based():
     from src.agents import core
 
-    assert core._is_unbounded_tool_feedback("jira_get_issue") is True
-    assert core._is_unbounded_tool_feedback("jira_future_bundle") is True
-    assert core._is_unbounded_tool_feedback("confluence_get_page") is True
-    assert core._is_unbounded_tool_feedback("confluence_future_tool") is True
-    assert core._is_unbounded_tool_feedback("github_get_pull_request") is False
-    assert core._is_unbounded_tool_feedback("") is False
-    assert core._is_unbounded_tool_feedback(None) is False
+    assert "jira_" in core.LARGE_SOURCE_TOOL_PREFIXES
+    assert "confluence_" in core.LARGE_SOURCE_TOOL_PREFIXES
 
 
 def test_tool_feedback_text_allows_explicit_unbounded_max_length():
@@ -145,6 +136,14 @@ def test_tool_feedback_text_allows_explicit_unbounded_max_length():
     value = "A" * 20000
     assert core._tool_feedback_text(value, max_length=None) == value
     assert core._tool_feedback_text(value, max_length=0) == value
+
+
+def test_tool_feedback_text_for_short_jira_confluence_keeps_full_text():
+    from src.agents import core
+
+    value = "short jira body"
+    output = core._tool_feedback_text_for_tool("jira_get_issue", value, session_id="s-core")
+    assert output == value
 
 
 def test_agent_process_source_uses_per_tool_feedback_policy_for_all_tool_feedback_paths():

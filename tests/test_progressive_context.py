@@ -92,9 +92,11 @@ async def test_prepare_progressive_messages_adds_budget_fields(monkeypatch):
     assert state["budget"]["usage_percent"] == 40.0
     assert state["budget"]["prepared_usage_percent"] == 40.0
     assert state["budget"]["soft_threshold_tokens"] == 650
-    assert state["budget"]["hard_threshold_tokens"] == 800
+    assert state["budget"]["hard_threshold_tokens"] == 700
     assert state["budget"]["tokens_until_soft_threshold"] == 250
-    assert state["budget"]["tokens_until_hard_threshold"] == 400
+    assert state["budget"]["tokens_until_hard_threshold"] == 300
+    assert state["budget"]["prompt_budget_tokens"] == 700
+    assert state["budget"]["reserved_output_tokens"] == 250
     assert state["budget"]["next_compaction_action"] == "none"
     assert "No compaction planned" in state["budget"]["next_pruning_policy"]
 
@@ -267,7 +269,7 @@ async def test_prepare_progressive_messages_preserves_tool_chain_consistency(mon
     tool_ids = [item.get("tool_call_id") for item in prepared if item.get("role") == "tool"]
     assert "tc-1" in tool_ids
     assert any(item.get("tool_calls") for item in prepared if item.get("role") == "assistant")
-    assert state["compaction_level"] in {"micro", "full"}
+    assert state["compaction_level"] in {"micro", "full", "projection_micro"}
 
 
 @pytest.mark.asyncio
@@ -344,3 +346,61 @@ def test_progressive_context_dict_roundtrip_preserves_tool_name():
 
     assert restored[0]["tool_name"] == "jira_get_issue"
     assert restored[0]["tool_call_id"] == "call_1"
+
+
+def test_resolve_prompt_budget_caps_large_context_window(monkeypatch):
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 200000)
+    budget = progressive_context.resolve_prompt_budget(stage="tool_loop", model="gpt-5-mini")
+    assert budget["prompt_budget_tokens"] == 32000
+    assert budget["reserved_output_tokens"] == 16000
+
+
+@pytest.mark.asyncio
+async def test_projection_runs_before_threshold_checks_and_compacts_old_assistant(monkeypatch):
+    old = "Feature: Big\n" + ("\nScenario: very long\nGiven x" * 4000)
+    messages = [
+        {"role": "assistant", "content": old},
+        {"role": "user", "content": "latest"},
+    ]
+
+    async def _get_context_state(_session_id):
+        return {}
+
+    monkeypatch.setattr(progressive_context.session_manager, "get_context_state", _get_context_state)
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 200000)
+    monkeypatch.setattr(progressive_context, "estimate_messages_tokens", lambda msgs: 100)
+
+    prepared, state = await prepare_progressive_messages(
+        messages=messages,
+        model="gpt-5-mini",
+        session_id="s-proj",
+        stage="tool_loop",
+        recent_count=1,
+    )
+    assert prepared != messages
+    assert "ctx://context/" in prepared[0]["content"]
+    assert state["budget"]["projected_old_assistant_messages"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_apply_progressive_context_after_turn_does_not_overwrite_history(monkeypatch):
+    session = {
+        "history": [{"role": "assistant", "content": "x" * 20000}, {"role": "user", "content": "next"}],
+        "metadata": {},
+    }
+
+    async def _get_session(_session_id):
+        return session
+
+    saved = {}
+
+    async def _set_context_state(_session_id, state):
+        saved["state"] = state
+
+    monkeypatch.setattr(progressive_context.session_manager, "get_session", _get_session)
+    monkeypatch.setattr(progressive_context.session_manager, "set_context_state", _set_context_state)
+
+    result = await progressive_context.apply_progressive_context_after_turn(session_id="s1", model="gpt-5-mini")
+    assert session["history"][0]["content"] == "x" * 20000
+    assert isinstance(result, dict)
+    assert "state" in saved

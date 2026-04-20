@@ -71,7 +71,10 @@ from src.runtime.tool_filtering import (
 from src.runtime.progressive_context import (
     apply_progressive_context_after_turn,
     prepare_progressive_messages,
+    resolve_prompt_budget,
 )
+from src.context_blob_store import build_section_map, put_text
+from src.agents.compaction import estimate_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -249,12 +252,7 @@ def get_skill_workdir() -> Optional[str]:
 _DEBUG_ENABLED = None  # Lazy initialization
 _TOOL_RESULT_GOVERNANCE_ATTR = "_governance"
 DEFAULT_TOOL_FEEDBACK_MAX_LENGTH = 8000
-UNBOUNDED_TOOL_FEEDBACK_PREFIXES = ("jira_", "confluence_")
-
-
-def _is_unbounded_tool_feedback(tool_name: Optional[str]) -> bool:
-    """Return True when tool feedback should skip core truncation."""
-    return bool(tool_name) and tool_name.startswith(UNBOUNDED_TOOL_FEEDBACK_PREFIXES)
+LARGE_SOURCE_TOOL_PREFIXES = ("jira_", "confluence_")
 
 
 def _tool_feedback_text(
@@ -273,10 +271,77 @@ def _tool_feedback_text(
     return truncate_with_count(text, max_length)
 
 
-def _tool_feedback_text_for_tool(tool_name: Optional[str], value: Any) -> str:
+def _resolve_context_projection_cfg() -> Dict[str, Any]:
+    llm_cfg = config.llm if isinstance(config.llm, dict) else {}
+    projection = llm_cfg.get("context_projection") if isinstance(llm_cfg.get("context_projection"), dict) else {}
+    return projection
+
+
+def _build_large_source_envelope(
+    *,
+    tool_name: str,
+    text: str,
+    max_chars: int,
+    session_id: Optional[str],
+    source_id: Optional[str],
+) -> str:
+    kind = "jira_issue" if tool_name.startswith("jira_") else "confluence_page" if tool_name.startswith("confluence_") else "large_source"
+    session_key = session_id or "unknown_session"
+    ref = put_text(
+        session_id=session_key,
+        kind=kind,
+        source_id=source_id or tool_name,
+        title=f"{tool_name} result",
+        content=text,
+        metadata={"tool_name": tool_name},
+    )
+    section_map = build_section_map(text)
+    preview = truncate_with_count(text, max_chars)
+    toc = "\n".join(f"- {item.get('heading')} (chars {item.get('start')}..{item.get('end')})" for item in section_map[:16]) or "(no headings found)"
+    model_view_chars = len(preview)
+    return (
+        f"[large source tool result projected]\n"
+        f"tool_name: {tool_name}\n"
+        f"kind: {kind}\n"
+        f"context_ref: {ref}\n"
+        f"original_chars: {len(text)}\n"
+        f"model_view_chars: {model_view_chars}\n"
+        f"full_content_available: true\n"
+        f"section_map:\n{toc}\n\n"
+        f"preview:\n{preview}\n\n"
+        f"To read more, call: context_read_ref(ref=\"{ref}\", section=\"raw\", max_chars=6000)\n"
+        f"To read headings only: context_read_ref(ref=\"{ref}\", section=\"toc\", max_chars=4000)"
+    )
+
+
+def _tool_feedback_text_for_tool(
+    tool_name: Optional[str],
+    value: Any,
+    *,
+    session_id: Optional[str] = None,
+    source_id: Optional[str] = None,
+) -> str:
     """Build tool feedback for the next LLM call using per-tool truncation policy."""
-    max_length = None if _is_unbounded_tool_feedback(tool_name) else DEFAULT_TOOL_FEEDBACK_MAX_LENGTH
-    return _tool_feedback_text(value, max_length=max_length)
+    text = str(value)
+    if not (tool_name and tool_name.startswith(LARGE_SOURCE_TOOL_PREFIXES)):
+        return _tool_feedback_text(text, max_length=DEFAULT_TOOL_FEEDBACK_MAX_LENGTH)
+    projection_cfg = _resolve_context_projection_cfg()
+    jira_conf_cfg = projection_cfg.get("jira_confluence") if isinstance(projection_cfg.get("jira_confluence"), dict) else {}
+    max_chars = int(jira_conf_cfg.get("model_feedback_max_chars", DEFAULT_TOOL_FEEDBACK_MAX_LENGTH) or DEFAULT_TOOL_FEEDBACK_MAX_LENGTH)
+    if len(text) <= max_chars:
+        return text
+    return _build_large_source_envelope(
+        tool_name=tool_name,
+        text=text,
+        max_chars=max_chars,
+        session_id=session_id,
+        source_id=source_id,
+    )
+
+
+def estimate_llm_request_tokens(input_items: List[Dict[str, Any]], system_prompt: str, tools: List[Dict[str, Any]]) -> int:
+    raw = json.dumps({"input_items": input_items, "system_prompt": system_prompt or "", "tools": tools or []}, ensure_ascii=False, default=str)
+    return estimate_tokens(raw)
 
 
 def _is_debug_enabled() -> bool:
@@ -1384,7 +1449,12 @@ You have access to the following tools. When a user asks you to do something tha
                     or msg.get("name")
                     or tool_names_by_call_id.get(call_id)
                 )
-                return _tool_feedback_text_for_tool(tool_name, content)
+                return _tool_feedback_text_for_tool(
+                    tool_name,
+                    content,
+                    session_id=session_id,
+                    source_id=call_id or tool_name,
+                )
 
             for msg in msgs:
                 role = msg.get("role", "user")
@@ -1579,7 +1649,9 @@ You have access to the following tools. When a user asks you to do something tha
             # Only pass model if explicitly set
             loop_tools = self.tools
             if active_skill_runtime and active_skill_runtime.tool_policy_declared:
-                loop_tools = intersect_tool_schemas_by_names(self.tools, active_skill_runtime.allowed_tools_set)
+                always_allowed = set(active_skill_runtime.allowed_tools_set)
+                always_allowed.add("context_read_ref")
+                loop_tools = intersect_tool_schemas_by_names(self.tools, always_allowed)
 
             llm_kwargs = dict(
                 input_items=input_items,
@@ -1593,6 +1665,35 @@ You have access to the following tools. When a user asks you to do something tha
             # Pass provider to ensure correct LLM client routing
             if provider:
                 llm_kwargs["provider"] = _normalize_provider_key(provider)
+
+            request_estimated_tokens = estimate_llm_request_tokens(
+                input_items=input_items,
+                system_prompt=effective_system_prompt or "",
+                tools=loop_tools or [],
+            )
+            loop_budget = resolve_prompt_budget(stage="tool_loop", model=effective_model)
+            if request_estimated_tokens > int(loop_budget.get("prompt_budget_tokens", 0) or 0):
+                loop_messages, loop_context_state = await prepare_progressive_messages(
+                    messages=loop_messages,
+                    model=effective_model,
+                    session_id=session_id,
+                    stage="tool_loop_aggressive",
+                    recent_count=3,
+                )
+                emit_context_snapshot("tool_loop_aggressive", loop_context_state, iteration=iteration)
+                input_items = _to_input_items(loop_messages)
+                llm_kwargs["input_items"] = input_items
+                request_estimated_tokens = estimate_llm_request_tokens(
+                    input_items=input_items,
+                    system_prompt=effective_system_prompt or "",
+                    tools=loop_tools or [],
+                )
+            if request_estimated_tokens > int(loop_budget.get("prompt_budget_tokens", 0) or 0):
+                llm_kwargs["system_prompt"] = (
+                    (effective_system_prompt or "")
+                    + "\n\nBudget guard: Do not emit all generated files in chat. "
+                    "Write artifacts/files via tools when possible; otherwise output a concise manifest and ask to continue file-by-file."
+                )
             
             llm_result = await llm_client.responses(**llm_kwargs)
             # Check for LLM configuration error
@@ -1923,7 +2024,9 @@ You have access to the following tools. When a user asks you to do something tha
                         loop_messages.append(
                             {
                                 "role": "tool",
-                                "content": _tool_feedback_text_for_tool(tool_name, deny_result),
+                                "content": _tool_feedback_text_for_tool(
+                                    tool_name, deny_result, session_id=session_id, source_id=call_id or tool_name
+                                ),
                                 "tool_call_id": call_id,
                                 "tool_name": tool_name,
                             }
@@ -1959,7 +2062,9 @@ You have access to the following tools. When a user asks you to do something tha
                     loop_messages.append(
                         {
                             "role": "tool",
-                            "content": _tool_feedback_text_for_tool(tool_name, short_result),
+                            "content": _tool_feedback_text_for_tool(
+                                tool_name, short_result, session_id=session_id, source_id=call_id or tool_name
+                            ),
                             "tool_call_id": call_id,
                             "tool_name": tool_name,
                         }
@@ -2043,7 +2148,9 @@ You have access to the following tools. When a user asks you to do something tha
                 # The tool result naturally comes after the assistant message in the iteration order.
                 tool_result_msg = {
                     "role": "tool",
-                    "content": _tool_feedback_text_for_tool(tool_name, tool_result),
+                    "content": _tool_feedback_text_for_tool(
+                        tool_name, tool_result, session_id=session_id, source_id=call_id or tool_name
+                    ),
                     "tool_call_id": call_id,
                     "tool_name": tool_name,
                 }
@@ -2436,7 +2543,7 @@ You have access to the following tools. When a user asks you to do something tha
             # If skill defines tool names (List[str]), intersect from globally filtered tools only.
             # If skill defines tool schemas (List[Dict]), intersect with globally allowed names.
             if skill_tool_names and isinstance(skill_tool_names[0], str):
-                available_tools = intersect_tool_schemas_by_names(self.tools, skill_tool_names)
+                available_tools = intersect_tool_schemas_by_names(self.tools, set(skill_tool_names or []) | {"context_read_ref"})
                 logger.debug(
                     "[SkillMode] Intersected skill tool names with llm.tools policy: requested=%s available=%s",
                     len(skill_tool_names),
@@ -2569,7 +2676,9 @@ You have access to the following tools. When a user asks you to do something tha
                         args=normalized_args,
                         source_ref="agents.core.skill_mode_loop",
                     )
-                    output_text = _tool_feedback_text_for_tool(tool_name, tool_result)
+                    output_text = _tool_feedback_text_for_tool(
+                        tool_name, tool_result, session_id=session_id, source_id=call_id or tool_name
+                    )
                     logger.debug(f"[SkillMode] [TOOL_RESULT] tool={tool_name}, result length={len(output_text)}, preview={safe_preview(output_text, 200)}")
                 except Exception as tool_exc:
                     output_text = f"Error: Tool '{tool_name}' failed with {tool_exc}"

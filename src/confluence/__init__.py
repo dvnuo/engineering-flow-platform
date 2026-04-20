@@ -564,10 +564,6 @@ def get_tools_schemas() -> list:
                             "default": "markdown",
                             "description": "Output format: markdown (default) or storage"
                         },
-                        "max_chars": {
-                            "type": "integer",
-                            "description": "Optional explicit response shortening. Leave unset for full Confluence page content; do not set unless the user explicitly asks for a shortened response."
-                        }
                     },
                     "required": ["page_id"]
                 }
@@ -588,10 +584,6 @@ def get_tools_schemas() -> list:
                             "default": "markdown",
                             "description": "Output format: markdown (default) or storage"
                         },
-                        "max_chars": {
-                            "type": "integer",
-                            "description": "Optional explicit response shortening. Leave unset for full Confluence page content; do not set unless the user explicitly asks for a shortened response."
-                        }
                     },
                     "required": ["url"]
                 }

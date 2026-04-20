@@ -145,6 +145,17 @@ def filter_tool_schemas_for_llm(
 
     unmatched_patterns = [pattern for pattern in spec.patterns if pattern.lower() not in matched_patterns]
 
+    # Internal support tools should remain available unless tools are explicitly disabled.
+    matched_names_set = {name.lower() for name in matched_names}
+    for schema in tool_schemas:
+        name = extract_tool_name(schema)
+        if not name or name.lower() in matched_names_set:
+            continue
+        if name in INTERNAL_SUPPORT_TOOL_NAMES:
+            matched_schemas.append(schema)
+            matched_names.append(name)
+            matched_names_set.add(name.lower())
+
     return FilteredToolSchemasResult(
         filtered_schemas=matched_schemas,
         allowed_tool_names=matched_names,
@@ -180,3 +191,4 @@ def intersect_tool_schemas_by_names(
         for tool_schema in tool_schemas
         if (extract_tool_name(tool_schema) or "") in allowed_name_set
     ]
+INTERNAL_SUPPORT_TOOL_NAMES = {"context_read_ref"}

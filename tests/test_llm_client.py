@@ -467,6 +467,33 @@ class TestResponsesAPI:
         assert result["error"]["details"]["incomplete_reason"] == "max_output_tokens"
 
     @pytest.mark.asyncio
+    async def test_openai_responses_partial_content_with_max_output_tokens_returns_warning(self, openai_provider):
+        mock_response = MockResponse({
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "partial"}]}],
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        })
+        mock_client = MockHttpClient(mock_response)
+        with patch('httpx.AsyncClient', return_value=mock_client):
+            result = await openai_provider.responses(messages=[{"role": "user", "content": "hello"}])
+        assert result["content"] == "partial"
+        assert result["truncated"] is True
+        assert result["warning"]["code"] == "max_output_tokens_exceeded"
+
+    @pytest.mark.asyncio
+    async def test_openai_responses_empty_content_with_function_call_not_error_even_if_truncated(self, openai_provider):
+        mock_response = MockResponse({
+            "output": [{"type": "function_call", "call_id": "c1", "name": "read", "arguments": {}}],
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {"input_tokens": 10, "output_tokens": 0},
+        })
+        mock_client = MockHttpClient(mock_response)
+        with patch('httpx.AsyncClient', return_value=mock_client):
+            result = await openai_provider.responses(messages=[{"role": "user", "content": "hello"}])
+        assert "error" not in result
+        assert result["function_calls"][0]["call_id"] == "c1"
+
+    @pytest.mark.asyncio
     async def test_responses_tool_calls(self, openai_provider):
         """Test responses() parses tool calls correctly."""
         # Response with function call
