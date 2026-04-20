@@ -2941,6 +2941,12 @@ async def run_chat_execution(
         model=getattr(agent, "model", None),
     )
     if isinstance(result, dict):
+        effective_request_id = request_id
+        if not effective_request_id:
+            candidate_request_id = result.get("request_id")
+            if candidate_request_id:
+                effective_request_id = str(candidate_request_id)
+
         result["context_state"] = context_state
         if _is_meaningful_context_state(context_state):
             runtime_events = result.get("runtime_events")
@@ -2954,13 +2960,13 @@ async def run_chat_execution(
                     context_state=context_state,
                     session_id=session_id,
                     agent_id=getattr(agent, "agent_id", None),
-                    request_id=request_id,
+                    request_id=effective_request_id,
                     status=status,
                 )
                 if terminal_context_event:
                     runtime_events.append(terminal_context_event)
-        if request_id:
-            result.setdefault("request_id", request_id)
+        if effective_request_id:
+            result.setdefault("request_id", effective_request_id)
     return result
 
 
