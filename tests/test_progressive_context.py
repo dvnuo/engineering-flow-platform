@@ -339,13 +339,34 @@ def test_build_portal_context_preview_includes_request_budget_fields():
             "summary": "s",
             "budget": {
                 "prepared_usage_percent": 12.0,
+                "prompt_budget_tokens": 32000,
                 "request_estimated_tokens": 40000,
+                "reserved_output_tokens": 16000,
+                "safety_margin_tokens": 4000,
+                "max_prompt_tokens": 32000,
+                "max_output_tokens": 64000,
+                "projection_chars_saved": 12345,
+                "projected_old_assistant_messages": 2,
+                "projected_old_tool_messages": 3,
+                "context_blob_refs_created": ["ctx://context/a", "ctx://context/b"],
                 "request_over_budget": True,
             },
         }
     )
+    import json
+
+    assert preview["context_prompt_budget_tokens"] == 32000
     assert preview["context_request_estimated_tokens"] == 40000
+    assert preview["context_reserved_output_tokens"] == 16000
+    assert preview["context_safety_margin_tokens"] == 4000
+    assert preview["context_max_prompt_tokens"] == 32000
+    assert preview["context_max_output_tokens"] == 64000
+    assert preview["context_projection_chars_saved"] == 12345
+    assert preview["context_projected_old_assistant_messages"] == 2
+    assert preview["context_projected_old_tool_messages"] == 3
+    assert preview["context_context_blob_refs_created"] == 2
     assert preview["context_request_over_budget"] is True
+    assert "ctx://context/a" not in json.dumps(preview)
 
 
 def test_progressive_context_dict_roundtrip_preserves_tool_name():

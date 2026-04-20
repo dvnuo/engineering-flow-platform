@@ -530,7 +530,20 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
                 "context_next_pruning_policy": budget.get("next_pruning_policy"),
                 "context_tokens_until_soft_threshold": budget.get("tokens_until_soft_threshold"),
                 "context_tokens_until_hard_threshold": budget.get("tokens_until_hard_threshold"),
+                "context_prompt_budget_tokens": budget.get("prompt_budget_tokens"),
                 "context_request_estimated_tokens": budget.get("request_estimated_tokens"),
+                "context_reserved_output_tokens": budget.get("reserved_output_tokens"),
+                "context_safety_margin_tokens": budget.get("safety_margin_tokens"),
+                "context_max_prompt_tokens": budget.get("max_prompt_tokens"),
+                "context_max_output_tokens": budget.get("max_output_tokens"),
+                "context_projection_chars_saved": budget.get("projection_chars_saved"),
+                "context_projected_old_assistant_messages": budget.get("projected_old_assistant_messages"),
+                "context_projected_old_tool_messages": budget.get("projected_old_tool_messages"),
+                "context_context_blob_refs_created": (
+                    len(budget.get("context_blob_refs_created"))
+                    if isinstance(budget.get("context_blob_refs_created"), list)
+                    else budget.get("context_blob_refs_created")
+                ),
                 "context_request_over_budget": budget.get("request_over_budget"),
             }
         )

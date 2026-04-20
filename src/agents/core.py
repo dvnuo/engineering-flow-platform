@@ -562,11 +562,60 @@ def project_skill_assistant_content_for_input_items(
     )
 
 
+def _should_project_assistant_context(content_text: str) -> bool:
+    text = str(content_text or "")
+    if not text:
+        return False
+    if _is_projected_feedback(text):
+        return False
+    return (
+        len(text) > DEFAULT_TOOL_FEEDBACK_MAX_LENGTH
+        or "```" in text
+        or re.search(r"\b(Feature:|Scenario:|Scenario Outline:|class\s+\w+|def\s+\w+)\b", text) is not None
+    )
+
+
 def degrade_projected_context_sources_in_responses_input_items(
     input_items: List[Dict[str, Any]],
     *,
     max_envelope_chars: int = 2500,
 ) -> List[Dict[str, Any]]:
+    def _preserve_projected_structure(text: str) -> str:
+        lines = str(text or "").splitlines()
+        if not lines:
+            return str(text or "")
+        marker = lines[0].strip()
+        head: List[str] = [lines[0]]
+        if marker.startswith("[large source tool result projected]"):
+            for line in lines[1:]:
+                s = line.strip()
+                if (
+                    s.startswith("tool_name:")
+                    or s.startswith("kind:")
+                    or s.startswith("context_ref:")
+                    or s.startswith("original_chars:")
+                    or s.startswith("model_view_chars:")
+                    or s.startswith("full_content_available:")
+                ):
+                    head.append(line)
+            section_lines = [line for line in lines if line.strip().startswith("- ")]
+            if section_lines:
+                head.append("section_map:")
+                head.extend(section_lines[:4])
+        else:
+            for line in lines[1:]:
+                s = line.strip()
+                if "ref=ctx://context/" in s or "ctx://context/" in s or s.startswith("Summary:"):
+                    head.append(line)
+                    break
+            summary_lines = [line for line in lines if line.strip() and not line.startswith("[")]
+            head.extend(summary_lines[:3])
+        instruction_lines = [line for line in lines if "context_read_ref(" in line]
+        if instruction_lines:
+            head.append(instruction_lines[0])
+        reduced = "\n".join(dict.fromkeys(head))
+        return truncate_with_count(reduced, max_envelope_chars)
+
     degraded: List[Dict[str, Any]] = []
     marker_prefixes = (
         "[large source tool result projected]",
@@ -584,7 +633,7 @@ def degrade_projected_context_sources_in_responses_input_items(
             output_text = str(item_copy.get("output") or "")
             stripped = output_text.lstrip()
             if stripped.startswith(marker_prefixes) and "ctx://context/" in stripped and len(output_text) > max_envelope_chars:
-                item_copy["output"] = truncate_with_count(output_text, max_envelope_chars)
+                item_copy["output"] = _preserve_projected_structure(output_text)
         degraded.append(item_copy)
     return degraded
 
@@ -633,18 +682,17 @@ def build_responses_input_items(messages: List[Dict[str, Any]], *, session_id: O
                     items.append({"role": role, "content": content})
                 else:
                     content_text = str(content)
-                    should_project_assistant = (
-                        len(content_text) > DEFAULT_TOOL_FEEDBACK_MAX_LENGTH
-                        or "```" in content_text
-                        or re.search(r"\b(Feature:|Scenario:|Scenario Outline:|class\s+\w+|def\s+\w+)\b", content_text) is not None
-                    )
-                    if should_project_assistant:
+                    if _is_projected_feedback(content_text):
+                        items.append({"role": role, "content": content_text})
+                    elif _should_project_assistant_context(content_text):
                         content_text = project_skill_assistant_content_for_input_items(
                             content_text,
                             session_id=session_id,
                             round_num=0,
                         )
-                    items.append({"role": role, "content": content_text})
+                        items.append({"role": role, "content": content_text})
+                    else:
+                        items.append({"role": role, "content": content_text})
             for tc in tool_calls:
                 call_id = tc.get("id", "")
                 func = tc.get("function", {})
@@ -968,6 +1016,7 @@ async def _run_skill_finalizer(
     track_usage: bool,
     usage_data: Dict[str, Any],
     remaining_llm_budget: int,
+    max_tokens: int = 64000,
 ) -> tuple[FinalizerResult, Dict[str, Any]]:
     raw_output = ""
     fallback_used = False
@@ -983,13 +1032,43 @@ async def _run_skill_finalizer(
             prompt += " STRICT: marker must be first line and body must be plain text."
         items = list(input_items)
         items.append({"role": "user", "content": [{"type": "input_text", "text": prompt}]})
+        loop_budget = resolve_prompt_budget(stage="skill_generation", model=model)
+        prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
+        budget_max_tokens = int(loop_budget.get("max_output_tokens") or max_tokens or 64000)
+        items_for_call = items
+        request_estimated_tokens = estimate_llm_request_tokens(
+            input_items=items_for_call,
+            system_prompt=system_prompt or "",
+            tools=[],
+        )
+        if request_estimated_tokens > prompt_budget_tokens:
+            items_for_call = degrade_projected_context_sources_in_responses_input_items(items_for_call)
+            request_estimated_tokens = estimate_llm_request_tokens(
+                input_items=items_for_call,
+                system_prompt=system_prompt or "",
+                tools=[],
+            )
+        if _should_abort_over_budget(request_estimated_tokens, prompt_budget_tokens):
+            skill_session.finalizer_state = "terminal_failed"
+            logger.warning("[SkillMode][Finalizer] state=terminal_failed reason=finalizer_context_budget_exceeded")
+            return (
+                FinalizerResult(
+                    "terminal_failed",
+                    skill_session.finalizer_attempts,
+                    "ask_user",
+                    "[ASK_USER]\nI need to continue in smaller steps because the context is too large to finalize safely.",
+                    "finalizer_context_budget_exceeded",
+                    True,
+                ),
+                usage_data,
+            )
         result = await llm_client.responses(
-            input_items=items,
+            input_items=items_for_call,
             system_prompt=system_prompt,
             tools=None,
             reasoning_replay=False,
             provider=_normalize_provider_key(provider),
-            max_tokens=64000,
+            max_tokens=budget_max_tokens,
             **({"model": model} if model else {}),
         )
         skill_session.llm_call_count += 1
@@ -2865,7 +2944,6 @@ You have access to the following tools. When a user asks you to do something tha
                 "tools": available_tools,  # Use skill's tools or fall back to all tools
                 "reasoning_replay": False,
                 "provider": _normalize_provider_key(provider),
-                "max_tokens": 64000,  # Max output tokens for skill mode
             }
             if self.model:
                 llm_kwargs["model"] = self.model
@@ -2876,6 +2954,8 @@ You have access to the following tools. When a user asks you to do something tha
                 tools=available_tools or [],
             )
             loop_budget = resolve_prompt_budget(stage="skill_generation", model=llm_kwargs.get("model"))
+            effective_max_tokens = int(loop_budget.get("max_output_tokens") or config.llm.get("max_tokens", 64000) or 64000)
+            llm_kwargs["max_tokens"] = effective_max_tokens
             prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
             skill_request_budget = {
                 "request_estimated_tokens": request_estimated_tokens,
@@ -3141,6 +3221,7 @@ You have access to the following tools. When a user asks you to do something tha
                 track_usage=track_usage,
                 usage_data=usage_data,
                 remaining_llm_budget=remaining_llm_budget,
+                max_tokens=int(skill_request_budget.get("max_output_tokens") or config.llm.get("max_tokens", 64000) or 64000),
             )
             raw_output = finalizer_result.raw_output
             if finalizer_result.state == "terminal_failed":

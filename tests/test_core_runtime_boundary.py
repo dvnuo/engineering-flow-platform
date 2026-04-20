@@ -247,12 +247,35 @@ def test_build_responses_input_items_mobilex_shape_projects_large_assistant_and_
     assert function_call["call_id"] == "call_1"
     assert tool_output_item["call_id"] == "call_1"
     assert assistant_item["content"] != long_gherkin
+    assert assistant_item["content"].count("[assistant skill content compacted") == 1
     assert tool_output_item["output"] != long_jira
     assert "ctx://context/" in assistant_item["content"]
     assert "context_ref: ctx://context/" in tool_output_item["output"]
     assert "Acceptance Criteria" in tool_output_item["output"]
     jira_ref = re.search(r"context_ref:\s*(ctx://context/[^\s]+)", tool_output_item["output"]).group(1)
     assert read_ref(jira_ref, session_id="s-mobilex", max_chars=30000) == long_jira
+
+
+def test_build_responses_input_items_keeps_already_projected_assistant_tool_call_content():
+    from src.agents import core
+
+    projected = (
+        "[assistant tool-call content compacted | original_chars=20000 | ref=ctx://context/s/assistant_output/aaaaaaaaaaaa]\n"
+        "Summary:\nFeature: X\nScenario: Y"
+    )
+    messages = [
+        {
+            "role": "assistant",
+            "content": projected,
+            "tool_calls": [{"id": "call_proj", "function": {"name": "jira_get_issue", "arguments": "{}"}}],
+        }
+    ]
+    items = core.build_responses_input_items(messages, session_id="s")
+    assistant_item = next(item for item in items if item.get("role") == "assistant")
+    function_call = next(item for item in items if item.get("type") == "function_call")
+    assert assistant_item["content"] == projected
+    assert function_call["call_id"] == "call_proj"
+    assert "[assistant skill content compacted" not in assistant_item["content"]
 
 
 def test_degrade_projected_context_sources_in_responses_input_items_preserves_call_id():
@@ -267,6 +290,44 @@ def test_degrade_projected_context_sources_in_responses_input_items_preserves_ca
     degraded = core.degrade_projected_context_sources_in_responses_input_items(items, max_envelope_chars=500)
     assert degraded[0]["call_id"] == "abc123"
     assert len(degraded[0]["output"]) < len(large_projected)
+
+
+def test_degrade_projected_context_sources_in_responses_preserves_ref_and_read_instruction():
+    from src.agents import core
+
+    large_envelope = (
+        "[large source tool result projected]\n"
+        "tool_name: jira_get_issue\n"
+        "kind: jira_issue\n"
+        "context_ref: ctx://context/s/k/aaaaaaaaaaaa\n"
+        "original_chars: 22000\n"
+        "model_view_chars: 7000\n"
+        "full_content_available: true\n"
+        "section_map:\n- One\n- Two\n\n"
+        "preview:\n" + ("X" * 8000) + "\n\n"
+        "To read more, call: context_read_ref(ref=\"ctx://context/s/k/aaaaaaaaaaaa\", section=\"raw\", max_chars=6000)\n"
+    )
+    items = [{"type": "function_call_output", "call_id": "call_1", "output": large_envelope}]
+    degraded = core.degrade_projected_context_sources_in_responses_input_items(items, max_envelope_chars=700)
+    output = degraded[0]["output"]
+    assert degraded[0]["call_id"] == "call_1"
+    assert len(output) < len(large_envelope)
+    assert "context_ref: ctx://context/" in output
+    assert "original_chars:" in output
+    assert "context_read_ref(" in output
+
+
+def test_degrade_projected_context_sources_keeps_assistant_skill_ref():
+    from src.agents import core
+
+    projected = (
+        "[assistant skill content compacted | original_chars=21000 | ref=ctx://context/s/k/bbbbbbbbbbbb]\n"
+        "Summary:\nFeature: Y\n" + ("extra\n" * 500)
+    )
+    items = [{"type": "function_call_output", "call_id": "call_2", "output": projected}]
+    degraded = core.degrade_projected_context_sources_in_responses_input_items(items, max_envelope_chars=300)
+    assert degraded[0]["call_id"] == "call_2"
+    assert "ref=ctx://context/" in degraded[0]["output"]
 
 
 def test_tool_loop_budget_updates_include_request_estimation_fields():
