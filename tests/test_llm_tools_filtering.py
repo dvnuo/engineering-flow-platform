@@ -69,6 +69,7 @@ def test_filter_explicit_none_does_not_include_internal_support_tools():
 
 def test_is_tool_name_enabled_allows_internal_support_tool_in_pattern_mode():
     assert is_tool_name_enabled_for_llm("context_read_ref", {"tools": "jira_*"}) is True
+    assert is_tool_name_enabled_for_llm("Context_Read_Ref", {"tools": "jira_*"}) is True
     assert is_tool_name_enabled_for_llm("context_read_ref", {"tools": []}) is False
     assert is_tool_name_enabled_for_llm("read", {"tools": "jira_*"}) is False
 

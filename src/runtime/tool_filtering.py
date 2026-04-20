@@ -153,7 +153,7 @@ def filter_tool_schemas_for_llm(
         name = extract_tool_name(schema)
         if not name or name.lower() in matched_names_set:
             continue
-        if name in INTERNAL_SUPPORT_TOOL_NAMES:
+        if name.lower() in INTERNAL_SUPPORT_TOOL_NAMES:
             matched_schemas.append(schema)
             matched_names.append(name)
             matched_names_set.add(name.lower())
@@ -178,7 +178,7 @@ def is_tool_name_enabled_for_llm(tool_name: str, llm_config: Dict[str, Any]) -> 
         return True
     if spec.mode == "none":
         return False
-    if tool_name.strip() in INTERNAL_SUPPORT_TOOL_NAMES:
+    if tool_name.strip().lower() in INTERNAL_SUPPORT_TOOL_NAMES:
         return True
     lowered_name = tool_name.strip().lower()
     return any(fnmatchcase(lowered_name, pattern.lower()) for pattern in spec.patterns)

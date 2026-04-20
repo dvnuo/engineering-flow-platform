@@ -483,11 +483,222 @@ def _build_context_budget_exceeded_error(
             "request_estimated_tokens": request_estimated_tokens,
             "prompt_budget_tokens": loop_budget.get("prompt_budget_tokens"),
             "reserved_output_tokens": loop_budget.get("reserved_output_tokens"),
+            "safety_margin_tokens": loop_budget.get("safety_margin_tokens"),
+            "max_prompt_tokens": loop_budget.get("max_prompt_tokens"),
             "max_output_tokens": loop_budget.get("max_output_tokens"),
+            "request_over_budget": True,
             "stage": stage,
             "suggestion": "Split generation into smaller steps or write artifacts/files instead of emitting full content in chat.",
         },
     }
+
+
+def _safe_request_budget_fields(budget: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(budget, dict):
+        return {}
+    keys = (
+        "request_estimated_tokens",
+        "prompt_budget_tokens",
+        "reserved_output_tokens",
+        "safety_margin_tokens",
+        "max_prompt_tokens",
+        "max_output_tokens",
+        "request_over_budget",
+    )
+    return {key: budget.get(key) for key in keys if key in budget}
+
+
+def _merge_budget_into_error_details(error_response: Dict[str, Any], budget: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(error_response, dict):
+        return error_response
+    safe_budget = _safe_request_budget_fields(budget)
+    if not safe_budget:
+        return error_response
+    details = error_response.get("details") if isinstance(error_response.get("details"), dict) else {}
+    merged = dict(details)
+    merged.update(safe_budget)
+    error_response["details"] = merged
+    error_response["request_budget"] = safe_budget
+    return error_response
+
+
+def project_skill_assistant_content_for_input_items(
+    raw_output: str,
+    *,
+    session_id: Optional[str],
+    round_num: int,
+    summary_max_chars: int = 2000,
+) -> str:
+    text = str(raw_output or "")
+    if not text:
+        return ""
+    summary_lines: List[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#") or stripped.startswith("```"):
+            summary_lines.append(stripped)
+        elif re.match(r"^(Feature|Scenario|Scenario Outline):", stripped):
+            summary_lines.append(stripped)
+        elif re.search(r"\b(class|def|function|Given|When|Then|And)\b", stripped):
+            summary_lines.append(stripped)
+        if len("\n".join(summary_lines)) >= summary_max_chars:
+            break
+    summary = truncate_with_count("\n".join(summary_lines).strip() or text, summary_max_chars)
+    session_key = session_id or "unknown_session"
+    ref = put_text(
+        session_id=session_key,
+        kind="assistant_skill_output",
+        source_id=f"skill_round_{round_num}",
+        title=f"Skill assistant output round {round_num}",
+        content=text,
+        metadata={"source": "skill_mode_assistant"},
+    )
+    return (
+        f"[assistant skill content compacted | original_chars={len(text)} | ref={ref}]\n"
+        f"Summary:\n{summary}\n\n"
+        f"Full assistant text is available through context_read_ref(ref=\"{ref}\")."
+    )
+
+
+def degrade_projected_context_sources_in_responses_input_items(
+    input_items: List[Dict[str, Any]],
+    *,
+    max_envelope_chars: int = 2500,
+) -> List[Dict[str, Any]]:
+    degraded: List[Dict[str, Any]] = []
+    marker_prefixes = (
+        "[large source tool result projected]",
+        "[old tool output compacted",
+        "[old assistant output compacted",
+        "[assistant tool-call content compacted",
+        "[assistant skill content compacted",
+    )
+    for item in input_items or []:
+        if not isinstance(item, dict):
+            degraded.append(item)
+            continue
+        item_copy = dict(item)
+        if item_copy.get("type") == "function_call_output":
+            output_text = str(item_copy.get("output") or "")
+            stripped = output_text.lstrip()
+            if stripped.startswith(marker_prefixes) and "ctx://context/" in stripped and len(output_text) > max_envelope_chars:
+                item_copy["output"] = truncate_with_count(output_text, max_envelope_chars)
+        degraded.append(item_copy)
+    return degraded
+
+
+def build_responses_input_items(messages: List[Dict[str, Any]], *, session_id: Optional[str]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    tool_names_by_call_id: Dict[str, str] = {}
+
+    def _feedback_output_for_message(msg: Dict[str, Any], content: Any) -> str:
+        if not content:
+            return ""
+        call_id = msg.get("tool_call_id", "")
+        tool_name = (
+            msg.get("tool_name")
+            or msg.get("name")
+            or tool_names_by_call_id.get(call_id)
+        )
+        return _tool_feedback_text_for_tool(
+            tool_name,
+            content,
+            session_id=session_id,
+            source_id=call_id or tool_name,
+        )
+
+    for msg in messages:
+        role = msg.get("role", "user")
+
+        tool_call_id = msg.get("tool_call_id", "")
+        if tool_call_id and role == "tool":
+            content = msg.get("content", "")
+            items.append({
+                "type": "function_call_output",
+                "call_id": tool_call_id,
+                "output": _feedback_output_for_message(msg, content),
+            })
+            continue
+
+        if role == "tool":
+            continue
+
+        tool_calls = msg.get("tool_calls", [])
+        if tool_calls and role == "assistant":
+            content = msg.get("content", "")
+            if content:
+                if isinstance(content, list):
+                    items.append({"role": role, "content": content})
+                else:
+                    content_text = str(content)
+                    should_project_assistant = (
+                        len(content_text) > DEFAULT_TOOL_FEEDBACK_MAX_LENGTH
+                        or "```" in content_text
+                        or re.search(r"\b(Feature:|Scenario:|Scenario Outline:|class\s+\w+|def\s+\w+)\b", content_text) is not None
+                    )
+                    if should_project_assistant:
+                        content_text = project_skill_assistant_content_for_input_items(
+                            content_text,
+                            session_id=session_id,
+                            round_num=0,
+                        )
+                    items.append({"role": role, "content": content_text})
+            for tc in tool_calls:
+                call_id = tc.get("id", "")
+                func = tc.get("function", {})
+                name = func.get("name", "")
+                args = func.get("arguments", {})
+                args_str = args if isinstance(args, str) else json.dumps(args)
+                if call_id and name:
+                    tool_names_by_call_id[call_id] = name
+                items.append({
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": args_str,
+                })
+            continue
+
+        if tool_call_id:
+            content = msg.get("content", "")
+            items.append({
+                "type": "function_call_output",
+                "call_id": tool_call_id,
+                "output": _feedback_output_for_message(msg, content),
+            })
+            continue
+
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            conv = []
+            for value in content:
+                if isinstance(value, dict):
+                    t = value.get("type", "")
+                    if t in ("text", "input_text"):
+                        if role == "user":
+                            conv.append({"type": "input_text", "text": value.get("text", "")})
+                        else:
+                            conv.append(value.get("text", ""))
+                    elif t in ("image_url", "input_image"):
+                        img = value.get("image_url", {})
+                        img_url = img.get("url") if isinstance(img, dict) else str(img)
+                        if img_url:
+                            conv.append({"type": "input_image", "image_url": img_url})
+                    else:
+                        conv.append(value)
+                else:
+                    conv.append({"type": "input_text", "text": str(value)} if role == "user" else str(value))
+            if conv:
+                items.append({"role": role, "content": conv})
+        elif content:
+            if role == "user":
+                items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
+            else:
+                items.append({"role": role, "content": str(content)})
+
+    return items
 
 
 def _is_debug_enabled() -> bool:
@@ -1584,118 +1795,7 @@ You have access to the following tools. When a user asks you to do something tha
                 added_images,
             )
 
-        # Convert messages to input_items for Responses API
-        def _to_input_items(msgs):
-            items = []
-            tool_names_by_call_id = {}
-
-            def _feedback_output_for_message(msg: Dict[str, Any], content: Any) -> str:
-                if not content:
-                    return ""
-                call_id = msg.get("tool_call_id", "")
-                tool_name = (
-                    msg.get("tool_name")
-                    or msg.get("name")
-                    or tool_names_by_call_id.get(call_id)
-                )
-                return _tool_feedback_text_for_tool(
-                    tool_name,
-                    content,
-                    session_id=session_id,
-                    source_id=call_id or tool_name,
-                )
-
-            for msg in msgs:
-                role = msg.get("role", "user")
-                
-                # Handle tool_call_id for tool result messages BEFORE skipping tool role
-                tool_call_id = msg.get("tool_call_id", "")
-                if tool_call_id and role == "tool":
-                    content = msg.get("content", "")
-                    items.append({
-                        "type": "function_call_output",
-                        "call_id": tool_call_id,
-                        "output": _feedback_output_for_message(msg, content),
-                    })
-                    continue
-                
-                if role == "tool":
-                    continue
-                
-                # Handle tool_calls from assistant messages - convert to function_call for Responses API
-                tool_calls = msg.get("tool_calls", [])
-                if tool_calls and role == "assistant":
-                    # First add assistant content (chronological order)
-                    content = msg.get("content", "")
-                    if content:
-                        if isinstance(content, list):
-                            items.append({"role": role, "content": content})
-                        else:
-                            items.append({"role": role, "content": str(content)})
-                    # Then add function_call items
-                    for tc in tool_calls:
-                        call_id = tc.get("id", "")
-                        func = tc.get("function", {})
-                        name = func.get("name", "")
-                        args = func.get("arguments", {})
-                        args_str = args if isinstance(args, str) else json.dumps(args)
-                        if call_id and name:
-                            tool_names_by_call_id[call_id] = name
-                        items.append({
-                            "type": "function_call",
-                            "call_id": call_id,
-                            "name": name,
-                            "arguments": args_str,
-                        })
-                    continue
-                
-                # Handle tool_call_id for other messages (fallback)
-                if tool_call_id:
-                    content = msg.get("content", "")
-                    items.append({
-                        "type": "function_call_output",
-                        "call_id": tool_call_id,
-                        "output": _feedback_output_for_message(msg, content),
-                    })
-                    continue
-                
-                content = msg.get("content", "")
-                if isinstance(content, list):
-                    conv = []
-                    for item in content:
-                        if isinstance(item, dict):
-                            t = item.get("type", "")
-                            if t in ("text", "input_text"):
-                                # Only use input_text for user messages
-                                if role == "user":
-                                    conv.append({"type": "input_text", "text": item.get("text", "")})
-                                else:
-                                    # Assistant messages - use plain text
-                                    conv.append(item.get("text", ""))
-                            elif t in ("image_url", "input_image"):
-                                img = item.get("image_url", {})
-                                img_url = img.get("url") if isinstance(img, dict) else str(img)
-                                if img_url:
-                                    conv.append({"type": "input_image", "image_url": img_url})
-                            else:
-                                conv.append(item)
-                        else:
-                            # Plain text item
-                            if role == "user":
-                                conv.append({"type": "input_text", "text": str(item)})
-                            else:
-                                conv.append(str(item))
-                    if conv:
-                        items.append({"role": role, "content": conv})
-                elif content:
-                    # Plain text content - no wrapper for assistant
-                    if role == "user":
-                        items.append({"role": role, "content": [{"type": "input_text", "text": str(content)}]})
-                    else:
-                        items.append({"role": role, "content": str(content)})
-            return items
-        
-        input_items = _to_input_items(messages)
+        input_items = build_responses_input_items(messages, session_id=session_id)
         
         # Keep track of messages for compaction during loop
         # IMPORTANT: Start fresh for each request to avoid carrying over
@@ -1717,7 +1817,7 @@ You have access to the following tools. When a user asks you to do something tha
                     recent_count=5,
                 )
                 emit_context_snapshot("tool_loop", loop_context_state, iteration=iteration)
-            input_items = _to_input_items(loop_messages)
+            input_items = build_responses_input_items(loop_messages, session_id=session_id)
             # ===== END COMPACTION IN LOOP =====
             
             # Send iteration start event
@@ -1840,7 +1940,7 @@ You have access to the following tools. When a user asks you to do something tha
                     recent_count=3,
                 )
                 emit_context_snapshot("tool_loop_aggressive", loop_context_state, iteration=iteration)
-                input_items = _to_input_items(loop_messages)
+                input_items = build_responses_input_items(loop_messages, session_id=session_id)
                 llm_kwargs["input_items"] = input_items
                 request_estimated_tokens = estimate_llm_request_tokens(
                     input_items=input_items,
@@ -1849,7 +1949,7 @@ You have access to the following tools. When a user asks you to do something tha
                 )
             if request_estimated_tokens > int(loop_budget.get("prompt_budget_tokens", 0) or 0):
                 loop_messages = degrade_projected_context_sources(loop_messages)
-                input_items = _to_input_items(loop_messages)
+                input_items = build_responses_input_items(loop_messages, session_id=session_id)
                 llm_kwargs["input_items"] = input_items
                 request_estimated_tokens = estimate_llm_request_tokens(
                     input_items=input_items,
@@ -1875,7 +1975,8 @@ You have access to the following tools. When a user asks you to do something tha
                     loop_budget=loop_budget,
                     stage="tool_loop",
                 )
-                return error_response
+                _merge_budget_into_error_details(error_response, latest_request_budget)
+                return attach_runtime_events(error_response)
             if request_estimated_tokens > prompt_budget_tokens:
                 llm_kwargs["system_prompt"] = (
                     (effective_system_prompt or "")
@@ -1900,7 +2001,8 @@ You have access to the following tools. When a user asks you to do something tha
                     error_response["details"] = details
                 if isinstance(status_code, int):
                     error_response["status_code"] = status_code
-                return error_response
+                _merge_budget_into_error_details(error_response, latest_request_budget)
+                return attach_runtime_events(error_response)
             
             # Debug logging for LLM response
             if _is_debug_enabled():
@@ -2640,6 +2742,7 @@ You have access to the following tools. When a user asks you to do something tha
         skill_max_tokens = int(context_window * 0.8)
         
         raw_output = ""
+        skill_request_budget: Dict[str, Any] = {}
         should_finalize_without_tools = False
         finalize_reason = ""
         skill_session.execution_mode = ""
@@ -2767,6 +2870,60 @@ You have access to the following tools. When a user asks you to do something tha
             if self.model:
                 llm_kwargs["model"] = self.model
 
+            request_estimated_tokens = estimate_llm_request_tokens(
+                input_items=input_items,
+                system_prompt=system_prompt or "",
+                tools=available_tools or [],
+            )
+            loop_budget = resolve_prompt_budget(stage="skill_generation", model=llm_kwargs.get("model"))
+            prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
+            skill_request_budget = {
+                "request_estimated_tokens": request_estimated_tokens,
+                "prompt_budget_tokens": prompt_budget_tokens,
+                "reserved_output_tokens": loop_budget.get("reserved_output_tokens"),
+                "safety_margin_tokens": loop_budget.get("safety_margin_tokens"),
+                "max_prompt_tokens": loop_budget.get("max_prompt_tokens"),
+                "max_output_tokens": loop_budget.get("max_output_tokens"),
+                "request_over_budget": request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False,
+            }
+            if request_estimated_tokens > prompt_budget_tokens:
+                skill_session = compact_skill_session_sync(skill_session, max_chars=4000)
+                system_prompt = _build_skill_mode_system_prompt(skill, skill_session)
+                input_items = degrade_projected_context_sources_in_responses_input_items(input_items)
+                llm_kwargs["system_prompt"] = system_prompt
+                llm_kwargs["input_items"] = input_items
+                request_estimated_tokens = estimate_llm_request_tokens(
+                    input_items=input_items,
+                    system_prompt=system_prompt or "",
+                    tools=available_tools or [],
+                )
+                skill_request_budget.update(
+                    {
+                        "request_estimated_tokens": request_estimated_tokens,
+                        "request_over_budget": request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False,
+                    }
+                )
+            if _should_abort_over_budget(request_estimated_tokens, prompt_budget_tokens):
+                error_response = {
+                    "error": "LLM request remains over prompt budget after skill-mode context projection.",
+                    "error_type": "context_budget_exceeded",
+                    "code": "context_budget_exceeded",
+                    "details": {
+                        "request_estimated_tokens": request_estimated_tokens,
+                        "prompt_budget_tokens": prompt_budget_tokens,
+                        "reserved_output_tokens": loop_budget.get("reserved_output_tokens"),
+                        "safety_margin_tokens": loop_budget.get("safety_margin_tokens"),
+                        "max_prompt_tokens": loop_budget.get("max_prompt_tokens"),
+                        "max_output_tokens": loop_budget.get("max_output_tokens"),
+                        "request_over_budget": True,
+                        "stage": "skill_generation",
+                        "suggestion": "Split generation into smaller steps or write artifacts/files instead of emitting full content in chat.",
+                    },
+                    "user_message_id": user_message_id,
+                    "request_budget": dict(skill_request_budget),
+                }
+                return error_response
+
             logger.debug(f"[SkillMode] Calling LLM with model={llm_kwargs.get('model')}, max_tokens={llm_kwargs.get('max_tokens')}")
             llm_result = await llm_client.responses(**llm_kwargs)
             skill_session.llm_call_count += 1
@@ -2790,6 +2947,7 @@ You have access to the following tools. When a user asks you to do something tha
                     error_response["details"] = details
                 if isinstance(status_code, int):
                     error_response["status_code"] = status_code
+                _merge_budget_into_error_details(error_response, skill_request_budget)
                 return error_response
 
             if track_usage:
@@ -2824,7 +2982,21 @@ You have access to the following tools. When a user asks you to do something tha
 
             # Keep assistant text context if model returned text together with tool calls
             if raw_output:
-                input_items.append({"role": "assistant", "content": raw_output})
+                should_project_output = (
+                    len(raw_output) > 4000
+                    or "```" in raw_output
+                    or re.search(r"\b(Feature:|Scenario:|Scenario Outline:|class\s+\w+|def\s+\w+)\b", raw_output) is not None
+                )
+                projected_output = (
+                    project_skill_assistant_content_for_input_items(
+                        raw_output,
+                        session_id=session_id,
+                        round_num=round_num + 1,
+                    )
+                    if should_project_output
+                    else raw_output
+                )
+                input_items.append({"role": "assistant", "content": projected_output})
 
             for call in function_calls:
                 call_id = call.get("id") or call.get("call_id") or f"skill_call_{len(input_items)}"
@@ -3031,6 +3203,7 @@ You have access to the following tools. When a user asks you to do something tha
                 usage=usage_data,
                 events=events,
                 user_message_id=user_message_id,
+                request_budget=dict(skill_request_budget) if skill_request_budget else {},
             )
 
         if action == "finish":
@@ -3090,6 +3263,7 @@ You have access to the following tools. When a user asks you to do something tha
                 usage=usage_data,
                 events=events,
                 user_message_id=user_message_id,
+                request_budget=dict(skill_request_budget) if skill_request_budget else {},
             )
 
         # default: execute
@@ -3132,6 +3306,7 @@ You have access to the following tools. When a user asks you to do something tha
             usage=usage_data,
             events=events,
             user_message_id=user_message_id,
+            request_budget=dict(skill_request_budget) if skill_request_budget else {},
         )
 
     async def _execute_skill(
