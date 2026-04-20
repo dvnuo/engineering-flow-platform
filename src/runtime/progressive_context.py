@@ -33,6 +33,7 @@ def _to_agent_messages(messages: List[Dict[str, Any]]) -> List[AgentMessage]:
             timestamp=msg.get("timestamp"),
             tool_calls=msg.get("tool_calls"),
             tool_use_id=msg.get("tool_call_id") or msg.get("tool_use_id"),
+            tool_name=msg.get("tool_name"),
         )
         for msg in messages
         if isinstance(msg, dict)
@@ -49,6 +50,8 @@ def _to_dict_messages(messages: Sequence[AgentMessage]) -> List[Dict[str, Any]]:
             item["tool_calls"] = msg.tool_calls
         if msg.tool_use_id:
             item["tool_call_id"] = msg.tool_use_id
+        if getattr(msg, "tool_name", None):
+            item["tool_name"] = msg.tool_name
         result.append(item)
     return result
 
@@ -102,6 +105,7 @@ def _micro_compact_messages(messages: List[AgentMessage], *, recent_count: int) 
                         content=f"[tool_result compacted | original_chars={len(content_text)}] {preview}",
                         timestamp=msg.timestamp,
                         tool_use_id=msg.tool_use_id,
+                        tool_name=getattr(msg, "tool_name", None),
                     )
                 )
                 continue
@@ -122,6 +126,7 @@ def _micro_compact_messages(messages: List[AgentMessage], *, recent_count: int) 
                         timestamp=msg.timestamp,
                         tool_calls=msg.tool_calls,
                         tool_use_id=msg.tool_use_id,
+                        tool_name=getattr(msg, "tool_name", None),
                     )
                 )
                 continue
@@ -187,6 +192,7 @@ def _trim_full_compaction_result_to_budget(
         timestamp=summary_message.timestamp,
         tool_calls=summary_message.tool_calls,
         tool_use_id=summary_message.tool_use_id,
+        tool_name=getattr(summary_message, "tool_name", None),
     )
     return fix_tool_call_consistency([shortened_summary])
 
