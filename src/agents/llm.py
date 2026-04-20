@@ -148,6 +148,13 @@ def _sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
 
 
 
+def _dict_or_empty(value: Any) -> Dict[str, Any]:
+    """Return a dict for optional API objects that may be omitted or explicitly null."""
+    return value if isinstance(value, dict) else {}
+
+
+
+
 def _convert_messages_to_input_items(messages: List[Dict]) -> List[Dict]:
     """Convert Chat-style messages to Responses API input_items format."""
     items = []
@@ -644,12 +651,12 @@ class OpenAIProvider(BaseProvider):
                     "name": item.get("name", ""),
                     "arguments": item.get("arguments", {}),
                 })
-        incomplete_reason = data.get("incomplete_details", {}).get("reason")
+        incomplete_reason = _dict_or_empty(data.get("incomplete_details")).get("reason")
 
         # Prioritize function_call: if there are function_calls/tool_calls_compat, return directly to the upper layer
         if not content.strip():
             # Assign all return fields in advance to ensure robustness
-            usage_data = data.get("usage", {})
+            usage_data = _dict_or_empty(data.get("usage"))
             prompt_tokens = usage_data.get("input_tokens", 0)
             completion_tokens = usage_data.get("output_tokens", 0)
             if prompt_tokens == 0:
@@ -708,7 +715,7 @@ class OpenAIProvider(BaseProvider):
                         "details": {
                             "incomplete_reason": "max_output_tokens",
                             "max_output_tokens": payload.get("max_output_tokens"),
-                            "request_estimated_tokens": data.get("usage", {}).get("input_tokens"),
+                            "request_estimated_tokens": usage_data.get("input_tokens"),
                             "suggestion": "Context was compacted but model output still reached max_output_tokens; split generation or write artifacts/files instead of emitting all content in chat.",
                         },
                         "status_code": 500,
@@ -718,7 +725,7 @@ class OpenAIProvider(BaseProvider):
             return {"error": {"message": "Copilot API returned empty message. Please try rephrasing your prompt or check your input.", "type": "empty_response", "code": "empty_message"}}
 
         # Calculate usage
-        usage_data = data.get("usage", {})
+        usage_data = _dict_or_empty(data.get("usage"))
         prompt_tokens = usage_data.get("input_tokens", 0)
         completion_tokens = usage_data.get("output_tokens", 0)
         
@@ -1072,12 +1079,12 @@ class GitHubCopilotProvider(BaseProvider):
                     "arguments": item.get("arguments", {}),
                 })
 
-        incomplete_reason = data.get("incomplete_details", {}).get("reason")
+        incomplete_reason = _dict_or_empty(data.get("incomplete_details")).get("reason")
 
         # Priority: handle function_call first. If there are function_calls/tool_calls_compat, return directly to the upper layer.
         if not content.strip():
             # Pre-assign all return fields in advance to ensure robustness
-            usage_data = data.get("usage", {})
+            usage_data = _dict_or_empty(data.get("usage"))
             prompt_tokens = usage_data.get("input_tokens", 0)
             completion_tokens = usage_data.get("output_tokens", 0)
             if prompt_tokens == 0:
@@ -1136,7 +1143,7 @@ class GitHubCopilotProvider(BaseProvider):
                         "details": {
                             "incomplete_reason": "max_output_tokens",
                             "max_output_tokens": payload.get("max_output_tokens"),
-                            "request_estimated_tokens": data.get("usage", {}).get("input_tokens"),
+                            "request_estimated_tokens": usage_data.get("input_tokens"),
                             "suggestion": "Context was compacted but model output still reached max_output_tokens; split generation or write artifacts/files instead of emitting all content in chat.",
                         },
                         "status_code": 500,
@@ -1146,7 +1153,7 @@ class GitHubCopilotProvider(BaseProvider):
             return {"error": {"message": "Copilot API returned empty message. Please try rephrasing your prompt or check your input.", "type": "empty_response", "code": "empty_message"}}
 
         # Calculate usage
-        usage_data = data.get("usage", {})
+        usage_data = _dict_or_empty(data.get("usage"))
         prompt_tokens = usage_data.get("input_tokens", 0)
         completion_tokens = usage_data.get("output_tokens", 0)
         

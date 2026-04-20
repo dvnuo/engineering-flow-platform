@@ -467,6 +467,77 @@ class TestResponsesAPI:
         assert result["error"]["details"]["incomplete_reason"] == "max_output_tokens"
 
     @pytest.mark.asyncio
+    async def test_openai_responses_allows_null_optional_response_objects(self, openai_provider):
+        mock_response = MockResponse({
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "ok"}],
+                }
+            ],
+            "incomplete_details": None,
+            "usage": None,
+        })
+        mock_client = MockHttpClient(mock_response)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await openai_provider.responses(
+                messages=[{"role": "user", "content": "hello"}]
+            )
+
+        assert result["content"] == "ok"
+        assert "error" not in result
+        assert result["usage"]["prompt_tokens"] > 0
+        assert result["usage"]["completion_tokens"] > 0
+
+    @pytest.mark.asyncio
+    async def test_github_copilot_responses_allows_null_optional_response_objects(
+        self,
+        github_copilot_provider,
+    ):
+        mock_response = MockResponse({
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "ok"}],
+                }
+            ],
+            "incomplete_details": None,
+            "usage": None,
+        })
+        mock_client = MockHttpClient(mock_response)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await github_copilot_provider.responses(
+                messages=[{"role": "user", "content": "hello"}]
+            )
+
+        assert result["content"] == "ok"
+        assert "error" not in result
+        assert result["usage"]["prompt_tokens"] > 0
+        assert result["usage"]["completion_tokens"] > 0
+
+    @pytest.mark.asyncio
+    async def test_github_copilot_responses_empty_output_with_null_incomplete_details_returns_empty_response(
+        self,
+        github_copilot_provider,
+    ):
+        mock_response = MockResponse({
+            "output": [],
+            "incomplete_details": None,
+            "usage": None,
+        })
+        mock_client = MockHttpClient(mock_response)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = await github_copilot_provider.responses(
+                messages=[{"role": "user", "content": "hello"}]
+            )
+
+        assert result["error"]["type"] == "empty_response"
+        assert result["error"]["code"] == "empty_message"
+
+    @pytest.mark.asyncio
     async def test_openai_responses_partial_content_with_max_output_tokens_returns_warning(self, openai_provider):
         mock_response = MockResponse({
             "output": [{"type": "message", "content": [{"type": "output_text", "text": "partial"}]}],
