@@ -137,6 +137,95 @@ def _build_runtime_event_record(event_type: str, event_data: Dict[str, Any]) -> 
         "ts": datetime.utcnow().isoformat() + "Z",
     }
 
+
+def _is_meaningful_context_state(value: Any) -> bool:
+    if not isinstance(value, dict) or not value:
+        return False
+
+    text_fields = (
+        "objective",
+        "summary",
+        "current_state",
+        "next_step",
+        "recovery_context_message",
+        "compaction_level",
+    )
+    for field in text_fields:
+        field_value = value.get(field)
+        if isinstance(field_value, str) and field_value.strip():
+            return True
+
+    list_fields = ("constraints", "decisions", "open_loops")
+    for field in list_fields:
+        field_value = value.get(field)
+        if isinstance(field_value, list) and field_value:
+            for item in field_value:
+                if str(item).strip():
+                    return True
+
+    budget = value.get("budget")
+    if isinstance(budget, dict):
+        for budget_value in budget.values():
+            if budget_value not in (None, "", [], {}):
+                return True
+
+    return False
+
+
+def _build_terminal_context_snapshot_event(
+    *,
+    context_state: Dict[str, Any],
+    session_id: str,
+    agent_id: Optional[str],
+    request_id: Optional[str],
+    status: str,
+) -> Optional[Dict[str, Any]]:
+    if not _is_meaningful_context_state(context_state):
+        return None
+
+    budget = context_state.get("budget") if isinstance(context_state.get("budget"), dict) else {}
+    event_data = {
+        "stage": "post_turn",
+        "terminal": True,
+        "state": status,
+        "message": "Final context snapshot",
+        "summary": "Final context snapshot",
+        "context_state": context_state,
+        "budget": budget,
+    }
+    enriched_event_data = _enrich_runtime_event_context(
+        event_data,
+        session_id=session_id,
+        agent_id=agent_id,
+        request_id=request_id,
+    )
+    return _build_runtime_event_record("context_snapshot", enriched_event_data)
+
+
+def _has_terminal_post_turn_context_snapshot(events: Any) -> bool:
+    if not isinstance(events, list):
+        return False
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_type = event.get("type") or event.get("event_type")
+        if event_type != "context_snapshot":
+            continue
+        data_payload = event.get("data") if isinstance(event.get("data"), dict) else {}
+        detail_payload = event.get("detail_payload") if isinstance(event.get("detail_payload"), dict) else {}
+        stage = data_payload.get("stage")
+        if stage is None:
+            stage = detail_payload.get("stage")
+        terminal = data_payload.get("terminal")
+        if terminal is None:
+            terminal = detail_payload.get("terminal")
+        context_state = data_payload.get("context_state")
+        if not _is_meaningful_context_state(context_state):
+            context_state = detail_payload.get("context_state")
+        if stage == "post_turn" and terminal is True and _is_meaningful_context_state(context_state):
+            return True
+    return False
+
 # Context variable for skill workdir - async-safe
 _skill_workdir: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar('skill_workdir', default=None)
 
@@ -2855,9 +2944,32 @@ async def run_chat_execution(
         model=getattr(agent, "model", None),
     )
     if isinstance(result, dict):
+        effective_request_id = request_id
+        if not effective_request_id:
+            candidate_request_id = result.get("request_id")
+            if candidate_request_id:
+                effective_request_id = str(candidate_request_id)
+
         result["context_state"] = context_state
-        if request_id:
-            result.setdefault("request_id", request_id)
+        if _is_meaningful_context_state(context_state):
+            runtime_events = result.get("runtime_events")
+            if not isinstance(runtime_events, list):
+                runtime_events = []
+                result["runtime_events"] = runtime_events
+
+            if not _has_terminal_post_turn_context_snapshot(runtime_events):
+                status = "failed" if result.get("error") else "completed"
+                terminal_context_event = _build_terminal_context_snapshot_event(
+                    context_state=context_state,
+                    session_id=session_id,
+                    agent_id=getattr(agent, "agent_id", None),
+                    request_id=effective_request_id,
+                    status=status,
+                )
+                if terminal_context_event:
+                    runtime_events.append(terminal_context_event)
+        if effective_request_id:
+            result.setdefault("request_id", effective_request_id)
     return result
 
 
