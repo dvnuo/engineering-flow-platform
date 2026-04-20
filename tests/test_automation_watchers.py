@@ -23,5 +23,8 @@ def test_automation_watchers_shim_source_has_no_polling_or_http_dependencies():
     source = automation_watchers.__loader__.get_source(automation_watchers.__name__)
     assert source is not None
     assert "ClientSession" not in source
+    assert "aiohttp" not in source
+    assert "httpx" not in source
+    assert "github.com" not in source
     assert "/api/internal/external-events/ingest" not in source
     assert "agent-identity-bindings" not in source
