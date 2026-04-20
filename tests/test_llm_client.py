@@ -686,7 +686,6 @@ class TestChatAPIFallback:
             # Verify provider.responses was called (no fallback)
             mock_responses.assert_called_once()
             assert result["content"] == "test response"
-
     @pytest.mark.asyncio
     async def test_responses_fallback_preserves_function_calls(self):
         """Test that fallback converts function_calls correctly."""
@@ -1084,3 +1083,12 @@ class TestVisionModelSelection:
         from src.agents.llm import get_vision_fallback_model
         assert get_vision_fallback_model("unknown") is None
         assert get_vision_fallback_model(None) is None
+
+
+def test_openai_provider_debug_fallback_max_tokens_matches_responses_default():
+    import inspect
+    from src.agents.llm import OpenAIProvider
+
+    source = inspect.getsource(OpenAIProvider.responses)
+    assert "config.llm.get('max_tokens', 1000)" not in source
+    assert "config.llm.get('max_tokens', 64000)" in source

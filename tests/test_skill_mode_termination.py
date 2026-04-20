@@ -619,3 +619,36 @@ async def test_continue_skill_mode_error_response_includes_skill_generation_budg
         responses=[{"error": {"message": "boom", "type": "llm_error"}}],
     )
     assert result["request_budget"].get("request_budget_stage") == "skill_generation"
+
+
+@pytest.mark.asyncio
+async def test_continue_skill_mode_over_budget_error_includes_skill_generation_stage_fields(monkeypatch):
+    from src.agents import core as core_mod
+
+    monkeypatch.setattr(
+        core_mod,
+        "estimate_llm_request_tokens",
+        lambda **kwargs: 60000,
+    )
+    monkeypatch.setattr(
+        core_mod,
+        "resolve_prompt_budget",
+        lambda **kwargs: {
+            "prompt_budget_tokens": 28000,
+            "max_output_tokens": 4096,
+            "reserved_output_tokens": 1000,
+            "safety_margin_tokens": 500,
+            "max_prompt_tokens": 28000,
+        },
+    )
+
+    result, _snapshots, calls = await run_replay_case(
+        monkeypatch,
+        responses=[{"content": "", "function_calls": [], "usage": {}}],
+    )
+
+    assert calls == 0
+    assert result["error_type"] == "context_budget_exceeded"
+    assert result["details"]["request_budget_stage"] == "skill_generation"
+    assert result["details"]["stage"] == "skill_generation"
+    assert result["request_budget"]["request_budget_stage"] == "skill_generation"

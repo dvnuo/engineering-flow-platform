@@ -3076,6 +3076,7 @@ You have access to the following tools. When a user asks you to do something tha
                         "max_prompt_tokens": loop_budget.get("max_prompt_tokens"),
                         "max_output_tokens": loop_budget.get("max_output_tokens"),
                         "request_over_budget": True,
+                        "request_budget_stage": "skill_generation",
                         "stage": "skill_generation",
                         "suggestion": "Split generation into smaller steps or write artifacts/files instead of emitting full content in chat.",
                     },

@@ -1205,7 +1205,7 @@ class GitHubCopilotProvider(BaseProvider):
             "instructions": system_prompt,
             "input": input_items,
             "tools": converted_tools,
-            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 1000),
+            "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),
         })
 
         # Calculate cost and record usage
