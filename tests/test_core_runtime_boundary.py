@@ -46,12 +46,12 @@ def test_core_safe_int_handles_none_for_max_chat_output_chars():
     assert core._safe_int("7000", 8000) == 7000
 
 
-def test_agent_process_source_uses_safe_int_for_max_chat_output_chars():
+def test_agent_process_passes_raw_max_chat_output_chars_to_output_controller():
     from src.agents import core
 
     source = inspect.getsource(core.Agent.process)
     assert "raw_max_chat =" in source
-    assert "resolve_output_boundary(effective_model)" in source
+    assert "max_chat_output_chars=raw_max_chat" in source
 
 
 def test_core_paths_use_effective_max_tokens_helper():
@@ -839,6 +839,28 @@ async def test_output_controller_tracks_generated_artifacts_by_phase_when_bounde
 
 
 @pytest.mark.asyncio
+async def test_output_controller_allows_20k_below_real_boundary():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "M" * 20000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "chat", "tools": [], "model": "gpt-5.4-mini"},
+        session_id="s-medium-20k",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="generate docs",
+        max_chat_output_chars=None,
+    )
+    assert len(result.get("content") or "") == 20000
+    assert diag.get("output_bounding", {}).get("bounded") is False
+
+
+@pytest.mark.asyncio
 async def test_output_controller_bounds_huge_content_medium_risk():
     from src.runtime.output_controller import call_llm_with_output_control
 
@@ -1021,7 +1043,7 @@ async def test_output_controller_accepts_none_max_chat_output_chars():
 
     result, diag = await call_llm_with_output_control(
         llm_client=_Client(),
-        llm_kwargs={"input_items": [], "system_prompt": "simple", "tools": []},
+        llm_kwargs={"input_items": [], "system_prompt": "simple", "tools": [], "model": "gpt-5.4-mini"},
         session_id="s-none-max-chat",
         stage="tool_loop",
         context_state={"budget": {}},
@@ -1030,6 +1052,7 @@ async def test_output_controller_accepts_none_max_chat_output_chars():
     )
     assert len(result.get("content") or "") == 9000
     assert diag.get("output_bounding", {}).get("bounded") is False
+    assert diag.get("max_chat_output_chars") == 480000
 
 
 def test_ensure_staged_generation_accepts_none_max_chat_output_chars():

@@ -1325,7 +1325,7 @@ async def _run_skill_finalizer(
             context_state={"budget": finalizer_request_budget},
             active_skill=None,
             latest_user_text="",
-            max_chat_output_chars=int(output_boundary.get("max_chat_output_chars") or (int(output_boundary.get("max_chat_output_tokens") or 0) * int(output_boundary.get("chars_per_token_estimate") or 4))),
+            max_chat_output_chars=None,
         )
         skill_session.llm_call_count += 1
         if not result.get("error"):
@@ -2438,7 +2438,7 @@ You have access to the following tools. When a user asks you to do something tha
                 context_state=loop_context_state if isinstance(loop_context_state, dict) else {"budget": {}},
                 active_skill=selected_skill,
                 latest_user_text=latest_user_text,
-                max_chat_output_chars=_safe_int(raw_max_chat, int(output_boundary.get("max_chat_output_chars") or (int(output_boundary.get("max_chat_output_tokens") or 0) * int(output_boundary.get("chars_per_token_estimate") or 4)))),
+                max_chat_output_chars=raw_max_chat,
             )
             if isinstance(loop_context_state, dict) and isinstance(loop_context_state.get("budget"), dict):
                 loop_context_state["budget"]["output_controller_applied"] = True
@@ -3465,7 +3465,7 @@ You have access to the following tools. When a user asks you to do something tha
                 context_state={"budget": skill_request_budget},
                 active_skill=skill,
                 latest_user_text=latest_user_text,
-                max_chat_output_chars=int(output_boundary.get("max_chat_output_chars") or (int(output_boundary.get("max_chat_output_tokens") or 0) * int(output_boundary.get("chars_per_token_estimate") or 4))),
+                max_chat_output_chars=None,
             )
             skill_session.llm_call_count += 1
             turn_state.llm_call_count = skill_session.llm_call_count

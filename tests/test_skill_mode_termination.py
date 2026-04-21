@@ -577,6 +577,110 @@ async def test_continue_skill_mode_uses_budget_max_output_tokens_for_llm_calls(m
 
 
 @pytest.mark.asyncio
+async def test_continue_skill_mode_uses_model_max_output_tokens_by_default_for_gpt_5_4_mini(monkeypatch):
+    from src.agents import core as core_mod
+
+    captured = []
+    original_max = core_mod.config.llm.get("max_tokens")
+    original_allow_lower = core_mod.config.llm.get("allow_lower_max_tokens_than_model_limit")
+    original_model = core_mod.config.llm.get("model")
+    core_mod.config.llm["model"] = "gpt-5.4-mini"
+    core_mod.config.llm["max_tokens"] = 64000
+    core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = False
+
+    monkeypatch.setattr(
+        core_mod,
+        "resolve_prompt_budget",
+        lambda **kwargs: {
+            "prompt_budget_tokens": 50000,
+            "max_output_tokens": 128000,
+            "reserved_output_tokens": 128000,
+            "safety_margin_tokens": 8000,
+            "max_prompt_tokens": 272000,
+        },
+    )
+    responses = [
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[FINISH]\ndone", "function_calls": [], "usage": {}},
+    ]
+    try:
+        await run_replay_case(
+            monkeypatch,
+            responses=responses,
+            capture_llm_kwargs=captured,
+            message="search issue details",
+        )
+    finally:
+        if original_max is None:
+            core_mod.config.llm.pop("max_tokens", None)
+        else:
+            core_mod.config.llm["max_tokens"] = original_max
+        if original_allow_lower is None:
+            core_mod.config.llm.pop("allow_lower_max_tokens_than_model_limit", None)
+        else:
+            core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = original_allow_lower
+        if original_model is None:
+            core_mod.config.llm.pop("model", None)
+        else:
+            core_mod.config.llm["model"] = original_model
+
+    assert captured
+    assert captured[0].get("max_tokens") == 128000
+
+
+@pytest.mark.asyncio
+async def test_continue_skill_mode_honors_explicit_lower_max_tokens_override(monkeypatch):
+    from src.agents import core as core_mod
+
+    captured = []
+    original_max = core_mod.config.llm.get("max_tokens")
+    original_allow_lower = core_mod.config.llm.get("allow_lower_max_tokens_than_model_limit")
+    original_model = core_mod.config.llm.get("model")
+    core_mod.config.llm["model"] = "gpt-5.4-mini"
+    core_mod.config.llm["max_tokens"] = 64000
+    core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = True
+
+    monkeypatch.setattr(
+        core_mod,
+        "resolve_prompt_budget",
+        lambda **kwargs: {
+            "prompt_budget_tokens": 50000,
+            "max_output_tokens": 128000,
+            "reserved_output_tokens": 128000,
+            "safety_margin_tokens": 8000,
+            "max_prompt_tokens": 272000,
+        },
+    )
+    responses = [
+        {"content": "", "function_calls": [], "usage": {}},
+        {"content": "[FINISH]\ndone", "function_calls": [], "usage": {}},
+    ]
+    try:
+        await run_replay_case(
+            monkeypatch,
+            responses=responses,
+            capture_llm_kwargs=captured,
+            message="search issue details",
+        )
+    finally:
+        if original_max is None:
+            core_mod.config.llm.pop("max_tokens", None)
+        else:
+            core_mod.config.llm["max_tokens"] = original_max
+        if original_allow_lower is None:
+            core_mod.config.llm.pop("allow_lower_max_tokens_than_model_limit", None)
+        else:
+            core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = original_allow_lower
+        if original_model is None:
+            core_mod.config.llm.pop("model", None)
+        else:
+            core_mod.config.llm["model"] = original_model
+
+    assert captured
+    assert captured[0].get("max_tokens") == 64000
+
+
+@pytest.mark.asyncio
 async def test_continue_skill_mode_finalizer_abort_includes_finalizer_request_budget(monkeypatch):
     from src.agents import core as core_mod
 
