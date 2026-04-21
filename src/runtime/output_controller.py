@@ -29,6 +29,26 @@ def _default_output_chars(model: Optional[str] = None) -> Tuple[int, str]:
     return 8000, "emergency_fallback_8000"
 
 
+def normalize_chat_output_chars(
+    candidate: Any,
+    *,
+    boundary: Dict[str, Any],
+    allow_low: bool = False,
+) -> Tuple[int, bool, Optional[str]]:
+    chars_per_token = int(boundary.get("chars_per_token_estimate") or 4)
+    derived = int(boundary.get("max_chat_output_chars") or 0)
+    if derived <= 0:
+        derived = int(boundary.get("max_chat_output_tokens") or 0) * chars_per_token
+    if derived <= 0:
+        derived = 8000
+    configured_raw = None if candidate in (None, "") else str(candidate)
+    parsed = _safe_int(candidate, derived)
+    min_reasonable = max(1, int(derived * 0.25))
+    if parsed < min_reasonable and not allow_low:
+        return derived, configured_raw is not None, configured_raw
+    return parsed, False, configured_raw
+
+
 def classify_output_risk(user_text: str, active_skill: Any, system_prompt: str, source_state: Optional[Dict[str, Any]] = None) -> str:
     text = (str(user_text or "") + " " + str(system_prompt or "")).lower()
     skill_name = str(getattr(active_skill, "name", "") or getattr(active_skill, "skill_name", "")).lower()
@@ -164,7 +184,16 @@ def ensure_staged_generation(
     gen["source_digest_chunk_coverage_count"] = len(gen["source_digest_chunk_coverage"])
     _refresh_generation_done(gen)
     fallback_chars, _ = _default_output_chars()
-    gen["max_chat_output_chars"] = _safe_int(max_chat_output_chars, fallback_chars)
+    boundary = {
+        "max_chat_output_chars": fallback_chars,
+        "chars_per_token_estimate": 4,
+    }
+    normalized_chars, _, _ = normalize_chat_output_chars(
+        max_chat_output_chars,
+        boundary=boundary,
+        allow_low=True,
+    )
+    gen["max_chat_output_chars"] = normalized_chars
     gen["output_controller_applied"] = True
     gen["output_controller_stage"] = stage
     return gen
@@ -309,15 +338,33 @@ async def call_llm_with_output_control(
     boundary = resolve_output_boundary(model)
     budget = context_state.setdefault("budget", {}) if isinstance(context_state, dict) else {}
     fallback_chars, fallback_source = _default_output_chars(model)
-    max_chat_output_chars = _safe_int(max_chat_output_chars, fallback_chars)
+    allow_low = bool(boundary.get("allow_low_max_chat_output_chars", False))
+    max_chat_output_chars, arg_ignored, configured_arg_chars = normalize_chat_output_chars(
+        max_chat_output_chars,
+        boundary=boundary,
+        allow_low=allow_low,
+    )
+    budget_chars_ignored = False
+    configured_budget_chars = None
     if isinstance(budget, dict):
         budget_chars = budget.get("max_chat_output_chars")
         budget_tokens = budget.get("max_chat_output_tokens")
         if budget_chars not in (None, ""):
-            max_chat_output_chars = _safe_int(budget_chars, max_chat_output_chars)
+            max_chat_output_chars, ignored, configured_budget_chars = normalize_chat_output_chars(
+                budget_chars,
+                boundary=boundary,
+                allow_low=allow_low,
+            )
+            budget_chars_ignored = budget_chars_ignored or ignored
         if budget_tokens not in (None, "") and budget.get("max_chat_output_chars") in (None, ""):
             chars_per_token = int(boundary.get("chars_per_token_estimate") or 4)
-            max_chat_output_chars = _safe_int(budget_tokens, int(boundary.get("max_chat_output_tokens") or 0)) * chars_per_token
+            tokens_candidate = _safe_int(budget_tokens, int(boundary.get("max_chat_output_tokens") or 0)) * chars_per_token
+            max_chat_output_chars, ignored, _ = normalize_chat_output_chars(
+                tokens_candidate,
+                boundary=boundary,
+                allow_low=allow_low,
+            )
+            budget_chars_ignored = budget_chars_ignored or ignored
     diagnostics: Dict[str, Any] = {"output_controller_applied": True, "stage": stage}
     diagnostics["output_boundary_source"] = str(boundary.get("output_boundary_source") or fallback_source)
     diagnostics["legacy_max_chat_output_chars_ignored"] = bool(boundary.get("legacy_max_chat_output_chars_ignored", False))
@@ -326,8 +373,12 @@ async def call_llm_with_output_control(
     diagnostics["max_prompt_tokens"] = int(boundary.get("max_prompt_tokens") or 0)
     diagnostics["max_output_tokens"] = int(boundary.get("max_output_tokens") or 0)
     diagnostics["max_chat_output_tokens"] = int(boundary.get("max_chat_output_tokens") or 0)
-    diagnostics["max_chat_output_chars"] = int(boundary.get("max_chat_output_chars") or max_chat_output_chars)
+    diagnostics["max_chat_output_chars"] = max_chat_output_chars
     diagnostics["chars_per_token_estimate"] = int(boundary.get("chars_per_token_estimate") or 4)
+    diagnostics["budget_max_chat_output_chars_ignored"] = budget_chars_ignored
+    diagnostics["configured_budget_max_chat_output_chars"] = configured_budget_chars
+    diagnostics["arg_max_chat_output_chars_ignored"] = arg_ignored
+    diagnostics["configured_arg_max_chat_output_chars"] = configured_arg_chars
     if isinstance(budget, dict):
         budget["session_id"] = session_id
 
@@ -365,6 +416,8 @@ async def call_llm_with_output_control(
         budget["chars_per_token_estimate"] = int(boundary.get("chars_per_token_estimate") or 4)
         budget["configured_max_chat_output_chars"] = boundary.get("configured_max_chat_output_chars")
         budget["legacy_max_chat_output_chars_ignored"] = bool(boundary.get("legacy_max_chat_output_chars_ignored", False))
+        budget["budget_max_chat_output_chars_ignored"] = budget_chars_ignored
+        budget["configured_budget_max_chat_output_chars"] = configured_budget_chars
         budget["output_boundary_source"] = str(boundary.get("output_boundary_source") or fallback_source)
         budget["output_controller_stage"] = stage
 

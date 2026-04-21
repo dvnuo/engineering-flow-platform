@@ -369,12 +369,14 @@ async def test_run_skill_finalizer_uses_passed_max_tokens(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_skill_finalizer_caps_to_config_when_config_smaller(monkeypatch):
+async def test_run_skill_finalizer_ignores_legacy_lower_config_cap_by_default(monkeypatch):
     from src.agents import core as core_mod
 
     captured = {}
     original_max = core_mod.config.llm.get("max_tokens")
+    original_allow_lower = core_mod.config.llm.get("allow_lower_max_tokens_than_model_limit")
     core_mod.config.llm["max_tokens"] = 2048
+    core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = False
 
     async def fake_responses(**kwargs):
         captured["max_tokens"] = kwargs.get("max_tokens")
@@ -398,6 +400,51 @@ async def test_run_skill_finalizer_caps_to_config_when_config_smaller(monkeypatc
             core_mod.config.llm.pop("max_tokens", None)
         else:
             core_mod.config.llm["max_tokens"] = original_max
+        if original_allow_lower is None:
+            core_mod.config.llm.pop("allow_lower_max_tokens_than_model_limit", None)
+        else:
+            core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = original_allow_lower
+
+    assert result.state == "succeeded"
+    assert captured["max_tokens"] == 4096
+
+
+@pytest.mark.asyncio
+async def test_run_skill_finalizer_honors_explicit_lower_config_cap(monkeypatch):
+    from src.agents import core as core_mod
+
+    captured = {}
+    original_max = core_mod.config.llm.get("max_tokens")
+    original_allow_lower = core_mod.config.llm.get("allow_lower_max_tokens_than_model_limit")
+    core_mod.config.llm["max_tokens"] = 2048
+    core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = True
+
+    async def fake_responses(**kwargs):
+        captured["max_tokens"] = kwargs.get("max_tokens")
+        return {"content": "[FINISH]\ndone", "usage": {}}
+
+    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
+    try:
+        result, _usage = await core_mod._run_skill_finalizer(
+            input_items=[{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+            system_prompt="sys",
+            provider="openai",
+            model="gpt-5-mini",
+            skill_session=SkillSession(skill_name="lookup", original_user_request="x"),
+            track_usage=False,
+            usage_data={},
+            remaining_llm_budget=1,
+            max_tokens=4096,
+        )
+    finally:
+        if original_max is None:
+            core_mod.config.llm.pop("max_tokens", None)
+        else:
+            core_mod.config.llm["max_tokens"] = original_max
+        if original_allow_lower is None:
+            core_mod.config.llm.pop("allow_lower_max_tokens_than_model_limit", None)
+        else:
+            core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = original_allow_lower
 
     assert result.state == "succeeded"
     assert captured["max_tokens"] == 2048

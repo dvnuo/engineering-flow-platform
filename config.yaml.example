@@ -37,7 +37,8 @@ llm:
   # api_key: "${ANTHROPIC_API_KEY}"  # Set ANTHROPIC_API_KEY env var
   # model: "claude-sonnet-4-20250514"  # or claude-haiku-4-20250514, claude-opus-4-20250514
   
-  max_tokens: 64000
+  max_tokens: 128000
+  allow_lower_max_tokens_than_model_limit: false
   model_limits:
     gpt-4o:
       max_context_window_tokens: 128000

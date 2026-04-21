@@ -54,6 +54,79 @@ def test_agent_process_source_uses_safe_int_for_max_chat_output_chars():
     assert "resolve_output_boundary(effective_model)" in source
 
 
+def test_core_paths_use_effective_max_tokens_helper():
+    from src.agents import core
+
+    module_source = inspect.getsource(core)
+    assert module_source.count("_resolve_effective_max_tokens(") >= 3
+
+
+def test_session_compactor_default_uses_model_prompt_budget(monkeypatch):
+    from src.config import config
+    from src.sessions.pruning import SessionCompactor
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {
+            "model": "gpt-5.4-mini",
+            "model_limits": {
+                "gpt-5.4-mini": {
+                    "max_context_window_tokens": 400000,
+                    "max_prompt_tokens": 272000,
+                    "max_output_tokens": 128000,
+                }
+            },
+        },
+    )
+    compactor = SessionCompactor()
+    assert compactor.max_context_tokens >= 264000
+
+
+def test_resolve_effective_max_tokens_ignores_legacy_lower_limit(monkeypatch):
+    from src.agents import core
+    from src.config import config
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {"model": "gpt-5.4-mini", "max_tokens": 64000, "allow_lower_max_tokens_than_model_limit": False},
+    )
+    effective, diag = core._resolve_effective_max_tokens(128000)
+    assert effective == 128000
+    assert diag["configured_max_tokens"] == 64000
+    assert diag["legacy_max_tokens_ignored"] is True
+
+
+def test_resolve_effective_max_tokens_accepts_explicit_lower_override(monkeypatch):
+    from src.agents import core
+    from src.config import config
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {"model": "gpt-5.4-mini", "max_tokens": 64000, "allow_lower_max_tokens_than_model_limit": True},
+    )
+    effective, diag = core._resolve_effective_max_tokens(128000)
+    assert effective == 64000
+    assert diag["configured_max_tokens"] == 64000
+    assert diag["legacy_max_tokens_ignored"] is False
+
+
+def test_resolve_effective_max_tokens_keeps_model_cap_for_smaller_models(monkeypatch):
+    from src.agents import core
+    from src.config import config
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {"model": "gpt-4o", "max_tokens": 128000, "allow_lower_max_tokens_than_model_limit": False},
+    )
+    effective, diag = core._resolve_effective_max_tokens(16384)
+    assert effective == 16384
+    assert diag["legacy_max_tokens_ignored"] is False
+
+
 def test_read_governance_hint_returns_empty_when_missing():
     from src.agents import core
     from src import ToolResult
@@ -806,6 +879,78 @@ async def test_output_controller_allows_100k_below_real_boundary():
     )
     assert len(result.get("content") or "") == 100000
     assert diag.get("output_bounding", {}).get("bounded") is False
+
+
+@pytest.mark.asyncio
+async def test_output_controller_ignores_stale_budget_max_chat_output_chars(monkeypatch):
+    from src.config import config
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {
+            "model": "gpt-5.4-mini",
+            "max_tokens": 128000,
+            "allow_lower_max_tokens_than_model_limit": False,
+            "output_controller": {"chars_per_token_estimate": 4},
+        },
+    )
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "M" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {"max_chat_output_chars": 8000}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "chat", "tools": [], "model": "gpt-5.4-mini"},
+        session_id="s-stale-budget",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="normal response",
+        max_chat_output_chars=None,
+    )
+    assert len(result.get("content") or "") == 50000
+    assert diag.get("output_bounding", {}).get("bounded") is False
+    assert diag.get("max_chat_output_chars") == 480000
+    assert diag.get("budget_max_chat_output_chars_ignored") is True
+    assert diag.get("configured_budget_max_chat_output_chars") == "8000"
+
+
+@pytest.mark.asyncio
+async def test_output_controller_allows_low_budget_max_chat_output_chars_when_explicit(monkeypatch):
+    from src.config import config
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {
+            "model": "gpt-5.4-mini",
+            "max_tokens": 128000,
+            "output_controller": {"allow_low_max_chat_output_chars": True, "chars_per_token_estimate": 4},
+        },
+    )
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "M" * 20000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {"max_chat_output_chars": 8000}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "chat", "tools": [], "model": "gpt-5.4-mini"},
+        session_id="s-allow-low-budget",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="normal response",
+        max_chat_output_chars=None,
+    )
+    assert len(result.get("content") or "") < 1000
+    assert diag.get("output_bounding", {}).get("bounded") is True
+    assert diag.get("max_chat_output_chars") == 8000
+    assert diag.get("budget_max_chat_output_chars_ignored") is False
 
 
 @pytest.mark.asyncio

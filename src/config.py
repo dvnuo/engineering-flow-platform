@@ -807,6 +807,7 @@ def resolve_output_boundary(model: Optional[str] = None) -> Dict[str, int | str]
         "max_chat_output_tokens": max_chat_output_tokens,
         "chars_per_token_estimate": chars_per_token,
         "max_chat_output_chars": max_chat_output_chars,
+        "allow_low_max_chat_output_chars": bool(output_cfg.get("allow_low_max_chat_output_chars", False)),
         "configured_max_chat_output_chars": str(configured_chars) if configured_chars is not None else None,
         "legacy_max_chat_output_chars_ignored": legacy_ignored,
         "output_boundary_source": boundary_source,

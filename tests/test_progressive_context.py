@@ -474,6 +474,23 @@ def test_resolve_prompt_budget_skill_generation_uses_model_limit(monkeypatch):
 @pytest.mark.parametrize(
     ("model", "expected"),
     [
+        ("gpt-5.3-codex", (400000, 272000, 128000, 264000)),
+        ("gpt-5.4-mini", (400000, 272000, 128000, 264000)),
+        ("gpt-5-mini", (264000, 128000, 64000, 128000)),
+        ("gpt-4o", (128000, 64000, 16384, 64000)),
+    ],
+)
+def test_resolve_prompt_budget_respects_authoritative_model_table(model, expected):
+    budget = progressive_context.resolve_prompt_budget(stage="tool_loop", model=model)
+    assert budget["context_window_tokens"] == expected[0]
+    assert budget["max_prompt_tokens"] == expected[1]
+    assert budget["max_output_tokens"] == expected[2]
+    assert budget["prompt_budget_tokens"] == expected[3]
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
         ("gpt-4o", (128000, 64000, 16384)),
         ("gpt-4.1", (128000, 128000, 16384)),
         ("gpt-5-mini", (264000, 128000, 64000)),

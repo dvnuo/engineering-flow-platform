@@ -233,6 +233,30 @@ def _has_terminal_post_turn_context_snapshot(events: Any) -> bool:
     return False
 
 
+def _resolve_effective_max_tokens(model_max_tokens: int) -> Tuple[int, Dict[str, Any]]:
+    llm_cfg = config.llm if isinstance(config.llm, dict) else {}
+    allow_lower = bool(llm_cfg.get("allow_lower_max_tokens_than_model_limit", False))
+    configured_raw = llm_cfg.get("max_tokens")
+    configured_max_tokens: Optional[int]
+    try:
+        configured_max_tokens = int(configured_raw) if configured_raw is not None else None
+    except Exception:
+        configured_max_tokens = None
+    if configured_max_tokens is not None and configured_max_tokens <= 0:
+        configured_max_tokens = None
+    legacy_ignored = False
+    if configured_max_tokens is not None and configured_max_tokens < int(model_max_tokens) and not allow_lower:
+        effective = int(model_max_tokens)
+        legacy_ignored = True
+    else:
+        effective = min(int(model_max_tokens), int(configured_max_tokens or model_max_tokens))
+    return effective, {
+        "configured_max_tokens": configured_max_tokens,
+        "effective_max_tokens": effective,
+        "legacy_max_tokens_ignored": legacy_ignored,
+    }
+
+
 def _merge_request_budget_into_context_state(
     context_state: Dict[str, Any],
     latest_request_budget: Optional[Dict[str, Any]],
@@ -1238,10 +1262,9 @@ async def _run_skill_finalizer(
         output_boundary = resolve_output_boundary(model)
         prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
         model_max = int(loop_budget.get("max_output_tokens") or 64000)
-        configured_limit = int(config.llm.get("max_tokens", model_max) or model_max)
-        configured_max = min(model_max, configured_limit)
-        requested_max = int(max_tokens or configured_max)
-        budget_max_tokens = min(requested_max, configured_max)
+        effective_max_tokens, max_token_diag = _resolve_effective_max_tokens(model_max)
+        requested_max = int(max_tokens or effective_max_tokens)
+        budget_max_tokens = min(requested_max, effective_max_tokens)
         items_for_call = items
         request_estimated_tokens = estimate_llm_request_tokens(
             input_items=items_for_call,
@@ -1255,6 +1278,9 @@ async def _run_skill_finalizer(
             "safety_margin_tokens": loop_budget.get("safety_margin_tokens"),
             "max_prompt_tokens": loop_budget.get("max_prompt_tokens"),
             "max_output_tokens": budget_max_tokens,
+            "configured_max_tokens": max_token_diag.get("configured_max_tokens"),
+            "effective_max_tokens": max_token_diag.get("effective_max_tokens"),
+            "legacy_max_tokens_ignored": bool(max_token_diag.get("legacy_max_tokens_ignored")),
             "request_over_budget": request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False,
             "request_budget_stage": "skill_finalizer",
             "stage": "skill_finalizer",
@@ -2310,8 +2336,8 @@ You have access to the following tools. When a user asks you to do something tha
             loop_budget = resolve_prompt_budget(stage="tool_loop", model=effective_model)
             output_boundary = resolve_output_boundary(effective_model)
             model_max_tokens = int(loop_budget.get("max_output_tokens") or 64000)
-            configured_limit = int(config.llm.get("max_tokens", model_max_tokens) or model_max_tokens)
-            llm_kwargs["max_tokens"] = min(model_max_tokens, configured_limit)
+            effective_max_tokens, max_token_diag = _resolve_effective_max_tokens(model_max_tokens)
+            llm_kwargs["max_tokens"] = effective_max_tokens
             if isinstance(loop_context_state, dict):
                 budget_state = loop_context_state.setdefault("budget", {})
                 prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
@@ -2330,6 +2356,9 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["max_chat_output_chars"] = output_boundary.get("max_chat_output_chars")
                 budget_state["output_risk_level"] = "high" if large_generation_guard_applied else "normal"
                 budget_state["output_token_limit"] = loop_budget.get("max_output_tokens")
+                budget_state["configured_max_tokens"] = max_token_diag.get("configured_max_tokens")
+                budget_state["effective_max_tokens"] = max_token_diag.get("effective_max_tokens")
+                budget_state["legacy_max_tokens_ignored"] = bool(max_token_diag.get("legacy_max_tokens_ignored"))
                 budget_state["input_context_usage_percent"] = (
                     (loop_context_state.get("budget") or {}).get("usage_percent")
                     if isinstance(loop_context_state.get("budget"), dict)
@@ -2371,6 +2400,9 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["max_output_tokens"] = loop_budget.get("max_output_tokens")
                 budget_state["max_chat_output_tokens"] = output_boundary.get("max_chat_output_tokens")
                 budget_state["max_chat_output_chars"] = output_boundary.get("max_chat_output_chars")
+                budget_state["configured_max_tokens"] = max_token_diag.get("configured_max_tokens")
+                budget_state["effective_max_tokens"] = max_token_diag.get("effective_max_tokens")
+                budget_state["legacy_max_tokens_ignored"] = bool(max_token_diag.get("legacy_max_tokens_ignored"))
                 budget_state["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
                 budget_state["large_generation_guard_applied"] = large_generation_guard_applied
                 budget_state["output_size_guard_applied"] = large_generation_guard_applied
@@ -3357,8 +3389,7 @@ You have access to the following tools. When a user asks you to do something tha
             loop_budget = resolve_prompt_budget(stage="skill_generation", model=llm_kwargs.get("model"))
             output_boundary = resolve_output_boundary(llm_kwargs.get("model"))
             model_max_tokens = int(loop_budget.get("max_output_tokens") or 64000)
-            configured_limit = int(config.llm.get("max_tokens", model_max_tokens) or model_max_tokens)
-            effective_max_tokens = min(model_max_tokens, configured_limit)
+            effective_max_tokens, max_token_diag = _resolve_effective_max_tokens(model_max_tokens)
             llm_kwargs["max_tokens"] = effective_max_tokens
             prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
             skill_request_budget = {
@@ -3368,6 +3399,9 @@ You have access to the following tools. When a user asks you to do something tha
                 "safety_margin_tokens": loop_budget.get("safety_margin_tokens"),
                 "max_prompt_tokens": loop_budget.get("max_prompt_tokens"),
                 "max_output_tokens": loop_budget.get("max_output_tokens"),
+                "configured_max_tokens": max_token_diag.get("configured_max_tokens"),
+                "effective_max_tokens": max_token_diag.get("effective_max_tokens"),
+                "legacy_max_tokens_ignored": bool(max_token_diag.get("legacy_max_tokens_ignored")),
                 "request_over_budget": request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False,
                 "large_generation_guard_applied": large_generation_guard_applied,
                 "output_size_guard_applied": large_generation_guard_applied,
