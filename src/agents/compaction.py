@@ -29,6 +29,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.utils.truncate import truncate
 from src.runtime.context_summary import build_context_state_from_messages, build_structured_summary
+from src.config import resolve_model_limits
 
 logger = logging.getLogger(__name__)
 
@@ -804,6 +805,10 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
     Returns:
         Context window size
     """
+    limits = resolve_model_limits(model)
+    if limits.get("max_context_window_tokens"):
+        return int(limits["max_context_window_tokens"])
+
     # Default context windows
     context_windows = {
         # GPT-4 series
@@ -812,6 +817,7 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
         "gpt-4o": 128000,
         "gpt-4o-mini": 128000,
         # GPT-5 series
+        "gpt-5.4-mini": 264000,
         "gpt-5": 200000,
         "gpt-5-mini": 200000,
         "gpt-5-pro": 200000,

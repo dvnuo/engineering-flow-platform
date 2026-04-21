@@ -33,7 +33,7 @@ from src.agents.llm import (
 from src.agents.memory import memory_system
 from src.memory.update_manager import MemoryUpdateManager
 from src.agents.thinking import ThinkLevel, normalize_think_level, format_runtime_info
-from src.config import config
+from src.config import config, resolve_output_boundary
 from src.utils.truncate import truncate, truncate_with_count
 from src.utils.redaction import safe_preview, redact_value, sanitize_exception_message
 from src.sessions.manager import session_manager
@@ -646,12 +646,17 @@ def _large_generation_output_guard(
     )
     if not is_generation:
         return ""
+    boundary = resolve_output_boundary(
+        getattr(active_skill_runtime, "model", None) or getattr(selected_skill, "model", None) or config.llm.get("model")
+    )
+    max_chars = int(boundary.get("max_chat_output_chars") or 0)
+    max_tokens = int(boundary.get("max_chat_output_tokens") or 0)
     return (
         "Large generation output guard: Do not emit a complete multi-file implementation or very long generated "
         "artifact in a single chat response. Generate one bounded phase/file at a time. Prefer writing artifacts/files "
         "through tools when available. In chat, return a concise manifest, file paths, and next step. "
-        "Keep response under 8000 characters.\n"
-        "generation_mode=staged\nmax_chat_output_chars=8000\ncurrent_phase=manifest"
+        f"Keep response within resolved output boundary (tokens≈{max_tokens}, chars≈{max_chars}).\n"
+        f"generation_mode=staged\nmax_chat_output_chars={max_chars}\ncurrent_phase=manifest"
     )
 
 
@@ -1230,6 +1235,7 @@ async def _run_skill_finalizer(
         items = list(input_items)
         items.append({"role": "user", "content": [{"type": "input_text", "text": prompt}]})
         loop_budget = resolve_prompt_budget(stage="skill_generation", model=model)
+        output_boundary = resolve_output_boundary(model)
         prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
         configured_max = int(loop_budget.get("max_output_tokens") or config.llm.get("max_tokens", 64000) or 64000)
         requested_max = int(max_tokens or configured_max)
@@ -1291,7 +1297,7 @@ async def _run_skill_finalizer(
             context_state={"budget": finalizer_request_budget},
             active_skill=None,
             latest_user_text="",
-            max_chat_output_chars=8000,
+            max_chat_output_chars=int(output_boundary.get("max_chat_output_chars") or (int(output_boundary.get("max_chat_output_tokens") or 0) * int(output_boundary.get("chars_per_token_estimate") or 4))),
         )
         skill_session.llm_call_count += 1
         if not result.get("error"):
@@ -2300,6 +2306,8 @@ You have access to the following tools. When a user asks you to do something tha
                 tools=loop_tools or [],
             )
             loop_budget = resolve_prompt_budget(stage="tool_loop", model=effective_model)
+            output_boundary = resolve_output_boundary(effective_model)
+            llm_kwargs["max_tokens"] = int(loop_budget.get("max_output_tokens") or config.llm.get("max_tokens", 64000) or 64000)
             if isinstance(loop_context_state, dict):
                 budget_state = loop_context_state.setdefault("budget", {})
                 prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
@@ -2314,7 +2322,8 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["large_generation_guard_reason"] = "classifier:skill_or_user_generation_request" if large_generation_guard_applied else ""
                 budget_state["generation_mode"] = "staged" if large_generation_guard_applied else "default"
                 budget_state["current_generation_phase"] = "manifest" if large_generation_guard_applied else ""
-                budget_state["max_chat_output_chars"] = 8000
+                budget_state["max_chat_output_tokens"] = output_boundary.get("max_chat_output_tokens")
+                budget_state["max_chat_output_chars"] = output_boundary.get("max_chat_output_chars")
                 budget_state["output_risk_level"] = "high" if large_generation_guard_applied else "normal"
                 budget_state["output_token_limit"] = loop_budget.get("max_output_tokens")
                 budget_state["input_context_usage_percent"] = (
@@ -2356,6 +2365,8 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["safety_margin_tokens"] = loop_budget.get("safety_margin_tokens")
                 budget_state["max_prompt_tokens"] = loop_budget.get("max_prompt_tokens")
                 budget_state["max_output_tokens"] = loop_budget.get("max_output_tokens")
+                budget_state["max_chat_output_tokens"] = output_boundary.get("max_chat_output_tokens")
+                budget_state["max_chat_output_chars"] = output_boundary.get("max_chat_output_chars")
                 budget_state["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
                 budget_state["large_generation_guard_applied"] = large_generation_guard_applied
                 budget_state["output_size_guard_applied"] = large_generation_guard_applied
@@ -2391,7 +2402,7 @@ You have access to the following tools. When a user asks you to do something tha
                 context_state=loop_context_state if isinstance(loop_context_state, dict) else {"budget": {}},
                 active_skill=selected_skill,
                 latest_user_text=latest_user_text,
-                max_chat_output_chars=_safe_int(raw_max_chat, 8000),
+                max_chat_output_chars=_safe_int(raw_max_chat, int(output_boundary.get("max_chat_output_chars") or (int(output_boundary.get("max_chat_output_tokens") or 0) * int(output_boundary.get("chars_per_token_estimate") or 4)))),
             )
             if isinstance(loop_context_state, dict) and isinstance(loop_context_state.get("budget"), dict):
                 loop_context_state["budget"]["output_controller_applied"] = True
@@ -3340,6 +3351,7 @@ You have access to the following tools. When a user asks you to do something tha
                 tools=available_tools or [],
             )
             loop_budget = resolve_prompt_budget(stage="skill_generation", model=llm_kwargs.get("model"))
+            output_boundary = resolve_output_boundary(llm_kwargs.get("model"))
             effective_max_tokens = int(loop_budget.get("max_output_tokens") or config.llm.get("max_tokens", 64000) or 64000)
             llm_kwargs["max_tokens"] = effective_max_tokens
             prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
@@ -3356,6 +3368,8 @@ You have access to the following tools. When a user asks you to do something tha
                 "large_generation_guard_reason": "classifier:skill_or_user_generation_request" if large_generation_guard_applied else "",
                 "generation_mode": "staged" if large_generation_guard_applied else "default",
                 "current_generation_phase": "manifest" if large_generation_guard_applied else "",
+                "max_chat_output_tokens": output_boundary.get("max_chat_output_tokens"),
+                "max_chat_output_chars": output_boundary.get("max_chat_output_chars"),
                 "request_budget_stage": "skill_generation",
                 "stage": "skill_generation",
             }
@@ -3411,7 +3425,7 @@ You have access to the following tools. When a user asks you to do something tha
                 context_state={"budget": skill_request_budget},
                 active_skill=skill,
                 latest_user_text=latest_user_text,
-                max_chat_output_chars=8000,
+                max_chat_output_chars=int(output_boundary.get("max_chat_output_chars") or (int(output_boundary.get("max_chat_output_tokens") or 0) * int(output_boundary.get("chars_per_token_estimate") or 4))),
             )
             skill_session.llm_call_count += 1
             turn_state.llm_call_count = skill_session.llm_call_count

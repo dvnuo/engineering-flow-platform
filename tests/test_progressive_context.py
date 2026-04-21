@@ -396,7 +396,7 @@ def test_build_portal_context_preview_includes_source_and_generation_diagnostics
                 "generation_mode": "staged",
                 "current_generation_phase": "manifest",
                 "output_risk_level": "high",
-                "max_chat_output_chars": 8000,
+                "max_chat_output_chars": 240000,
                 "max_output_recovery_applied": True,
             },
             "source": {
@@ -437,10 +437,29 @@ def test_progressive_context_dict_roundtrip_preserves_tool_name():
 
 
 def test_resolve_prompt_budget_caps_large_context_window(monkeypatch):
-    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 200000)
-    budget = progressive_context.resolve_prompt_budget(stage="tool_loop", model="gpt-5-mini")
-    assert budget["prompt_budget_tokens"] == 32000
-    assert budget["reserved_output_tokens"] == 16000
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 264000)
+    budget = progressive_context.resolve_prompt_budget(stage="tool_loop", model="gpt-5.4-mini")
+    assert budget["context_window_tokens"] == 264000
+    assert budget["max_prompt_tokens"] == 128000
+    assert budget["max_output_tokens"] == 64000
+    assert budget["prompt_budget_tokens"] == 128000
+    assert budget["reserved_output_tokens"] == 64000
+
+
+def test_resolve_prompt_budget_skill_generation_uses_model_limit(monkeypatch):
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 264000)
+    budget = progressive_context.resolve_prompt_budget(stage="skill_generation", model="gpt-5.4-mini")
+    assert budget["max_prompt_tokens"] == 128000
+    assert budget["prompt_budget_tokens"] == 128000
+
+
+def test_resolve_model_limits_for_gpt_54_mini():
+    from src.config import resolve_model_limits
+
+    limits = resolve_model_limits("gpt-5.4-mini")
+    assert limits["max_context_window_tokens"] == 264000
+    assert limits["max_prompt_tokens"] == 128000
+    assert limits["max_output_tokens"] == 64000
 
 
 @pytest.mark.asyncio

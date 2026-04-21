@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.context_blob_store import put_text
+from src.config import resolve_output_boundary
 
 
 def _safe_int(value: Any, default: int) -> int:
@@ -15,6 +16,17 @@ def _safe_int(value: Any, default: int) -> int:
         return parsed if parsed > 0 else default
     except Exception:
         return default
+
+
+def _default_output_chars(model: Optional[str] = None) -> int:
+    boundary = resolve_output_boundary(model)
+    chars = int(boundary.get("max_chat_output_chars") or 0)
+    if chars > 0:
+        return chars
+    tokens = int(boundary.get("max_chat_output_tokens") or 0)
+    if tokens > 0:
+        return tokens * int(boundary.get("chars_per_token_estimate") or 4)
+    return 8000
 
 
 def classify_output_risk(user_text: str, active_skill: Any, system_prompt: str, source_state: Optional[Dict[str, Any]] = None) -> str:
@@ -34,7 +46,7 @@ def build_output_guard(risk: str, generation_mode: str) -> str:
     return (
         "Large generation output guard: staged mode is enforced. "
         "Return manifest/phase output only; do not emit full multi-file content. "
-        "Keep chat output <= 8000 characters."
+        "Keep chat output concise and split multi-file output across phases."
     )
 
 
@@ -131,7 +143,7 @@ def ensure_staged_generation(
     context_state: Optional[Dict[str, Any]],
     *,
     stage: str,
-    max_chat_output_chars: int,
+    max_chat_output_chars: Optional[int],
 ) -> Dict[str, Any]:
     gen = get_generation_state(context_state)
     completed = gen.get("completed_phases")
@@ -151,7 +163,8 @@ def ensure_staged_generation(
     gen["source_digest_chunk_coverage"] = coverage if isinstance(coverage, list) else []
     gen["source_digest_chunk_coverage_count"] = len(gen["source_digest_chunk_coverage"])
     _refresh_generation_done(gen)
-    gen["max_chat_output_chars"] = _safe_int(max_chat_output_chars, 8000)
+    fallback_chars = _default_output_chars()
+    gen["max_chat_output_chars"] = _safe_int(max_chat_output_chars, fallback_chars)
     gen["output_controller_applied"] = True
     gen["output_controller_stage"] = stage
     return gen
@@ -198,9 +211,10 @@ def _extract_content_text(result: Dict[str, Any]) -> str:
     return ""
 
 
-def enforce_chat_output_bound(content: str, *, session_id: str, stage: str, max_chars: int = 8000) -> Tuple[str, Dict[str, Any]]:
+def enforce_chat_output_bound(content: str, *, session_id: str, stage: str, max_chars: Optional[int] = None) -> Tuple[str, Dict[str, Any]]:
     text = str(content or "")
-    max_chars = _safe_int(max_chars, 8000)
+    fallback_chars = _default_output_chars()
+    max_chars = _safe_int(max_chars, fallback_chars)
     if len(text) <= max_chars:
         return text, {"bounded": False, "ref_count": 0}
     ref = put_text(
@@ -212,12 +226,12 @@ def enforce_chat_output_bound(content: str, *, session_id: str, stage: str, max_
         metadata={"stage": stage},
     )
     bounded = (
-        "Output was too large for one response. Saved full draft to context blob. "
-        "Continuing in staged mode with concise manifest.\n"
-        "ref_count=1\nnext_phase=phase_1\n"
+        "I saved the oversized draft and will continue from the next phase.\n"
+        "Output was too large for one response. Continuing in staged mode with concise manifest.\n"
+        "generated_artifact_ref_count=1\nnext_phase=phase_1\n"
         f"Use context_read_ref(ref=\"{ref}\") if needed."
     )
-    return bounded, {"bounded": True, "ref_count": 1, "ref": ref}
+    return bounded, {"bounded": True, "ref_count": 1, "generated_artifact_ref_count": 1, "ref": ref}
 
 
 async def recover_max_output_tokens(
@@ -266,8 +280,8 @@ async def recover_max_output_tokens(
         return retry_result, info
 
     fallback_text = (
-        "The requested output is too large for one response. I switched to staged generation and "
-        "will continue with manifest-first output."
+        "I saved the oversized draft and will continue from the next phase. "
+        "I switched to staged generation with manifest-first output."
     )
     if partial_ref:
         fallback_text += f"\nRecovered partial output was saved. Use context_read_ref(ref=\"{partial_ref}\") if needed."
@@ -289,11 +303,22 @@ async def call_llm_with_output_control(
     context_state: Optional[Dict[str, Any]],
     active_skill: Any = None,
     latest_user_text: str = "",
-    max_chat_output_chars: int = 8000,
+    max_chat_output_chars: Optional[int] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    max_chat_output_chars = _safe_int(max_chat_output_chars, 8000)
-    diagnostics: Dict[str, Any] = {"output_controller_applied": True, "stage": stage}
+    model = str(llm_kwargs.get("model") or "")
+    boundary = resolve_output_boundary(model)
     budget = context_state.setdefault("budget", {}) if isinstance(context_state, dict) else {}
+    fallback_chars = _default_output_chars(model)
+    max_chat_output_chars = _safe_int(max_chat_output_chars, fallback_chars)
+    if isinstance(budget, dict):
+        budget_chars = budget.get("max_chat_output_chars")
+        budget_tokens = budget.get("max_chat_output_tokens")
+        if budget_chars not in (None, ""):
+            max_chat_output_chars = _safe_int(budget_chars, max_chat_output_chars)
+        if budget_tokens not in (None, "") and budget.get("max_chat_output_chars") in (None, ""):
+            chars_per_token = int(boundary.get("chars_per_token_estimate") or 4)
+            max_chat_output_chars = _safe_int(budget_tokens, int(boundary.get("max_chat_output_tokens") or 0)) * chars_per_token
+    diagnostics: Dict[str, Any] = {"output_controller_applied": True, "stage": stage}
     if isinstance(budget, dict):
         budget["session_id"] = session_id
 
@@ -322,7 +347,9 @@ async def call_llm_with_output_control(
         budget["output_controller_applied"] = True
         budget["output_risk_level"] = risk
         budget["generation_mode"] = generation_mode
-        budget["output_token_limit"] = int(llm_kwargs.get("max_tokens") or 0)
+        budget["output_token_limit"] = int(llm_kwargs.get("max_tokens") or boundary.get("max_output_tokens") or 0)
+        budget["max_chat_output_tokens"] = int(boundary.get("max_chat_output_tokens") or 0)
+        budget["max_chat_output_chars"] = max_chat_output_chars
         budget["output_controller_stage"] = stage
 
     llm_result = await llm_client.responses(**llm_kwargs)
@@ -367,11 +394,11 @@ async def call_llm_with_output_control(
         diagnostics["output_bounding"] = bound_info
         if isinstance(budget, dict):
             budget["output_bounded"] = bool(bound_info.get("bounded"))
-            budget["max_chat_output_chars"] = _safe_int(max_chat_output_chars, 8000)
+            budget["max_chat_output_chars"] = max_chat_output_chars
             budget["oversized_output_saved"] = bool(bound_info.get("bounded"))
             budget["partial_output_saved"] = bool(recovery_info.get("partial_ref"))
         if isinstance(gen_state, dict):
-            gen_state["max_chat_output_chars"] = _safe_int(max_chat_output_chars, 8000)
+            gen_state["max_chat_output_chars"] = max_chat_output_chars
             if bound_info.get("bounded"):
                 ref = bound_info.get("ref")
                 if isinstance(ref, str):

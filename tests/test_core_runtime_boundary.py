@@ -51,7 +51,7 @@ def test_agent_process_source_uses_safe_int_for_max_chat_output_chars():
 
     source = inspect.getsource(core.Agent.process)
     assert "raw_max_chat =" in source
-    assert "max_chat_output_chars=_safe_int(raw_max_chat, 8000)" in source
+    assert "resolve_output_boundary(effective_model)" in source
 
 
 def test_read_governance_hint_returns_empty_when_missing():
@@ -486,13 +486,44 @@ async def test_output_controller_bounds_huge_content_in_staged_mode():
         stage="skill_generation",
         context_state=state,
         latest_user_text="generate all test cases",
-        max_chat_output_chars=8000,
+        max_chat_output_chars=240000,
     )
-    assert len(result.get("content") or "") <= 8000
-    assert "context_read_ref(" in (result.get("content") or "")
-    assert diag.get("output_bounding", {}).get("bounded") is True
-    assert diag.get("generated_artifact_ref_count", 0) >= 1
+    assert len(result.get("content") or "") == 50000
+    assert "context_read_ref(" not in (result.get("content") or "")
+    assert diag.get("output_bounding", {}).get("bounded") is False
     assert diag.get("generation", {}).get("generation_mode") == "staged"
+
+
+@pytest.mark.asyncio
+async def test_output_controller_allows_20k_high_risk_without_oversize_manifest():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "H" * 20000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate implementation", "tools": [], "model": "gpt-5.4-mini"},
+        session_id="s-20k",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="generate full implementation",
+        max_chat_output_chars=None,
+    )
+    assert len(result.get("content") or "") == 20000
+    assert "saved the oversized draft" not in (result.get("content") or "").lower()
+    assert diag.get("output_bounding", {}).get("bounded") is False
+
+
+def test_resolve_output_boundary_uses_model_limit_tokens():
+    from src.config import resolve_output_boundary
+
+    boundary = resolve_output_boundary("gpt-5.4-mini")
+    assert boundary["max_output_tokens"] == 64000
+    assert boundary["max_chat_output_tokens"] >= 60000
+    assert boundary["max_chat_output_chars"] >= 200000
 
 
 @pytest.mark.asyncio
@@ -602,7 +633,7 @@ async def test_output_controller_tracks_generated_artifacts_by_phase_when_bounde
 
     class _Client:
         async def responses(self, **kwargs):
-            return {"content": "X" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
+            return {"content": "X" * 250000, "tool_calls": [], "function_calls": [], "usage": {}}
 
     state = {"budget": {}}
     _, diag1 = await call_llm_with_output_control(
@@ -636,9 +667,9 @@ async def test_output_controller_bounds_huge_content_medium_risk():
         stage="tool_loop",
         context_state=state,
         latest_user_text=user_text,
-        max_chat_output_chars=8000,
+        max_chat_output_chars=240000,
     )
-    assert len(result.get("content") or "") <= 8000
+    assert len(result.get("content") or "") == 50000
 
 
 @pytest.mark.asyncio
@@ -679,8 +710,8 @@ async def test_output_controller_accepts_none_max_chat_output_chars():
         latest_user_text="Hey",
         max_chat_output_chars=None,
     )
-    assert len(result.get("content") or "") <= 8000
-    assert diag.get("output_bounding", {}).get("bounded") is True
+    assert len(result.get("content") or "") == 9000
+    assert diag.get("output_bounding", {}).get("bounded") is False
 
 
 def test_ensure_staged_generation_accepts_none_max_chat_output_chars():
@@ -688,7 +719,7 @@ def test_ensure_staged_generation_accepts_none_max_chat_output_chars():
 
     state = {"generation": {}}
     gen = ensure_staged_generation(state, stage="tool_loop", max_chat_output_chars=None)
-    assert gen.get("max_chat_output_chars") == 8000
+    assert gen.get("max_chat_output_chars") >= 200000
 
 
 @pytest.mark.asyncio
@@ -707,11 +738,36 @@ async def test_output_controller_bounds_oversized_normal_risk_output():
         stage="tool_loop",
         context_state=state,
         latest_user_text="hello",
-        max_chat_output_chars=8000,
+        max_chat_output_chars=240000,
     )
-    assert len(result.get("content") or "") <= 8000
+    assert len(result.get("content") or "") == 50000
+    assert diag.get("output_bounding", {}).get("bounded") is False
+    assert state["budget"].get("oversized_output_saved") is False
+
+
+@pytest.mark.asyncio
+async def test_output_controller_bounds_only_when_exceeding_real_boundary():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "N" * 250000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "simple chat reply", "tools": [], "model": "gpt-5.4-mini"},
+        session_id="s-normal-oversized",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="hello",
+        max_chat_output_chars=None,
+    )
+    assert len(result.get("content") or "") < 1000
     assert diag.get("output_bounding", {}).get("bounded") is True
     assert state["budget"].get("oversized_output_saved") is True
+    assert "generated_artifact_ref_count=1" in (result.get("content") or "")
+    assert "next_phase=phase_1" in (result.get("content") or "")
 
 
 def test_core_and_skill_mode_do_not_call_llm_client_responses_directly():

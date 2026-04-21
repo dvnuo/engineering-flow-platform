@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.agents.llm import _normalize_provider_key, llm_client
 from src.runtime.output_controller import call_llm_with_output_control
-from src.config import config
+from src.config import config, resolve_output_boundary
 from src.skills.registry import Skill
 
 logger = logging.getLogger(__name__)
@@ -369,6 +369,7 @@ async def _generate_initial_skill_plan_direct(skill: Skill, user_message: str, m
     }
     if model:
         kwargs["model"] = model
+    output_boundary = resolve_output_boundary(model or kwargs.get("model"))
 
     result, _diag = await call_llm_with_output_control(
         llm_client=llm_client,
@@ -378,7 +379,7 @@ async def _generate_initial_skill_plan_direct(skill: Skill, user_message: str, m
         context_state={"budget": {}},
         active_skill=skill,
         latest_user_text=user_message,
-        max_chat_output_chars=8000,
+        max_chat_output_chars=int(output_boundary.get("max_chat_output_chars") or (int(output_boundary.get("max_chat_output_tokens") or 0) * int(output_boundary.get("chars_per_token_estimate") or 4))),
     )
     content = (result.get("content") or "").strip()
 

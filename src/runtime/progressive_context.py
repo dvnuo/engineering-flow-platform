@@ -15,7 +15,7 @@ from src.agents.compaction import (
     normalize_compaction_threshold,
     resolve_context_window_tokens,
 )
-from src.config import config
+from src.config import config, resolve_model_limits
 from src.runtime.context_summary import (
     build_context_state_from_messages,
     build_recovery_context_message,
@@ -152,11 +152,20 @@ def resolve_prompt_budget(*, stage: str, model: str | None) -> Dict[str, int]:
     default_cfg = budget_cfg.get("default") if isinstance(budget_cfg.get("default"), dict) else {}
     stage_cfg = budget_cfg.get(stage) if isinstance(budget_cfg.get(stage), dict) else {}
     merged = {**default_cfg, **stage_cfg}
+    model_limits = resolve_model_limits(model)
     context_window = int(resolve_context_window_tokens(model))
-    configured_reserved = int(merged.get("reserved_output_tokens", 8000) or 8000)
-    configured_safety = int(merged.get("safety_margin_tokens", 4000) or 4000)
-    max_prompt_tokens = int(merged.get("max_prompt_tokens", 50000) or 50000)
-    actual_max_output_tokens = int(config.llm.get("max_tokens", 64000) or 64000)
+    model_max_prompt_tokens = int(model_limits.get("max_prompt_tokens") or 128000)
+    actual_max_output_tokens = int(model_limits.get("max_output_tokens") or config.llm.get("max_tokens", 64000) or 64000)
+    configured_reserved = int(merged.get("reserved_output_tokens", actual_max_output_tokens) or actual_max_output_tokens)
+    configured_safety = int(merged.get("safety_margin_tokens", 8000) or 8000)
+    configured_max_prompt = merged.get("max_prompt_tokens")
+    max_prompt_tokens = int(configured_max_prompt or model_max_prompt_tokens)
+    if max_prompt_tokens <= 0:
+        max_prompt_tokens = model_max_prompt_tokens
+    allow_lower = bool(merged.get("allow_lower_than_model_limit", False))
+    if max_prompt_tokens < model_max_prompt_tokens and not allow_lower:
+        max_prompt_tokens = model_max_prompt_tokens
+    max_prompt_tokens = min(max_prompt_tokens, model_max_prompt_tokens)
     effective_reserved = min(configured_reserved, actual_max_output_tokens, int(context_window * 0.25))
     effective_safety = min(configured_safety, int(context_window * 0.05))
     context_based_prompt_cap = context_window - effective_reserved - effective_safety
