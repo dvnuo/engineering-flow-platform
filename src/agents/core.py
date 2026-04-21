@@ -544,6 +544,15 @@ def _safe_request_budget_fields(budget: Optional[Dict[str, Any]]) -> Dict[str, A
     return safe
 
 
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
 def _merge_budget_into_error_details(error_response: Dict[str, Any], budget: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not isinstance(error_response, dict):
         return error_response
@@ -2305,7 +2314,7 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["large_generation_guard_reason"] = "classifier:skill_or_user_generation_request" if large_generation_guard_applied else ""
                 budget_state["generation_mode"] = "staged" if large_generation_guard_applied else "default"
                 budget_state["current_generation_phase"] = "manifest" if large_generation_guard_applied else ""
-                budget_state["max_chat_output_chars"] = 8000 if large_generation_guard_applied else None
+                budget_state["max_chat_output_chars"] = 8000
                 budget_state["output_risk_level"] = "high" if large_generation_guard_applied else "normal"
                 budget_state["output_token_limit"] = loop_budget.get("max_output_tokens")
                 budget_state["input_context_usage_percent"] = (
@@ -2369,6 +2378,11 @@ You have access to the following tools. When a user asks you to do something tha
                     "Write artifacts/files via tools when possible; otherwise output a concise manifest and ask to continue file-by-file."
                 )
             
+            raw_max_chat = (
+                ((loop_context_state.get("budget", {}) or {}).get("max_chat_output_chars"))
+                if isinstance(loop_context_state, dict)
+                else None
+            )
             llm_result, output_diag = await call_llm_with_output_control(
                 llm_client=llm_client,
                 llm_kwargs=llm_kwargs,
@@ -2377,7 +2391,7 @@ You have access to the following tools. When a user asks you to do something tha
                 context_state=loop_context_state if isinstance(loop_context_state, dict) else {"budget": {}},
                 active_skill=selected_skill,
                 latest_user_text=latest_user_text,
-                max_chat_output_chars=int((loop_context_state.get("budget", {}) or {}).get("max_chat_output_chars", 8000)) if isinstance(loop_context_state, dict) else 8000,
+                max_chat_output_chars=_safe_int(raw_max_chat, 8000),
             )
             if isinstance(loop_context_state, dict) and isinstance(loop_context_state.get("budget"), dict):
                 loop_context_state["budget"]["output_controller_applied"] = True

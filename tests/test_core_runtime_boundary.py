@@ -38,6 +38,22 @@ def test_core_no_longer_directly_calls_should_passthrough_tool_result():
     assert "should_passthrough_tool_result(" not in source
 
 
+def test_core_safe_int_handles_none_for_max_chat_output_chars():
+    from src.agents import core
+
+    assert core._safe_int(None, 8000) == 8000
+    assert core._safe_int("", 8000) == 8000
+    assert core._safe_int("7000", 8000) == 7000
+
+
+def test_agent_process_source_uses_safe_int_for_max_chat_output_chars():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent.process)
+    assert "raw_max_chat =" in source
+    assert "max_chat_output_chars=_safe_int(raw_max_chat, 8000)" in source
+
+
 def test_read_governance_hint_returns_empty_when_missing():
     from src.agents import core
     from src import ToolResult
@@ -614,6 +630,35 @@ async def test_output_controller_retry_max_output_still_returns_non_error_fallba
     assert "error" not in result
     assert diag["max_output_recovery"]["applied"] is True
     assert "Model output was truncated because max_output_tokens" not in (result.get("content") or "")
+
+
+@pytest.mark.asyncio
+async def test_output_controller_accepts_none_max_chat_output_chars():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "N" * 9000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "simple", "tools": []},
+        session_id="s-none-max-chat",
+        stage="tool_loop",
+        context_state={"budget": {}},
+        latest_user_text="Hey",
+        max_chat_output_chars=None,
+    )
+    assert len(result.get("content") or "") <= 8000
+    assert diag.get("output_bounding", {}).get("bounded") is True
+
+
+def test_ensure_staged_generation_accepts_none_max_chat_output_chars():
+    from src.runtime.output_controller import ensure_staged_generation
+
+    state = {"generation": {}}
+    gen = ensure_staged_generation(state, stage="tool_loop", max_chat_output_chars=None)
+    assert gen.get("max_chat_output_chars") == 8000
 
 
 @pytest.mark.asyncio

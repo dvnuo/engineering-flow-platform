@@ -7,6 +7,16 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.context_blob_store import put_text
 
 
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        parsed = int(value)
+        return parsed if parsed > 0 else default
+    except Exception:
+        return default
+
+
 def classify_output_risk(user_text: str, active_skill: Any, system_prompt: str, source_state: Optional[Dict[str, Any]] = None) -> str:
     text = (str(user_text or "") + " " + str(system_prompt or "")).lower()
     skill_name = str(getattr(active_skill, "name", "") or getattr(active_skill, "skill_name", "")).lower()
@@ -133,7 +143,7 @@ def ensure_staged_generation(
     gen["source_digest_chunk_coverage_count"] = len(gen["source_digest_chunk_coverage"])
     statuses = gen.get("completion_criteria_status")
     gen["generation_done"] = bool(isinstance(statuses, dict) and statuses and all(bool(v) for v in statuses.values()))
-    gen["max_chat_output_chars"] = int(max_chat_output_chars)
+    gen["max_chat_output_chars"] = _safe_int(max_chat_output_chars, 8000)
     gen["output_controller_applied"] = True
     gen["output_controller_stage"] = stage
     return gen
@@ -185,6 +195,7 @@ def _extract_content_text(result: Dict[str, Any]) -> str:
 
 def enforce_chat_output_bound(content: str, *, session_id: str, stage: str, max_chars: int = 8000) -> Tuple[str, Dict[str, Any]]:
     text = str(content or "")
+    max_chars = _safe_int(max_chars, 8000)
     if len(text) <= max_chars:
         return text, {"bounded": False, "ref_count": 0}
     ref = put_text(
@@ -275,6 +286,7 @@ async def call_llm_with_output_control(
     latest_user_text: str = "",
     max_chat_output_chars: int = 8000,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    max_chat_output_chars = _safe_int(max_chat_output_chars, 8000)
     diagnostics: Dict[str, Any] = {"output_controller_applied": True, "stage": stage}
     budget = context_state.setdefault("budget", {}) if isinstance(context_state, dict) else {}
     if isinstance(budget, dict):
@@ -341,11 +353,11 @@ async def call_llm_with_output_control(
         diagnostics["output_bounding"] = bound_info
         if isinstance(budget, dict):
             budget["output_bounded"] = bool(bound_info.get("bounded"))
-            budget["max_chat_output_chars"] = int(max_chat_output_chars)
+            budget["max_chat_output_chars"] = _safe_int(max_chat_output_chars, 8000)
             budget["oversized_output_saved"] = bool(bound_info.get("bounded"))
             budget["partial_output_saved"] = bool(recovery_info.get("partial_ref"))
         if isinstance(gen_state, dict):
-            gen_state["max_chat_output_chars"] = int(max_chat_output_chars)
+            gen_state["max_chat_output_chars"] = _safe_int(max_chat_output_chars, 8000)
             if bound_info.get("bounded"):
                 ref = bound_info.get("ref")
                 if isinstance(ref, str):
