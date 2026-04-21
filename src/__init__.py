@@ -597,6 +597,11 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         page_id = kwargs.get("page_id", "")
         result = await confluence_module.confluence_get_comments(page_id, _session_id=kwargs.get("_session_id"))
         return ToolResult(success="Error" not in result, content=result)
+
+    elif name == "jira_get_comments":
+        issue_key = kwargs.get("issue_key", "")
+        result = await jira_module.jira_get_comments(issue_key, _session_id=kwargs.get("_session_id"))
+        return ToolResult(success="Error" not in str(result), content=str(result))
     
     elif name == "confluence_add_comment":
         page_id = kwargs.get("page_id", "")
@@ -623,7 +628,11 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     elif name == "confluence_get_page_children":
         page_id = kwargs.get("page_id", "")
         limit = kwargs.get("limit", 10)
-        result = await confluence_module.confluence_get_page_children(page_id, limit)
+        result = await confluence_module.confluence_get_page_children(
+            page_id,
+            limit,
+            _session_id=kwargs.get("_session_id"),
+        )
         return ToolResult(success="Error" not in result, content=result)
     
     elif name == "confluence_get_page_history":

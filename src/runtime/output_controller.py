@@ -92,6 +92,13 @@ def initialize_completion_criteria(gen: Dict[str, Any], *, generation_mode: str)
     return normalized
 
 
+def _refresh_generation_done(gen: Dict[str, Any]) -> bool:
+    status = gen.get("completion_criteria_status")
+    done = bool(isinstance(status, dict) and status and all(bool(v) for v in status.values()))
+    gen["generation_done"] = done
+    return done
+
+
 def mark_phase_complete(gen: Dict[str, Any], phase: str) -> None:
     completed = gen.get("completed_phases")
     if not isinstance(completed, list):
@@ -137,12 +144,13 @@ def ensure_staged_generation(
     refs = gen.get("generated_artifact_refs")
     gen["generated_artifact_refs"] = refs if isinstance(refs, list) else []
     gen["generated_artifact_ref_count"] = len(gen["generated_artifact_refs"])
+    artifacts_by_phase = gen.get("generated_artifacts_by_phase")
+    gen["generated_artifacts_by_phase"] = artifacts_by_phase if isinstance(artifacts_by_phase, dict) else {}
     initialize_completion_criteria(gen, generation_mode="staged")
     coverage = gen.get("source_digest_chunk_coverage")
     gen["source_digest_chunk_coverage"] = coverage if isinstance(coverage, list) else []
     gen["source_digest_chunk_coverage_count"] = len(gen["source_digest_chunk_coverage"])
-    statuses = gen.get("completion_criteria_status")
-    gen["generation_done"] = bool(isinstance(statuses, dict) and statuses and all(bool(v) for v in statuses.values()))
+    _refresh_generation_done(gen)
     gen["max_chat_output_chars"] = _safe_int(max_chat_output_chars, 8000)
     gen["output_controller_applied"] = True
     gen["output_controller_stage"] = stage
@@ -157,9 +165,6 @@ def advance_generation_phase(context_state: Optional[Dict[str, Any]], *, latest_
     if text not in {"continue", "next", "go on", "继续", "继续生成"}:
         return gen
     current = str(gen.get("current_generation_phase") or "manifest")
-    status = gen.get("completion_criteria_status")
-    if isinstance(status, dict) and current == "manifest":
-        status["manifest_prepared"] = True
     mark_phase_complete(gen, current)
     next_phase = next_incomplete_phase(gen)
     gen["current_generation_phase"] = next_phase
@@ -340,6 +345,15 @@ async def call_llm_with_output_control(
 
     content = _extract_content_text(llm_result)
     if content:
+        if isinstance(gen_state, dict):
+            status = gen_state.get("completion_criteria_status")
+            if isinstance(status, dict):
+                phase = str(gen_state.get("current_generation_phase") or "manifest")
+                if phase == "manifest":
+                    status["manifest_prepared"] = True
+                if phase.startswith("phase_"):
+                    status["phase_output_recorded"] = True
+            _refresh_generation_done(gen_state)
         bounded, bound_info = enforce_chat_output_bound(
             content,
             session_id=session_id or "unknown_session",
@@ -367,24 +381,38 @@ async def call_llm_with_output_control(
                     refs.append(ref)
                     gen_state["generated_artifact_refs"] = refs
                     gen_state["generated_artifact_ref_count"] = len(refs)
+                    by_phase = gen_state.get("generated_artifacts_by_phase")
+                    if not isinstance(by_phase, dict):
+                        by_phase = {}
+                    phase = str(gen_state.get("current_generation_phase") or "manifest")
+                    phase_refs = by_phase.get(phase)
+                    if not isinstance(phase_refs, list):
+                        phase_refs = []
+                    phase_refs.append(ref)
+                    by_phase[phase] = phase_refs
+                    gen_state["generated_artifacts_by_phase"] = by_phase
                     coverage = gen_state.get("source_digest_chunk_coverage")
                     if not isinstance(coverage, list):
                         coverage = []
-                    coverage.append(f"{stage}:{gen_state.get('current_generation_phase')}")
+                    coverage.append(f"{stage}:{phase}")
                     gen_state["source_digest_chunk_coverage"] = coverage
                     gen_state["source_digest_chunk_coverage_count"] = len(coverage)
                 status = gen_state.get("completion_criteria_status")
                 if isinstance(status, dict):
                     status["response_bounded"] = True
-                    if str(gen_state.get("current_generation_phase")) == "manifest":
+                    phase = str(gen_state.get("current_generation_phase") or "manifest")
+                    if phase == "manifest":
                         status["manifest_prepared"] = True
-                    if str(gen_state.get("current_generation_phase", "")).startswith("phase_"):
+                    if phase.startswith("phase_"):
                         status["phase_output_recorded"] = True
                 if gen_state.get("generation_mode") == "staged":
                     gen_state["next_phase"] = next_incomplete_phase(gen_state)
+                    if gen_state["next_phase"] == "complete":
+                        gen_state["current_generation_phase"] = "complete"
+                    else:
+                        gen_state["current_generation_phase"] = gen_state["next_phase"]
             gen_state["partial_output_saved"] = bool(recovery_info.get("partial_ref"))
-            status = gen_state.get("completion_criteria_status")
-            gen_state["generation_done"] = bool(isinstance(status, dict) and status and all(bool(v) for v in status.values()))
+            _refresh_generation_done(gen_state)
 
     if isinstance(gen_state, dict):
         diagnostics["generation"] = dict(gen_state)

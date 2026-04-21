@@ -567,7 +567,14 @@ async def test_output_controller_generation_done_requires_completion_criteria():
         async def responses(self, **kwargs):
             return {"content": "X" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
 
-    state = {"budget": {}, "generation": {"completion_criteria": ["manifest_prepared", "phase_output_recorded"], "completion_criteria_status": {"manifest_prepared": False, "phase_output_recorded": False}}}
+    state = {
+        "budget": {},
+        "generation": {
+            "completion_criteria": ["manifest_prepared", "phase_output_recorded"],
+            "completion_criteria_status": {"manifest_prepared": False, "phase_output_recorded": False},
+            "generated_artifact_ref_count": 2,
+        },
+    }
     _, diag1 = await call_llm_with_output_control(
         llm_client=_Client(),
         llm_kwargs={"input_items": [], "system_prompt": "generate implementation", "tools": []},
@@ -587,6 +594,29 @@ async def test_output_controller_generation_done_requires_completion_criteria():
         latest_user_text="continue",
     )
     assert diag2.get("generation_done") is True
+
+
+@pytest.mark.asyncio
+async def test_output_controller_tracks_generated_artifacts_by_phase_when_bounded():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "X" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    _, diag1 = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate implementation", "tools": []},
+        session_id="s-gen-phase",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="generate implementation",
+    )
+    by_phase = diag1.get("generation", {}).get("generated_artifacts_by_phase", {})
+    assert isinstance(by_phase, dict)
+    assert "manifest" in by_phase
+    assert len(by_phase["manifest"]) == 1
 
 
 @pytest.mark.asyncio
