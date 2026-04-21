@@ -185,3 +185,71 @@ async def test_jira_prepare_issue_context_persists_all_comments_and_bounded_mani
     raw = read_ref(ref, session_id="s-jira-prepare", section="raw", max_chars=50000)
     assert '"comments_loaded": 20' in raw
     assert '"comments_complete": true' in raw.lower()
+
+
+@pytest.mark.asyncio
+async def test_jira_prepare_issue_context_attachment_full_and_preview_ledger(monkeypatch):
+    from src.jira import jira_prepare_issue_context
+    from types import SimpleNamespace
+
+    class _Channel:
+        api_version = "3"
+        _auth_header = {}
+        def is_configured(self): return True
+        def get_instance_client(self, **kwargs): return self
+        async def get_issue(self, issue_key, expand=None):
+            return {
+                "key": issue_key,
+                "names": {"customfield_1": "Acceptance Criteria"},
+                "renderedFields": {"description": "<p>x</p>"},
+                "fields": {
+                    "summary": "Demo",
+                    "description": "Body",
+                    "comment": {"comments": [], "total": 0},
+                    "attachment": [
+                        {"id": "1", "filename": "small.txt", "mimeType": "text/plain", "content": "u1"},
+                        {"id": "2", "filename": "big.txt", "mimeType": "text/plain", "content": "u2"},
+                        {"id": "3", "filename": "img.png", "mimeType": "image/png"},
+                    ],
+                },
+            }
+        async def get_comments(self, issue_key): return []
+
+    async def _fake_download(url, session_id=None, options=None, auth_header=None):
+        if url == "u1":
+            return SimpleNamespace(content_format="text", content="small text")
+        return SimpleNamespace(content_format="text", content="X" * 5001)
+
+    monkeypatch.setattr("src.jira.jira_channel", _Channel())
+    monkeypatch.setattr("src.jira.download_and_process_attachment", _fake_download)
+    out = await jira_prepare_issue_context("PROJ-2", _session_id="s-jira-attach")
+    assert "text_attachments_loaded: 2/2" in out
+    ref = out.split("context_ref: ", 1)[1].split("\\n", 1)[0].strip().strip('"')
+    from src.context_blob_store import read_ref
+    raw = read_ref(ref, session_id="s-jira-attach", section="coverage_ledger", max_chars=50000)
+    assert "text_attachments_full_loaded" in raw
+    assert "text_attachments_preview_only" in raw
+
+
+@pytest.mark.asyncio
+async def test_jira_digest_chunks_do_not_silently_truncate_long_comment(monkeypatch):
+    from src.jira import jira_prepare_issue_context
+    from src.context_blob_store import read_ref
+
+    long_comment = "L" * 30000
+
+    class _Channel:
+        api_version = "3"
+        _auth_header = {}
+        def is_configured(self): return True
+        def get_instance_client(self, **kwargs): return self
+        async def get_issue(self, issue_key, expand=None):
+            return {"key": issue_key, "names": {"x": "y"}, "renderedFields": {"description": "<p>x</p>"}, "fields": {"summary": "Demo", "description": "Body", "comment": {"comments": [], "total": 1}, "attachment": []}}
+        async def get_comments(self, issue_key):
+            return [{"id": "1", "author": {"displayName": "A"}, "created": "2026-01-01", "body": long_comment}]
+
+    monkeypatch.setattr("src.jira.jira_channel", _Channel())
+    out = await jira_prepare_issue_context("PROJ-3", _session_id="s-jira-long")
+    ref = out.split("context_ref: ", 1)[1].split("\\n", 1)[0].strip().strip('"')
+    raw = read_ref(ref, session_id="s-jira-long", section="raw", max_chars=60000)
+    assert "L" * 1000 in raw

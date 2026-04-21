@@ -382,7 +382,75 @@ def test_agent_process_source_auto_invokes_source_prepare_and_max_output_recover
     assert "_requires_source_complete_context(" in process_source
     assert "jira_prepare_issue_context" in process_source
     assert "confluence_prepare_page_context" in process_source
-    assert "max_output_tokens_exceeded" in process_source
+    assert "_recover_max_output_tokens(" in process_source
+    assert "[auto source context prepared]" in process_source
+    assert "staged_oversized_output" in process_source
+
+
+@pytest.mark.asyncio
+async def test_recover_max_output_tokens_success_path(monkeypatch):
+    from src.agents import core
+
+    async def _fake_responses(**kwargs):
+        return {"content": "manifest", "tool_calls": [], "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr(core.llm_client, "responses", _fake_responses)
+    recovered, did_recover = await core._recover_max_output_tokens(
+        llm_result={"error": {"code": "max_output_tokens_exceeded", "message": "x"}},
+        llm_kwargs={"input_items": [], "system_prompt": "", "tools": []},
+        loop_context_state={"budget": {}},
+        stage_hint="tool_loop",
+    )
+    assert did_recover is True
+    assert recovered.get("content") == "manifest"
+    assert "error" not in recovered
+
+
+@pytest.mark.asyncio
+async def test_recover_max_output_tokens_fallback_path(monkeypatch):
+    from src.agents import core
+
+    async def _fake_responses(**kwargs):
+        return {"error": {"code": "max_output_tokens_exceeded", "message": "x"}}
+
+    monkeypatch.setattr(core.llm_client, "responses", _fake_responses)
+    recovered, did_recover = await core._recover_max_output_tokens(
+        llm_result={"error": {"code": "max_output_tokens_exceeded", "message": "x"}},
+        llm_kwargs={"input_items": [], "system_prompt": "", "tools": []},
+        loop_context_state={"budget": {}},
+        stage_hint="tool_loop",
+    )
+    assert did_recover is True
+    assert "error" not in recovered
+    assert "staged chunks" in recovered.get("content", "")
+
+
+def test_find_source_target_for_context_can_reuse_previous_jira_and_confluence_messages():
+    from src.agents import core
+
+    jira = core._find_source_target_for_context(
+        latest_user_text="基于刚才全部Jira信息生成测试",
+        messages=[{"role": "user", "content": "https://x/browse/ABC-123"}],
+        context_state={},
+    )
+    assert jira["source_type"] == "jira"
+    conf = core._find_source_target_for_context(
+        latest_user_text="use all confluence info",
+        messages=[{"role": "user", "content": "https://wiki.local/pages/123/Title"}],
+        context_state={},
+    )
+    assert conf["source_type"] == "confluence"
+
+
+def test_auto_source_manifest_as_assistant_message_does_not_create_orphan_function_call_output():
+    from src.agents import core
+
+    messages = [
+        {"role": "assistant", "content": "[auto source context prepared]\n[jira source bundle prepared]\ncontext_ref: ctx://context/s/k/aaaaaaaaaaaa"},
+        {"role": "user", "content": "continue"},
+    ]
+    items = core.build_responses_input_items(messages, session_id="s")
+    assert not any(item.get("type") == "function_call_output" for item in items)
 
 
 def test_mobilex_skill_prompt_contains_hard_output_constraints():

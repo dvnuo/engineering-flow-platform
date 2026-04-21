@@ -25,6 +25,7 @@ from .adapter import JiraFormatAdapter
 from src.utils.attachment import download_and_process_attachment
 from .exporter import export_issues_to_markdown
 from src.source_context import persist_jira_source_bundle_and_digest
+from src.context_blob_store import put_text
 
 __all__ = [
     "JiraChannel", 
@@ -287,7 +288,10 @@ async def jira_prepare_issue_context(
     attachments = []
     text_attachments_total = 0
     text_attachments_loaded = 0
+    text_attachments_full_loaded = 0
+    text_attachments_preview_only = 0
     partial_reasons: List[str] = []
+    attachment_body_partial_reasons: List[str] = []
     attachment_list = fields.get("attachment", []) if isinstance(fields, dict) else []
     binary_attachments_count = 0
     binary_attachment_bodies_skipped_count = 0
@@ -309,6 +313,8 @@ async def jira_prepare_issue_context(
             "created": att.get("created"),
             "author": att.get("author"),
             "text_preview": None,
+            "text_ref": None,
+            "attachment_text_preview_only": False,
         }
         if include_attachments and is_text and att.get("content"):
             try:
@@ -320,10 +326,27 @@ async def jira_prepare_issue_context(
                     auth_header=auth_header,
                 )
                 if getattr(result, "content_format", "") == "text":
-                    item["text_preview"] = str(getattr(result, "content", "") or "")[:1000]
+                    text_content = str(getattr(result, "content", "") or "")
+                    if len(text_content) <= 4000:
+                        item["text_preview"] = text_content
+                        text_attachments_full_loaded += 1
+                    else:
+                        item["text_preview"] = text_content[:1000]
+                        item["attachment_text_preview_only"] = True
+                        text_attachments_preview_only += 1
+                        item["text_ref"] = put_text(
+                            session_id=session_id,
+                            kind="jira_attachment_text",
+                            source_id=f"{issue_key}_{filename}",
+                            title=f"Jira attachment text {filename}",
+                            content=text_content,
+                            metadata={"issue_key": issue_key, "filename": filename},
+                        )
+                        attachment_body_partial_reasons.append(f"text_attachment_preview_only:{filename}")
                     text_attachments_loaded += 1
             except Exception as exc:
                 partial_reasons.append(f"attachment_text_processing_failed:{filename}:{type(exc).__name__}")
+                attachment_body_partial_reasons.append(f"attachment_text_processing_failed:{filename}:{type(exc).__name__}")
         attachments.append(item)
 
     rendered_fields = issue.get("renderedFields") if isinstance(issue, dict) else None
@@ -368,8 +391,12 @@ async def jira_prepare_issue_context(
             "text_attachments_loaded": text_attachments_loaded,
             "text_attachments_total": text_attachments_total,
             "text_attachments_complete": text_attachments_loaded >= text_attachments_total,
+            "text_attachments_full_loaded": text_attachments_full_loaded,
+            "text_attachments_preview_only": text_attachments_preview_only,
             "binary_attachments_count": binary_attachments_count,
             "binary_attachment_bodies_skipped_count": binary_attachment_bodies_skipped_count,
+            "attachment_body_complete": text_attachments_preview_only == 0 and binary_attachment_bodies_skipped_count == 0,
+            "attachment_body_partial_reasons": attachment_body_partial_reasons + [f"binary_attachment_body_skipped:{att.get('filename','unknown')}" for att in attachment_list if not (str(att.get('mimeType') or '').startswith('text/') or str(att.get('filename') or '').lower().endswith((".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".xml", ".log")))],
             "raw_fields_loaded": bool(fields),
             "rendered_fields_loaded": bool(rendered_fields),
             "custom_fields_loaded": bool(issue.get("names")) if isinstance(issue, dict) else False,
@@ -377,6 +404,7 @@ async def jira_prepare_issue_context(
         },
     }
     ledger = bundle["completeness_ledger"]
+    blocking_partial_reasons = [r for r in ledger.get("partial_reasons", []) if not str(r).startswith("binary_attachment_body_skipped:")]
     ledger["source_complete"] = (
         ledger["issue_loaded"]
         and ledger["raw_issue_loaded"]
@@ -385,7 +413,7 @@ async def jira_prepare_issue_context(
         and ledger["text_attachments_complete"]
         and ledger["names_loaded"]
         and ledger["rendered_fields_loaded"]
-        and not ledger["partial_reasons"]
+        and not blocking_partial_reasons
     )
     persisted = persist_jira_source_bundle_and_digest(session_id=session_id, issue_key=issue_key, bundle=bundle)
 

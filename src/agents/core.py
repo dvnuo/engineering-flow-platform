@@ -10,7 +10,7 @@ import platform
 import re
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.agents.skill_mode import (
     SkillSession,
@@ -662,6 +662,36 @@ def _extract_confluence_page_hint(text: str) -> str:
     return ""
 
 
+def _find_source_target_for_context(
+    latest_user_text: str,
+    messages: List[Dict[str, Any]],
+    context_state: Optional[Dict[str, Any]],
+) -> Dict[str, str]:
+    source = context_state.get("source") if isinstance(context_state, dict) and isinstance(context_state.get("source"), dict) else {}
+    candidates: List[str] = [str(latest_user_text or "")]
+    if isinstance(source, dict):
+        for key in ("target", "latest_target", "issue_key", "page_id", "last_source_hint"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                candidates.append(value.strip())
+    for msg in reversed(messages or []):
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if isinstance(content, str) and content.strip():
+            candidates.append(content)
+        if len(candidates) >= 12:
+            break
+    for text in candidates:
+        jira = _extract_jira_key_or_url(text)
+        if jira:
+            return {"source_type": "jira", "target": jira, "existing_source_ref": str(source.get("source_ref") or ""), "existing_digest_ref": str(source.get("digest_ref") or "")}
+        conf = _extract_confluence_page_hint(text)
+        if conf:
+            return {"source_type": "confluence", "target": conf, "existing_source_ref": str(source.get("source_ref") or ""), "existing_digest_ref": str(source.get("digest_ref") or "")}
+    return {"source_type": "", "target": "", "existing_source_ref": str(source.get("source_ref") or ""), "existing_digest_ref": str(source.get("digest_ref") or "")}
+
+
 def _requires_source_complete_context(
     user_text: str,
     active_skill_runtime: Optional[Any],
@@ -671,15 +701,56 @@ def _requires_source_complete_context(
     text = str(user_text or "").lower()
     skill_name = str(getattr(active_skill_runtime, "skill_name", "") or getattr(selected_skill, "name", "")).lower()
     skill_desc = str(getattr(selected_skill, "description", "")).lower()
+    compact_text = text.replace(" ", "")
     full_source_markers = (
         "全部 jira 信息", "所有 jira 信息", "完整 jira", "all jira information", "complete jira",
         "based on all jira", "generate all test cases from jira", "获取全部 jira 信息并生成测试用例",
+        "全部jira信息", "所有jira信息", "完整jira", "基于全部jira", "全部confluence信息", "完整confluence",
+        "all confluence", "complete confluence",
     )
     generation_markers = ("generate", "test", "code", "spec", "feature", "implementation", "review", "生成", "测试用例")
     has_jira_or_conf = bool(_extract_jira_key_or_url(text) or _extract_confluence_page_hint(text) or (" jira" in text) or ("confluence" in text))
     generation_intent = any(m in text for m in generation_markers) or any(m in skill_name for m in generation_markers) or any(m in skill_desc for m in generation_markers)
-    explicit_full = any(m in text for m in full_source_markers)
+    explicit_full = any(m in text for m in full_source_markers) or any(m in compact_text for m in full_source_markers)
     return has_jira_or_conf and (explicit_full or generation_intent)
+
+
+async def _recover_max_output_tokens(
+    *,
+    llm_result: Dict[str, Any],
+    llm_kwargs: Dict[str, Any],
+    loop_context_state: Optional[Dict[str, Any]],
+    stage_hint: str,
+) -> Tuple[Dict[str, Any], bool]:
+    error = llm_result.get("error") if isinstance(llm_result, dict) else None
+    if not isinstance(error, dict) or error.get("code") != "max_output_tokens_exceeded":
+        return llm_result, False
+    retry_kwargs = dict(llm_kwargs)
+    retry_kwargs["system_prompt"] = (
+        (retry_kwargs.get("system_prompt") or "")
+        + "\n\nRecovery mode: previous output exceeded max_output_tokens. Return concise staged manifest only."
+    ).strip()
+    retry_kwargs["input_items"] = list(retry_kwargs.get("input_items") or []) + [
+        {"role": "user", "content": "Continue in strict staged mode. Manifest and next phase only."}
+    ]
+    retry_result = await llm_client.responses(**retry_kwargs)
+    budget = loop_context_state.setdefault("budget", {}) if isinstance(loop_context_state, dict) else {}
+    if isinstance(budget, dict):
+        budget["max_output_recovery_applied"] = True
+        budget["max_output_recovery_attempts"] = 1
+        budget["request_budget_stage"] = stage_hint
+    if isinstance(retry_result, dict) and not retry_result.get("error"):
+        return retry_result, True
+    fallback = {
+        "content": (
+            "The model output exceeded the per-response limit. I will continue in smaller staged chunks "
+            "(manifest first, then phase-by-phase generation)."
+        ),
+        "tool_calls": [],
+        "function_calls": [],
+        "usage": llm_result.get("usage", {}) if isinstance(llm_result, dict) else {},
+    }
+    return fallback, True
 
 
 def degrade_projected_context_sources_in_responses_input_items(
@@ -2162,8 +2233,9 @@ You have access to the following tools. When a user asks you to do something tha
             if _requires_source_complete_context(latest_user_text, active_skill_runtime, selected_skill, loop_messages):
                 source_state = loop_context_state.setdefault("source", {}) if isinstance(loop_context_state, dict) else {}
                 if not source_state.get("source_complete"):
-                    jira_hint = _extract_jira_key_or_url(latest_user_text)
-                    confluence_hint = _extract_confluence_page_hint(latest_user_text)
+                    source_target = _find_source_target_for_context(latest_user_text, loop_messages, loop_context_state)
+                    jira_hint = source_target.get("target") if source_target.get("source_type") == "jira" else ""
+                    confluence_hint = source_target.get("target") if source_target.get("source_type") == "confluence" else ""
                     source_manifest = ""
                     source_type = ""
                     try:
@@ -2186,17 +2258,11 @@ You have access to the following tools. When a user asks you to do something tha
                     except Exception:
                         source_manifest = ""
                     if source_manifest:
-                        loop_messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": f"auto_source_prepare_{iteration}",
-                                "tool_name": f"{source_type}_prepare_context",
-                                "content": source_manifest,
-                            }
-                        )
+                        loop_messages.append({"role": "assistant", "content": f"[auto source context prepared]\n{source_manifest}"})
                         input_items = build_responses_input_items(loop_messages, session_id=session_id)
                         llm_kwargs["input_items"] = input_items
                         source_state["source_type"] = source_type
+                        source_state["target"] = jira_hint or confluence_hint
                         source_state["source_complete"] = "source_complete: True" in source_manifest
                         comments_match = re.search(r"comments_loaded:\\s*([0-9]+)/([0-9]+)", source_manifest)
                         if comments_match:
@@ -2314,53 +2380,29 @@ You have access to the following tools. When a user asks you to do something tha
             llm_result = await llm_client.responses(**llm_kwargs)
             # Check for LLM configuration error
             if llm_result.get("error"):
-                error_info = llm_result["error"]
-                if error_info.get("code") == "max_output_tokens_exceeded":
-                    retry_kwargs = dict(llm_kwargs)
-                    retry_kwargs["system_prompt"] = (
-                        (retry_kwargs.get("system_prompt") or "")
-                        + "\n\nRecovery mode: The previous output hit max_output_tokens. "
-                        "Return only staged generation manifest and next phase under 8000 chars. "
-                        "Do not emit full multi-file content."
-                    ).strip()
-                    retry_kwargs["input_items"] = list(retry_kwargs.get("input_items") or []) + [
-                        {"role": "user", "content": "Continue with concise staged output only: manifest + next phase."}
-                    ]
-                    retry_result = await llm_client.responses(**retry_kwargs)
-                    if isinstance(loop_context_state, dict):
-                        budget_state = loop_context_state.setdefault("budget", {})
-                        budget_state["max_output_recovery_applied"] = True
-                        budget_state["max_output_recovery_attempts"] = 1
-                    if not retry_result.get("error"):
-                        llm_result = retry_result
-                    else:
-                        fallback = {
-                            "content": (
-                                "The model output exceeded the per-response limit. I prepared staged mode and will continue "
-                                "in smaller phases. I can provide the manifest/phase-1 next."
-                            ),
-                            "tool_calls": [],
-                            "function_calls": [],
-                            "usage": llm_result.get("usage", {}),
-                        }
-                        llm_result = fallback
+                llm_result, _recovered = await _recover_max_output_tokens(
+                    llm_result=llm_result,
+                    llm_kwargs=llm_kwargs,
+                    loop_context_state=loop_context_state,
+                    stage_hint="tool_loop",
+                )
                 if llm_result.get("error"):
                     error_info = llm_result["error"]
-                error_msg = error_info.get("message", "Unknown LLM error")
-                logger.error(f"LLM error: {error_msg}")
-                error_response = {
-                    "error": error_msg,
-                    "error_type": error_info.get("type", "llm_error"),
-                    "code": error_info.get("code", "")
-                }
-                details = error_info.get("details")
-                status_code = error_info.get("status_code")
-                if isinstance(details, dict):
-                    error_response["details"] = details
-                if isinstance(status_code, int):
-                    error_response["status_code"] = status_code
-                _merge_budget_into_error_details(error_response, latest_request_budget)
-                return attach_runtime_events(error_response)
+                    error_msg = error_info.get("message", "Unknown LLM error")
+                    logger.error(f"LLM error: {error_msg}")
+                    error_response = {
+                        "error": error_msg,
+                        "error_type": error_info.get("type", "llm_error"),
+                        "code": error_info.get("code", "")
+                    }
+                    details = error_info.get("details")
+                    status_code = error_info.get("status_code")
+                    if isinstance(details, dict):
+                        error_response["details"] = details
+                    if isinstance(status_code, int):
+                        error_response["status_code"] = status_code
+                    _merge_budget_into_error_details(error_response, latest_request_budget)
+                    return attach_runtime_events(error_response)
             
             # Debug logging for LLM response
             if _is_debug_enabled():
@@ -2389,6 +2431,23 @@ You have access to the following tools. When a user asks you to do something tha
             content = (llm_result.get("content") or "").strip()
             function_calls = llm_result.get("function_calls", [])
             tool_calls = function_calls  # alias
+            staged_mode = bool(isinstance(loop_context_state, dict) and isinstance(loop_context_state.get("budget"), dict) and (loop_context_state.get("budget") or {}).get("generation_mode") == "staged")
+            max_chat_chars = int(((loop_context_state.get("budget") or {}).get("max_chat_output_chars") if isinstance(loop_context_state, dict) else 8000) or 8000)
+            if staged_mode and content and len(content) > max_chat_chars:
+                full_ref = put_text(
+                    session_id=session_id,
+                    kind="assistant_output",
+                    source_id=f"staged_response_iter_{iteration}",
+                    title="staged_oversized_output",
+                    content=content,
+                    metadata={"stage": "tool_loop", "generation_mode": "staged"},
+                )
+                content = (
+                    f"Output was too large for one response. Saved full draft to context blob. "
+                    f"Here is a concise manifest-style continuation.\nref_count=1\nnext_phase=phase_1\n"
+                    f"Use context_read_ref(ref=\"{full_ref}\") only if needed."
+                )
+                llm_result["content"] = content
             
             # Save intermediate chatlog after EVERY LLM call (for recovery on interruption)
             # Use asyncio.to_thread to avoid blocking the event loop
@@ -3239,8 +3298,13 @@ You have access to the following tools. When a user asks you to do something tha
             latest_user_text = ""
             latest_user_text = str(message or "")
             if _requires_source_complete_context(latest_user_text, skill_runtime_config, skill, []):
-                jira_hint = _extract_jira_key_or_url(latest_user_text)
-                confluence_hint = _extract_confluence_page_hint(latest_user_text)
+                source_target = _find_source_target_for_context(
+                    latest_user_text,
+                    messages=[],
+                    context_state={"source": (skill_state.get("source") if isinstance(skill_state, dict) else {})},
+                )
+                jira_hint = source_target.get("target") if source_target.get("source_type") == "jira" else ""
+                confluence_hint = source_target.get("target") if source_target.get("source_type") == "confluence" else ""
                 source_manifest = ""
                 if jira_hint:
                     prepared = await _execute_tool_via_runtime_bus(
@@ -3257,7 +3321,7 @@ You have access to the following tools. When a user asks you to do something tha
                     )
                     source_manifest = str(prepared.content or "")
                 if source_manifest:
-                    input_items.append({"role": "assistant", "content": source_manifest})
+                    input_items.append({"role": "assistant", "content": f"[auto source context prepared]\n{source_manifest}"})
                     llm_kwargs["input_items"] = input_items
             large_generation_guard = _large_generation_output_guard(
                 active_skill_runtime=skill_runtime_config,
@@ -3347,41 +3411,30 @@ You have access to the following tools. When a user asks you to do something tha
             logger.debug(f"[SkillMode] LLM response content length={len(llm_result.get('content', '') or '')}")
 
             if llm_result.get("error"):
-                error_info = llm_result["error"]
-                if error_info.get("code") == "max_output_tokens_exceeded":
-                    retry_kwargs = dict(llm_kwargs)
-                    retry_kwargs["system_prompt"] = (
-                        (retry_kwargs.get("system_prompt") or "")
-                        + "\n\nRecovery mode: Output hit max_output_tokens. Return concise staged manifest only."
-                    ).strip()
-                    retry_kwargs["input_items"] = list(retry_kwargs.get("input_items") or []) + [
-                        {"role": "user", "content": [{"type": "input_text", "text": "Continue in staged concise mode only."}]}
-                    ]
-                    retry_result = await llm_client.responses(**retry_kwargs)
-                    skill_request_budget["max_output_recovery_applied"] = True
-                    skill_request_budget["max_output_recovery_attempts"] = 1
-                    if not retry_result.get("error"):
-                        llm_result = retry_result
-                    else:
-                        llm_result = {"content": "The requested output is too large for a single response. I will proceed by stages.", "function_calls": [], "usage": llm_result.get("usage", {})}
+                llm_result, _recovered = await _recover_max_output_tokens(
+                    llm_result=llm_result,
+                    llm_kwargs=llm_kwargs,
+                    loop_context_state={"budget": skill_request_budget},
+                    stage_hint="skill_generation",
+                )
                 if llm_result.get("error"):
                     error_info = llm_result["error"]
-                error_msg = error_info.get("message", "Unknown LLM error")
-                logger.error(f"[SkillMode] LLM error: {error_msg}")
-                error_response = {
-                    "error": error_msg,
-                    "error_type": error_info.get("type", "llm_error"),
-                    "code": error_info.get("code", ""),
-                    "user_message_id": user_message_id,
-                }
-                details = error_info.get("details")
-                status_code = error_info.get("status_code")
-                if isinstance(details, dict):
-                    error_response["details"] = details
-                if isinstance(status_code, int):
-                    error_response["status_code"] = status_code
-                _merge_budget_into_error_details(error_response, skill_request_budget)
-                return error_response
+                    error_msg = error_info.get("message", "Unknown LLM error")
+                    logger.error(f"[SkillMode] LLM error: {error_msg}")
+                    error_response = {
+                        "error": error_msg,
+                        "error_type": error_info.get("type", "llm_error"),
+                        "code": error_info.get("code", ""),
+                        "user_message_id": user_message_id,
+                    }
+                    details = error_info.get("details")
+                    status_code = error_info.get("status_code")
+                    if isinstance(details, dict):
+                        error_response["details"] = details
+                    if isinstance(status_code, int):
+                        error_response["status_code"] = status_code
+                    _merge_budget_into_error_details(error_response, skill_request_budget)
+                    return error_response
 
             if track_usage:
                 iter_usage = llm_result.get("usage", {}) or {}
@@ -3392,6 +3445,19 @@ You have access to the following tools. When a user asks you to do something tha
                 }
 
             raw_output = (llm_result.get("content") or "").strip()
+            if skill_request_budget.get("generation_mode") == "staged" and isinstance(raw_output, str) and len(raw_output) > 8000:
+                full_ref = put_text(
+                    session_id=session_id,
+                    kind="assistant_skill_output",
+                    source_id=f"skill_staged_round_{round_num+1}",
+                    title="skill_staged_oversized_output",
+                    content=raw_output,
+                    metadata={"generation_mode": "staged"},
+                )
+                raw_output = (
+                    "Output was too large for one response. Saved full draft to context blob and continuing in staged mode.\n"
+                    f"ref_count=1\nnext_phase=phase_1\nUse context_read_ref(ref=\"{full_ref}\") if needed."
+                )
             function_calls = llm_result.get("function_calls", []) or llm_result.get("tool_calls", []) or []
             turn_state.has_function_calls = bool(function_calls)
 

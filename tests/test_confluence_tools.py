@@ -142,12 +142,35 @@ async def test_confluence_prepare_page_context_persists_manifest(monkeypatch):
         def get_instance_client(self, **kwargs): return self
         async def get_page(self, page_id):
             return {"id": page_id, "title": "Page", "space": {"key": "DOC"}, "body": {"storage": {"value": "<p>hello</p>"}}}
-        async def get_comments(self, page_id): return [{"id": "1", "body": {"storage": {"value": "c1"}}}]
-        async def get_attachments(self, page_id): return [{"id": "a1", "title": "a.txt"}]
-        async def get_page_children(self, page_id): return [{"id": "c1", "title": "child"}]
+        async def get_all_comments_with_ledger(self, page_id, limit=100):
+            return ([{"id": str(i)} for i in range(150)], {"loaded": 150, "total": 150, "complete": True})
+        async def get_all_attachments_with_ledger(self, page_id, limit=100):
+            return ([{"id": "a1", "title": "a.txt"}], {"loaded": 1, "total": 1, "complete": True})
+        async def get_all_page_children_with_ledger(self, page_id, limit=100):
+            return ([{"id": "c1", "title": "child"}], {"loaded": 1, "total": 1, "complete": True})
 
     monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
     out = await confluence_prepare_page_context("123", include_children=True, _session_id="s-conf-prepare")
     assert "[confluence source bundle prepared]" in out
     assert "source_complete: True" in out
-    assert "comments_loaded: 1/1" in out
+    assert "comments_loaded: 150/150" in out
+
+
+@pytest.mark.asyncio
+async def test_confluence_prepare_page_context_marks_partial_when_pagination_incomplete(monkeypatch):
+    from src.confluence import confluence_prepare_page_context
+
+    class _Channel:
+        def is_configured(self): return True
+        def get_instance_client(self, **kwargs): return self
+        async def get_page(self, page_id): return {"id": page_id, "title": "Page", "body": {"storage": {"value": "<p>x</p>"}}}
+        async def get_all_comments_with_ledger(self, page_id, limit=100):
+            return ([{"id": "1"}], {"loaded": 1, "total": 2, "complete": False})
+        async def get_all_attachments_with_ledger(self, page_id, limit=100):
+            return ([], {"loaded": 0, "total": 0, "complete": True})
+        async def get_all_page_children_with_ledger(self, page_id, limit=100):
+            return ([], {"loaded": 0, "total": 0, "complete": True})
+
+    monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
+    out = await confluence_prepare_page_context("123", _session_id="s-conf-partial")
+    assert "source_complete: False" in out

@@ -152,15 +152,28 @@ def persist_jira_source_bundle_and_digest(
             idx = i // 25 + 1
             chunk_payloads.append((f"comments_chunk_{idx}", json.dumps({"comments": comments[i:i + 25]}, ensure_ascii=False, indent=2)))
     for chunk_kind, chunk_body in chunk_payloads:
-        chunk_ref = put_text(
-            session_id=session_id,
-            kind="jira_source_digest_chunk",
-            source_id=f"{issue_key}_{chunk_kind}",
-            title=f"Jira digest chunk {chunk_kind}",
-            content=truncate(chunk_body, 12000),
-            metadata={"issue_key": issue_key, "chunk_kind": chunk_kind},
-        )
-        chunk_refs.append(chunk_ref)
+        if len(chunk_body) <= 12000:
+            chunk_ref = put_text(
+                session_id=session_id,
+                kind="jira_source_digest_chunk",
+                source_id=f"{issue_key}_{chunk_kind}",
+                title=f"Jira digest chunk {chunk_kind}",
+                content=chunk_body,
+                metadata={"issue_key": issue_key, "chunk_kind": chunk_kind},
+            )
+            chunk_refs.append(chunk_ref)
+            continue
+        for part_idx, start in enumerate(range(0, len(chunk_body), 10000), 1):
+            part_body = chunk_body[start:start + 10000]
+            chunk_ref = put_text(
+                session_id=session_id,
+                kind="jira_source_digest_chunk",
+                source_id=f"{issue_key}_{chunk_kind}_part_{part_idx}",
+                title=f"Jira digest chunk {chunk_kind} part {part_idx}",
+                content=part_body,
+                metadata={"issue_key": issue_key, "chunk_kind": chunk_kind, "part_index": part_idx},
+            )
+            chunk_refs.append(chunk_ref)
     digest_overview = (
         digest["digest_text"]
         + "\n\n[source digest chunks]\n"

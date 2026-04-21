@@ -308,9 +308,9 @@ async def confluence_prepare_page_context(
             instance_channel = confluence_channel.get_instance_client(url=target) or confluence_channel
 
         page = await instance_channel.get_page(page_id)
-        comments = await instance_channel.get_comments(page_id) if include_comments else []
-        attachments = await instance_channel.get_attachments(page_id) if include_attachments else []
-        children = await instance_channel.get_page_children(page_id) if include_children else []
+        comments, comments_ledger = await instance_channel.get_all_comments_with_ledger(page_id) if include_comments else ([], {"loaded": 0, "total": 0, "complete": True})
+        attachments, attachments_ledger = await instance_channel.get_all_attachments_with_ledger(page_id) if include_attachments else ([], {"loaded": 0, "total": 0, "complete": True})
+        children, children_ledger = await instance_channel.get_all_page_children_with_ledger(page_id) if include_children else ([], {"loaded": 0, "total": 0, "complete": True})
 
         partial_reasons = []
         comments = comments or []
@@ -327,15 +327,23 @@ async def confluence_prepare_page_context(
             partial_reasons.append("children_unavailable")
 
         ledger = {
-            "comments_loaded": len(comments),
-            "comments_total": len(comments),
-            "attachments_loaded": len(attachments),
-            "attachments_total": len(attachments),
-            "children_loaded": len(children),
-            "children_total": len(children),
+            "comments_loaded": int(comments_ledger.get("loaded", len(comments))),
+            "comments_total": int(comments_ledger.get("total", len(comments))),
+            "comments_complete": bool(comments_ledger.get("complete", False)),
+            "attachments_loaded": int(attachments_ledger.get("loaded", len(attachments))),
+            "attachments_total": int(attachments_ledger.get("total", len(attachments))),
+            "attachments_complete": bool(attachments_ledger.get("complete", False)),
+            "children_loaded": int(children_ledger.get("loaded", len(children))),
+            "children_total": int(children_ledger.get("total", len(children))),
+            "children_complete": bool(children_ledger.get("complete", False)),
             "partial_reasons": partial_reasons,
         }
-        ledger["source_complete"] = not partial_reasons
+        ledger["source_complete"] = (
+            not partial_reasons
+            and ledger["comments_complete"]
+            and ledger["attachments_complete"]
+            and ledger["children_complete"]
+        )
 
         adapter = ConfluenceFormatAdapter(instance_channel)
         bundle = {
