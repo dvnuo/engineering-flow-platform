@@ -526,6 +526,90 @@ def test_resolve_output_boundary_uses_model_limit_tokens():
     assert boundary["max_chat_output_chars"] >= 200000
 
 
+def test_resolve_output_boundary_ignores_legacy_8k_override(monkeypatch):
+    from src.config import config, resolve_output_boundary
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {
+            "model": "gpt-5.4-mini",
+            "max_tokens": 64000,
+            "output_controller": {"max_chat_output_chars": 7000, "chars_per_token_estimate": 4},
+            "model_limits": {
+                "gpt-5.4-mini": {
+                    "max_context_window_tokens": 264000,
+                    "max_prompt_tokens": 128000,
+                    "max_output_tokens": 64000,
+                }
+            },
+        },
+    )
+    boundary = resolve_output_boundary("gpt-5.4-mini")
+    assert boundary["max_chat_output_chars"] >= 200000
+    assert boundary["legacy_max_chat_output_chars_ignored"] is True
+    assert boundary["output_boundary_source"] == "model_limits_legacy_override_ignored"
+
+
+def test_resolve_output_boundary_allows_low_override_when_explicit(monkeypatch):
+    from src.config import config, resolve_output_boundary
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {
+                "model": "gpt-5.4-mini",
+                "max_tokens": 64000,
+                "output_controller": {
+                "max_chat_output_chars": 7000,
+                "allow_low_max_chat_output_chars": True,
+                "chars_per_token_estimate": 4,
+            },
+            "model_limits": {
+                "gpt-5.4-mini": {
+                    "max_context_window_tokens": 264000,
+                    "max_prompt_tokens": 128000,
+                    "max_output_tokens": 64000,
+                }
+            },
+        },
+    )
+    boundary = resolve_output_boundary("gpt-5.4-mini")
+    assert boundary["max_chat_output_chars"] == 7000
+    assert boundary["legacy_max_chat_output_chars_ignored"] is False
+
+
+def test_resolve_output_boundary_defaults_to_derived_chars(monkeypatch):
+    from src.config import config, resolve_output_boundary
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {
+            "model": "gpt-5.4-mini",
+            "max_tokens": 64000,
+            "output_controller": {"max_chat_output_tokens": 60000, "chars_per_token_estimate": 4},
+            "model_limits": {
+                "gpt-5.4-mini": {
+                    "max_context_window_tokens": 264000,
+                    "max_prompt_tokens": 128000,
+                    "max_output_tokens": 64000,
+                }
+            },
+        },
+    )
+    boundary = resolve_output_boundary("gpt-5.4-mini")
+    assert boundary["max_chat_output_chars"] == 240000
+
+
+def test_compaction_context_window_defaults_do_not_assume_8k():
+    from src.agents import compaction
+
+    assert inspect.signature(compaction.summarize_with_fallback).parameters["context_window"].default is None
+    assert inspect.signature(compaction.summarize_in_stages).parameters["context_window"].default is None
+    assert inspect.signature(compaction.compact_messages).parameters["context_window"].default is None
+
+
 @pytest.mark.asyncio
 async def test_output_controller_treats_warning_truncation_as_recovery():
     from src.runtime.output_controller import call_llm_with_output_control
@@ -670,6 +754,28 @@ async def test_output_controller_bounds_huge_content_medium_risk():
         max_chat_output_chars=240000,
     )
     assert len(result.get("content") or "") == 50000
+
+
+@pytest.mark.asyncio
+async def test_output_controller_allows_100k_below_real_boundary():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "M" * 100000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "chat", "tools": [], "model": "gpt-5.4-mini"},
+        session_id="s-medium-100k",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="generate docs",
+        max_chat_output_chars=None,
+    )
+    assert len(result.get("content") or "") == 100000
+    assert diag.get("output_bounding", {}).get("bounded") is False
 
 
 @pytest.mark.asyncio

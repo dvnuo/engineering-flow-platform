@@ -462,6 +462,28 @@ def test_resolve_model_limits_for_gpt_54_mini():
     assert limits["max_output_tokens"] == 64000
 
 
+def test_resolve_context_window_tokens_uses_configured_model_limit(monkeypatch):
+    from src.agents.compaction import resolve_context_window_tokens
+    from src.config import config
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {
+            "model": "gpt-5.4-mini",
+            "max_tokens": 64000,
+            "model_limits": {
+                "gpt-5.4-mini": {
+                    "max_context_window_tokens": 264000,
+                    "max_prompt_tokens": 128000,
+                    "max_output_tokens": 64000,
+                }
+            },
+        },
+    )
+    assert resolve_context_window_tokens(None) == 264000
+
+
 @pytest.mark.asyncio
 async def test_projection_runs_before_threshold_checks_and_compacts_old_assistant(monkeypatch):
     old = "Feature: Big\n" + ("\nScenario: very long\nGiven x" * 4000)

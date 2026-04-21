@@ -758,16 +758,33 @@ def resolve_output_boundary(model: Optional[str] = None) -> Dict[str, int | str]
     max_chat_output_tokens = min(max_chat_output_tokens, max_output_tokens)
     chars_per_token = _safe_positive_int(output_cfg.get("chars_per_token_estimate"), 4)
     configured_chars = output_cfg.get("max_chat_output_chars")
+    derived_chars = max_chat_output_tokens * chars_per_token
+    min_reasonable_chars = int(derived_chars * 0.25)
+    legacy_ignored = False
+    boundary_source = "model_limits_derived"
     if configured_chars in (None, "", "null"):
-        max_chat_output_chars = max_chat_output_tokens * chars_per_token
+        max_chat_output_chars = derived_chars
     else:
-        max_chat_output_chars = _safe_positive_int(configured_chars, max_chat_output_tokens * chars_per_token)
+        parsed_chars = _safe_positive_int(configured_chars, derived_chars)
+        allow_low = bool(output_cfg.get("allow_low_max_chat_output_chars", False))
+        if parsed_chars < min_reasonable_chars and not allow_low:
+            max_chat_output_chars = derived_chars
+            legacy_ignored = True
+            boundary_source = "model_limits_legacy_override_ignored"
+        else:
+            max_chat_output_chars = parsed_chars
+            boundary_source = "config_override"
     strategy = str(output_cfg.get("oversized_output_strategy") or "save_and_manifest")
     return {
+        "max_context_window_tokens": int(limits.get("max_context_window_tokens") or 264000),
+        "max_prompt_tokens": int(limits.get("max_prompt_tokens") or 128000),
         "max_output_tokens": max_output_tokens,
         "max_chat_output_tokens": max_chat_output_tokens,
         "chars_per_token_estimate": chars_per_token,
         "max_chat_output_chars": max_chat_output_chars,
+        "configured_max_chat_output_chars": str(configured_chars) if configured_chars is not None else None,
+        "legacy_max_chat_output_chars_ignored": legacy_ignored,
+        "output_boundary_source": boundary_source,
         "oversized_output_strategy": strategy,
     }
 

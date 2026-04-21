@@ -433,7 +433,7 @@ async def summarize_with_fallback(
     summarize_func: Optional[Callable] = None,
     reserve_tokens: int = 1000,
     max_chunk_tokens: int = 4000,
-    context_window: int = 8000,
+    context_window: Optional[int] = None,
     custom_instructions: Optional[str] = None,
     previous_summary: Optional[str] = None,
 ) -> str:
@@ -455,6 +455,7 @@ async def summarize_with_fallback(
     """
     if not messages:
         return previous_summary or DEFAULT_SUMMARY_FALLBACK
+    context_window = int(context_window or resolve_context_window_tokens(None))
     
     # Try full summarization first
     try:
@@ -509,7 +510,7 @@ async def summarize_in_stages(
     summarize_func: Optional[Callable] = None,
     reserve_tokens: int = 1000,
     max_chunk_tokens: int = 4000,
-    context_window: int = 8000,
+    context_window: Optional[int] = None,
     custom_instructions: Optional[str] = None,
     previous_summary: Optional[str] = None,
     parts: Optional[int] = None,
@@ -533,6 +534,7 @@ async def summarize_in_stages(
     """
     if not messages:
         return previous_summary or DEFAULT_SUMMARY_FALLBACK
+    context_window = int(context_window or resolve_context_window_tokens(None))
     
     normalized_parts = normalize_parts(parts or DEFAULT_PARTS, len(messages))
     total_tokens = estimate_messages_tokens(messages)
@@ -721,7 +723,7 @@ async def compact_messages(
     messages: List[AgentMessage],
     max_tokens: int,
     summarize_func: Optional[Callable] = None,
-    context_window: int = 8000,
+    context_window: Optional[int] = None,
     recent_count: int = 3,
 ) -> Tuple[List[AgentMessage], CompactionStats]:
     """Compact messages for token optimization.
@@ -740,6 +742,7 @@ async def compact_messages(
     """
     if not messages:
         return [], CompactionStats()
+    context_window = int(context_window or resolve_context_window_tokens(None))
     
     # Estimate current tokens
     current_tokens = estimate_messages_tokens(messages)
