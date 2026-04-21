@@ -12,6 +12,7 @@ from .api import (
 )
 from .adapter import ConfluenceFormatAdapter, _extract_page_id_from_url
 from src.source_context import persist_confluence_source_bundle_and_digest
+from src.context_blob_store import put_text
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +313,12 @@ async def confluence_prepare_page_context(
     include_raw_snapshot: bool = True,
     _session_id: Optional[str] = None,
 ) -> str:
-    """Prepare source-complete Confluence page bundle + digest refs."""
+    """Prepare source-complete Confluence page context.
+
+    Default behavior includes page body, comments, attachments, and children.
+    Descendants beyond direct children are not currently supported and are
+    explicitly reflected in the completeness ledger.
+    """
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
@@ -353,6 +359,7 @@ async def confluence_prepare_page_context(
             partial_reasons.append("children_not_requested")
 
         ledger = {
+            "page_body_complete": bool(page),
             "comments_loaded": int(comments_ledger.get("loaded", len(comments))),
             "comments_total": int(comments_ledger.get("total", len(comments))),
             "comments_complete": bool(comments_ledger.get("complete", False)),
@@ -362,13 +369,24 @@ async def confluence_prepare_page_context(
             "children_loaded": int(children_ledger.get("loaded", len(children))),
             "children_total": int(children_ledger.get("total", len(children))),
             "children_complete": bool(children_ledger.get("complete", False)),
+            "descendants_supported": False,
+            "descendants_complete": False,
             "partial_reasons": partial_reasons,
         }
+        if include_children:
+            ledger["partial_reasons"].append("descendants_not_supported")
+        ledger["source_complete_definition"] = (
+            "source_complete requires page_body_complete, comments_complete, attachments_complete, "
+            "children_complete, and descendants coverage support. descendants are currently unsupported."
+        )
         ledger["source_complete"] = (
             not partial_reasons
+            and ledger["page_body_complete"]
             and ledger["comments_complete"]
             and ledger["attachments_complete"]
             and ledger["children_complete"]
+            and ledger["descendants_supported"]
+            and ledger["descendants_complete"]
         )
 
         adapter = ConfluenceFormatAdapter(instance_channel)
@@ -398,6 +416,9 @@ async def confluence_prepare_page_context(
             "comments_loaded": f"{ledger['comments_loaded']}/{ledger['comments_total']}",
             "attachments_loaded": f"{ledger['attachments_loaded']}/{ledger['attachments_total']}",
             "children_loaded": f"{ledger['children_loaded']}/{ledger['children_total']}",
+            "descendants_supported": ledger.get("descendants_supported", False),
+            "descendants_complete": ledger.get("descendants_complete", False),
+            "source_complete_definition": ledger.get("source_complete_definition", ""),
             "partial_reasons": partial_reasons,
             "sections": ["metadata", "content", "comments", "attachments", "children", "raw_snapshot"],
         }
@@ -458,28 +479,39 @@ async def confluence_update_page(
         return f"Error updating page: {e}"
 
 
-async def confluence_get_comments(page_id: str) -> str:
-    """Get all comments on a Confluence page."""
+async def confluence_get_comments(page_id: str, _session_id: Optional[str] = None) -> str:
+    """Get source-complete Confluence comments with ledger and context refs."""
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await confluence_channel.get_comments(page_id)
-        
-        if isinstance(result, dict):
-            comments = result.get("results", [])
-            if not comments:
-                return "No comments found."
-            
-            lines = [f"**Comments** ({len(comments)}):\n"]
-            for c in comments:
-                if not isinstance(c, dict):
-                    continue
-                body = c.get("body", {})
-                if isinstance(body, dict):
-                    body = body.get("storage", {}).get("value", "")
-                lines.append(f"- {body}")
-            return "\n".join(lines)
-        return str(result)
+        comments, ledger = await confluence_channel.get_all_comments_with_ledger(page_id)
+        comments = comments or []
+        ledger = ledger or {}
+        context_ref = put_text(
+            session_id=_session_id or "unknown_session",
+            kind="confluence_comments_bundle",
+            source_id=page_id,
+            title=f"Confluence comments {page_id}",
+            content=json.dumps({"page_id": page_id, "comments": comments}, ensure_ascii=False, indent=2),
+            metadata={"page_id": page_id, "comments_complete": bool(ledger.get("complete", False))},
+        )
+        preview_lines = []
+        for c in comments[:5]:
+            if not isinstance(c, dict):
+                continue
+            body = c.get("body", {})
+            if isinstance(body, dict):
+                body = body.get("storage", {}).get("value", "")
+            preview_lines.append(f"- {str(body)[:240]}")
+        return (
+            "[confluence comments prepared]\n"
+            f"page_id: {page_id}\n"
+            f"context_ref: {context_ref}\n"
+            f"comments_loaded: {int(ledger.get('loaded', len(comments)))}/{int(ledger.get('total', len(comments)))}\n"
+            f"comments_complete: {bool(ledger.get('complete', False))}\n"
+            "preview:\n"
+            + ("\n".join(preview_lines) if preview_lines else "- (no comments)")
+        )
     except Exception as e:
         return f"Error getting comments: {e}"
 
@@ -724,14 +756,14 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "confluence_prepare_page_context",
-                "description": "Prepare complete-source Confluence page context for generation workflows.",
+                "description": "Prepare source-complete Confluence page context (body + comments + attachments + children) for generation workflows.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "page_id_or_url": {"type": "string", "description": "Confluence page ID or full URL"},
                         "include_comments": {"type": "boolean", "default": True},
                         "include_attachments": {"type": "boolean", "default": True},
-                        "include_children": {"type": "boolean", "default": False},
+                        "include_children": {"type": "boolean", "default": True},
                         "include_raw_snapshot": {"type": "boolean", "default": True}
                     },
                     "required": ["page_id_or_url"]

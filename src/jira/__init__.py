@@ -402,24 +402,32 @@ async def jira_prepare_issue_context(
             "issue_loaded": bool(issue),
             "raw_issue_loaded": bool(issue),
             "names_loaded": bool(issue.get("names")) if isinstance(issue, dict) else False,
+            "issue_fields_complete": bool(fields),
             "comments_loaded": len(comments),
             "comments_total": comments_total,
             "comments_complete": len(comments) >= comments_total,
             "attachments_metadata_loaded": len(attachments),
             "attachments_total": len(attachment_list),
             "attachments_metadata_complete": len(attachments) >= len(attachment_list),
+            "attachment_metadata_complete": len(attachments) >= len(attachment_list),
             "text_attachments_loaded": text_attachments_loaded,
             "text_attachments_total": text_attachments_total,
             "text_attachments_complete": text_attachments_loaded >= text_attachments_total,
+            "text_attachment_bodies_complete": text_attachments_loaded >= text_attachments_total and text_attachments_preview_only == 0,
             "text_attachments_full_loaded": text_attachments_full_loaded,
             "text_attachments_preview_only": text_attachments_preview_only,
             "binary_attachments_count": binary_attachments_count,
+            "binary_attachment_bodies_available": False,
             "binary_attachment_bodies_skipped_count": binary_attachment_bodies_skipped_count,
             "attachment_body_complete": text_attachments_preview_only == 0 and binary_attachment_bodies_skipped_count == 0,
             "attachment_body_partial_reasons": attachment_body_partial_reasons + [f"binary_attachment_body_skipped:{att.get('filename','unknown')}" for att in attachment_list if not (str(att.get('mimeType') or '').startswith('text/') or str(att.get('filename') or '').lower().endswith((".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".xml", ".log")))],
             "raw_fields_loaded": bool(fields),
             "rendered_fields_loaded": bool(rendered_fields),
             "custom_fields_loaded": bool(issue.get("names")) if isinstance(issue, dict) else False,
+            "source_complete_definition": (
+                "source_complete requires issue fields, all comments, attachment metadata, and text attachment bodies. "
+                "Binary attachment bodies are metadata-only by design and do not block source_complete."
+            ),
             "partial_reasons": partial_reasons,
         },
     }
@@ -429,8 +437,8 @@ async def jira_prepare_issue_context(
         ledger["issue_loaded"]
         and ledger["raw_issue_loaded"]
         and ledger["comments_complete"]
-        and ledger["attachments_metadata_complete"]
-        and ledger["text_attachments_complete"]
+        and ledger["attachment_metadata_complete"]
+        and ledger["text_attachment_bodies_complete"]
         and ledger["names_loaded"]
         and ledger["rendered_fields_loaded"]
         and not blocking_partial_reasons
@@ -605,8 +613,10 @@ def get_tools_schemas() -> list:
     for name, schema in enhanced_schemas.items():
         if name not in seen_names:
             result.append(schema)
-    
-    return result
+
+    # Export tool is intentionally internal/export-oriented; keep it out of
+    # model-facing default schemas to avoid partial source acquisition paths.
+    return [schema for schema in result if (schema.get("function", {}).get("name") != "export_issues_to_markdown")]
 
 
 def _get_all_schemas() -> list:
@@ -787,49 +797,6 @@ def _get_all_schemas() -> list:
                         "issue_key": {"type": "string", "description": "Jira issue key"}
                     },
                     "required": ["issue_key"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "export_issues_to_markdown",
-                "description": "Export one or more Jira issues to Markdown. Supports single issue key, comma-separated keys, or JQL input. Can write per-issue files, a combined file, or produce a zip.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "input": {
-                            "type": "string",
-                            "description": "Issue input as a string. Accepts a single issue key (e.g., 'PROJ-123'), comma-separated keys ('PROJ-1,PROJ-2'), or a JQL query string prefixed with 'jql:' (e.g., 'jql:project = PROJ AND status != Done')."
-                        },
-                        "jql": {
-                            "type": "string",
-                            "description": "Optional JQL query string (alternative to using 'input' with 'jql:' prefix)."
-                        },
-                        "page_size": {
-                            "type": "integer",
-                            "description": "Optional page size when using JQL",
-                            "default": 50
-                        },
-                        "output_mode": {"type": "string", "enum": ["single_combined", "one_file_per_issue", "zip_per_issue"], "default": "single_combined"},
-                        "output_directory": {"type": "string", "description": "Directory to write files (required for file modes)"},
-                        "download_attachments": {"type": "boolean", "description": "Whether to download attachments"},
-                        "attachments_dir": {"type": "string", "description": "Relative attachments directory under output_directory"},
-                        "attachments_concurrency": {"type": "integer", "description": "Concurrent downloads for attachments", "default": 4},
-                        "attachments_max_size": {"type": "integer", "description": "Maximum attachment download size in bytes", "default": 52428800},
-                        "attachments_inline_text_threshold": {"type": "integer", "description": "Max chars for inline text embedding", "default": 2000},
-                        "attachments_retries": {"type": "integer", "description": "Retry attempts for attachment downloads", "default": 3},
-                        "attachments_backoff": {"type": "array", "items": {"type": "integer"}, "description": "Backoff seconds for retries", "default": [1,2,4]},
-                        "attachments_preserve_binary": {"type": "boolean", "description": "Whether to preserve and copy the original binary files", "default": True},
-                        "include_raw_snapshot": {"type": "boolean", "description": "Include a raw fields snapshot in the Markdown"},
-                        "max_comments": {"type": "integer", "description": "Maximum number of comments to include", "default": 10},
-                        "comments_order": {"type": "string", "enum": ["latest_first", "oldest_first"], "default": "latest_first"},
-                        "field_match_threshold": {"type": "number", "description": "Similarity threshold for custom field matching", "default": 0.9},
-                        "field_similarity_threshold": {"type": "number", "description": "Similarity threshold for content de-duplication", "default": 0.9},
-                        "array_inline_max_items": {"type": "integer", "default": 3},
-                        "array_inline_max_element_length": {"type": "integer", "default": 40}
-                    },
-                    "required": ["input"]
                 }
             }
         },

@@ -2384,6 +2384,8 @@ You have access to the following tools. When a user asks you to do something tha
                 if isinstance(output_diag, dict):
                     loop_context_state["budget"]["output_risk_level"] = output_diag.get("output_risk_level")
                     loop_context_state["budget"]["generation_mode"] = output_diag.get("generation_mode") or loop_context_state["budget"].get("generation_mode")
+                    if isinstance(output_diag.get("generation"), dict):
+                        loop_context_state["generation"] = dict(output_diag.get("generation"))
             # Check for LLM configuration error
             if llm_result.get("error"):
                 error_info = llm_result["error"]
@@ -3406,6 +3408,8 @@ You have access to the following tools. When a user asks you to do something tha
                 skill_request_budget["output_controller_applied"] = True
                 skill_request_budget["output_risk_level"] = output_diag.get("output_risk_level")
                 skill_request_budget["generation_mode"] = output_diag.get("generation_mode") or skill_request_budget.get("generation_mode")
+                if isinstance(output_diag.get("generation"), dict):
+                    skill_state["generation"] = dict(output_diag.get("generation"))
             if llm_result.get("error"):
                 error_info = llm_result["error"]
                 error_msg = error_info.get("message", "Unknown LLM error")

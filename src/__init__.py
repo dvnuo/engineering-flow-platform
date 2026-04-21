@@ -552,7 +552,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
             page_id_or_url=kwargs.get("page_id_or_url", ""),
             include_comments=True if kwargs.get("include_comments") is None else kwargs.get("include_comments"),
             include_attachments=True if kwargs.get("include_attachments") is None else kwargs.get("include_attachments"),
-            include_children=False if kwargs.get("include_children") is None else kwargs.get("include_children"),
+            include_children=True if kwargs.get("include_children") is None else kwargs.get("include_children"),
             include_raw_snapshot=True if kwargs.get("include_raw_snapshot") is None else kwargs.get("include_raw_snapshot"),
             _session_id=kwargs.get("_session_id"),
         )
@@ -595,7 +595,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     
     elif name == "confluence_get_comments":
         page_id = kwargs.get("page_id", "")
-        result = await confluence_module.confluence_get_comments(page_id)
+        result = await confluence_module.confluence_get_comments(page_id, _session_id=kwargs.get("_session_id"))
         return ToolResult(success="Error" not in result, content=result)
     
     elif name == "confluence_add_comment":

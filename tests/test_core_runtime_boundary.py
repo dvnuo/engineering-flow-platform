@@ -477,6 +477,66 @@ async def test_output_controller_bounds_huge_content_in_staged_mode():
     assert diag.get("output_bounding", {}).get("bounded") is True
 
 
+@pytest.mark.asyncio
+async def test_output_controller_treats_warning_truncation_as_recovery():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+        async def responses(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "content": "partial body",
+                    "truncated": True,
+                    "warning": {"type": "truncated_response", "code": "max_output_tokens_exceeded"},
+                }
+            return {"content": "manifest", "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate full spec", "tools": []},
+        session_id="s-warn",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="generate tests",
+    )
+    assert "error" not in result
+    assert diag["max_output_recovery"]["applied"] is True
+    assert state["budget"]["output_controller_recovery_reason"] == "max_output_tokens"
+
+
+@pytest.mark.asyncio
+async def test_output_controller_generation_state_machine_advances_on_continue():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "phase content", "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    _, diag1 = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate implementation", "tools": []},
+        session_id="s-gen",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="generate implementation",
+    )
+    assert diag1.get("generation", {}).get("current_generation_phase") == "manifest"
+    _, diag2 = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "continue staged", "tools": []},
+        session_id="s-gen",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="continue",
+    )
+    assert diag2.get("generation", {}).get("current_generation_phase") in {"phase_1", "phase_2"}
+
+
 def test_core_and_skill_mode_do_not_call_llm_client_responses_directly():
     from src.agents import core
     from src.agents import skill_mode

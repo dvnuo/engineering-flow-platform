@@ -132,6 +132,7 @@ def test_confluence_prepare_page_context_schema_exists_without_max_chars():
     schemas = get_tools_schemas()
     schema = next(s for s in schemas if s["function"]["name"] == "confluence_prepare_page_context")
     assert "max_chars" not in schema["function"]["parameters"]["properties"]
+    assert schema["function"]["parameters"]["properties"]["include_children"]["default"] is True
 
 
 def test_confluence_preview_tools_not_model_facing():
@@ -161,8 +162,9 @@ async def test_confluence_prepare_page_context_persists_manifest(monkeypatch):
     monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
     out = await confluence_prepare_page_context("123", include_children=True, _session_id="s-conf-prepare")
     assert "[confluence source bundle prepared]" in out
-    assert "source_complete: True" in out
+    assert "source_complete: False" in out
     assert "comments_loaded: 150/150" in out
+    assert "descendants_not_supported" in out
 
 
 @pytest.mark.asyncio
@@ -183,6 +185,7 @@ async def test_confluence_prepare_page_context_marks_partial_when_pagination_inc
     monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
     out = await confluence_prepare_page_context("123", _session_id="s-conf-partial")
     assert "source_complete: False" in out
+    assert "descendants_supported" in out
 
 
 @pytest.mark.asyncio
@@ -228,3 +231,40 @@ async def test_execute_tool_confluence_get_page_by_url_uses_session_scoped_conte
     ref = re.search(r"context_ref:\s*(ctx://context/[^\s\"\\]+)", result.content).group(1)
     read_back = await context_read_ref(ref=ref, _session_id="s1")
     assert "source bundle" in read_back.lower() or "metadata" in read_back.lower()
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_confluence_prepare_context_defaults_include_children(monkeypatch):
+    from src import execute_tool
+
+    captured = {}
+
+    async def _fake_prepare(*, page_id_or_url, include_comments=True, include_attachments=True, include_children=True, include_raw_snapshot=True, _session_id=None):
+        captured["include_children"] = include_children
+        return "ok"
+
+    monkeypatch.setattr("src.confluence.confluence_prepare_page_context", _fake_prepare)
+    result = await execute_tool("confluence_prepare_page_context", page_id_or_url="123", _session_id="s2")
+    assert result.success is True
+    assert captured["include_children"] is True
+
+
+@pytest.mark.asyncio
+async def test_confluence_get_comments_is_ledger_aware_and_bounded(monkeypatch):
+    from src.confluence import confluence_get_comments
+    from src.context_blob_store import read_ref
+
+    class _Channel:
+        def is_configured(self): return True
+        async def get_all_comments_with_ledger(self, page_id, limit=100):
+            comments = [{"id": str(i), "body": {"storage": {"value": "x" * 400}}} for i in range(120)]
+            return comments, {"loaded": 120, "total": 120, "complete": True}
+
+    monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
+    out = await confluence_get_comments("555", _session_id="s-com")
+    assert "[confluence comments prepared]" in out
+    assert "comments_loaded: 120/120" in out
+    assert "comments_complete: True" in out
+    ref = re.search(r"context_ref:\s*(ctx://context/[^\s\"\\]+)", out).group(1)
+    raw = read_ref(ref, session_id="s-com", section="raw", max_chars=12000)
+    assert "\"comments\"" in raw

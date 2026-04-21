@@ -46,6 +46,7 @@ def test_jira_preview_tools_not_model_facing():
     names = {s.get("function", {}).get("name") for s in get_tools_schemas()}
     assert "jira_get_issue_preview" not in names
     assert "jira_get_issue_by_url_preview" not in names
+    assert "export_issues_to_markdown" not in names
 
 
 @pytest.mark.asyncio
@@ -238,6 +239,8 @@ async def test_jira_prepare_issue_context_attachment_full_and_preview_ledger(mon
     raw = read_ref(ref, session_id="s-jira-attach", section="coverage_ledger", max_chars=50000)
     assert "text_attachments_full_loaded" in raw
     assert "text_attachments_preview_only" in raw
+    assert "binary_attachment_bodies_skipped_count" in raw
+    assert "source_complete_definition" in raw
 
 
 @pytest.mark.asyncio
