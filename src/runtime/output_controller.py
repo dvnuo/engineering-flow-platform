@@ -75,6 +75,12 @@ def ensure_staged_generation(
     refs = gen.get("generated_artifact_refs")
     gen["generated_artifact_refs"] = refs if isinstance(refs, list) else []
     gen["generated_artifact_ref_count"] = len(gen["generated_artifact_refs"])
+    criteria = gen.get("completion_criteria")
+    gen["completion_criteria"] = criteria if isinstance(criteria, list) else ["manifest_ready", "phase_outputs_recorded"]
+    coverage = gen.get("source_digest_chunk_coverage")
+    gen["source_digest_chunk_coverage"] = coverage if isinstance(coverage, list) else []
+    gen["completion_criteria_count"] = len(gen["completion_criteria"])
+    gen["source_digest_chunk_coverage_count"] = len(gen["source_digest_chunk_coverage"])
     gen["generation_done"] = bool(gen.get("generation_done", False))
     gen["max_chat_output_chars"] = int(max_chat_output_chars)
     gen["output_controller_applied"] = True
@@ -292,9 +298,17 @@ async def call_llm_with_output_control(
                     refs.append(ref)
                     gen_state["generated_artifact_refs"] = refs
                     gen_state["generated_artifact_ref_count"] = len(refs)
+                    coverage = gen_state.get("source_digest_chunk_coverage")
+                    if not isinstance(coverage, list):
+                        coverage = []
+                    coverage.append(f"{stage}:{gen_state.get('current_generation_phase')}")
+                    gen_state["source_digest_chunk_coverage"] = coverage
+                    gen_state["source_digest_chunk_coverage_count"] = len(coverage)
                 if gen_state.get("generation_mode") == "staged":
                     gen_state["next_phase"] = "phase_1"
             gen_state["partial_output_saved"] = bool(recovery_info.get("partial_ref"))
+            if gen_state.get("generated_artifact_ref_count", 0) >= 2:
+                gen_state["generation_done"] = True
 
     if isinstance(gen_state, dict):
         diagnostics["generation"] = dict(gen_state)

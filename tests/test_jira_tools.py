@@ -243,6 +243,38 @@ async def test_jira_prepare_issue_context_attachment_full_and_preview_ledger(mon
     assert "binary_attachment_bodies_skipped_count" in raw
     assert "source_complete_definition" in raw
     assert '"source_complete_including_binary_bodies": false' in raw.lower()
+    assert '"binary_attachment_body_policy": "metadata_only"' in raw
+    assert '"text_attachment_bodies_complete": true' in raw.lower()
+
+
+@pytest.mark.asyncio
+async def test_jira_preview_only_text_attachment_marks_text_incomplete(monkeypatch):
+    from src.jira import jira_prepare_issue_context
+    from types import SimpleNamespace
+    from src.context_blob_store import read_ref
+
+    class _Channel:
+        api_version = "3"
+        _auth_header = {}
+        def is_configured(self): return True
+        def get_instance_client(self, **kwargs): return self
+        async def get_issue(self, issue_key, expand=None):
+            return {"key": issue_key, "names": {"customfield_1": "Acceptance Criteria"}, "renderedFields": {"description": "<p>x</p>"}, "fields": {"summary": "Demo", "description": "Body", "comment": {"comments": [], "total": 0}, "attachment": [{"id": "2", "filename": "big.txt", "mimeType": "text/plain", "content": "u2"}]}}
+        async def get_comments(self, issue_key): return []
+
+    async def _fake_download(url, session_id=None, options=None, auth_header=None):
+        return SimpleNamespace(content_format="text", content="X" * 5001)
+
+    def _raise_put_text(*args, **kwargs):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr("src.jira.jira_channel", _Channel())
+    monkeypatch.setattr("src.jira.download_and_process_attachment", _fake_download)
+    monkeypatch.setattr("src.jira.put_text", _raise_put_text)
+    out = await jira_prepare_issue_context("PROJ-9", _session_id="s-jira-preview")
+    ref = out.split("context_ref: ", 1)[1].split("\\n", 1)[0].strip().strip('"')
+    raw = read_ref(ref, session_id="s-jira-preview", section="coverage_ledger", max_chars=50000)
+    assert '"text_attachment_bodies_complete": false' in raw.lower()
 
 
 @pytest.mark.asyncio

@@ -337,6 +337,16 @@ async def confluence_prepare_page_context(
         comments, comments_ledger = await instance_channel.get_all_comments_with_ledger(page_id) if include_comments else ([], {"loaded": 0, "total": 0, "complete": False})
         attachments, attachments_ledger = await instance_channel.get_all_attachments_with_ledger(page_id) if include_attachments else ([], {"loaded": 0, "total": 0, "complete": False})
         children, children_ledger = await instance_channel.get_all_page_children_with_ledger(page_id) if include_children else ([], {"loaded": 0, "total": 0, "complete": False})
+        descendants: list = []
+        descendants_ledger: dict = {"loaded": 0, "total": 0, "complete": False, "partial_reasons": []}
+        descendants_supported = bool(include_children)
+        if include_children:
+            try:
+                descendants, descendants_ledger = await instance_channel.get_all_descendants_with_ledger(page_id)
+            except Exception as desc_exc:
+                descendants_supported = False
+                descendants = []
+                descendants_ledger = {"loaded": 0, "total": 0, "complete": False, "partial_reasons": [f"descendants_fetch_failed:{type(desc_exc).__name__}"]}
 
         partial_reasons = []
         comments = comments or []
@@ -351,6 +361,9 @@ async def confluence_prepare_page_context(
         if include_children and not isinstance(children, list):
             children = []
             partial_reasons.append("children_unavailable")
+        if include_children and not isinstance(descendants, list):
+            descendants = []
+            partial_reasons.append("descendants_unavailable")
         if not include_comments:
             partial_reasons.append("comments_not_requested")
         if not include_attachments:
@@ -369,15 +382,19 @@ async def confluence_prepare_page_context(
             "children_loaded": int(children_ledger.get("loaded", len(children))),
             "children_total": int(children_ledger.get("total", len(children))),
             "children_complete": bool(children_ledger.get("complete", False)),
-            "descendants_supported": False,
-            "descendants_complete": False,
+            "descendants_loaded": int((descendants_ledger or {}).get("loaded", len(descendants))),
+            "descendants_total": int((descendants_ledger or {}).get("total", len(descendants))),
+            "descendants_supported": descendants_supported,
+            "descendants_complete": bool((descendants_ledger or {}).get("complete", False)),
             "partial_reasons": partial_reasons,
         }
-        if include_children:
+        if isinstance((descendants_ledger or {}).get("partial_reasons"), list):
+            ledger["partial_reasons"].extend([str(r) for r in (descendants_ledger.get("partial_reasons") or []) if r])
+        if include_children and not descendants_supported:
             ledger["partial_reasons"].append("descendants_not_supported")
         ledger["source_complete_definition"] = (
             "source_complete requires page_body_complete, comments_complete, attachments_complete, "
-            "children_complete, and descendants coverage support. descendants are currently unsupported."
+            "children_complete, and descendants coverage support."
         )
         ledger["source_metadata_complete"] = bool(ledger["page_body_complete"])
         ledger["source_text_complete"] = bool(ledger["page_body_complete"] and ledger["comments_complete"])
@@ -410,9 +427,43 @@ async def confluence_prepare_page_context(
             "comments": comments,
             "attachments": attachments,
             "children": children,
+            "descendants": descendants,
             "raw_snapshot": page if include_raw_snapshot else {},
             "completeness_ledger": ledger,
         }
+        if descendants:
+            descendants_enriched = []
+            for entry in descendants:
+                desc_id = str((entry or {}).get("id") or "").strip()
+                if not desc_id:
+                    continue
+                try:
+                    desc_page = await instance_channel.get_page(desc_id)
+                    desc_comments, desc_comments_ledger = await instance_channel.get_all_comments_with_ledger(desc_id)
+                    desc_attachments, desc_attachments_ledger = await instance_channel.get_all_attachments_with_ledger(desc_id)
+                    descendants_enriched.append(
+                        {
+                            "id": desc_id,
+                            "title": (entry or {}).get("title"),
+                            "parent_id": (entry or {}).get("parent_id"),
+                            "depth": (entry or {}).get("depth"),
+                            "space": ((desc_page or {}).get("space") or {}).get("key") if isinstance((desc_page or {}).get("space"), dict) else None,
+                            "version": ((desc_page or {}).get("version") or {}).get("number") if isinstance((desc_page or {}).get("version"), dict) else None,
+                            "content_markdown": await adapter._to_markdown(desc_page if isinstance(desc_page, dict) else {}),
+                            "comments_loaded": int((desc_comments_ledger or {}).get("loaded", len(desc_comments or []))),
+                            "comments_total": int((desc_comments_ledger or {}).get("total", len(desc_comments or []))),
+                            "comments_complete": bool((desc_comments_ledger or {}).get("complete", False)),
+                            "attachments_loaded": int((desc_attachments_ledger or {}).get("loaded", len(desc_attachments or []))),
+                            "attachments_total": int((desc_attachments_ledger or {}).get("total", len(desc_attachments or []))),
+                            "attachments_complete": bool((desc_attachments_ledger or {}).get("complete", False)),
+                        }
+                    )
+                except Exception as desc_item_exc:
+                    ledger["partial_reasons"].append(f"descendant_enrich_failed:{desc_id}:{type(desc_item_exc).__name__}")
+                    ledger["descendants_complete"] = False
+                    ledger["source_tree_complete"] = False
+                    ledger["source_complete"] = False
+            bundle["descendants"] = descendants_enriched
         persisted = persist_confluence_source_bundle_and_digest(
             session_id=_session_id or "unknown_session",
             page_id=page_id,
@@ -431,13 +482,13 @@ async def confluence_prepare_page_context(
             "comments_loaded": f"{ledger['comments_loaded']}/{ledger['comments_total']}",
             "attachments_loaded": f"{ledger['attachments_loaded']}/{ledger['attachments_total']}",
             "children_loaded": f"{ledger['children_loaded']}/{ledger['children_total']}",
-            "descendants_loaded": 0,
-            "descendants_total": 0,
+            "descendants_loaded": ledger.get("descendants_loaded", 0),
+            "descendants_total": ledger.get("descendants_total", 0),
             "descendants_supported": ledger.get("descendants_supported", False),
             "descendants_complete": ledger.get("descendants_complete", False),
             "source_complete_definition": ledger.get("source_complete_definition", ""),
             "partial_reasons": partial_reasons,
-            "sections": ["metadata", "content", "comments", "attachments", "children", "raw_snapshot"],
+            "sections": ["metadata", "content", "comments", "attachments", "children", "descendants", "raw_snapshot"],
         }
         return "[confluence source bundle prepared]\n" + "\n".join(
             f"{k}: {json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v}" for k, v in manifest.items()

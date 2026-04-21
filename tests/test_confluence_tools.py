@@ -158,14 +158,16 @@ async def test_confluence_prepare_page_context_persists_manifest(monkeypatch):
             return ([{"id": "a1", "title": "a.txt"}], {"loaded": 1, "total": 1, "complete": True})
         async def get_all_page_children_with_ledger(self, page_id, limit=100):
             return ([{"id": "c1", "title": "child"}], {"loaded": 1, "total": 1, "complete": True})
+        async def get_all_descendants_with_ledger(self, page_id, limit=100, max_depth=None):
+            return ([{"id": "d1", "title": "desc", "parent_id": page_id, "depth": 1}], {"loaded": 1, "total": 1, "complete": True, "partial_reasons": []})
 
     monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
     out = await confluence_prepare_page_context("123", include_children=True, _session_id="s-conf-prepare")
     assert "[confluence source bundle prepared]" in out
-    assert "source_complete: False" in out
+    assert "source_complete: True" in out
     assert "comments_loaded: 150/150" in out
-    assert "descendants_not_supported" in out
-    assert "source_tree_complete: False" in out
+    assert "descendants_complete: True" in out
+    assert "source_tree_complete: True" in out
 
 
 @pytest.mark.asyncio
@@ -182,12 +184,15 @@ async def test_confluence_prepare_page_context_marks_partial_when_pagination_inc
             return ([], {"loaded": 0, "total": 0, "complete": True})
         async def get_all_page_children_with_ledger(self, page_id, limit=100):
             return ([], {"loaded": 0, "total": 0, "complete": True})
+        async def get_all_descendants_with_ledger(self, page_id, limit=100, max_depth=None):
+            raise RuntimeError("desc api unavailable")
 
     monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
     out = await confluence_prepare_page_context("123", _session_id="s-conf-partial")
     assert "source_complete: False" in out
-    assert "descendants_supported" in out
+    assert "descendants_supported: False" in out
     assert "source_complete_for_generation" in out
+    assert "descendants_fetch_failed:RuntimeError" in out
 
 
 @pytest.mark.asyncio
@@ -224,6 +229,8 @@ async def test_execute_tool_confluence_get_page_by_url_uses_session_scoped_conte
             return ([], {"loaded": 0, "total": 0, "complete": True})
         async def get_all_page_children_with_ledger(self, page_id, limit=100):
             return ([], {"loaded": 0, "total": 0, "complete": True})
+        async def get_all_descendants_with_ledger(self, page_id, limit=100, max_depth=None):
+            return ([], {"loaded": 0, "total": 0, "complete": True, "partial_reasons": []})
 
     monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
     result = await execute_tool("confluence_get_page_by_url", url="https://wiki.local/pages/123/Title", _session_id="s1")

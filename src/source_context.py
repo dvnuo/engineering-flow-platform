@@ -219,6 +219,7 @@ def persist_confluence_source_bundle_and_digest(
             _heading_block("comments", json.dumps(bundle.get("comments") or [], ensure_ascii=False, indent=2)),
             _heading_block("attachments", json.dumps(bundle.get("attachments") or [], ensure_ascii=False, indent=2)),
             _heading_block("children", json.dumps(bundle.get("children") or [], ensure_ascii=False, indent=2)),
+            _heading_block("descendants", json.dumps(bundle.get("descendants") or [], ensure_ascii=False, indent=2)),
             _heading_block("coverage_ledger", json.dumps(bundle.get("completeness_ledger") or {}, ensure_ascii=False, indent=2)),
             _heading_block("raw_snapshot", json.dumps(bundle.get("raw_snapshot") or {}, ensure_ascii=False, indent=2)),
         ]

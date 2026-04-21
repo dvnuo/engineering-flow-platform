@@ -636,6 +636,7 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
                 "context_source_metadata_complete": source.get("source_metadata_complete"),
                 "context_source_text_complete": source.get("source_text_complete"),
                 "context_source_tree_complete": source.get("source_tree_complete"),
+                "context_binary_attachment_body_policy": source.get("binary_attachment_body_policy"),
                 "context_descendants_loaded": source.get("descendants_loaded"),
                 "context_descendants_total": source.get("descendants_total"),
                 "context_descendants_complete": source.get("descendants_complete"),
@@ -648,6 +649,8 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
             {
                 "context_generated_artifact_ref_count": generation.get("generated_artifact_ref_count"),
                 "context_generation_done": generation.get("generation_done"),
+                "context_completion_criteria_count": generation.get("completion_criteria_count"),
+                "context_source_digest_chunk_coverage_count": generation.get("source_digest_chunk_coverage_count"),
                 "context_output_controller_stage_generation": generation.get("output_controller_stage"),
             }
         )

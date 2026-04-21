@@ -528,6 +528,7 @@ async def test_output_controller_generation_state_machine_advances_on_continue()
     )
     assert diag1.get("generation", {}).get("current_generation_phase") == "manifest"
     assert diag1.get("generation", {}).get("output_controller_stage") == "tool_loop"
+    assert diag1.get("generation", {}).get("completion_criteria_count", 0) >= 1
     _, diag2 = await call_llm_with_output_control(
         llm_client=_Client(),
         llm_kwargs={"input_items": [], "system_prompt": "continue staged", "tools": []},
@@ -537,6 +538,7 @@ async def test_output_controller_generation_state_machine_advances_on_continue()
         latest_user_text="continue",
     )
     assert diag2.get("generation", {}).get("current_generation_phase") in {"phase_1", "phase_2"}
+    assert "source_digest_chunk_coverage_count" in diag2.get("generation", {})
 
 
 @pytest.mark.asyncio

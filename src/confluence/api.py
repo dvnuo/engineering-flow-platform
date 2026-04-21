@@ -546,6 +546,53 @@ class ConfluenceChannel:
         if total is None:
             total = len(children)
         return children, {"loaded": len(children), "total": total, "complete": (len(children) >= total and not has_next), "total_known": total is not None}
+
+    async def get_all_descendants_with_ledger(
+        self,
+        page_id: str,
+        limit: int = 100,
+        max_depth: Optional[int] = None,
+    ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        descendants: List[Dict[str, Any]] = []
+        visited: set[str] = {str(page_id)}
+        queue: List[tuple[str, int]] = [(str(page_id), 0)]
+        total_candidates = 0
+        complete = True
+        partial_reasons: List[str] = []
+        while queue:
+            current_id, depth = queue.pop(0)
+            if max_depth is not None and depth >= max_depth:
+                continue
+            try:
+                children, child_ledger = await self.get_all_page_children_with_ledger(current_id, limit=limit)
+            except Exception as exc:
+                complete = False
+                partial_reasons.append(f"descendants_children_fetch_failed:{current_id}:{type(exc).__name__}")
+                continue
+            total_candidates += int((child_ledger or {}).get("total", len(children)))
+            if not bool((child_ledger or {}).get("complete", False)):
+                complete = False
+                partial_reasons.append(f"descendants_children_incomplete:{current_id}")
+            for child in children or []:
+                child_id = str((child or {}).get("id") or "").strip()
+                if not child_id or child_id in visited:
+                    continue
+                visited.add(child_id)
+                descendants.append(
+                    {
+                        "id": child_id,
+                        "title": (child or {}).get("title"),
+                        "parent_id": current_id,
+                        "depth": depth + 1,
+                    }
+                )
+                queue.append((child_id, depth + 1))
+        return descendants, {
+            "loaded": len(descendants),
+            "total": max(total_candidates, len(descendants)),
+            "complete": complete and len(descendants) >= max(total_candidates, len(descendants)),
+            "partial_reasons": partial_reasons,
+        }
     
     async def get_page_history(self, page_id: str) -> Dict[str, Any]:
         logger.info(f"Fetching history for page: {page_id}")
