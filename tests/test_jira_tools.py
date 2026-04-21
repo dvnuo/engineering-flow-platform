@@ -245,6 +245,7 @@ async def test_jira_prepare_issue_context_attachment_full_and_preview_ledger(mon
     assert '"source_complete_including_binary_bodies": false' in raw.lower()
     assert '"binary_attachment_body_policy": "metadata_only"' in raw
     assert '"text_attachment_bodies_complete": true' in raw.lower()
+    assert '"source_complete_definition"' in raw
 
 
 @pytest.mark.asyncio
@@ -275,6 +276,7 @@ async def test_jira_preview_only_text_attachment_marks_text_incomplete(monkeypat
     ref = out.split("context_ref: ", 1)[1].split("\\n", 1)[0].strip().strip('"')
     raw = read_ref(ref, session_id="s-jira-preview", section="coverage_ledger", max_chars=50000)
     assert '"text_attachment_bodies_complete": false' in raw.lower()
+    assert '"source_complete_for_generation": false' in raw.lower()
 
 
 @pytest.mark.asyncio
@@ -318,6 +320,41 @@ async def test_jira_prepare_issue_context_extracts_issue_key_from_url(monkeypatc
     out = await jira_prepare_issue_context("https://jira.systems.com/browse/MMGFX-13887", _session_id="s-jira-url")
     assert "issue_key: MMGFX-13887" in out
     assert "Could not extract issue key" not in out
+
+
+@pytest.mark.asyncio
+async def test_jira_get_comments_returns_bounded_manifest(monkeypatch):
+    from src.jira import jira_get_comments
+
+    class _Channel:
+        api_version = "3"
+        _auth_header = {}
+        def is_configured(self): return True
+        async def get_issue(self, issue_key, expand=None):
+            return {"key": issue_key, "fields": {"comment": {"comments": [{"id": "1", "body": "A" * 5000}], "total": 1}}}
+
+    monkeypatch.setattr("src.jira.jira_channel", _Channel())
+    out = await jira_get_comments("PROJ-77", _session_id="s-jira-comments")
+    assert "[jira comments bundle prepared]" in out
+    assert "context_ref: ctx://context/" in out
+    assert "comments_loaded: 1/1" in out
+    assert "AAAAA" not in out
+
+
+@pytest.mark.asyncio
+async def test_jira_get_issue_by_url_defaults_to_source_complete_without_keyword(monkeypatch):
+    from src.jira import jira_get_issue_by_url
+
+    called = {}
+
+    async def _fake_prepare(*, issue_key_or_url, include_all_comments=True, include_attachments=True, include_raw_snapshot=True, _session_id=None):
+        called["url"] = issue_key_or_url
+        return "[jira source bundle prepared]\nsource_complete: True"
+
+    monkeypatch.setattr("src.jira.jira_prepare_issue_context", _fake_prepare)
+    out = await jira_get_issue_by_url("https://jira.local/browse/PROJ-1", _session_id="s-keywordless")
+    assert "[jira source bundle prepared]" in out
+    assert called["url"].endswith("/PROJ-1")
 
 
 @pytest.mark.asyncio

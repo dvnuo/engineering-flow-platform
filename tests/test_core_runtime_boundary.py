@@ -476,6 +476,7 @@ async def test_output_controller_bounds_huge_content_in_staged_mode():
     assert "context_read_ref(" in (result.get("content") or "")
     assert diag.get("output_bounding", {}).get("bounded") is True
     assert diag.get("generated_artifact_ref_count", 0) >= 1
+    assert diag.get("generation", {}).get("generation_mode") == "staged"
 
 
 @pytest.mark.asyncio
@@ -507,6 +508,7 @@ async def test_output_controller_treats_warning_truncation_as_recovery():
     assert "error" not in result
     assert diag["max_output_recovery"]["applied"] is True
     assert state["budget"]["output_controller_recovery_reason"] == "max_output_tokens"
+    assert "Model output was truncated because max_output_tokens" not in (result.get("content") or "")
 
 
 @pytest.mark.asyncio
@@ -539,6 +541,79 @@ async def test_output_controller_generation_state_machine_advances_on_continue()
     )
     assert diag2.get("generation", {}).get("current_generation_phase") in {"phase_1", "phase_2"}
     assert "source_digest_chunk_coverage_count" in diag2.get("generation", {})
+
+
+@pytest.mark.asyncio
+async def test_output_controller_generation_done_requires_completion_criteria():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "X" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}, "generation": {"completion_criteria": ["manifest_prepared", "phase_output_recorded"], "completion_criteria_status": {"manifest_prepared": False, "phase_output_recorded": False}}}
+    _, diag1 = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate implementation", "tools": []},
+        session_id="s-gen-criteria",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="generate implementation",
+    )
+    assert diag1.get("generation_done") is False
+    state["generation"]["completion_criteria_status"] = {"manifest_prepared": True, "phase_output_recorded": True}
+    _, diag2 = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "continue", "tools": []},
+        session_id="s-gen-criteria",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="continue",
+    )
+    assert diag2.get("generation_done") is True
+
+
+@pytest.mark.asyncio
+async def test_output_controller_bounds_huge_content_medium_risk():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "M" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    user_text = "x" * 1500
+    state = {"budget": {}}
+    result, _ = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "chat", "tools": []},
+        session_id="s-medium",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text=user_text,
+        max_chat_output_chars=8000,
+    )
+    assert len(result.get("content") or "") <= 8000
+
+
+@pytest.mark.asyncio
+async def test_output_controller_retry_max_output_still_returns_non_error_fallback():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"error": {"code": "max_output_tokens_exceeded", "message": "Model output was truncated because max_output_tokens was reached"}}
+
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate complete implementation", "tools": []},
+        session_id="s-retry-fallback",
+        stage="tool_loop",
+        context_state={"budget": {}},
+        latest_user_text="generate all tests and code",
+    )
+    assert "error" not in result
+    assert diag["max_output_recovery"]["applied"] is True
+    assert "Model output was truncated because max_output_tokens" not in (result.get("content") or "")
 
 
 @pytest.mark.asyncio

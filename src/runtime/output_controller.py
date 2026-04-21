@@ -58,6 +58,58 @@ def get_generation_state(context_state: Optional[Dict[str, Any]]) -> Dict[str, A
     return gen
 
 
+def _default_completion_criteria(generation_mode: str) -> List[str]:
+    if generation_mode == "staged":
+        return ["manifest_prepared", "phase_output_recorded"]
+    return ["response_bounded"]
+
+
+def initialize_completion_criteria(gen: Dict[str, Any], *, generation_mode: str) -> Dict[str, bool]:
+    raw = gen.get("completion_criteria")
+    if isinstance(raw, list) and raw:
+        criteria = [str(item) for item in raw if str(item).strip()]
+    else:
+        criteria = _default_completion_criteria(generation_mode)
+    status = gen.get("completion_criteria_status")
+    if not isinstance(status, dict):
+        status = {}
+    normalized: Dict[str, bool] = {}
+    for criterion in criteria:
+        normalized[criterion] = bool(status.get(criterion, False))
+    gen["completion_criteria"] = criteria
+    gen["completion_criteria_status"] = normalized
+    gen["completion_criteria_count"] = len(criteria)
+    return normalized
+
+
+def mark_phase_complete(gen: Dict[str, Any], phase: str) -> None:
+    completed = gen.get("completed_phases")
+    if not isinstance(completed, list):
+        completed = []
+    if phase and phase not in completed:
+        completed.append(phase)
+    gen["completed_phases"] = completed
+
+
+def next_incomplete_phase(gen: Dict[str, Any]) -> str:
+    criteria = gen.get("completion_criteria")
+    status = gen.get("completion_criteria_status")
+    if not isinstance(criteria, list) or not criteria:
+        return str(gen.get("next_phase") or "phase_1")
+    if not isinstance(status, dict):
+        status = {}
+    index_map = {
+        "manifest_prepared": "manifest",
+        "phase_output_recorded": "phase_1",
+        "response_bounded": "phase_1",
+    }
+    for criterion in criteria:
+        key = str(criterion)
+        if not bool(status.get(key, False)):
+            return index_map.get(key, f"phase_{criteria.index(criterion) + 1}")
+    return "complete"
+
+
 def ensure_staged_generation(
     context_state: Optional[Dict[str, Any]],
     *,
@@ -75,13 +127,12 @@ def ensure_staged_generation(
     refs = gen.get("generated_artifact_refs")
     gen["generated_artifact_refs"] = refs if isinstance(refs, list) else []
     gen["generated_artifact_ref_count"] = len(gen["generated_artifact_refs"])
-    criteria = gen.get("completion_criteria")
-    gen["completion_criteria"] = criteria if isinstance(criteria, list) else ["manifest_ready", "phase_outputs_recorded"]
+    initialize_completion_criteria(gen, generation_mode="staged")
     coverage = gen.get("source_digest_chunk_coverage")
     gen["source_digest_chunk_coverage"] = coverage if isinstance(coverage, list) else []
-    gen["completion_criteria_count"] = len(gen["completion_criteria"])
     gen["source_digest_chunk_coverage_count"] = len(gen["source_digest_chunk_coverage"])
-    gen["generation_done"] = bool(gen.get("generation_done", False))
+    statuses = gen.get("completion_criteria_status")
+    gen["generation_done"] = bool(isinstance(statuses, dict) and statuses and all(bool(v) for v in statuses.values()))
     gen["max_chat_output_chars"] = int(max_chat_output_chars)
     gen["output_controller_applied"] = True
     gen["output_controller_stage"] = stage
@@ -96,11 +147,11 @@ def advance_generation_phase(context_state: Optional[Dict[str, Any]], *, latest_
     if text not in {"continue", "next", "go on", "继续", "继续生成"}:
         return gen
     current = str(gen.get("current_generation_phase") or "manifest")
-    completed: List[str] = [str(p) for p in (gen.get("completed_phases") or [])]
-    if current not in completed:
-        completed.append(current)
-    next_phase = str(gen.get("next_phase") or "phase_1")
-    gen["completed_phases"] = completed
+    status = gen.get("completion_criteria_status")
+    if isinstance(status, dict) and current == "manifest":
+        status["manifest_prepared"] = True
+    mark_phase_complete(gen, current)
+    next_phase = next_incomplete_phase(gen)
     gen["current_generation_phase"] = next_phase
     if next_phase.startswith("phase_"):
         try:
@@ -108,8 +159,10 @@ def advance_generation_phase(context_state: Optional[Dict[str, Any]], *, latest_
             gen["next_phase"] = f"phase_{idx + 1}"
         except Exception:
             gen["next_phase"] = "phase_next"
+    elif next_phase == "complete":
+        gen["next_phase"] = "complete"
     else:
-        gen["next_phase"] = "phase_next"
+        gen["next_phase"] = "phase_1"
     return gen
 
 
@@ -193,7 +246,7 @@ async def recover_max_output_tokens(
         state["output_controller_recovery_reason"] = "max_output_tokens"
         if partial_ref:
             state["max_output_partial_ref"] = partial_ref
-    if isinstance(retry_result, dict) and not retry_result.get("error"):
+    if isinstance(retry_result, dict) and not retry_result.get("error") and not is_max_output_truncated_result(retry_result):
         return retry_result, info
 
     fallback_text = (
@@ -238,6 +291,7 @@ async def call_llm_with_output_control(
     if generation_mode == "staged" or (isinstance(gen_state, dict) and gen_state.get("generation_mode") == "staged"):
         generation_mode = "staged"
         gen_state = ensure_staged_generation(context_state, stage=stage, max_chat_output_chars=max_chat_output_chars)
+        initialize_completion_criteria(gen_state, generation_mode="staged")
         gen_state = advance_generation_phase(context_state, latest_user_text=latest_user_text)
     guard = build_output_guard(risk=risk, generation_mode=generation_mode)
     if guard:
@@ -268,6 +322,9 @@ async def call_llm_with_output_control(
         if recovery_info.get("applied"):
             gen_state["generation_mode"] = "staged"
             gen_state["output_controller_recovery_reason"] = "max_output_tokens"
+            status = gen_state.get("completion_criteria_status")
+            if isinstance(status, dict):
+                status["manifest_prepared"] = False
 
     content = _extract_content_text(llm_result)
     if content:
@@ -304,11 +361,18 @@ async def call_llm_with_output_control(
                     coverage.append(f"{stage}:{gen_state.get('current_generation_phase')}")
                     gen_state["source_digest_chunk_coverage"] = coverage
                     gen_state["source_digest_chunk_coverage_count"] = len(coverage)
+                status = gen_state.get("completion_criteria_status")
+                if isinstance(status, dict):
+                    status["response_bounded"] = True
+                    if str(gen_state.get("current_generation_phase")) == "manifest":
+                        status["manifest_prepared"] = True
+                    if str(gen_state.get("current_generation_phase", "")).startswith("phase_"):
+                        status["phase_output_recorded"] = True
                 if gen_state.get("generation_mode") == "staged":
-                    gen_state["next_phase"] = "phase_1"
+                    gen_state["next_phase"] = next_incomplete_phase(gen_state)
             gen_state["partial_output_saved"] = bool(recovery_info.get("partial_ref"))
-            if gen_state.get("generated_artifact_ref_count", 0) >= 2:
-                gen_state["generation_done"] = True
+            status = gen_state.get("completion_criteria_status")
+            gen_state["generation_done"] = bool(isinstance(status, dict) and status and all(bool(v) for v in status.values()))
 
     if isinstance(gen_state, dict):
         diagnostics["generation"] = dict(gen_state)

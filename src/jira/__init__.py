@@ -460,6 +460,10 @@ async def jira_prepare_issue_context(
         ledger["source_complete_for_generation"]
         and not blocking_partial_reasons
     )
+    ledger["source_complete_definition"] = (
+        "source_complete_for_generation requires issue metadata, all comments, full text fields, and full text attachment bodies. "
+        "Binary attachments are metadata-only by policy; source_complete_including_binary_bodies is false when binary bodies are unavailable."
+    )
     persisted = persist_jira_source_bundle_and_digest(session_id=session_id, issue_key=issue_key, bundle=bundle)
 
     manifest = {
@@ -471,8 +475,13 @@ async def jira_prepare_issue_context(
         "source_complete_including_binary_bodies": ledger["source_complete_including_binary_bodies"],
         "source_metadata_complete": ledger["source_metadata_complete"],
         "source_text_complete": ledger["source_text_complete"],
+        "attachment_metadata_complete": ledger["attachment_metadata_complete"],
+        "text_attachment_bodies_complete": ledger["text_attachment_bodies_complete"],
         "source_tree_complete": ledger["source_tree_complete"],
         "binary_attachment_body_policy": ledger.get("binary_attachment_body_policy"),
+        "binary_attachment_bodies_available": ledger.get("binary_attachment_bodies_available"),
+        "binary_attachment_bodies_skipped_count": ledger.get("binary_attachment_bodies_skipped_count"),
+        "source_complete_definition": ledger.get("source_complete_definition"),
         "comments_loaded": f"{ledger['comments_loaded']}/{ledger['comments_total']}",
         "attachments_metadata_loaded": f"{ledger['attachments_metadata_loaded']}/{ledger['attachments_total']}",
         "text_attachments_loaded": f"{ledger['text_attachments_loaded']}/{ledger['text_attachments_total']}",
@@ -485,6 +494,41 @@ async def jira_prepare_issue_context(
         "[jira source bundle prepared]\\n"
         + "\\n".join(f"{k}: {json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v}" for k, v in manifest.items())
         + f"\\n\\nUse context_read_ref(ref=\\\"{persisted['context_ref']}\\\", section=\\\"...\\\") to inspect source sections."
+    )
+
+
+async def jira_get_comments(issue_key: str, _session_id: Optional[str] = None) -> str:
+    """Prepare bounded Jira comments bundle manifest with context ref."""
+    if not jira_channel.is_configured():
+        return "Error: Jira is not configured."
+    adapter = _get_adapter()
+    issue = await adapter.get_issue(
+        issue_key=issue_key,
+        format="raw",
+        max_comments=None,
+        include_comments=True,
+        include_fields=None,
+    )
+    fields = issue.get("fields", {}) if isinstance(issue, dict) else {}
+    comments = adapter._get_comments_list(issue if isinstance(issue, dict) else {}, None)
+    comment_field = fields.get("comment", {}) if isinstance(fields, dict) else {}
+    comments_total = int((comment_field or {}).get("total") or len(comments)) if isinstance(comment_field, dict) else len(comments)
+    comments_loaded = len(comments)
+    comments_complete = comments_loaded >= comments_total
+    context_ref = put_text(
+        session_id=_session_id or "unknown_session",
+        kind="jira_comments_bundle",
+        source_id=issue_key,
+        title=f"Jira comments {issue_key}",
+        content=json.dumps({"issue_key": issue_key, "comments": comments}, ensure_ascii=False, indent=2),
+        metadata={"issue_key": issue_key, "comments_complete": comments_complete},
+    )
+    return (
+        "[jira comments bundle prepared]\n"
+        f"issue_key: {issue_key}\n"
+        f"context_ref: {context_ref}\n"
+        f"comments_loaded: {comments_loaded}/{comments_total}\n"
+        f"comments_complete: {comments_complete}"
     )
 
 
@@ -599,8 +643,6 @@ async def jira_update_issue(
         return f"Error updating issue: {str(e)}"
 
 
-# Re-export original functions for compatibility
-from .api import jira_get_comments
 from .api import get_tools_schemas as _get_api_schemas
 
 
@@ -813,7 +855,7 @@ def _get_all_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "jira_get_comments",
-                "description": "Get comments on a Jira issue.",
+                "description": "Prepare bounded Jira comments manifest with completeness ledger and context_ref.",
                 "parameters": {
                     "type": "object",
                     "properties": {

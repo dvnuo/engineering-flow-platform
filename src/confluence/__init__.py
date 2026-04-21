@@ -313,12 +313,7 @@ async def confluence_prepare_page_context(
     include_raw_snapshot: bool = True,
     _session_id: Optional[str] = None,
 ) -> str:
-    """Prepare source-complete Confluence page context.
-
-    Default behavior includes page body, comments, attachments, and children.
-    Descendants beyond direct children are not currently supported and are
-    explicitly reflected in the completeness ledger.
-    """
+    """Prepare source-complete Confluence page context."""
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
@@ -431,16 +426,27 @@ async def confluence_prepare_page_context(
             "raw_snapshot": page if include_raw_snapshot else {},
             "completeness_ledger": ledger,
         }
+        descendants_pages_complete = True
+        descendants_comments_complete = True
+        descendants_attachments_complete = True
         if descendants:
             descendants_enriched = []
             for entry in descendants:
                 desc_id = str((entry or {}).get("id") or "").strip()
                 if not desc_id:
+                    descendants_pages_complete = False
                     continue
                 try:
                     desc_page = await instance_channel.get_page(desc_id)
                     desc_comments, desc_comments_ledger = await instance_channel.get_all_comments_with_ledger(desc_id)
                     desc_attachments, desc_attachments_ledger = await instance_channel.get_all_attachments_with_ledger(desc_id)
+                    desc_markdown = await adapter._to_markdown(desc_page if isinstance(desc_page, dict) else {})
+                    desc_page_complete = bool(desc_page) and bool(str(desc_markdown or "").strip())
+                    desc_comments_complete = bool((desc_comments_ledger or {}).get("complete", False))
+                    desc_attachments_complete = bool((desc_attachments_ledger or {}).get("complete", False))
+                    descendants_pages_complete = descendants_pages_complete and desc_page_complete
+                    descendants_comments_complete = descendants_comments_complete and desc_comments_complete
+                    descendants_attachments_complete = descendants_attachments_complete and desc_attachments_complete
                     descendants_enriched.append(
                         {
                             "id": desc_id,
@@ -449,21 +455,48 @@ async def confluence_prepare_page_context(
                             "depth": (entry or {}).get("depth"),
                             "space": ((desc_page or {}).get("space") or {}).get("key") if isinstance((desc_page or {}).get("space"), dict) else None,
                             "version": ((desc_page or {}).get("version") or {}).get("number") if isinstance((desc_page or {}).get("version"), dict) else None,
-                            "content_markdown": await adapter._to_markdown(desc_page if isinstance(desc_page, dict) else {}),
+                            "content_markdown": desc_markdown,
+                            "descendant_page_body_complete": desc_page_complete,
                             "comments_loaded": int((desc_comments_ledger or {}).get("loaded", len(desc_comments or []))),
                             "comments_total": int((desc_comments_ledger or {}).get("total", len(desc_comments or []))),
-                            "comments_complete": bool((desc_comments_ledger or {}).get("complete", False)),
+                            "comments_complete": desc_comments_complete,
+                            "descendant_comments_complete": desc_comments_complete,
                             "attachments_loaded": int((desc_attachments_ledger or {}).get("loaded", len(desc_attachments or []))),
                             "attachments_total": int((desc_attachments_ledger or {}).get("total", len(desc_attachments or []))),
-                            "attachments_complete": bool((desc_attachments_ledger or {}).get("complete", False)),
+                            "attachments_complete": desc_attachments_complete,
+                            "descendant_attachments_complete": desc_attachments_complete,
                         }
                     )
                 except Exception as desc_item_exc:
+                    descendants_pages_complete = False
+                    descendants_comments_complete = False
+                    descendants_attachments_complete = False
                     ledger["partial_reasons"].append(f"descendant_enrich_failed:{desc_id}:{type(desc_item_exc).__name__}")
-                    ledger["descendants_complete"] = False
-                    ledger["source_tree_complete"] = False
-                    ledger["source_complete"] = False
             bundle["descendants"] = descendants_enriched
+        ledger["descendants_pages_complete"] = descendants_pages_complete
+        ledger["descendants_comments_complete"] = descendants_comments_complete
+        ledger["descendants_attachments_complete"] = descendants_attachments_complete
+        ledger["descendants_complete"] = bool(
+            ledger.get("descendants_complete", False)
+            and descendants_pages_complete
+            and descendants_comments_complete
+            and descendants_attachments_complete
+        )
+        ledger["source_tree_complete"] = bool(ledger["children_complete"] and ledger["descendants_complete"])
+        ledger["source_complete_for_generation"] = bool(
+            ledger["source_metadata_complete"]
+            and ledger["source_text_complete"]
+            and ledger["attachments_complete"]
+            and ledger["source_tree_complete"]
+        )
+        ledger["source_complete"] = bool(
+            not ledger["partial_reasons"]
+            and ledger["page_body_complete"]
+            and ledger["comments_complete"]
+            and ledger["attachments_complete"]
+            and ledger["source_tree_complete"]
+            and ledger["descendants_supported"]
+        )
         persisted = persist_confluence_source_bundle_and_digest(
             session_id=_session_id or "unknown_session",
             page_id=page_id,
@@ -487,7 +520,10 @@ async def confluence_prepare_page_context(
             "descendants_supported": ledger.get("descendants_supported", False),
             "descendants_complete": ledger.get("descendants_complete", False),
             "source_complete_definition": ledger.get("source_complete_definition", ""),
-            "partial_reasons": partial_reasons,
+            "descendants_pages_complete": ledger.get("descendants_pages_complete", False),
+            "descendants_comments_complete": ledger.get("descendants_comments_complete", False),
+            "descendants_attachments_complete": ledger.get("descendants_attachments_complete", False),
+            "partial_reasons": ledger["partial_reasons"],
             "sections": ["metadata", "content", "comments", "attachments", "children", "descendants", "raw_snapshot"],
         }
         return "[confluence source bundle prepared]\n" + "\n".join(
@@ -563,22 +599,13 @@ async def confluence_get_comments(page_id: str, _session_id: Optional[str] = Non
             content=json.dumps({"page_id": page_id, "comments": comments}, ensure_ascii=False, indent=2),
             metadata={"page_id": page_id, "comments_complete": bool(ledger.get("complete", False))},
         )
-        preview_lines = []
-        for c in comments[:5]:
-            if not isinstance(c, dict):
-                continue
-            body = c.get("body", {})
-            if isinstance(body, dict):
-                body = body.get("storage", {}).get("value", "")
-            preview_lines.append(f"- {str(body)[:240]}")
         return (
             "[confluence comments prepared]\n"
             f"page_id: {page_id}\n"
             f"context_ref: {context_ref}\n"
             f"comments_loaded: {int(ledger.get('loaded', len(comments)))}/{int(ledger.get('total', len(comments)))}\n"
             f"comments_complete: {bool(ledger.get('complete', False))}\n"
-            "preview:\n"
-            + ("\n".join(preview_lines) if preview_lines else "- (no comments)")
+            "comments_preview: omitted (use context_read_ref for full comments)"
         )
     except Exception as e:
         return f"Error getting comments: {e}"
@@ -657,7 +684,7 @@ async def confluence_get_page_history(page_id: str) -> str:
         return f"Error getting page history: {e}"
 
 
-async def confluence_get_page_children(page_id: str, limit: int = 10) -> str:
+async def confluence_get_page_children(page_id: str, limit: int = 10, _session_id: Optional[str] = None) -> str:
     """Get child pages of a Confluence page with ledger completeness."""
     try:
         if not confluence_channel.is_configured():
@@ -666,7 +693,7 @@ async def confluence_get_page_children(page_id: str, limit: int = 10) -> str:
         children = children or []
         ledger = ledger or {}
         context_ref = put_text(
-            session_id=f"confluence-children-{page_id}",
+            session_id=_session_id or f"confluence-children-{page_id}",
             kind="confluence_children_bundle",
             source_id=page_id,
             title=f"Confluence children {page_id}",
@@ -676,9 +703,7 @@ async def confluence_get_page_children(page_id: str, limit: int = 10) -> str:
         lines = [f"[confluence children prepared]\npage_id: {page_id}\ncontext_ref: {context_ref}"]
         lines.append(f"children_loaded: {int(ledger.get('loaded', len(children)))}/{int(ledger.get('total', len(children)))}")
         lines.append(f"children_complete: {bool(ledger.get('complete', False))}")
-        for p in children[:10]:
-            if isinstance(p, dict):
-                lines.append(f"- {p.get('title','Untitled')} ({p.get('id','?')})")
+        lines.append("children_preview: omitted (use context_read_ref for full child list)")
         return "\n".join(lines)
     except Exception as e:
         return f"Error getting page children: {e}"
@@ -845,7 +870,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "confluence_search",
-                "description": "Search Confluence pages using CQL. Returns title + url + excerpt.",
+                "description": "Discovery tool: search Confluence pages using CQL and return lightweight preview metadata.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -860,7 +885,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "confluence_search_by_title",
-                "description": "Search Confluence pages by exact title",
+                "description": "Discovery tool: search Confluence pages by exact title and return lightweight preview metadata",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -990,7 +1015,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "confluence_list_pages",
-                "description": "List all pages in a Confluence space",
+                "description": "Discovery tool: list pages in a Confluence space (preview metadata only)",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1005,7 +1030,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "confluence_get_page_children",
-                "description": "Get child pages of a Confluence page",
+                "description": "Prepare bounded child-page manifest with completeness ledger and context_ref",
                 "parameters": {
                     "type": "object",
                     "properties": {
