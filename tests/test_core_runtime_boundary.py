@@ -38,6 +38,22 @@ def test_core_no_longer_directly_calls_should_passthrough_tool_result():
     assert "should_passthrough_tool_result(" not in source
 
 
+def test_core_safe_int_handles_none_for_max_chat_output_chars():
+    from src.agents import core
+
+    assert core._safe_int(None, 8000) == 8000
+    assert core._safe_int("", 8000) == 8000
+    assert core._safe_int("7000", 8000) == 7000
+
+
+def test_agent_process_source_uses_safe_int_for_max_chat_output_chars():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent.process)
+    assert "raw_max_chat =" in source
+    assert "max_chat_output_chars=_safe_int(raw_max_chat, 8000)" in source
+
+
 def test_read_governance_hint_returns_empty_when_missing():
     from src.agents import core
     from src import ToolResult
@@ -335,6 +351,374 @@ def test_mobilex_large_generation_output_guard_is_unconditional_in_tool_loop_and
     assert "_large_generation_output_guard(" in process_source
     assert "_large_generation_output_guard(" in continue_source
     assert "Large generation output guard:" in inspect.getsource(core._large_generation_output_guard)
+
+
+def test_large_generation_output_guard_applies_to_non_mobilex_generation_skill():
+    from src.agents import core
+
+    class Skill:
+        name = "api-test-generator"
+        description = "Generate integration tests and implementation files"
+
+    text = core._large_generation_output_guard(None, Skill(), {"skill_name": "api-test-generator"}, "generate all test cases from this Jira")
+    assert "Large generation output guard:" in text
+    assert "generation_mode=staged" in text
+
+
+def test_large_generation_output_guard_not_applied_to_normal_chat():
+    from src.agents import core
+
+    class Skill:
+        name = "chat-helper"
+        description = "General discussion assistant"
+
+    text = core._large_generation_output_guard(None, Skill(), {"skill_name": "chat-helper"}, "what is jira?")
+    assert text == ""
+
+
+def test_requires_source_complete_context_detects_full_source_generation_intent():
+    from src.agents import core
+
+    class Skill:
+        name = "api-test-generator"
+        description = "generate tests from jira"
+
+    assert core._requires_source_complete_context(
+        "please use all Jira information and generate all test cases from https://x/browse/ABC-1",
+        None,
+        Skill(),
+        [],
+    ) is True
+
+
+def test_agent_process_source_auto_invokes_source_prepare_and_max_output_recovery_paths_present():
+    from src.agents import core
+
+    process_source = inspect.getsource(core.Agent.process)
+    assert "_requires_source_complete_context(" in process_source
+    assert "jira_prepare_issue_context" in process_source
+    assert "confluence_prepare_page_context" in process_source
+    assert "call_llm_with_output_control(" in process_source
+    assert "[auto source context prepared]" in process_source
+    assert "output_controller_applied" in process_source
+
+
+@pytest.mark.asyncio
+async def test_recover_max_output_tokens_success_path(monkeypatch):
+    from src.agents import core
+
+    async def _fake_responses(**kwargs):
+        return {"content": "manifest", "tool_calls": [], "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr(core.llm_client, "responses", _fake_responses)
+    recovered, did_recover = await core._recover_max_output_tokens(
+        llm_result={"error": {"code": "max_output_tokens_exceeded", "message": "x"}},
+        llm_kwargs={"input_items": [], "system_prompt": "", "tools": []},
+        loop_context_state={"budget": {}},
+        stage_hint="tool_loop",
+    )
+    assert did_recover is True
+    assert recovered.get("content") == "manifest"
+    assert "error" not in recovered
+
+
+@pytest.mark.asyncio
+async def test_recover_max_output_tokens_fallback_path(monkeypatch):
+    from src.agents import core
+
+    async def _fake_responses(**kwargs):
+        return {"error": {"code": "max_output_tokens_exceeded", "message": "x"}}
+
+    monkeypatch.setattr(core.llm_client, "responses", _fake_responses)
+    recovered, did_recover = await core._recover_max_output_tokens(
+        llm_result={"error": {"code": "max_output_tokens_exceeded", "message": "x"}},
+        llm_kwargs={"input_items": [], "system_prompt": "", "tools": []},
+        loop_context_state={"budget": {}},
+        stage_hint="tool_loop",
+    )
+    assert did_recover is True
+    assert "error" not in recovered
+    assert "staged generation" in recovered.get("content", "")
+
+
+@pytest.mark.asyncio
+async def test_output_controller_recovers_max_output_without_raw_fatal():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+        async def responses(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {"error": {"code": "max_output_tokens_exceeded", "message": "Model output was truncated because max_output_tokens was reached"}}
+            return {"content": "manifest", "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate full implementation", "tools": []},
+        session_id="s-out",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="generate implementation from jira",
+    )
+    assert "error" not in result
+    assert "max_output_tokens was reached" not in (result.get("content") or "")
+    assert diag["max_output_recovery"]["applied"] is True
+    assert state["budget"]["generation_mode"] == "staged"
+    assert state["budget"]["output_risk_level"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_output_controller_bounds_huge_content_in_staged_mode():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "X" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate full implementation", "tools": []},
+        session_id="s-out-big",
+        stage="skill_generation",
+        context_state=state,
+        latest_user_text="generate all test cases",
+        max_chat_output_chars=8000,
+    )
+    assert len(result.get("content") or "") <= 8000
+    assert "context_read_ref(" in (result.get("content") or "")
+    assert diag.get("output_bounding", {}).get("bounded") is True
+    assert diag.get("generated_artifact_ref_count", 0) >= 1
+    assert diag.get("generation", {}).get("generation_mode") == "staged"
+
+
+@pytest.mark.asyncio
+async def test_output_controller_treats_warning_truncation_as_recovery():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+        async def responses(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "content": "partial body",
+                    "truncated": True,
+                    "warning": {"type": "truncated_response", "code": "max_output_tokens_exceeded"},
+                }
+            return {"content": "manifest", "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate full spec", "tools": []},
+        session_id="s-warn",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="generate tests",
+    )
+    assert "error" not in result
+    assert diag["max_output_recovery"]["applied"] is True
+    assert state["budget"]["output_controller_recovery_reason"] == "max_output_tokens"
+    assert "Model output was truncated because max_output_tokens" not in (result.get("content") or "")
+
+
+@pytest.mark.asyncio
+async def test_output_controller_generation_state_machine_advances_on_continue():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "phase content", "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    _, diag1 = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate implementation", "tools": []},
+        session_id="s-gen",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="generate implementation",
+    )
+    assert diag1.get("generation", {}).get("current_generation_phase") == "manifest"
+    assert diag1.get("generation", {}).get("output_controller_stage") == "tool_loop"
+    assert diag1.get("generation", {}).get("completion_criteria_count", 0) >= 1
+    _, diag2 = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "continue staged", "tools": []},
+        session_id="s-gen",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="continue",
+    )
+    assert diag2.get("generation", {}).get("current_generation_phase") in {"phase_1", "phase_2"}
+    assert "source_digest_chunk_coverage_count" in diag2.get("generation", {})
+
+
+@pytest.mark.asyncio
+async def test_output_controller_generation_done_requires_completion_criteria():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "X" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}, "generation": {"completion_criteria": ["manifest_prepared", "phase_output_recorded"], "completion_criteria_status": {"manifest_prepared": False, "phase_output_recorded": False}}}
+    _, diag1 = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate implementation", "tools": []},
+        session_id="s-gen-criteria",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="generate implementation",
+    )
+    assert diag1.get("generation_done") is False
+    state["generation"]["completion_criteria_status"] = {"manifest_prepared": True, "phase_output_recorded": True}
+    _, diag2 = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "continue", "tools": []},
+        session_id="s-gen-criteria",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="continue",
+    )
+    assert diag2.get("generation_done") is True
+
+
+@pytest.mark.asyncio
+async def test_output_controller_bounds_huge_content_medium_risk():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "M" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    user_text = "x" * 1500
+    state = {"budget": {}}
+    result, _ = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "chat", "tools": []},
+        session_id="s-medium",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text=user_text,
+        max_chat_output_chars=8000,
+    )
+    assert len(result.get("content") or "") <= 8000
+
+
+@pytest.mark.asyncio
+async def test_output_controller_retry_max_output_still_returns_non_error_fallback():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"error": {"code": "max_output_tokens_exceeded", "message": "Model output was truncated because max_output_tokens was reached"}}
+
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate complete implementation", "tools": []},
+        session_id="s-retry-fallback",
+        stage="tool_loop",
+        context_state={"budget": {}},
+        latest_user_text="generate all tests and code",
+    )
+    assert "error" not in result
+    assert diag["max_output_recovery"]["applied"] is True
+    assert "Model output was truncated because max_output_tokens" not in (result.get("content") or "")
+
+
+@pytest.mark.asyncio
+async def test_output_controller_accepts_none_max_chat_output_chars():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "N" * 9000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "simple", "tools": []},
+        session_id="s-none-max-chat",
+        stage="tool_loop",
+        context_state={"budget": {}},
+        latest_user_text="Hey",
+        max_chat_output_chars=None,
+    )
+    assert len(result.get("content") or "") <= 8000
+    assert diag.get("output_bounding", {}).get("bounded") is True
+
+
+def test_ensure_staged_generation_accepts_none_max_chat_output_chars():
+    from src.runtime.output_controller import ensure_staged_generation
+
+    state = {"generation": {}}
+    gen = ensure_staged_generation(state, stage="tool_loop", max_chat_output_chars=None)
+    assert gen.get("max_chat_output_chars") == 8000
+
+
+@pytest.mark.asyncio
+async def test_output_controller_bounds_oversized_normal_risk_output():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "N" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "simple chat reply", "tools": []},
+        session_id="s-normal",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="hello",
+        max_chat_output_chars=8000,
+    )
+    assert len(result.get("content") or "") <= 8000
+    assert diag.get("output_bounding", {}).get("bounded") is True
+    assert state["budget"].get("oversized_output_saved") is True
+
+
+def test_core_and_skill_mode_do_not_call_llm_client_responses_directly():
+    from src.agents import core
+    from src.agents import skill_mode
+
+    assert "llm_client.responses(" not in inspect.getsource(core.Agent.process)
+    assert "llm_client.responses(" not in inspect.getsource(core._run_skill_finalizer)
+    assert "llm_client.responses(" not in inspect.getsource(skill_mode._generate_initial_skill_plan_direct)
+
+
+def test_find_source_target_for_context_can_reuse_previous_jira_and_confluence_messages():
+    from src.agents import core
+
+    jira = core._find_source_target_for_context(
+        latest_user_text="基于刚才全部Jira信息生成测试",
+        messages=[{"role": "user", "content": "https://x/browse/ABC-123"}],
+        context_state={},
+    )
+    assert jira["source_type"] == "jira"
+    conf = core._find_source_target_for_context(
+        latest_user_text="use all confluence info",
+        messages=[{"role": "user", "content": "https://wiki.local/pages/123/Title"}],
+        context_state={},
+    )
+    assert conf["source_type"] == "confluence"
+
+
+def test_auto_source_manifest_as_assistant_message_does_not_create_orphan_function_call_output():
+    from src.agents import core
+
+    messages = [
+        {"role": "assistant", "content": "[auto source context prepared]\n[jira source bundle prepared]\ncontext_ref: ctx://context/s/k/aaaaaaaaaaaa"},
+        {"role": "user", "content": "continue"},
+    ]
+    items = core.build_responses_input_items(messages, session_id="s")
+    assert not any(item.get("type") == "function_call_output" for item in items)
 
 
 def test_mobilex_skill_prompt_contains_hard_output_constraints():

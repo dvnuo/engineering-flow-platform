@@ -10,7 +10,7 @@ import platform
 import re
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.agents.skill_mode import (
     SkillSession,
@@ -77,6 +77,7 @@ from src.runtime.progressive_context import (
 )
 from src.context_blob_store import build_section_map, put_text
 from src.agents.compaction import estimate_tokens
+from src.runtime.output_controller import call_llm_with_output_control, recover_max_output_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -524,6 +525,15 @@ def _safe_request_budget_fields(budget: Optional[Dict[str, Any]]) -> Dict[str, A
         "request_over_budget",
         "output_size_guard_applied",
         "large_generation_guard_applied",
+        "large_generation_guard_reason",
+        "generation_mode",
+        "current_generation_phase",
+        "output_risk_level",
+        "max_chat_output_chars",
+        "output_token_limit",
+        "input_context_usage_percent",
+        "max_output_recovery_applied",
+        "max_output_recovery_attempts",
     )
     safe = {key: budget.get(key) for key in keys if key in budget}
     stage = budget.get("request_budget_stage")
@@ -532,6 +542,15 @@ def _safe_request_budget_fields(budget: Optional[Dict[str, Any]]) -> Dict[str, A
     if isinstance(stage, str) and stage.strip():
         safe["request_budget_stage"] = stage.strip()
     return safe
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(value)
+    except Exception:
+        return default
 
 
 def _merge_budget_into_error_details(error_response: Dict[str, Any], budget: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -607,6 +626,7 @@ def _large_generation_output_guard(
     active_skill_runtime: Optional[Any],
     selected_skill: Optional[Any],
     active_skill_contract: Optional[Dict[str, Any]],
+    latest_user_text: str = "",
 ) -> str:
     skill_name = (
         getattr(active_skill_runtime, "skill_name", None)
@@ -614,20 +634,115 @@ def _large_generation_output_guard(
         or (active_skill_contract or {}).get("skill_name")
     )
     normalized = str(skill_name or "").strip().lower()
-    guarded_skills = {
-        "mobilex-test-cases-generator",
-        "java_cucumber_generator",
-        "java-cucumber-generator",
-        "mobilex-test-generator",
-    }
-    if normalized not in guarded_skills:
+    skill_desc = str(getattr(selected_skill, "description", "") or "")
+    skill_or_desc = f"{normalized} {skill_desc}".lower()
+    user_text = str(latest_user_text or "").lower()
+    generation_markers = (
+        "test", "code", "generate", "implementation", "spec", "feature", "step definition", "step_definitions",
+        "multi-file", "all test cases", "generate all", "全部内容", "生成全部", "all jira information",
+    )
+    is_generation = any(marker in skill_or_desc for marker in generation_markers) or any(
+        marker in user_text for marker in generation_markers
+    )
+    if not is_generation:
         return ""
     return (
-        "Large generation output guard: For this skill, never emit all generated files or complete multi-file "
-        "implementations in a single chat response. Produce one bounded phase at a time. Prefer writing "
-        "artifacts/files via tools when a repository target is available. In chat, return a concise manifest, "
-        "file paths, and the next recommended step. Keep chat output under 8000 characters."
+        "Large generation output guard: Do not emit a complete multi-file implementation or very long generated "
+        "artifact in a single chat response. Generate one bounded phase/file at a time. Prefer writing artifacts/files "
+        "through tools when available. In chat, return a concise manifest, file paths, and next step. "
+        "Keep response under 8000 characters.\n"
+        "generation_mode=staged\nmax_chat_output_chars=8000\ncurrent_phase=manifest"
     )
+
+
+def _extract_jira_key_or_url(text: str) -> str:
+    raw = str(text or "")
+    url_match = re.search(r"https?://[^\s]+/browse/([A-Z][A-Z0-9_]*-\d+)", raw, re.IGNORECASE)
+    if url_match:
+        return url_match.group(0)
+    key_match = re.search(r"\b([A-Z][A-Z0-9_]*-\d+)\b", raw)
+    return key_match.group(1) if key_match else ""
+
+
+def _extract_confluence_page_hint(text: str) -> str:
+    raw = str(text or "")
+    url_match = re.search(r"https?://[^\s]+(?:/pages/\d+/?[^\s]*|[?&]pageId=\d+)", raw, re.IGNORECASE)
+    if url_match:
+        return url_match.group(0)
+    return ""
+
+
+def _find_source_target_for_context(
+    latest_user_text: str,
+    messages: List[Dict[str, Any]],
+    context_state: Optional[Dict[str, Any]],
+) -> Dict[str, str]:
+    source = context_state.get("source") if isinstance(context_state, dict) and isinstance(context_state.get("source"), dict) else {}
+    candidates: List[str] = [str(latest_user_text or "")]
+    if isinstance(source, dict):
+        for key in ("target", "latest_target", "issue_key", "page_id", "last_source_hint"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                candidates.append(value.strip())
+    for msg in reversed(messages or []):
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if isinstance(content, str) and content.strip():
+            candidates.append(content)
+        if len(candidates) >= 12:
+            break
+    for text in candidates:
+        jira = _extract_jira_key_or_url(text)
+        if jira:
+            return {"source_type": "jira", "target": jira, "existing_source_ref": str(source.get("source_ref") or ""), "existing_digest_ref": str(source.get("digest_ref") or "")}
+        conf = _extract_confluence_page_hint(text)
+        if conf:
+            return {"source_type": "confluence", "target": conf, "existing_source_ref": str(source.get("source_ref") or ""), "existing_digest_ref": str(source.get("digest_ref") or "")}
+    return {"source_type": "", "target": "", "existing_source_ref": str(source.get("source_ref") or ""), "existing_digest_ref": str(source.get("digest_ref") or "")}
+
+
+def _requires_source_complete_context(
+    user_text: str,
+    active_skill_runtime: Optional[Any],
+    selected_skill: Optional[Any],
+    tool_results_or_messages: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
+    text = str(user_text or "").lower()
+    skill_name = str(getattr(active_skill_runtime, "skill_name", "") or getattr(selected_skill, "name", "")).lower()
+    skill_desc = str(getattr(selected_skill, "description", "")).lower()
+    compact_text = text.replace(" ", "")
+    full_source_markers = (
+        "全部 jira 信息", "所有 jira 信息", "完整 jira", "all jira information", "complete jira",
+        "based on all jira", "generate all test cases from jira", "获取全部 jira 信息并生成测试用例",
+        "全部jira信息", "所有jira信息", "完整jira", "基于全部jira", "全部confluence信息", "完整confluence",
+        "all confluence", "complete confluence",
+    )
+    generation_markers = ("generate", "test", "code", "spec", "feature", "implementation", "review", "生成", "测试用例")
+    has_jira_or_conf = bool(_extract_jira_key_or_url(text) or _extract_confluence_page_hint(text) or (" jira" in text) or ("confluence" in text))
+    generation_intent = any(m in text for m in generation_markers) or any(m in skill_name for m in generation_markers) or any(m in skill_desc for m in generation_markers)
+    explicit_full = any(m in text for m in full_source_markers) or any(m in compact_text for m in full_source_markers)
+    return has_jira_or_conf and (explicit_full or generation_intent)
+
+
+async def _recover_max_output_tokens(
+    *,
+    llm_result: Dict[str, Any],
+    llm_kwargs: Dict[str, Any],
+    loop_context_state: Optional[Dict[str, Any]],
+    stage_hint: str,
+) -> Tuple[Dict[str, Any], bool]:
+    state = loop_context_state.setdefault("budget", {}) if isinstance(loop_context_state, dict) else {}
+    recovered, info = await recover_max_output_tokens(
+        llm_client=llm_client,
+        llm_result=llm_result,
+        llm_kwargs=llm_kwargs,
+        state=state,
+        stage=stage_hint,
+    )
+    if isinstance(state, dict):
+        state["request_budget_stage"] = stage_hint
+    return recovered, bool(info.get("applied"))
 
 
 def degrade_projected_context_sources_in_responses_input_items(
@@ -1160,14 +1275,23 @@ async def _run_skill_finalizer(
                 ),
                 usage_data,
             )
-        result = await llm_client.responses(
-            input_items=items_for_call,
-            system_prompt=system_prompt,
-            tools=None,
-            reasoning_replay=False,
-            provider=_normalize_provider_key(provider),
-            max_tokens=budget_max_tokens,
-            **({"model": model} if model else {}),
+        result, _output_diag = await call_llm_with_output_control(
+            llm_client=llm_client,
+            llm_kwargs={
+                "input_items": items_for_call,
+                "system_prompt": system_prompt,
+                "tools": None,
+                "reasoning_replay": False,
+                "provider": _normalize_provider_key(provider),
+                "max_tokens": budget_max_tokens,
+                **({"model": model} if model else {}),
+            },
+            session_id=getattr(skill_session, "session_id", None) or "unknown_session",
+            stage="skill_finalizer",
+            context_state={"budget": finalizer_request_budget},
+            active_skill=None,
+            latest_user_text="",
+            max_chat_output_chars=8000,
         )
         skill_session.llm_call_count += 1
         if not result.get("error"):
@@ -2102,10 +2226,63 @@ You have access to the following tools. When a user asks you to do something tha
                 tools=loop_tools,
                 reasoning_replay=enable_reasoning,
             )
+            latest_user_text = ""
+            for _m in reversed(loop_messages):
+                if isinstance(_m, dict) and _m.get("role") == "user":
+                    latest_user_text = str(_m.get("content") or "")
+                    break
+            if _requires_source_complete_context(latest_user_text, active_skill_runtime, selected_skill, loop_messages):
+                source_state = loop_context_state.setdefault("source", {}) if isinstance(loop_context_state, dict) else {}
+                if not source_state.get("source_complete"):
+                    source_target = _find_source_target_for_context(latest_user_text, loop_messages, loop_context_state)
+                    jira_hint = source_target.get("target") if source_target.get("source_type") == "jira" else ""
+                    confluence_hint = source_target.get("target") if source_target.get("source_type") == "confluence" else ""
+                    source_manifest = ""
+                    source_type = ""
+                    try:
+                        if jira_hint:
+                            prepared = await _execute_tool_via_runtime_bus(
+                                session_id=session_id,
+                                tool_name="jira_prepare_issue_context",
+                                args={"issue_key_or_url": jira_hint},
+                            )
+                            source_manifest = str(prepared.content or "")
+                            source_type = "jira"
+                        elif confluence_hint:
+                            prepared = await _execute_tool_via_runtime_bus(
+                                session_id=session_id,
+                                tool_name="confluence_prepare_page_context",
+                                args={"page_id_or_url": confluence_hint},
+                            )
+                            source_manifest = str(prepared.content or "")
+                            source_type = "confluence"
+                    except Exception:
+                        source_manifest = ""
+                    if source_manifest:
+                        loop_messages.append({"role": "assistant", "content": f"[auto source context prepared]\n{source_manifest}"})
+                        input_items = build_responses_input_items(loop_messages, session_id=session_id)
+                        llm_kwargs["input_items"] = input_items
+                        source_state["source_type"] = source_type
+                        source_state["target"] = jira_hint or confluence_hint
+                        source_state["source_complete"] = "source_complete: True" in source_manifest
+                        comments_match = re.search(r"comments_loaded:\\s*([0-9]+)/([0-9]+)", source_manifest)
+                        if comments_match:
+                            source_state["comments_loaded"] = int(comments_match.group(1))
+                            source_state["comments_total"] = int(comments_match.group(2))
+                        attachments_match = re.search(r"attachments_(?:metadata_)?loaded:\\s*([0-9]+)/([0-9]+)", source_manifest)
+                        if attachments_match:
+                            source_state["attachments_loaded"] = int(attachments_match.group(1))
+                            source_state["attachments_total"] = int(attachments_match.group(2))
+                        source_state["source_bundle_ref_count"] = 1 if "context_ref:" in source_manifest else 0
+                        source_state["source_digest_ref_count"] = 1 if "digest_ref:" in source_manifest else 0
+                        chunk_match = re.search(r"source_digest_chunk_count:\\s*([0-9]+)", source_manifest)
+                        source_state["source_digest_chunk_count"] = int(chunk_match.group(1)) if chunk_match else 0
+                        source_state["source_partial_reasons_count"] = source_manifest.count("partial_reasons:")
             large_generation_guard = _large_generation_output_guard(
                 active_skill_runtime=active_skill_runtime,
                 selected_skill=selected_skill,
                 active_skill_contract=active_skill_contract,
+                latest_user_text=latest_user_text,
             )
             if large_generation_guard:
                 llm_kwargs["system_prompt"] = ((llm_kwargs.get("system_prompt") or "") + "\n\n" + large_generation_guard).strip()
@@ -2134,6 +2311,17 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
                 budget_state["large_generation_guard_applied"] = large_generation_guard_applied
                 budget_state["output_size_guard_applied"] = large_generation_guard_applied
+                budget_state["large_generation_guard_reason"] = "classifier:skill_or_user_generation_request" if large_generation_guard_applied else ""
+                budget_state["generation_mode"] = "staged" if large_generation_guard_applied else "default"
+                budget_state["current_generation_phase"] = "manifest" if large_generation_guard_applied else ""
+                budget_state["max_chat_output_chars"] = 8000
+                budget_state["output_risk_level"] = "high" if large_generation_guard_applied else "normal"
+                budget_state["output_token_limit"] = loop_budget.get("max_output_tokens")
+                budget_state["input_context_usage_percent"] = (
+                    (loop_context_state.get("budget") or {}).get("usage_percent")
+                    if isinstance(loop_context_state.get("budget"), dict)
+                    else None
+                )
             if request_estimated_tokens > int(loop_budget.get("prompt_budget_tokens", 0) or 0):
                 loop_messages, loop_context_state = await prepare_progressive_messages(
                     messages=loop_messages,
@@ -2190,7 +2378,28 @@ You have access to the following tools. When a user asks you to do something tha
                     "Write artifacts/files via tools when possible; otherwise output a concise manifest and ask to continue file-by-file."
                 )
             
-            llm_result = await llm_client.responses(**llm_kwargs)
+            raw_max_chat = (
+                ((loop_context_state.get("budget", {}) or {}).get("max_chat_output_chars"))
+                if isinstance(loop_context_state, dict)
+                else None
+            )
+            llm_result, output_diag = await call_llm_with_output_control(
+                llm_client=llm_client,
+                llm_kwargs=llm_kwargs,
+                session_id=session_id,
+                stage="tool_loop",
+                context_state=loop_context_state if isinstance(loop_context_state, dict) else {"budget": {}},
+                active_skill=selected_skill,
+                latest_user_text=latest_user_text,
+                max_chat_output_chars=_safe_int(raw_max_chat, 8000),
+            )
+            if isinstance(loop_context_state, dict) and isinstance(loop_context_state.get("budget"), dict):
+                loop_context_state["budget"]["output_controller_applied"] = True
+                if isinstance(output_diag, dict):
+                    loop_context_state["budget"]["output_risk_level"] = output_diag.get("output_risk_level")
+                    loop_context_state["budget"]["generation_mode"] = output_diag.get("generation_mode") or loop_context_state["budget"].get("generation_mode")
+                    if isinstance(output_diag.get("generation"), dict):
+                        loop_context_state["generation"] = dict(output_diag.get("generation"))
             # Check for LLM configuration error
             if llm_result.get("error"):
                 error_info = llm_result["error"]
@@ -2237,6 +2446,7 @@ You have access to the following tools. When a user asks you to do something tha
             content = (llm_result.get("content") or "").strip()
             function_calls = llm_result.get("function_calls", [])
             tool_calls = function_calls  # alias
+            staged_mode = bool(isinstance(loop_context_state, dict) and isinstance(loop_context_state.get("budget"), dict) and (loop_context_state.get("budget") or {}).get("generation_mode") == "staged")
             
             # Save intermediate chatlog after EVERY LLM call (for recovery on interruption)
             # Use asyncio.to_thread to avoid blocking the event loop
@@ -3084,10 +3294,39 @@ You have access to the following tools. When a user asks you to do something tha
                 "reasoning_replay": False,
                 "provider": _normalize_provider_key(provider),
             }
+            latest_user_text = ""
+            latest_user_text = str(message or "")
+            if _requires_source_complete_context(latest_user_text, skill_runtime_config, skill, []):
+                source_target = _find_source_target_for_context(
+                    latest_user_text,
+                    messages=[],
+                    context_state={"source": (skill_state.get("source") if isinstance(skill_state, dict) else {})},
+                )
+                jira_hint = source_target.get("target") if source_target.get("source_type") == "jira" else ""
+                confluence_hint = source_target.get("target") if source_target.get("source_type") == "confluence" else ""
+                source_manifest = ""
+                if jira_hint:
+                    prepared = await _execute_tool_via_runtime_bus(
+                        session_id=session_id,
+                        tool_name="jira_prepare_issue_context",
+                        args={"issue_key_or_url": jira_hint},
+                    )
+                    source_manifest = str(prepared.content or "")
+                elif confluence_hint:
+                    prepared = await _execute_tool_via_runtime_bus(
+                        session_id=session_id,
+                        tool_name="confluence_prepare_page_context",
+                        args={"page_id_or_url": confluence_hint},
+                    )
+                    source_manifest = str(prepared.content or "")
+                if source_manifest:
+                    input_items.append({"role": "assistant", "content": f"[auto source context prepared]\n{source_manifest}"})
+                    llm_kwargs["input_items"] = input_items
             large_generation_guard = _large_generation_output_guard(
                 active_skill_runtime=skill_runtime_config,
                 selected_skill=skill,
                 active_skill_contract=skill_state if isinstance(skill_state, dict) else None,
+                latest_user_text=latest_user_text,
             )
             if large_generation_guard:
                 llm_kwargs["system_prompt"] = ((llm_kwargs.get("system_prompt") or "") + "\n\n" + large_generation_guard).strip()
@@ -3114,6 +3353,9 @@ You have access to the following tools. When a user asks you to do something tha
                 "request_over_budget": request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False,
                 "large_generation_guard_applied": large_generation_guard_applied,
                 "output_size_guard_applied": large_generation_guard_applied,
+                "large_generation_guard_reason": "classifier:skill_or_user_generation_request" if large_generation_guard_applied else "",
+                "generation_mode": "staged" if large_generation_guard_applied else "default",
+                "current_generation_phase": "manifest" if large_generation_guard_applied else "",
                 "request_budget_stage": "skill_generation",
                 "stage": "skill_generation",
             }
@@ -3161,12 +3403,27 @@ You have access to the following tools. When a user asks you to do something tha
                 return error_response
 
             logger.debug(f"[SkillMode] Calling LLM with model={llm_kwargs.get('model')}, max_tokens={llm_kwargs.get('max_tokens')}")
-            llm_result = await llm_client.responses(**llm_kwargs)
+            llm_result, output_diag = await call_llm_with_output_control(
+                llm_client=llm_client,
+                llm_kwargs=llm_kwargs,
+                session_id=session_id,
+                stage="skill_generation",
+                context_state={"budget": skill_request_budget},
+                active_skill=skill,
+                latest_user_text=latest_user_text,
+                max_chat_output_chars=8000,
+            )
             skill_session.llm_call_count += 1
             turn_state.llm_call_count = skill_session.llm_call_count
             logger.debug(f"[SkillMode] LLM response keys={llm_result.keys() if llm_result else None}")
             logger.debug(f"[SkillMode] LLM response content length={len(llm_result.get('content', '') or '')}")
 
+            if isinstance(output_diag, dict):
+                skill_request_budget["output_controller_applied"] = True
+                skill_request_budget["output_risk_level"] = output_diag.get("output_risk_level")
+                skill_request_budget["generation_mode"] = output_diag.get("generation_mode") or skill_request_budget.get("generation_mode")
+                if isinstance(output_diag.get("generation"), dict):
+                    skill_state["generation"] = dict(output_diag.get("generation"))
             if llm_result.get("error"):
                 error_info = llm_result["error"]
                 error_msg = error_info.get("message", "Unknown LLM error")

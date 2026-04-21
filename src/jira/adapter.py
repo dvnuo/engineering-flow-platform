@@ -55,7 +55,7 @@ class JiraFormatAdapter:
             issue_key: str,
             format: str = "markdown",
             max_chars: int = None,
-            max_comments: int = 5,
+            max_comments: Optional[int] = 5,
             include_fields: List[str] = None,
             include_comments: bool = True,
             include_attachment_urls: bool = False,
@@ -108,7 +108,7 @@ class JiraFormatAdapter:
             self,
             issue: dict,
             max_chars: int = None,
-            max_comments: int = 5,
+            max_comments: Optional[int] = 5,
             include_fields: List[str] = None,
             include_comments: bool = True,
             include_attachment_urls: bool = False,
@@ -205,7 +205,7 @@ class JiraFormatAdapter:
             self,
             issue: dict,
             max_chars: int = None,
-            max_comments: int = 5,
+            max_comments: Optional[int] = 5,
             include_fields: List[str] = None,
             include_comments: bool = True
     ) -> str:
@@ -339,19 +339,24 @@ class JiraFormatAdapter:
 
         return str(desc)
 
-    def _get_comments_list(self, issue: dict, max_comments: int = 5) -> List[dict]:
+    def _get_comments_list(self, issue: dict, max_comments: Optional[int] = 5) -> List[dict]:
         """Extract comments from issue."""
         fields = issue.get("fields", {})
         comments = fields.get("comment", {})
 
+        def _slice_all(values: List[dict]) -> List[dict]:
+            if max_comments is None or int(max_comments) <= 0:
+                return list(values)
+            return list(values)[: int(max_comments)]
+
         if isinstance(comments, dict):
-            return comments.get("comments", [])[:max_comments]
+            return _slice_all(comments.get("comments", []) or [])
         elif isinstance(comments, list):
-            return comments[:max_comments]
+            return _slice_all(comments)
 
         return []
 
-    async def _ensure_comments_loaded(self, issue_key: str, issue: dict, max_comments: int) -> dict:
+    async def _ensure_comments_loaded(self, issue_key: str, issue: dict, max_comments: Optional[int]) -> dict:
         """Load comments explicitly when the issue payload doesn't contain them."""
         existing_comments = self._get_comments_list(issue, max_comments)
         comment_field = issue.get("fields", {}).get("comment", {})
@@ -359,7 +364,10 @@ class JiraFormatAdapter:
         if isinstance(comment_field, dict):
             total_comments = comment_field.get("total") or len(comment_field.get("comments", []))
 
-        if existing_comments and len(existing_comments) >= min(total_comments or len(existing_comments), max_comments):
+        target = total_comments or len(existing_comments)
+        if max_comments is not None and int(max_comments) > 0:
+            target = min(target, int(max_comments))
+        if existing_comments and len(existing_comments) >= target:
             return issue
 
         try:

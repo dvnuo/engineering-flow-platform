@@ -2,6 +2,7 @@
 
 import logging
 from typing import List, Optional, Union
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,8 @@ from .api import (
 from .adapter import JiraFormatAdapter
 from src.utils.attachment import download_and_process_attachment
 from .exporter import export_issues_to_markdown
+from src.source_context import persist_jira_source_bundle_and_digest
+from src.context_blob_store import put_text
 
 __all__ = [
     "JiraChannel", 
@@ -30,6 +33,9 @@ __all__ = [
     "JiraFormatAdapter",
     "jira_get_issue",
     "jira_get_issue_by_url",
+    "jira_get_issue_preview",
+    "jira_get_issue_by_url_preview",
+    "jira_prepare_issue_context",
     "jira_search",
     "jira_add_comment",
     "jira_add_attachment",
@@ -111,7 +117,9 @@ async def jira_get_issue(
     max_comments: int = 5,
     include_fields: List[str] = None,
     include_comments: bool = True,
-    include_attachment_urls: bool = False
+    include_attachment_urls: bool = False,
+    preview: bool = False,
+    _session_id: Optional[str] = None,
 ) -> Union[str, dict]:
     """Get a Jira issue by key.
     
@@ -132,6 +140,8 @@ async def jira_get_issue(
         Issue details in requested format (markdown/wiki: str, raw: dict)
     """
     try:
+        if not preview:
+            return await jira_prepare_issue_context(issue_key_or_url=issue_key, _session_id=_session_id)
         if not jira_channel.is_configured():
             return "Error: Jira is not configured. Please check your settings."
         
@@ -178,7 +188,9 @@ async def jira_get_issue_by_url(
     max_comments: int = 5,
     include_fields: List[str] = None,
     include_comments: bool = True,
-    include_attachment_urls: bool = False
+    include_attachment_urls: bool = False,
+    preview: bool = False,
+    _session_id: Optional[str] = None,
 ) -> Union[str, dict]:
     """Get a Jira issue by its URL.
     
@@ -201,6 +213,8 @@ async def jira_get_issue_by_url(
     import re
     
     try:
+        if not preview:
+            return await jira_prepare_issue_context(issue_key_or_url=url, _session_id=_session_id)
         # Extract issue key from URL (support letters, digits, underscores in project key)
         match = re.search(r'/browse/([A-Z][A-Z0-9_]*-\d+)', url, re.IGNORECASE)
         if not match:
@@ -243,6 +257,279 @@ async def jira_get_issue_by_url(
         return result
     except Exception as e:
         return f"Error getting issue from URL: {str(e)}"
+
+
+async def jira_get_issue_preview(*args, **kwargs) -> Union[str, dict]:
+    kwargs["preview"] = True
+    return await jira_get_issue(*args, **kwargs)
+
+
+async def jira_get_issue_by_url_preview(*args, **kwargs) -> Union[str, dict]:
+    kwargs["preview"] = True
+    return await jira_get_issue_by_url(*args, **kwargs)
+
+
+async def jira_prepare_issue_context(
+    issue_key_or_url: str,
+    include_all_comments: bool = True,
+    include_attachments: bool = True,
+    include_raw_snapshot: bool = True,
+    _session_id: Optional[str] = None,
+) -> Union[str, dict]:
+    """Prepare a source-complete Jira context bundle and bounded digest manifest."""
+    import re
+
+    if not jira_channel.is_configured():
+        return "Error: Jira is not configured."
+
+    issue_key = str(issue_key_or_url or "").strip()
+    instance_channel = jira_channel
+    if "/browse/" in issue_key:
+        match = re.search(r"/browse/([A-Z][A-Z0-9_]*-\d+)", issue_key, re.IGNORECASE)
+        if not match:
+            return f"Could not extract issue key from URL: {issue_key_or_url}"
+        issue_key = match.group(1).upper()
+        instance_channel = jira_channel.get_instance_client(url=issue_key_or_url)
+    session_id = _session_id or "unknown_session"
+
+    adapter = JiraFormatAdapter(instance_channel)
+    issue = await adapter.get_issue(
+        issue_key=issue_key,
+        format="raw",
+        max_comments=None if include_all_comments else 5,
+        include_comments=True,
+        include_fields=None,
+    )
+    fields = issue.get("fields", {}) if isinstance(issue, dict) else {}
+    comments = adapter._get_comments_list(issue if isinstance(issue, dict) else {}, None if include_all_comments else 5)
+    comment_field = fields.get("comment", {})
+    comments_total = int((comment_field or {}).get("total") or len(comments)) if isinstance(comment_field, dict) else len(comments)
+
+    attachments = []
+    text_attachments_total = 0
+    text_attachments_loaded = 0
+    text_attachments_full_loaded = 0
+    text_attachments_preview_only = 0
+    text_attachments_with_full_ref = 0
+    partial_reasons: List[str] = []
+    attachment_body_partial_reasons: List[str] = []
+    attachment_list = fields.get("attachment", []) if isinstance(fields, dict) else []
+    binary_attachments_count = 0
+    binary_attachment_bodies_skipped_count = 0
+    for att in attachment_list:
+        mime = str(att.get("mimeType") or "")
+        filename = str(att.get("filename") or "unknown")
+        is_text = mime.startswith("text/") or filename.lower().endswith((".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".xml", ".log"))
+        if is_text:
+            text_attachments_total += 1
+        else:
+            binary_attachments_count += 1
+            binary_attachment_bodies_skipped_count += 1
+            partial_reasons.append(f"binary_attachment_body_skipped:{filename}")
+        item = {
+            "id": att.get("id"),
+            "filename": filename,
+            "mime_type": mime,
+            "size": att.get("size", 0),
+            "created": att.get("created"),
+            "author": att.get("author"),
+            "text_preview": None,
+            "text_ref": None,
+            "attachment_text_preview_only": False,
+        }
+        if include_attachments and is_text and att.get("content"):
+            try:
+                auth_header = instance_channel._auth_header if instance_channel.is_configured() else None
+                result = await download_and_process_attachment(
+                    url=att.get("content"),
+                    session_id=f"jira-source-{issue_key}",
+                    options={"include_image_data": False},
+                    auth_header=auth_header,
+                )
+                if getattr(result, "content_format", "") == "text":
+                    text_content = str(getattr(result, "content", "") or "")
+                    if len(text_content) <= 4000:
+                        item["text_preview"] = text_content
+                        text_attachments_full_loaded += 1
+                    else:
+                        item["text_preview"] = text_content[:1000]
+                        item["attachment_text_preview_only"] = True
+                        text_attachments_preview_only += 1
+                        item["text_ref"] = put_text(
+                            session_id=session_id,
+                            kind="jira_attachment_text",
+                            source_id=f"{issue_key}_{filename}",
+                            title=f"Jira attachment text {filename}",
+                            content=text_content,
+                            metadata={"issue_key": issue_key, "filename": filename},
+                        )
+                        text_attachments_with_full_ref += 1
+                        attachment_body_partial_reasons.append(f"text_attachment_preview_only:{filename}")
+                    text_attachments_loaded += 1
+            except Exception as exc:
+                partial_reasons.append(f"attachment_text_processing_failed:{filename}:{type(exc).__name__}")
+                attachment_body_partial_reasons.append(f"attachment_text_processing_failed:{filename}:{type(exc).__name__}")
+        attachments.append(item)
+
+    rendered_fields = issue.get("renderedFields") if isinstance(issue, dict) else None
+    bundle = {
+        "issue_key": issue_key,
+        "metadata": {
+            "key": issue.get("key") if isinstance(issue, dict) else issue_key,
+            "title": fields.get("summary"),
+            "status": (fields.get("status") or {}).get("name") if isinstance(fields.get("status"), dict) else "",
+            "type": (fields.get("issuetype") or {}).get("name") if isinstance(fields.get("issuetype"), dict) else "",
+            "priority": (fields.get("priority") or {}).get("name") if isinstance(fields.get("priority"), dict) else "",
+            "assignee": (fields.get("assignee") or {}).get("displayName") if isinstance(fields.get("assignee"), dict) else "",
+        },
+        "description": adapter._convert_description_to_markdown(fields.get("description")),
+        "acceptance_criteria": adapter._extract_acceptance_criteria(issue if isinstance(issue, dict) else {}),
+        "business_rules": "",
+        "validation_rules": "",
+        "comments": [
+            {
+                "id": c.get("id"),
+                "author": c.get("author"),
+                "created": c.get("created"),
+                "body": c.get("body"),
+                "body_markdown": adapter._convert_description_to_markdown(c.get("body")),
+            }
+            for c in comments
+        ],
+        "attachments": attachments,
+        "raw_snapshot": issue if include_raw_snapshot else {},
+        "names": issue.get("names") if isinstance(issue, dict) else {},
+        "renderedFields": issue.get("renderedFields") if isinstance(issue, dict) else {},
+        "completeness_ledger": {
+            "issue_loaded": bool(issue),
+            "raw_issue_loaded": bool(issue),
+            "names_loaded": bool(issue.get("names")) if isinstance(issue, dict) else False,
+            "issue_fields_complete": bool(fields),
+            "comments_loaded": len(comments),
+            "comments_total": comments_total,
+            "comments_complete": len(comments) >= comments_total,
+            "attachments_metadata_loaded": len(attachments),
+            "attachments_total": len(attachment_list),
+            "attachments_metadata_complete": len(attachments) >= len(attachment_list),
+            "attachment_metadata_complete": len(attachments) >= len(attachment_list),
+            "text_attachments_loaded": text_attachments_loaded,
+            "text_attachments_total": text_attachments_total,
+            "text_attachments_complete": text_attachments_loaded >= text_attachments_total,
+            "text_attachment_bodies_complete": text_attachments_loaded >= text_attachments_total and text_attachments_with_full_ref >= text_attachments_preview_only,
+            "text_attachments_full_loaded": text_attachments_full_loaded,
+            "text_attachments_preview_only": text_attachments_preview_only,
+            "text_attachments_with_full_ref": text_attachments_with_full_ref,
+            "binary_attachments_count": binary_attachments_count,
+            "binary_attachment_bodies_available": False,
+            "binary_attachment_bodies_skipped_count": binary_attachment_bodies_skipped_count,
+            "binary_attachment_body_policy": "metadata_only" if binary_attachments_count > 0 else "loaded",
+            "attachment_body_complete": text_attachments_preview_only == 0 and binary_attachment_bodies_skipped_count == 0,
+            "attachment_body_partial_reasons": attachment_body_partial_reasons + [f"binary_attachment_body_skipped:{att.get('filename','unknown')}" for att in attachment_list if not (str(att.get('mimeType') or '').startswith('text/') or str(att.get('filename') or '').lower().endswith((".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".xml", ".log")))],
+            "raw_fields_loaded": bool(fields),
+            "rendered_fields_loaded": bool(rendered_fields),
+            "custom_fields_loaded": bool(issue.get("names")) if isinstance(issue, dict) else False,
+            "source_complete_definition": (
+                "source_complete requires issue fields, all comments, attachment metadata, and text attachment bodies. "
+                "Binary attachment bodies are metadata-only by design and do not block source_complete."
+            ),
+            "partial_reasons": partial_reasons,
+        },
+    }
+    ledger = bundle["completeness_ledger"]
+    ledger["source_metadata_complete"] = bool(
+        ledger.get("issue_fields_complete")
+        and ledger.get("names_loaded")
+        and ledger.get("rendered_fields_loaded")
+        and ledger.get("attachment_metadata_complete")
+    )
+    ledger["source_text_complete"] = bool(
+        ledger.get("comments_complete")
+        and ledger.get("text_attachment_bodies_complete")
+    )
+    ledger["source_tree_complete"] = True
+    ledger["source_complete_for_generation"] = bool(
+        ledger["source_metadata_complete"] and ledger["source_text_complete"]
+    )
+    ledger["source_complete_including_binary_bodies"] = bool(
+        ledger["source_complete_for_generation"]
+        and ledger.get("binary_attachment_bodies_available")
+        and int(ledger.get("binary_attachment_bodies_skipped_count", 0)) == 0
+    )
+    blocking_partial_reasons = [r for r in ledger.get("partial_reasons", []) if not str(r).startswith("binary_attachment_body_skipped:")]
+    ledger["source_complete"] = (
+        ledger["source_complete_for_generation"]
+        and not blocking_partial_reasons
+    )
+    ledger["source_complete_definition"] = (
+        "source_complete_for_generation requires issue metadata, all comments, full text fields, and full text attachment bodies. "
+        "Binary attachments are metadata-only by policy; source_complete_including_binary_bodies is false when binary bodies are unavailable."
+    )
+    persisted = persist_jira_source_bundle_and_digest(session_id=session_id, issue_key=issue_key, bundle=bundle)
+
+    manifest = {
+        "issue_key": issue_key,
+        "context_ref": persisted["context_ref"],
+        "digest_ref": persisted["digest_ref"],
+        "source_complete": ledger["source_complete"],
+        "source_complete_for_generation": ledger["source_complete_for_generation"],
+        "source_complete_including_binary_bodies": ledger["source_complete_including_binary_bodies"],
+        "source_metadata_complete": ledger["source_metadata_complete"],
+        "source_text_complete": ledger["source_text_complete"],
+        "attachment_metadata_complete": ledger["attachment_metadata_complete"],
+        "text_attachment_bodies_complete": ledger["text_attachment_bodies_complete"],
+        "source_tree_complete": ledger["source_tree_complete"],
+        "binary_attachment_body_policy": ledger.get("binary_attachment_body_policy"),
+        "binary_attachment_bodies_available": ledger.get("binary_attachment_bodies_available"),
+        "binary_attachment_bodies_skipped_count": ledger.get("binary_attachment_bodies_skipped_count"),
+        "source_complete_definition": ledger.get("source_complete_definition"),
+        "comments_loaded": f"{ledger['comments_loaded']}/{ledger['comments_total']}",
+        "attachments_metadata_loaded": f"{ledger['attachments_metadata_loaded']}/{ledger['attachments_total']}",
+        "text_attachments_loaded": f"{ledger['text_attachments_loaded']}/{ledger['text_attachments_total']}",
+        "binary_attachments_preserved": max(0, ledger["attachments_total"] - ledger["text_attachments_loaded"]),
+        "partial_reasons": ledger["partial_reasons"],
+        "source_digest_chunk_count": persisted.get("source_digest_chunk_count", 0),
+        "sections": ["metadata", "description", "acceptance_criteria", "comments", "attachments", "raw_snapshot"],
+    }
+    return (
+        "[jira source bundle prepared]\\n"
+        + "\\n".join(f"{k}: {json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v}" for k, v in manifest.items())
+        + f"\\n\\nUse context_read_ref(ref=\\\"{persisted['context_ref']}\\\", section=\\\"...\\\") to inspect source sections."
+    )
+
+
+async def jira_get_comments(issue_key: str, _session_id: Optional[str] = None) -> str:
+    """Prepare bounded Jira comments bundle manifest with context ref."""
+    if not jira_channel.is_configured():
+        return "Error: Jira is not configured."
+    adapter = _get_adapter()
+    issue = await adapter.get_issue(
+        issue_key=issue_key,
+        format="raw",
+        max_comments=None,
+        include_comments=True,
+        include_fields=None,
+    )
+    fields = issue.get("fields", {}) if isinstance(issue, dict) else {}
+    comments = adapter._get_comments_list(issue if isinstance(issue, dict) else {}, None)
+    comment_field = fields.get("comment", {}) if isinstance(fields, dict) else {}
+    comments_total = int((comment_field or {}).get("total") or len(comments)) if isinstance(comment_field, dict) else len(comments)
+    comments_loaded = len(comments)
+    comments_complete = comments_loaded >= comments_total
+    context_ref = put_text(
+        session_id=_session_id or "unknown_session",
+        kind="jira_comments_bundle",
+        source_id=issue_key,
+        title=f"Jira comments {issue_key}",
+        content=json.dumps({"issue_key": issue_key, "comments": comments}, ensure_ascii=False, indent=2),
+        metadata={"issue_key": issue_key, "comments_complete": comments_complete},
+    )
+    return (
+        "[jira comments bundle prepared]\n"
+        f"issue_key: {issue_key}\n"
+        f"context_ref: {context_ref}\n"
+        f"comments_loaded: {comments_loaded}/{comments_total}\n"
+        f"comments_complete: {comments_complete}"
+    )
 
 
 async def jira_add_comment(
@@ -356,8 +643,6 @@ async def jira_update_issue(
         return f"Error updating issue: {str(e)}"
 
 
-# Re-export original functions for compatibility
-from .api import jira_get_comments
 from .api import get_tools_schemas as _get_api_schemas
 
 
@@ -393,8 +678,10 @@ def get_tools_schemas() -> list:
     for name, schema in enhanced_schemas.items():
         if name not in seen_names:
             result.append(schema)
-    
-    return result
+
+    # Export tool is intentionally internal/export-oriented; keep it out of
+    # model-facing default schemas to avoid partial source acquisition paths.
+    return [schema for schema in result if (schema.get("function", {}).get("name") != "export_issues_to_markdown")]
 
 
 def _get_all_schemas() -> list:
@@ -404,7 +691,7 @@ def _get_all_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "jira_get_issue",
-                "description": "Get a Jira issue by key. Returns Markdown by default, including description, recent comments, and extracted acceptance criteria when visible.",
+                "description": "Get a Jira issue by key. Default model-facing behavior prepares source-complete context manifest.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -414,11 +701,6 @@ def _get_all_schemas() -> list:
                             "enum": ["markdown", "wiki", "raw"],
                             "default": "markdown",
                             "description": "Output format: markdown (LLM-friendly), wiki (renderable), or raw (JSON)"
-                        },
-                        "max_comments": {
-                            "type": "integer",
-                            "description": "Maximum number of comments to include",
-                            "default": 5
                         },
                         "include_fields": {
                             "type": "array",
@@ -444,7 +726,7 @@ def _get_all_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "jira_get_issue_by_url",
-                "description": "Get a Jira issue by its full URL. Returns Markdown by default.",
+                "description": "Get a Jira issue by URL. Default model-facing behavior prepares source-complete context manifest.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -455,7 +737,6 @@ def _get_all_schemas() -> list:
                             "default": "markdown",
                             "description": "Output format: markdown, wiki, or raw"
                         },
-                        "max_comments": {"type": "integer", "description": "Maximum comments to include", "default": 5},
                         "include_comments": {"type": "boolean", "description": "Include comments", "default": True},
                         "include_attachment_urls": {
                             "type": "boolean",
@@ -467,6 +748,23 @@ def _get_all_schemas() -> list:
                     "required": ["url"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_prepare_issue_context",
+                "description": "Prepare a source-complete Jira context bundle and bounded digest for generation workflows.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key_or_url": {"type": "string", "description": "Jira issue key (PROJ-123) or full browse URL"},
+                        "include_all_comments": {"type": "boolean", "default": True},
+                        "include_attachments": {"type": "boolean", "default": True},
+                        "include_raw_snapshot": {"type": "boolean", "default": True},
+                    },
+                    "required": ["issue_key_or_url"],
+                },
+            },
         },
         {
             "type": "function",
@@ -557,56 +855,13 @@ def _get_all_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "jira_get_comments",
-                "description": "Get comments on a Jira issue.",
+                "description": "Prepare bounded Jira comments manifest with completeness ledger and context_ref.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "issue_key": {"type": "string", "description": "Jira issue key"}
                     },
                     "required": ["issue_key"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "export_issues_to_markdown",
-                "description": "Export one or more Jira issues to Markdown. Supports single issue key, comma-separated keys, or JQL input. Can write per-issue files, a combined file, or produce a zip.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "input": {
-                            "type": "string",
-                            "description": "Issue input as a string. Accepts a single issue key (e.g., 'PROJ-123'), comma-separated keys ('PROJ-1,PROJ-2'), or a JQL query string prefixed with 'jql:' (e.g., 'jql:project = PROJ AND status != Done')."
-                        },
-                        "jql": {
-                            "type": "string",
-                            "description": "Optional JQL query string (alternative to using 'input' with 'jql:' prefix)."
-                        },
-                        "page_size": {
-                            "type": "integer",
-                            "description": "Optional page size when using JQL",
-                            "default": 50
-                        },
-                        "output_mode": {"type": "string", "enum": ["single_combined", "one_file_per_issue", "zip_per_issue"], "default": "single_combined"},
-                        "output_directory": {"type": "string", "description": "Directory to write files (required for file modes)"},
-                        "download_attachments": {"type": "boolean", "description": "Whether to download attachments"},
-                        "attachments_dir": {"type": "string", "description": "Relative attachments directory under output_directory"},
-                        "attachments_concurrency": {"type": "integer", "description": "Concurrent downloads for attachments", "default": 4},
-                        "attachments_max_size": {"type": "integer", "description": "Maximum attachment download size in bytes", "default": 52428800},
-                        "attachments_inline_text_threshold": {"type": "integer", "description": "Max chars for inline text embedding", "default": 2000},
-                        "attachments_retries": {"type": "integer", "description": "Retry attempts for attachment downloads", "default": 3},
-                        "attachments_backoff": {"type": "array", "items": {"type": "integer"}, "description": "Backoff seconds for retries", "default": [1,2,4]},
-                        "attachments_preserve_binary": {"type": "boolean", "description": "Whether to preserve and copy the original binary files", "default": True},
-                        "include_raw_snapshot": {"type": "boolean", "description": "Include a raw fields snapshot in the Markdown"},
-                        "max_comments": {"type": "integer", "description": "Maximum number of comments to include", "default": 10},
-                        "comments_order": {"type": "string", "enum": ["latest_first", "oldest_first"], "default": "latest_first"},
-                        "field_match_threshold": {"type": "number", "description": "Similarity threshold for custom field matching", "default": 0.9},
-                        "field_similarity_threshold": {"type": "number", "description": "Similarity threshold for content de-duplication", "default": 0.9},
-                        "array_inline_max_items": {"type": "integer", "default": 3},
-                        "array_inline_max_element_length": {"type": "integer", "default": 40}
-                    },
-                    "required": ["input"]
                 }
             }
         },
