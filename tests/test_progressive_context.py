@@ -396,7 +396,15 @@ def test_build_portal_context_preview_includes_source_and_generation_diagnostics
                 "generation_mode": "staged",
                 "current_generation_phase": "manifest",
                 "output_risk_level": "high",
-                "max_chat_output_chars": 240000,
+                "max_chat_output_chars": 120000 * 4,
+                "max_chat_output_tokens": 120000,
+                "max_context_window_tokens": 400000,
+                "max_prompt_tokens": 272000,
+                "max_output_tokens": 128000,
+                "output_boundary_source": "model_limits_derived",
+                "legacy_max_chat_output_chars_ignored": True,
+                "configured_max_chat_output_chars": "7000",
+                "chars_per_token_estimate": 4,
                 "max_output_recovery_applied": True,
             },
             "source": {
@@ -417,6 +425,10 @@ def test_build_portal_context_preview_includes_source_and_generation_diagnostics
     assert preview["context_source_complete"] is True
     assert preview["context_output_risk_level"] == "high"
     assert preview["context_source_digest_chunk_count"] == 4
+    assert preview["context_max_chat_output_tokens"] == 120000
+    assert preview["context_max_chat_output_chars"] == 120000 * 4
+    assert preview["context_max_context_window_tokens"] == 400000
+    assert preview["context_output_boundary_source"] == "model_limits_derived"
 
 
 def test_progressive_context_dict_roundtrip_preserves_tool_name():
@@ -437,29 +449,46 @@ def test_progressive_context_dict_roundtrip_preserves_tool_name():
 
 
 def test_resolve_prompt_budget_caps_large_context_window(monkeypatch):
-    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 264000)
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 400000)
     budget = progressive_context.resolve_prompt_budget(stage="tool_loop", model="gpt-5.4-mini")
-    assert budget["context_window_tokens"] == 264000
-    assert budget["max_prompt_tokens"] == 128000
-    assert budget["max_output_tokens"] == 64000
-    assert budget["prompt_budget_tokens"] == 128000
-    assert budget["reserved_output_tokens"] == 64000
+    assert budget["context_window_tokens"] == 400000
+    assert budget["max_prompt_tokens"] == 272000
+    assert budget["max_output_tokens"] == 128000
+    assert budget["reserved_output_tokens"] == 128000
+    assert budget["safety_margin_tokens"] == 8000
+    assert budget["prompt_budget_tokens"] == min(
+        budget["max_prompt_tokens"],
+        budget["context_window_tokens"] - budget["reserved_output_tokens"] - budget["safety_margin_tokens"],
+    )
+    assert budget["prompt_budget_tokens"] == 264000
 
 
 def test_resolve_prompt_budget_skill_generation_uses_model_limit(monkeypatch):
-    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 264000)
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 400000)
     budget = progressive_context.resolve_prompt_budget(stage="skill_generation", model="gpt-5.4-mini")
-    assert budget["max_prompt_tokens"] == 128000
-    assert budget["prompt_budget_tokens"] == 128000
+    assert budget["max_prompt_tokens"] == 272000
+    assert budget["max_output_tokens"] == 128000
+    assert budget["prompt_budget_tokens"] == 264000
 
 
-def test_resolve_model_limits_for_gpt_54_mini():
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("gpt-4o", (128000, 64000, 16384)),
+        ("gpt-4.1", (128000, 128000, 16384)),
+        ("gpt-5-mini", (264000, 128000, 64000)),
+        ("gpt-5.3-codex", (400000, 272000, 128000)),
+        ("gpt-5.4-mini", (400000, 272000, 128000)),
+        ("gemini-2.5-pro", (128000, 128000, 64000)),
+    ],
+)
+def test_resolve_model_limits_for_authoritative_models(model, expected):
     from src.config import resolve_model_limits
 
-    limits = resolve_model_limits("gpt-5.4-mini")
-    assert limits["max_context_window_tokens"] == 264000
-    assert limits["max_prompt_tokens"] == 128000
-    assert limits["max_output_tokens"] == 64000
+    limits = resolve_model_limits(model)
+    assert limits["max_context_window_tokens"] == expected[0]
+    assert limits["max_prompt_tokens"] == expected[1]
+    assert limits["max_output_tokens"] == expected[2]
 
 
 def test_resolve_context_window_tokens_uses_configured_model_limit(monkeypatch):
@@ -474,14 +503,29 @@ def test_resolve_context_window_tokens_uses_configured_model_limit(monkeypatch):
             "max_tokens": 64000,
             "model_limits": {
                 "gpt-5.4-mini": {
-                    "max_context_window_tokens": 264000,
-                    "max_prompt_tokens": 128000,
-                    "max_output_tokens": 64000,
+                    "max_context_window_tokens": 400000,
+                    "max_prompt_tokens": 272000,
+                    "max_output_tokens": 128000,
                 }
             },
         },
     )
-    assert resolve_context_window_tokens(None) == 264000
+    assert resolve_context_window_tokens(None) == 400000
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_window"),
+    [
+        ("gpt-5.4-mini", 400000),
+        ("gpt-5.3-codex", 400000),
+        ("gpt-5-mini", 264000),
+        ("gemini-2.5-pro", 128000),
+    ],
+)
+def test_resolve_context_window_tokens_known_models(model, expected_window):
+    from src.agents.compaction import resolve_context_window_tokens
+
+    assert resolve_context_window_tokens(model) == expected_window
 
 
 @pytest.mark.asyncio

@@ -39,8 +39,28 @@ llm:
   
   max_tokens: 64000
   model_limits:
-    gpt-5.4-mini:
+    gpt-4o:
+      max_context_window_tokens: 128000
+      max_prompt_tokens: 64000
+      max_output_tokens: 16384
+    gpt-4.1:
+      max_context_window_tokens: 128000
+      max_prompt_tokens: 128000
+      max_output_tokens: 16384
+    gpt-5-mini:
       max_context_window_tokens: 264000
+      max_prompt_tokens: 128000
+      max_output_tokens: 64000
+    gpt-5.3-codex:
+      max_context_window_tokens: 400000
+      max_prompt_tokens: 272000
+      max_output_tokens: 128000
+    gpt-5.4-mini:
+      max_context_window_tokens: 400000
+      max_prompt_tokens: 272000
+      max_output_tokens: 128000
+    gemini-2.5-pro:
+      max_context_window_tokens: 128000
       max_prompt_tokens: 128000
       max_output_tokens: 64000
   temperature: 0.7
@@ -48,27 +68,27 @@ llm:
   retry_delay: 1
   context_budget:
     default:
-      max_prompt_tokens: 128000
-      reserved_output_tokens: 64000
+      max_prompt_tokens: 272000
+      reserved_output_tokens: 128000
       safety_margin_tokens: 8000
     pre_request:
-      max_prompt_tokens: 128000
-      reserved_output_tokens: 64000
+      max_prompt_tokens: 272000
+      reserved_output_tokens: 128000
       safety_margin_tokens: 8000
     tool_loop:
-      max_prompt_tokens: 128000
-      reserved_output_tokens: 64000
+      max_prompt_tokens: 272000
+      reserved_output_tokens: 128000
       safety_margin_tokens: 8000
     skill_generation:
-      max_prompt_tokens: 128000
-      reserved_output_tokens: 64000
+      max_prompt_tokens: 272000
+      reserved_output_tokens: 128000
       safety_margin_tokens: 8000
     tool_loop_aggressive:
-      max_prompt_tokens: 96000
-      reserved_output_tokens: 64000
+      max_prompt_tokens: 200000
+      reserved_output_tokens: 128000
       safety_margin_tokens: 8000
   output_controller:
-    max_chat_output_tokens: 60000
+    max_chat_output_tokens: 120000
     chars_per_token_estimate: 4
     max_chat_output_chars: null
     oversized_output_strategy: "save_and_manifest"

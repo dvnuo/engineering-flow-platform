@@ -820,14 +820,16 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
         "gpt-4o": 128000,
         "gpt-4o-mini": 128000,
         # GPT-5 series
-        "gpt-5.4-mini": 264000,
+        "gpt-5.4-mini": 400000,
+        "gpt-5.3-codex": 400000,
         "gpt-5": 200000,
-        "gpt-5-mini": 200000,
+        "gpt-5-mini": 264000,
         "gpt-5-pro": 200000,
         # GPT-3.5
         "gpt-3.5-turbo": 16385,
         # Gemini series (64K context)
-        "gemini-2.5": 200000,
+        "gemini-2.5-pro": 128000,
+        "gemini-2.5": 128000,
         "minimax/MiniMax-M3": 200000,
         "gemini-2.0": 32000,
         "gemini-1.5": 32000,

@@ -221,7 +221,7 @@ def test_build_session_metadata_payload_preserves_context_budget_preview_keys():
         metadata={
             "context_usage_percent": 42.0,
             "context_estimated_tokens": 4200,
-            "context_window_tokens": 128000,
+            "context_window_tokens": 128_000,
             "context_next_compaction_action": "approaching_micro_compaction",
             "context_next_pruning_policy": "Approaching micro-compaction...",
             "context_tokens_until_soft_threshold": 1200,

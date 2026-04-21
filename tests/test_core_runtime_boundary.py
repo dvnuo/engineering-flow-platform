@@ -486,7 +486,7 @@ async def test_output_controller_bounds_huge_content_in_staged_mode():
         stage="skill_generation",
         context_state=state,
         latest_user_text="generate all test cases",
-        max_chat_output_chars=240000,
+        max_chat_output_chars=480000,
     )
     assert len(result.get("content") or "") == 50000
     assert "context_read_ref(" not in (result.get("content") or "")
@@ -517,13 +517,35 @@ async def test_output_controller_allows_20k_high_risk_without_oversize_manifest(
     assert diag.get("output_bounding", {}).get("bounded") is False
 
 
-def test_resolve_output_boundary_uses_model_limit_tokens():
-    from src.config import resolve_output_boundary
+def test_resolve_output_boundary_uses_model_limit_tokens(monkeypatch):
+    from src.config import config, resolve_output_boundary
 
+    monkeypatch.setitem(config._config, "llm", {"model": "gpt-5.4-mini", "max_tokens": 128000})
     boundary = resolve_output_boundary("gpt-5.4-mini")
-    assert boundary["max_output_tokens"] == 64000
-    assert boundary["max_chat_output_tokens"] >= 60000
-    assert boundary["max_chat_output_chars"] >= 200000
+    assert boundary["max_output_tokens"] == 128000
+    assert boundary["max_chat_output_tokens"] == 120000
+    assert boundary["max_chat_output_chars"] == 120000 * 4
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_output", "expected_chat_tokens", "expected_chars"),
+    [
+        ("gpt-4o", 16384, 15360, 61440),
+        ("gpt-4.1", 16384, 15360, 61440),
+        ("gpt-5-mini", 64000, 60000, 240000),
+        ("gpt-5.3-codex", 128000, 120000, 480000),
+        ("gpt-5.4-mini", 128000, 120000, 480000),
+        ("gemini-2.5-pro", 64000, 60000, 240000),
+    ],
+)
+def test_resolve_output_boundary_for_authoritative_models(monkeypatch, model, expected_output, expected_chat_tokens, expected_chars):
+    from src.config import config, resolve_output_boundary
+
+    monkeypatch.setitem(config._config, "llm", {"model": model, "max_tokens": expected_output})
+    boundary = resolve_output_boundary(model)
+    assert boundary["max_output_tokens"] == expected_output
+    assert boundary["max_chat_output_tokens"] == expected_chat_tokens
+    assert boundary["max_chat_output_chars"] == expected_chars
 
 
 def test_resolve_output_boundary_ignores_legacy_8k_override(monkeypatch):
@@ -534,19 +556,19 @@ def test_resolve_output_boundary_ignores_legacy_8k_override(monkeypatch):
         "llm",
         {
             "model": "gpt-5.4-mini",
-            "max_tokens": 64000,
+            "max_tokens": 128000,
             "output_controller": {"max_chat_output_chars": 7000, "chars_per_token_estimate": 4},
             "model_limits": {
                 "gpt-5.4-mini": {
-                    "max_context_window_tokens": 264000,
-                    "max_prompt_tokens": 128000,
-                    "max_output_tokens": 64000,
+                    "max_context_window_tokens": 400000,
+                    "max_prompt_tokens": 272000,
+                    "max_output_tokens": 128000,
                 }
             },
         },
     )
     boundary = resolve_output_boundary("gpt-5.4-mini")
-    assert boundary["max_chat_output_chars"] >= 200000
+    assert boundary["max_chat_output_chars"] == 120000 * 4
     assert boundary["legacy_max_chat_output_chars_ignored"] is True
     assert boundary["output_boundary_source"] == "model_limits_legacy_override_ignored"
 
@@ -559,7 +581,7 @@ def test_resolve_output_boundary_allows_low_override_when_explicit(monkeypatch):
         "llm",
         {
                 "model": "gpt-5.4-mini",
-                "max_tokens": 64000,
+                "max_tokens": 128000,
                 "output_controller": {
                 "max_chat_output_chars": 7000,
                 "allow_low_max_chat_output_chars": True,
@@ -567,9 +589,9 @@ def test_resolve_output_boundary_allows_low_override_when_explicit(monkeypatch):
             },
             "model_limits": {
                 "gpt-5.4-mini": {
-                    "max_context_window_tokens": 264000,
-                    "max_prompt_tokens": 128000,
-                    "max_output_tokens": 64000,
+                    "max_context_window_tokens": 400000,
+                    "max_prompt_tokens": 272000,
+                    "max_output_tokens": 128000,
                 }
             },
         },
@@ -587,19 +609,19 @@ def test_resolve_output_boundary_defaults_to_derived_chars(monkeypatch):
         "llm",
         {
             "model": "gpt-5.4-mini",
-            "max_tokens": 64000,
-            "output_controller": {"max_chat_output_tokens": 60000, "chars_per_token_estimate": 4},
+            "max_tokens": 128000,
+            "output_controller": {"max_chat_output_tokens": 120000, "chars_per_token_estimate": 4},
             "model_limits": {
                 "gpt-5.4-mini": {
-                    "max_context_window_tokens": 264000,
-                    "max_prompt_tokens": 128000,
-                    "max_output_tokens": 64000,
+                    "max_context_window_tokens": 400000,
+                    "max_prompt_tokens": 272000,
+                    "max_output_tokens": 128000,
                 }
             },
         },
     )
     boundary = resolve_output_boundary("gpt-5.4-mini")
-    assert boundary["max_chat_output_chars"] == 240000
+    assert boundary["max_chat_output_chars"] == 120000 * 4
 
 
 def test_compaction_context_window_defaults_do_not_assume_8k():
@@ -608,6 +630,14 @@ def test_compaction_context_window_defaults_do_not_assume_8k():
     assert inspect.signature(compaction.summarize_with_fallback).parameters["context_window"].default is None
     assert inspect.signature(compaction.summarize_in_stages).parameters["context_window"].default is None
     assert inspect.signature(compaction.compact_messages).parameters["context_window"].default is None
+
+
+def test_output_controller_default_output_chars_uses_model_limits():
+    from src.runtime.output_controller import _default_output_chars
+
+    chars, source = _default_output_chars("gpt-5.4-mini")
+    assert chars == 120000 * 4
+    assert source != "emergency_fallback_8000"
 
 
 @pytest.mark.asyncio
@@ -717,7 +747,7 @@ async def test_output_controller_tracks_generated_artifacts_by_phase_when_bounde
 
     class _Client:
         async def responses(self, **kwargs):
-            return {"content": "X" * 250000, "tool_calls": [], "function_calls": [], "usage": {}}
+            return {"content": "X" * 500000, "tool_calls": [], "function_calls": [], "usage": {}}
 
     state = {"budget": {}}
     _, diag1 = await call_llm_with_output_control(
@@ -751,7 +781,7 @@ async def test_output_controller_bounds_huge_content_medium_risk():
         stage="tool_loop",
         context_state=state,
         latest_user_text=user_text,
-        max_chat_output_chars=240000,
+        max_chat_output_chars=480000,
     )
     assert len(result.get("content") or "") == 50000
 
@@ -825,7 +855,7 @@ def test_ensure_staged_generation_accepts_none_max_chat_output_chars():
 
     state = {"generation": {}}
     gen = ensure_staged_generation(state, stage="tool_loop", max_chat_output_chars=None)
-    assert gen.get("max_chat_output_chars") >= 200000
+    assert gen.get("max_chat_output_chars") >= 120000 * 4
 
 
 @pytest.mark.asyncio
@@ -844,7 +874,7 @@ async def test_output_controller_bounds_oversized_normal_risk_output():
         stage="tool_loop",
         context_state=state,
         latest_user_text="hello",
-        max_chat_output_chars=240000,
+        max_chat_output_chars=480000,
     )
     assert len(result.get("content") or "") == 50000
     assert diag.get("output_bounding", {}).get("bounded") is False
@@ -857,7 +887,7 @@ async def test_output_controller_bounds_only_when_exceeding_real_boundary():
 
     class _Client:
         async def responses(self, **kwargs):
-            return {"content": "N" * 250000, "tool_calls": [], "function_calls": [], "usage": {}}
+            return {"content": "N" * 500000, "tool_calls": [], "function_calls": [], "usage": {}}
 
     state = {"budget": {}}
     result, diag = await call_llm_with_output_control(

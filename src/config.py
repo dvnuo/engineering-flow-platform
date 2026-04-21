@@ -697,9 +697,34 @@ class Config:
 
 
 DEFAULT_MODEL_LIMITS: Dict[str, Dict[str, int]] = {
-    "gpt-5.4-mini": {
+    "gpt-4o": {
+        "max_context_window_tokens": 128_000,
+        "max_prompt_tokens": 64000,
+        "max_output_tokens": 16384,
+    },
+    "gpt-4.1": {
+        "max_context_window_tokens": 128_000,
+        "max_prompt_tokens": 128_000,
+        "max_output_tokens": 16384,
+    },
+    "gpt-5-mini": {
         "max_context_window_tokens": 264000,
         "max_prompt_tokens": 128000,
+        "max_output_tokens": 64000,
+    },
+    "gpt-5.3-codex": {
+        "max_context_window_tokens": 400000,
+        "max_prompt_tokens": 272000,
+        "max_output_tokens": 128000,
+    },
+    "gpt-5.4-mini": {
+        "max_context_window_tokens": 400000,
+        "max_prompt_tokens": 272000,
+        "max_output_tokens": 128000,
+    },
+    "gemini-2.5-pro": {
+        "max_context_window_tokens": 128_000,
+        "max_prompt_tokens": 128_000,
         "max_output_tokens": 64000,
     },
 }

@@ -166,8 +166,14 @@ def resolve_prompt_budget(*, stage: str, model: str | None) -> Dict[str, int]:
     if max_prompt_tokens < model_max_prompt_tokens and not allow_lower:
         max_prompt_tokens = model_max_prompt_tokens
     max_prompt_tokens = min(max_prompt_tokens, model_max_prompt_tokens)
-    effective_reserved = min(configured_reserved, actual_max_output_tokens, int(context_window * 0.25))
     effective_safety = min(configured_safety, int(context_window * 0.05))
+    reserved_cap = int(context_window * 0.25) if context_window < 10000 else context_window
+    effective_reserved = min(
+        configured_reserved,
+        actual_max_output_tokens,
+        max(1, context_window - effective_safety - 1),
+        max(1, reserved_cap),
+    )
     context_based_prompt_cap = context_window - effective_reserved - effective_safety
     base_prompt = min(max_prompt_tokens, context_based_prompt_cap)
     if context_window < 4000:
@@ -599,6 +605,12 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
                 "context_safety_margin_tokens": budget.get("safety_margin_tokens"),
                 "context_max_prompt_tokens": budget.get("max_prompt_tokens"),
                 "context_max_output_tokens": budget.get("max_output_tokens"),
+                "context_max_context_window_tokens": budget.get("max_context_window_tokens"),
+                "context_max_chat_output_tokens": budget.get("max_chat_output_tokens"),
+                "context_chars_per_token_estimate": budget.get("chars_per_token_estimate"),
+                "context_output_boundary_source": budget.get("output_boundary_source"),
+                "context_legacy_max_chat_output_chars_ignored": budget.get("legacy_max_chat_output_chars_ignored"),
+                "context_configured_max_chat_output_chars": budget.get("configured_max_chat_output_chars"),
                 "context_projection_chars_saved": budget.get("projection_chars_saved"),
                 "context_assistant_projection_chars_saved": budget.get("assistant_projection_chars_saved"),
                 "context_projected_old_assistant_messages": budget.get("projected_old_assistant_messages"),

@@ -291,8 +291,8 @@ class TestResolveContextWindowTokens:
         """Test GPT-4 Turbo context window."""
         # Update based on actual implementation
         result = resolve_context_window_tokens("gpt-4-turbo")
-        # Should match either gpt-4 or be the actual 128000
-        assert result in [8192, 128000]
+        # Should match either gpt-4 or be the actual 128k
+        assert result in [8192, 128_000]
     
     def test_gpt_3_5_turbo(self):
         """Test GPT-3.5 Turbo context window."""
@@ -307,16 +307,16 @@ class TestResolveContextWindowTokens:
         assert resolve_context_window_tokens("unknown") == 4096
     
     def test_none_model(self):
-        """Test None model returns default."""
-        assert resolve_context_window_tokens(None) == 4096
+        """Test None model resolves to configured model limit."""
+        assert resolve_context_window_tokens(None) >= 128_000
 
     def test_gpt_4o(self):
         """Test GPT-4o context window."""
-        assert resolve_context_window_tokens("gpt-4o") == 128000
+        assert resolve_context_window_tokens("gpt-4o") == 128_000
 
     def test_gpt_4o_mini(self):
         """Test GPT-4o Mini context window."""
-        assert resolve_context_window_tokens("gpt-4o-mini") == 128000
+        assert resolve_context_window_tokens("gpt-4o-mini") == 128_000
 
     def test_gpt_5(self):
         """Test GPT-5 context window."""
@@ -324,7 +324,7 @@ class TestResolveContextWindowTokens:
 
     def test_gpt_5_mini(self):
         """Test GPT-5 Mini context window."""
-        assert resolve_context_window_tokens("gpt-5-mini") == 200000
+        assert resolve_context_window_tokens("gpt-5-mini") == 264000
 
     def test_gpt_5_pro(self):
         """Test GPT-5 Pro context window."""

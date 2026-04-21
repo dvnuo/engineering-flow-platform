@@ -1237,7 +1237,9 @@ async def _run_skill_finalizer(
         loop_budget = resolve_prompt_budget(stage="skill_generation", model=model)
         output_boundary = resolve_output_boundary(model)
         prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
-        configured_max = int(loop_budget.get("max_output_tokens") or config.llm.get("max_tokens", 64000) or 64000)
+        model_max = int(loop_budget.get("max_output_tokens") or 64000)
+        configured_limit = int(config.llm.get("max_tokens", model_max) or model_max)
+        configured_max = min(model_max, configured_limit)
         requested_max = int(max_tokens or configured_max)
         budget_max_tokens = min(requested_max, configured_max)
         items_for_call = items
@@ -2307,7 +2309,9 @@ You have access to the following tools. When a user asks you to do something tha
             )
             loop_budget = resolve_prompt_budget(stage="tool_loop", model=effective_model)
             output_boundary = resolve_output_boundary(effective_model)
-            llm_kwargs["max_tokens"] = int(loop_budget.get("max_output_tokens") or config.llm.get("max_tokens", 64000) or 64000)
+            model_max_tokens = int(loop_budget.get("max_output_tokens") or 64000)
+            configured_limit = int(config.llm.get("max_tokens", model_max_tokens) or model_max_tokens)
+            llm_kwargs["max_tokens"] = min(model_max_tokens, configured_limit)
             if isinstance(loop_context_state, dict):
                 budget_state = loop_context_state.setdefault("budget", {})
                 prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
@@ -3352,7 +3356,9 @@ You have access to the following tools. When a user asks you to do something tha
             )
             loop_budget = resolve_prompt_budget(stage="skill_generation", model=llm_kwargs.get("model"))
             output_boundary = resolve_output_boundary(llm_kwargs.get("model"))
-            effective_max_tokens = int(loop_budget.get("max_output_tokens") or config.llm.get("max_tokens", 64000) or 64000)
+            model_max_tokens = int(loop_budget.get("max_output_tokens") or 64000)
+            configured_limit = int(config.llm.get("max_tokens", model_max_tokens) or model_max_tokens)
+            effective_max_tokens = min(model_max_tokens, configured_limit)
             llm_kwargs["max_tokens"] = effective_max_tokens
             prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
             skill_request_budget = {
