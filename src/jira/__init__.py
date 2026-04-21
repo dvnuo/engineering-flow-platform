@@ -33,6 +33,8 @@ __all__ = [
     "JiraFormatAdapter",
     "jira_get_issue",
     "jira_get_issue_by_url",
+    "jira_get_issue_preview",
+    "jira_get_issue_by_url_preview",
     "jira_prepare_issue_context",
     "jira_search",
     "jira_add_comment",
@@ -115,7 +117,8 @@ async def jira_get_issue(
     max_comments: int = 5,
     include_fields: List[str] = None,
     include_comments: bool = True,
-    include_attachment_urls: bool = False
+    include_attachment_urls: bool = False,
+    preview: bool = False,
 ) -> Union[str, dict]:
     """Get a Jira issue by key.
     
@@ -136,6 +139,8 @@ async def jira_get_issue(
         Issue details in requested format (markdown/wiki: str, raw: dict)
     """
     try:
+        if not preview:
+            return await jira_prepare_issue_context(issue_key_or_url=issue_key, _session_id=None)
         if not jira_channel.is_configured():
             return "Error: Jira is not configured. Please check your settings."
         
@@ -182,7 +187,8 @@ async def jira_get_issue_by_url(
     max_comments: int = 5,
     include_fields: List[str] = None,
     include_comments: bool = True,
-    include_attachment_urls: bool = False
+    include_attachment_urls: bool = False,
+    preview: bool = False,
 ) -> Union[str, dict]:
     """Get a Jira issue by its URL.
     
@@ -205,6 +211,8 @@ async def jira_get_issue_by_url(
     import re
     
     try:
+        if not preview:
+            return await jira_prepare_issue_context(issue_key_or_url=url, _session_id=None)
         # Extract issue key from URL (support letters, digits, underscores in project key)
         match = re.search(r'/browse/([A-Z][A-Z0-9_]*-\d+)', url, re.IGNORECASE)
         if not match:
@@ -247,6 +255,16 @@ async def jira_get_issue_by_url(
         return result
     except Exception as e:
         return f"Error getting issue from URL: {str(e)}"
+
+
+async def jira_get_issue_preview(*args, **kwargs) -> Union[str, dict]:
+    kwargs["preview"] = True
+    return await jira_get_issue(*args, **kwargs)
+
+
+async def jira_get_issue_by_url_preview(*args, **kwargs) -> Union[str, dict]:
+    kwargs["preview"] = True
+    return await jira_get_issue_by_url(*args, **kwargs)
 
 
 async def jira_prepare_issue_context(
@@ -596,7 +614,7 @@ def _get_all_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "jira_get_issue",
-                "description": "Get a Jira issue by key (preview tool). For complete-source generation workflows, use jira_prepare_issue_context.",
+                "description": "Get a Jira issue by key. Default model-facing behavior prepares source-complete context manifest.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -631,7 +649,7 @@ def _get_all_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "jira_get_issue_by_url",
-                "description": "Get a Jira issue by its full URL (preview tool). For complete-source generation workflows, use jira_prepare_issue_context.",
+                "description": "Get a Jira issue by URL. Default model-facing behavior prepares source-complete context manifest.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -670,6 +688,36 @@ def _get_all_schemas() -> list:
                     "required": ["issue_key_or_url"],
                 },
             },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_get_issue_preview",
+                "description": "Preview-only Jira issue fetch (partial/compact). Internal use only.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string"},
+                        "format": {"type": "string", "enum": ["markdown", "wiki", "raw"], "default": "markdown"}
+                    },
+                    "required": ["issue_key"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_get_issue_by_url_preview",
+                "description": "Preview-only Jira URL fetch (partial/compact). Internal use only.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "format": {"type": "string", "enum": ["markdown", "wiki", "raw"], "default": "markdown"}
+                    },
+                    "required": ["url"]
+                }
+            }
         },
         {
             "type": "function",

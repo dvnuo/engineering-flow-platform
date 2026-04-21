@@ -219,12 +219,20 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await jira_module.jira_get_issue(
             issue_key, format=format, max_chars=max_chars, max_comments=max_comments,
             include_comments=include_comments, include_fields=include_fields,
-            include_attachment_urls=include_attachment_urls
+            include_attachment_urls=include_attachment_urls,
+            preview=kwargs.get("preview", False),
         )
         # Ensure content is always a string (format="raw" returns dict)
         if isinstance(result, dict):
             result = str(result)
         return ToolResult(success="Error" not in result, content=result)
+
+    elif name == "jira_get_issue_preview":
+        result = await jira_module.jira_get_issue_preview(
+            kwargs.get("issue_key", ""),
+            format=kwargs.get("format", "markdown"),
+        )
+        return ToolResult(success="Error" not in str(result), content=str(result))
     
     elif name == "jira_search":
         jql = kwargs.get("jql", "")
@@ -273,12 +281,20 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await jira_module.jira_get_issue_by_url(
             url, format=format, max_chars=max_chars, max_comments=max_comments,
             include_comments=include_comments, include_fields=include_fields,
-            include_attachment_urls=include_attachment_urls
+            include_attachment_urls=include_attachment_urls,
+            preview=kwargs.get("preview", False),
         )
         # Ensure content is always a string (format="raw" returns dict)
         if isinstance(result, dict):
             result = str(result)
         return ToolResult(success="Error" not in result, content=result)
+
+    elif name == "jira_get_issue_by_url_preview":
+        result = await jira_module.jira_get_issue_by_url_preview(
+            kwargs.get("url", ""),
+            format=kwargs.get("format", "markdown"),
+        )
+        return ToolResult(success="Error" not in str(result), content=str(result))
 
     elif name == "jira_prepare_issue_context":
         result = await jira_module.jira_prepare_issue_context(
@@ -493,7 +509,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         page_id = kwargs.get("page_id", "")
         format = kwargs.get("format", "markdown")
         max_chars = kwargs.get("max_chars")
-        result = await confluence_module.confluence_get_page(page_id, format=format, max_chars=max_chars)
+        result = await confluence_module.confluence_get_page(page_id, format=format, max_chars=max_chars, preview=kwargs.get("preview", False))
         return ToolResult(success="Error" not in result, content=result)
     
     elif name == "confluence_search":
@@ -506,8 +522,16 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         url = kwargs.get("url", "")
         format = kwargs.get("format", "markdown")
         max_chars = kwargs.get("max_chars")
-        result = await confluence_module.confluence_get_page_by_url(url, format=format, max_chars=max_chars)
+        result = await confluence_module.confluence_get_page_by_url(url, format=format, max_chars=max_chars, preview=kwargs.get("preview", False))
         return ToolResult(success="Error" not in result, content=result)
+
+    elif name == "confluence_get_page_preview":
+        result = await confluence_module.confluence_get_page_preview(kwargs.get("page_id", ""), format=kwargs.get("format", "markdown"))
+        return ToolResult(success="Error" not in str(result), content=str(result))
+
+    elif name == "confluence_get_page_by_url_preview":
+        result = await confluence_module.confluence_get_page_by_url_preview(kwargs.get("url", ""), format=kwargs.get("format", "markdown"))
+        return ToolResult(success="Error" not in str(result), content=str(result))
 
     elif name == "confluence_prepare_page_context":
         result = await confluence_module.confluence_prepare_page_context(

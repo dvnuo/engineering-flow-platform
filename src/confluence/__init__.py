@@ -22,6 +22,8 @@ __all__ = [
     "confluence_get_page",
     "confluence_search",
     "confluence_get_page_by_url",
+    "confluence_get_page_preview",
+    "confluence_get_page_by_url_preview",
     "confluence_create_page",
     "confluence_update_page",
     "confluence_get_comments",
@@ -202,7 +204,8 @@ async def _render_page_with_attachments(
 async def confluence_get_page(
     page_id: str,
     format: str = "markdown",
-    max_chars: Optional[int] = None
+    max_chars: Optional[int] = None,
+    preview: bool = False,
 ) -> str:
     """Get a Confluence page by ID.
     
@@ -214,6 +217,8 @@ async def confluence_get_page(
             context projection controls model-facing size.
     """
     try:
+        if not preview:
+            return await confluence_prepare_page_context(page_id_or_url=page_id, _session_id=None)
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
         
@@ -249,7 +254,8 @@ async def confluence_search(query: str, max_results: int = 10) -> str:
 async def confluence_get_page_by_url(
     url: str,
     format: str = "markdown",
-    max_chars: Optional[int] = None
+    max_chars: Optional[int] = None,
+    preview: bool = False,
 ) -> str:
     """Get a Confluence page by its URL.
     
@@ -263,6 +269,8 @@ async def confluence_get_page_by_url(
             context projection controls model-facing size.
     """
     try:
+        if not preview:
+            return await confluence_prepare_page_context(page_id_or_url=url, _session_id=None)
         page_id = _extract_page_id_from_url(url)
         if not page_id:
             return f"Could not extract page ID from URL: {url}"
@@ -282,6 +290,16 @@ async def confluence_get_page_by_url(
         )
     except Exception as e:
         return f"Error getting page: {e}"
+
+
+async def confluence_get_page_preview(*args, **kwargs) -> str:
+    kwargs["preview"] = True
+    return await confluence_get_page(*args, **kwargs)
+
+
+async def confluence_get_page_by_url_preview(*args, **kwargs) -> str:
+    kwargs["preview"] = True
+    return await confluence_get_page_by_url(*args, **kwargs)
 
 
 async def confluence_prepare_page_context(
@@ -658,7 +676,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "confluence_get_page",
-                "description": "Get a Confluence page by its ID. Returns Markdown by default.",
+                "description": "Get a Confluence page by ID. Default model-facing behavior prepares source-complete context manifest.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -678,7 +696,7 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "confluence_get_page_by_url",
-                "description": "Get a Confluence page directly by its full URL. Returns Markdown by default.",
+                "description": "Get a Confluence page by URL. Default model-facing behavior prepares source-complete context manifest.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -689,6 +707,36 @@ def get_tools_schemas() -> list:
                             "default": "markdown",
                             "description": "Output format: markdown (default) or storage"
                         },
+                    },
+                    "required": ["url"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "confluence_get_page_preview",
+                "description": "Preview-only Confluence page fetch (compact). Internal use only.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "page_id": {"type": "string"},
+                        "format": {"type": "string", "enum": ["markdown", "storage"], "default": "markdown"}
+                    },
+                    "required": ["page_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "confluence_get_page_by_url_preview",
+                "description": "Preview-only Confluence page URL fetch (compact). Internal use only.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "format": {"type": "string", "enum": ["markdown", "storage"], "default": "markdown"}
                     },
                     "required": ["url"]
                 }
