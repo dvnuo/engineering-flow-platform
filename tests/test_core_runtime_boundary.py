@@ -551,13 +551,39 @@ def test_merge_request_budget_into_context_state_merges_safe_fields():
 
     merged = core._merge_request_budget_into_context_state(
         {"budget": {"existing": 1}},
-        {"request_estimated_tokens": 123, "request_over_budget": True, "stage": "skill_finalizer", "ignored_key": "x"},
+        {
+            "request_estimated_tokens": 123,
+            "request_over_budget": True,
+            "stage": "skill_finalizer",
+            "large_generation_guard_applied": True,
+            "output_size_guard_applied": True,
+            "ignored_key": "x",
+        },
     )
     assert merged["budget"]["existing"] == 1
     assert merged["budget"]["request_estimated_tokens"] == 123
     assert merged["budget"]["request_over_budget"] is True
+    assert merged["budget"]["large_generation_guard_applied"] is True
+    assert merged["budget"]["output_size_guard_applied"] is True
     assert merged["budget"]["request_budget_stage"] == "skill_finalizer"
     assert "ignored_key" not in merged["budget"]
+
+
+def test_safe_request_budget_fields_includes_guard_flags():
+    from src.agents import core
+
+    safe = core._safe_request_budget_fields(
+        {
+            "request_estimated_tokens": 10,
+            "large_generation_guard_applied": True,
+            "output_size_guard_applied": True,
+            "prompt": "do-not-include",
+        }
+    )
+    assert safe["request_estimated_tokens"] == 10
+    assert safe["large_generation_guard_applied"] is True
+    assert safe["output_size_guard_applied"] is True
+    assert "prompt" not in safe
 
 
 def test_agent_process_source_attaches_runtime_events_for_early_budget_and_llm_errors():
@@ -573,6 +599,14 @@ def test_continue_skill_mode_source_merges_budget_into_llm_errors():
 
     source = inspect.getsource(core.Agent._continue_skill_mode)
     assert "_merge_budget_into_error_details(error_response, skill_request_budget)" in source
+
+
+def test_agent_process_source_records_large_generation_guard_budget_fields():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent.process)
+    assert 'budget_state["large_generation_guard_applied"] = large_generation_guard_applied' in source
+    assert 'budget_state["output_size_guard_applied"] = large_generation_guard_applied' in source
 
 
 def test_is_meaningful_context_state_rules():

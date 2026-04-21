@@ -348,9 +348,14 @@ def test_build_portal_context_preview_includes_request_budget_fields():
                 "max_prompt_tokens": 32000,
                 "max_output_tokens": 64000,
                 "projection_chars_saved": 12345,
+                "assistant_projection_chars_saved": 6789,
                 "projected_old_assistant_messages": 2,
+                "projected_recent_assistant_messages": 1,
+                "projected_plain_assistant_messages": 1,
                 "projected_old_tool_messages": 3,
                 "context_blob_refs_created": ["ctx://context/a", "ctx://context/b"],
+                "output_size_guard_applied": True,
+                "large_generation_guard_applied": True,
                 "request_over_budget": True,
                 "request_budget_stage": "skill_finalizer",
             },
@@ -365,8 +370,13 @@ def test_build_portal_context_preview_includes_request_budget_fields():
     assert preview["context_max_prompt_tokens"] == 32000
     assert preview["context_max_output_tokens"] == 64000
     assert preview["context_projection_chars_saved"] == 12345
+    assert preview["context_assistant_projection_chars_saved"] == 6789
     assert preview["context_projected_old_assistant_messages"] == 2
+    assert preview["context_projected_recent_assistant_messages"] == 1
+    assert preview["context_projected_plain_assistant_messages"] == 1
     assert preview["context_projected_old_tool_messages"] == 3
+    assert preview["context_output_size_guard_applied"] is True
+    assert preview["context_large_generation_guard_applied"] is True
     assert preview["context_context_blob_refs_created"] == 2
     assert preview["context_request_budget_stage"] == "skill_finalizer"
     assert preview["context_request_over_budget"] is True
@@ -522,7 +532,40 @@ async def test_projects_recent_plain_assistant_artifact_like_content(monkeypatch
     restored = read_ref(ref, session_id=f"s-recent-plain-{stage}", max_chars=len(huge) + 1000)
     assert restored == huge
     assert state["budget"]["projected_old_assistant_messages"] >= 1
+    assert state["budget"]["projected_recent_assistant_messages"] >= 1
+    assert state["budget"]["projected_plain_assistant_messages"] >= 1
+    assert state["budget"]["assistant_projection_chars_saved"] > 0
     assert messages[3]["content"] == huge
+
+
+@pytest.mark.asyncio
+async def test_projects_large_assistant_with_tool_calls_tracks_assistant_saved_not_plain(monkeypatch):
+    huge = "```gherkin\n" + ("\nScenario: S\nGiven x\nWhen y\nThen z" * 2500)
+    messages = [
+        {"role": "assistant", "content": huge, "tool_calls": [{"id": "call_1", "function": {"name": "jira_get_issue", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_1", "tool_name": "jira_get_issue", "content": "short"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    async def _get_context_state(_session_id):
+        return {}
+
+    monkeypatch.setattr(progressive_context.session_manager, "get_context_state", _get_context_state)
+    monkeypatch.setattr(progressive_context, "resolve_context_window_tokens", lambda model: 200000)
+    monkeypatch.setattr(progressive_context, "estimate_messages_tokens", lambda msgs: 100)
+
+    prepared, state = await prepare_progressive_messages(
+        messages=messages,
+        model="gpt-5-mini",
+        session_id="s-assistant-tool-saved",
+        stage="tool_loop",
+        recent_count=5,
+    )
+
+    assistant = next(m for m in prepared if m["role"] == "assistant")
+    assert "[assistant tool-call content compacted" in assistant["content"]
+    assert state["budget"]["assistant_projection_chars_saved"] > 0
+    assert state["budget"]["projected_plain_assistant_messages"] == 0
 
 
 def test_degrade_projected_context_sources_keeps_ref_and_call_id():
