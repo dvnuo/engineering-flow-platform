@@ -507,29 +507,30 @@ class JiraChannel:
         )
     
     async def get_comments(self, issue_key: str) -> List[Dict[str, Any]]:
-        """Get all comments for an issue.
-
-        Args:
-            issue_key: Issue key
-
-        Returns:
-            List of comments with id, body, author, and created time
-        """
+        """Get all comments for an issue with pagination."""
         logger.info(f"Getting comments for {issue_key}")
 
-        result = await self._request("GET", f"/issue/{issue_key}/comment")
-        comments = result.get("comments", [])
-
-        # Return simplified comment structure
-        return [
-            {
-                "id": str(c.get("id", "")),
-                "body": self._parse_body(c.get("body", {})),
-                "author": c.get("author", {}).get("displayName", "unknown"),
-                "created": c.get("created", ""),
-            }
-            for c in comments
-        ]
+        comments: List[Dict[str, Any]] = []
+        start_at = 0
+        page_size = 100
+        while True:
+            result = await self._request(
+                "GET",
+                f"/issue/{issue_key}/comment",
+                params={"startAt": start_at, "maxResults": page_size},
+            )
+            if isinstance(result, dict):
+                page_comments = result.get("comments", []) or []
+                comments.extend(page_comments)
+                total = int(result.get("total") or len(comments))
+                start_at = int(result.get("startAt") or start_at) + int(result.get("maxResults") or len(page_comments) or page_size)
+                if not page_comments or len(comments) >= total:
+                    break
+                continue
+            if isinstance(result, list):
+                comments.extend(result)
+            break
+        return comments
 
     def _parse_body(self, body) -> str:
         """Extract text from comment body (supports v2 plain text and v3 ADF)."""

@@ -337,6 +337,29 @@ def test_mobilex_large_generation_output_guard_is_unconditional_in_tool_loop_and
     assert "Large generation output guard:" in inspect.getsource(core._large_generation_output_guard)
 
 
+def test_large_generation_output_guard_applies_to_non_mobilex_generation_skill():
+    from src.agents import core
+
+    class Skill:
+        name = "api-test-generator"
+        description = "Generate integration tests and implementation files"
+
+    text = core._large_generation_output_guard(None, Skill(), {"skill_name": "api-test-generator"}, "generate all test cases from this Jira")
+    assert "Large generation output guard:" in text
+    assert "generation_mode=staged" in text
+
+
+def test_large_generation_output_guard_not_applied_to_normal_chat():
+    from src.agents import core
+
+    class Skill:
+        name = "chat-helper"
+        description = "General discussion assistant"
+
+    text = core._large_generation_output_guard(None, Skill(), {"skill_name": "chat-helper"}, "what is jira?")
+    assert text == ""
+
+
 def test_mobilex_skill_prompt_contains_hard_output_constraints():
     from pathlib import Path
 

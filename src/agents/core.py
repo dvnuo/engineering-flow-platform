@@ -524,6 +524,9 @@ def _safe_request_budget_fields(budget: Optional[Dict[str, Any]]) -> Dict[str, A
         "request_over_budget",
         "output_size_guard_applied",
         "large_generation_guard_applied",
+        "large_generation_guard_reason",
+        "generation_mode",
+        "current_generation_phase",
     )
     safe = {key: budget.get(key) for key in keys if key in budget}
     stage = budget.get("request_budget_stage")
@@ -607,6 +610,7 @@ def _large_generation_output_guard(
     active_skill_runtime: Optional[Any],
     selected_skill: Optional[Any],
     active_skill_contract: Optional[Dict[str, Any]],
+    latest_user_text: str = "",
 ) -> str:
     skill_name = (
         getattr(active_skill_runtime, "skill_name", None)
@@ -614,19 +618,24 @@ def _large_generation_output_guard(
         or (active_skill_contract or {}).get("skill_name")
     )
     normalized = str(skill_name or "").strip().lower()
-    guarded_skills = {
-        "mobilex-test-cases-generator",
-        "java_cucumber_generator",
-        "java-cucumber-generator",
-        "mobilex-test-generator",
-    }
-    if normalized not in guarded_skills:
+    skill_desc = str(getattr(selected_skill, "description", "") or "")
+    skill_or_desc = f"{normalized} {skill_desc}".lower()
+    user_text = str(latest_user_text or "").lower()
+    generation_markers = (
+        "test", "code", "generate", "implementation", "spec", "feature", "step definition", "step_definitions",
+        "multi-file", "all test cases", "generate all", "全部内容", "生成全部", "all jira information",
+    )
+    is_generation = any(marker in skill_or_desc for marker in generation_markers) or any(
+        marker in user_text for marker in generation_markers
+    )
+    if not is_generation:
         return ""
     return (
-        "Large generation output guard: For this skill, never emit all generated files or complete multi-file "
-        "implementations in a single chat response. Produce one bounded phase at a time. Prefer writing "
-        "artifacts/files via tools when a repository target is available. In chat, return a concise manifest, "
-        "file paths, and the next recommended step. Keep chat output under 8000 characters."
+        "Large generation output guard: Do not emit a complete multi-file implementation or very long generated "
+        "artifact in a single chat response. Generate one bounded phase/file at a time. Prefer writing artifacts/files "
+        "through tools when available. In chat, return a concise manifest, file paths, and next step. "
+        "Keep response under 8000 characters.\n"
+        "generation_mode=staged\nmax_chat_output_chars=8000\ncurrent_phase=manifest"
     )
 
 
@@ -2102,10 +2111,16 @@ You have access to the following tools. When a user asks you to do something tha
                 tools=loop_tools,
                 reasoning_replay=enable_reasoning,
             )
+            latest_user_text = ""
+            for _m in reversed(loop_messages):
+                if isinstance(_m, dict) and _m.get("role") == "user":
+                    latest_user_text = str(_m.get("content") or "")
+                    break
             large_generation_guard = _large_generation_output_guard(
                 active_skill_runtime=active_skill_runtime,
                 selected_skill=selected_skill,
                 active_skill_contract=active_skill_contract,
+                latest_user_text=latest_user_text,
             )
             if large_generation_guard:
                 llm_kwargs["system_prompt"] = ((llm_kwargs.get("system_prompt") or "") + "\n\n" + large_generation_guard).strip()
@@ -2134,6 +2149,9 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
                 budget_state["large_generation_guard_applied"] = large_generation_guard_applied
                 budget_state["output_size_guard_applied"] = large_generation_guard_applied
+                budget_state["large_generation_guard_reason"] = "classifier:skill_or_user_generation_request" if large_generation_guard_applied else ""
+                budget_state["generation_mode"] = "staged" if large_generation_guard_applied else "default"
+                budget_state["current_generation_phase"] = "manifest" if large_generation_guard_applied else ""
             if request_estimated_tokens > int(loop_budget.get("prompt_budget_tokens", 0) or 0):
                 loop_messages, loop_context_state = await prepare_progressive_messages(
                     messages=loop_messages,
@@ -3084,10 +3102,13 @@ You have access to the following tools. When a user asks you to do something tha
                 "reasoning_replay": False,
                 "provider": _normalize_provider_key(provider),
             }
+            latest_user_text = ""
+            latest_user_text = str(message or "")
             large_generation_guard = _large_generation_output_guard(
                 active_skill_runtime=skill_runtime_config,
                 selected_skill=skill,
                 active_skill_contract=skill_state if isinstance(skill_state, dict) else None,
+                latest_user_text=latest_user_text,
             )
             if large_generation_guard:
                 llm_kwargs["system_prompt"] = ((llm_kwargs.get("system_prompt") or "") + "\n\n" + large_generation_guard).strip()
@@ -3114,6 +3135,9 @@ You have access to the following tools. When a user asks you to do something tha
                 "request_over_budget": request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False,
                 "large_generation_guard_applied": large_generation_guard_applied,
                 "output_size_guard_applied": large_generation_guard_applied,
+                "large_generation_guard_reason": "classifier:skill_or_user_generation_request" if large_generation_guard_applied else "",
+                "generation_mode": "staged" if large_generation_guard_applied else "default",
+                "current_generation_phase": "manifest" if large_generation_guard_applied else "",
                 "request_budget_stage": "skill_generation",
                 "stage": "skill_generation",
             }

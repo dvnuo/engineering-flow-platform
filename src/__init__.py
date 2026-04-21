@@ -279,6 +279,18 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         if isinstance(result, dict):
             result = str(result)
         return ToolResult(success="Error" not in result, content=result)
+
+    elif name == "jira_prepare_issue_context":
+        result = await jira_module.jira_prepare_issue_context(
+            issue_key_or_url=kwargs.get("issue_key_or_url", ""),
+            include_all_comments=True if kwargs.get("include_all_comments") is None else kwargs.get("include_all_comments"),
+            include_attachments=True if kwargs.get("include_attachments") is None else kwargs.get("include_attachments"),
+            include_raw_snapshot=True if kwargs.get("include_raw_snapshot") is None else kwargs.get("include_raw_snapshot"),
+            _session_id=kwargs.get("_session_id"),
+        )
+        if isinstance(result, dict):
+            result = str(result)
+        return ToolResult(success="Error" not in str(result), content=result)
     
     elif name == "jira_add_attachment":
         issue_key = kwargs.get("issue_key", "")

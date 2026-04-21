@@ -598,12 +598,29 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
                 "context_projected_old_tool_messages": budget.get("projected_old_tool_messages"),
                 "context_output_size_guard_applied": budget.get("output_size_guard_applied"),
                 "context_large_generation_guard_applied": budget.get("large_generation_guard_applied"),
+                "context_large_generation_guard_reason": budget.get("large_generation_guard_reason"),
+                "context_generation_mode": budget.get("generation_mode"),
+                "context_current_generation_phase": budget.get("current_generation_phase"),
                 "context_context_blob_refs_created": (
                     len(budget.get("context_blob_refs_created"))
                     if isinstance(budget.get("context_blob_refs_created"), list)
                     else budget.get("context_blob_refs_created")
                 ),
                 "context_request_over_budget": budget.get("request_over_budget"),
+            }
+        )
+    source = context_state.get("source") if isinstance(context_state.get("source"), dict) else {}
+    if source:
+        preview.update(
+            {
+                "context_source_complete": source.get("source_complete"),
+                "context_source_bundle_ref_count": source.get("source_bundle_ref_count"),
+                "context_source_digest_ref_count": source.get("source_digest_ref_count"),
+                "context_comments_loaded": source.get("comments_loaded"),
+                "context_comments_total": source.get("comments_total"),
+                "context_attachments_loaded": source.get("attachments_loaded"),
+                "context_attachments_total": source.get("attachments_total"),
+                "context_source_partial_reasons_count": source.get("source_partial_reasons_count"),
             }
         )
     return {key: value for key, value in preview.items() if value not in (None, "")}

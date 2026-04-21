@@ -135,3 +135,49 @@ async def test_jira_add_worklog_no_comment(mock_jira_channel):
     result = await jira_add_worklog("PROJ-123", "2h")
     mock_jira_channel._request.assert_called()
     assert "work log" in result.lower() or "Error" in result
+
+
+def test_jira_adapter_get_comments_list_supports_all_comments_mode():
+    from src.jira.adapter import JiraFormatAdapter
+
+    adapter = JiraFormatAdapter(MagicMock())
+    issue = {"fields": {"comment": {"comments": [{"id": str(i)} for i in range(20)], "total": 20}}}
+    assert len(adapter._get_comments_list(issue, 5)) == 5
+    assert len(adapter._get_comments_list(issue, None)) == 20
+
+
+@pytest.mark.asyncio
+async def test_jira_prepare_issue_context_persists_all_comments_and_bounded_manifest(monkeypatch):
+    from src.jira import jira_prepare_issue_context
+    from src.context_blob_store import read_ref
+    import re
+
+    class _Channel:
+        api_version = "3"
+        _auth_header = {}
+        def is_configured(self): return True
+        def get_instance_client(self, **kwargs): return self
+        async def get_issue(self, issue_key, expand=None):
+            return {
+                "key": issue_key,
+                "names": {"customfield_1": "Acceptance Criteria"},
+                "renderedFields": {"description": "<p>x</p>"},
+                "fields": {
+                    "summary": "Demo",
+                    "status": {"name": "Open"},
+                    "description": "## Description\\nBody\\n## Acceptance Criteria\\n- AC1",
+                    "comment": {"comments": [], "total": 20},
+                    "attachment": [],
+                },
+            }
+        async def get_comments(self, issue_key):
+            return [{"id": str(i), "author": {"displayName": "A"}, "created": "2026-01-01", "body": f"c{i}"} for i in range(20)]
+
+    monkeypatch.setattr("src.jira.jira_channel", _Channel())
+    out = await jira_prepare_issue_context("PROJ-1", _session_id="s-jira-prepare")
+    assert "[jira source bundle prepared]" in out
+    assert "comments_loaded: 20/20" in out
+    assert len(out) < 8000
+    ref = out.split("context_ref: ", 1)[1].split("\\n", 1)[0].strip().strip('"')
+    raw = read_ref(ref, session_id="s-jira-prepare", section="raw", max_chars=50000)
+    assert '"comments_loaded": 20' in raw

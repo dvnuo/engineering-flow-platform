@@ -2,6 +2,7 @@
 
 import logging
 from typing import List, Optional, Union
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ from .api import (
 from .adapter import JiraFormatAdapter
 from src.utils.attachment import download_and_process_attachment
 from .exporter import export_issues_to_markdown
+from src.source_context import persist_jira_source_bundle_and_digest
 
 __all__ = [
     "JiraChannel", 
@@ -30,6 +32,7 @@ __all__ = [
     "JiraFormatAdapter",
     "jira_get_issue",
     "jira_get_issue_by_url",
+    "jira_prepare_issue_context",
     "jira_search",
     "jira_add_comment",
     "jira_add_attachment",
@@ -243,6 +246,145 @@ async def jira_get_issue_by_url(
         return result
     except Exception as e:
         return f"Error getting issue from URL: {str(e)}"
+
+
+async def jira_prepare_issue_context(
+    issue_key_or_url: str,
+    include_all_comments: bool = True,
+    include_attachments: bool = True,
+    include_raw_snapshot: bool = True,
+    _session_id: Optional[str] = None,
+) -> Union[str, dict]:
+    """Prepare a source-complete Jira context bundle and bounded digest manifest."""
+    import re
+
+    if not jira_channel.is_configured():
+        return "Error: Jira is not configured."
+
+    issue_key = str(issue_key_or_url or "").strip()
+    instance_channel = jira_channel
+    if "/browse/" in issue_key:
+        match = re.search(r"/browse/([A-Z][A-Z0-9_]*-\\d+)", issue_key, re.IGNORECASE)
+        if not match:
+            return f"Could not extract issue key from URL: {issue_key_or_url}"
+        issue_key = match.group(1).upper()
+        instance_channel = jira_channel.get_instance_client(url=issue_key_or_url)
+    session_id = _session_id or "unknown_session"
+
+    adapter = JiraFormatAdapter(instance_channel)
+    issue = await adapter.get_issue(
+        issue_key=issue_key,
+        format="raw",
+        max_comments=None if include_all_comments else 5,
+        include_comments=True,
+        include_fields=None,
+    )
+    fields = issue.get("fields", {}) if isinstance(issue, dict) else {}
+    comments = adapter._get_comments_list(issue if isinstance(issue, dict) else {}, None if include_all_comments else 5)
+    comment_field = fields.get("comment", {})
+    comments_total = int((comment_field or {}).get("total") or len(comments)) if isinstance(comment_field, dict) else len(comments)
+
+    attachments = []
+    text_attachments_total = 0
+    text_attachments_loaded = 0
+    partial_reasons: List[str] = []
+    attachment_list = fields.get("attachment", []) if isinstance(fields, dict) else []
+    for att in attachment_list:
+        mime = str(att.get("mimeType") or "")
+        filename = str(att.get("filename") or "unknown")
+        is_text = mime.startswith("text/") or filename.lower().endswith((".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".xml", ".log"))
+        if is_text:
+            text_attachments_total += 1
+        item = {
+            "id": att.get("id"),
+            "filename": filename,
+            "mime_type": mime,
+            "size": att.get("size", 0),
+            "created": att.get("created"),
+            "author": att.get("author"),
+            "text_preview": None,
+        }
+        if include_attachments and is_text and att.get("content"):
+            try:
+                auth_header = instance_channel._auth_header if instance_channel.is_configured() else None
+                result = await download_and_process_attachment(
+                    url=att.get("content"),
+                    session_id=f"jira-source-{issue_key}",
+                    options={"include_image_data": False},
+                    auth_header=auth_header,
+                )
+                if getattr(result, "content_format", "") == "text":
+                    item["text_preview"] = str(getattr(result, "content", "") or "")[:1000]
+                    text_attachments_loaded += 1
+            except Exception as exc:
+                partial_reasons.append(f"attachment_text_processing_failed:{filename}:{type(exc).__name__}")
+        attachments.append(item)
+
+    rendered_fields = issue.get("renderedFields") if isinstance(issue, dict) else None
+    bundle = {
+        "issue_key": issue_key,
+        "metadata": {
+            "key": issue.get("key") if isinstance(issue, dict) else issue_key,
+            "title": fields.get("summary"),
+            "status": (fields.get("status") or {}).get("name") if isinstance(fields.get("status"), dict) else "",
+            "type": (fields.get("issuetype") or {}).get("name") if isinstance(fields.get("issuetype"), dict) else "",
+            "priority": (fields.get("priority") or {}).get("name") if isinstance(fields.get("priority"), dict) else "",
+            "assignee": (fields.get("assignee") or {}).get("displayName") if isinstance(fields.get("assignee"), dict) else "",
+        },
+        "description": adapter._convert_description_to_markdown(fields.get("description")),
+        "acceptance_criteria": adapter._extract_acceptance_criteria(issue if isinstance(issue, dict) else {}),
+        "business_rules": "",
+        "validation_rules": "",
+        "comments": [
+            {
+                "id": c.get("id"),
+                "author": c.get("author"),
+                "created": c.get("created"),
+                "body": c.get("body"),
+                "body_markdown": adapter._convert_description_to_markdown(c.get("body")),
+            }
+            for c in comments
+        ],
+        "attachments": attachments,
+        "raw_snapshot": fields if include_raw_snapshot else {},
+        "completeness_ledger": {
+            "comments_loaded": len(comments),
+            "comments_total": comments_total,
+            "attachments_metadata_loaded": len(attachments),
+            "attachments_total": len(attachment_list),
+            "text_attachments_loaded": text_attachments_loaded,
+            "text_attachments_total": text_attachments_total,
+            "raw_fields_loaded": bool(fields),
+            "rendered_fields_loaded": bool(rendered_fields),
+            "custom_fields_loaded": bool(issue.get("names")) if isinstance(issue, dict) else False,
+            "partial_reasons": partial_reasons,
+        },
+    }
+    ledger = bundle["completeness_ledger"]
+    ledger["source_complete"] = (
+        ledger["comments_loaded"] >= ledger["comments_total"]
+        and ledger["attachments_metadata_loaded"] >= ledger["attachments_total"]
+        and not ledger["partial_reasons"]
+    )
+    persisted = persist_jira_source_bundle_and_digest(session_id=session_id, issue_key=issue_key, bundle=bundle)
+
+    manifest = {
+        "issue_key": issue_key,
+        "context_ref": persisted["context_ref"],
+        "digest_ref": persisted["digest_ref"],
+        "source_complete": ledger["source_complete"],
+        "comments_loaded": f"{ledger['comments_loaded']}/{ledger['comments_total']}",
+        "attachments_metadata_loaded": f"{ledger['attachments_metadata_loaded']}/{ledger['attachments_total']}",
+        "text_attachments_loaded": f"{ledger['text_attachments_loaded']}/{ledger['text_attachments_total']}",
+        "binary_attachments_preserved": max(0, ledger["attachments_total"] - ledger["text_attachments_loaded"]),
+        "partial_reasons": ledger["partial_reasons"],
+        "sections": ["metadata", "description", "acceptance_criteria", "comments", "attachments", "raw_snapshot"],
+    }
+    return (
+        "[jira source bundle prepared]\\n"
+        + "\\n".join(f"{k}: {json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v}" for k, v in manifest.items())
+        + f"\\n\\nUse context_read_ref(ref=\\\"{persisted['context_ref']}\\\", section=\\\"...\\\") to inspect source sections."
+    )
 
 
 async def jira_add_comment(
@@ -467,6 +609,23 @@ def _get_all_schemas() -> list:
                     "required": ["url"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "jira_prepare_issue_context",
+                "description": "Prepare a source-complete Jira context bundle and bounded digest for generation workflows.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key_or_url": {"type": "string", "description": "Jira issue key (PROJ-123) or full browse URL"},
+                        "include_all_comments": {"type": "boolean", "default": True},
+                        "include_attachments": {"type": "boolean", "default": True},
+                        "include_raw_snapshot": {"type": "boolean", "default": True},
+                    },
+                    "required": ["issue_key_or_url"],
+                },
+            },
         },
         {
             "type": "function",

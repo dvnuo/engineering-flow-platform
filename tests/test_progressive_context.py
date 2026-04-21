@@ -388,6 +388,30 @@ def test_build_portal_context_preview_uses_request_budget_stage_when_present():
     assert preview["context_request_budget_stage"] == "skill_generation"
 
 
+def test_build_portal_context_preview_includes_source_and_generation_diagnostics():
+    preview = build_portal_context_preview(
+        {
+            "budget": {
+                "large_generation_guard_reason": "classifier:skill_or_user_generation_request",
+                "generation_mode": "staged",
+                "current_generation_phase": "manifest",
+            },
+            "source": {
+                "source_complete": True,
+                "source_bundle_ref_count": 1,
+                "source_digest_ref_count": 1,
+                "comments_loaded": 20,
+                "comments_total": 20,
+                "attachments_loaded": 2,
+                "attachments_total": 2,
+                "source_partial_reasons_count": 0,
+            },
+        }
+    )
+    assert preview["context_generation_mode"] == "staged"
+    assert preview["context_source_complete"] is True
+
+
 def test_progressive_context_dict_roundtrip_preserves_tool_name():
     messages = [
         {
