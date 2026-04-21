@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.context_blob_store import put_text
-from src.config import resolve_output_boundary
+from src.config import config, resolve_model_limits, resolve_output_boundary
 
 
 def _safe_int(value: Any, default: int) -> int:
@@ -47,6 +47,33 @@ def normalize_chat_output_chars(
     if parsed < min_reasonable and not allow_low:
         return derived, configured_raw is not None, configured_raw
     return parsed, False, configured_raw
+
+
+def resolve_effective_max_tokens_for_model(model: Optional[str]) -> Tuple[int, Dict[str, Any]]:
+    llm_cfg = config.llm if isinstance(config.llm, dict) else {}
+    limits = resolve_model_limits(model)
+    model_max_tokens = int(limits.get("max_output_tokens") or llm_cfg.get("max_tokens") or 64000)
+    configured_raw = llm_cfg.get("max_tokens")
+    configured_max_tokens: Optional[int]
+    try:
+        configured_max_tokens = int(configured_raw) if configured_raw is not None else None
+    except Exception:
+        configured_max_tokens = None
+    if configured_max_tokens is not None and configured_max_tokens <= 0:
+        configured_max_tokens = None
+    allow_lower = bool(llm_cfg.get("allow_lower_max_tokens_than_model_limit", False))
+    legacy_ignored = False
+    if configured_max_tokens is not None and configured_max_tokens < model_max_tokens and not allow_lower:
+        effective_max_tokens = model_max_tokens
+        legacy_ignored = True
+    else:
+        effective_max_tokens = min(model_max_tokens, int(configured_max_tokens or model_max_tokens))
+    return effective_max_tokens, {
+        "configured_max_tokens": configured_max_tokens,
+        "effective_max_tokens": effective_max_tokens,
+        "legacy_max_tokens_ignored": legacy_ignored,
+        "allow_lower_max_tokens_than_model_limit": allow_lower,
+    }
 
 
 def classify_output_risk(user_text: str, active_skill: Any, system_prompt: str, source_state: Optional[Dict[str, Any]] = None) -> str:
@@ -335,7 +362,28 @@ async def call_llm_with_output_control(
     max_chat_output_chars: Optional[int] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     model = str(llm_kwargs.get("model") or "")
+    llm_kwargs = dict(llm_kwargs)
     boundary = resolve_output_boundary(model)
+    effective_max_tokens, max_token_diag = resolve_effective_max_tokens_for_model(model or None)
+    caller_max_tokens_raw = llm_kwargs.get("max_tokens")
+    caller_max_tokens: Optional[int]
+    try:
+        caller_max_tokens = int(caller_max_tokens_raw) if caller_max_tokens_raw is not None else None
+    except Exception:
+        caller_max_tokens = None
+    allow_lower_max_tokens = bool(max_token_diag.get("allow_lower_max_tokens_than_model_limit", False))
+    caller_max_tokens_ignored = False
+    model_token_cap = int(boundary.get("max_output_tokens") or effective_max_tokens)
+    if caller_max_tokens is None:
+        llm_kwargs["max_tokens"] = int(effective_max_tokens)
+    elif caller_max_tokens <= 0:
+        llm_kwargs["max_tokens"] = int(effective_max_tokens)
+        caller_max_tokens_ignored = True
+    elif caller_max_tokens < int(effective_max_tokens) and not allow_lower_max_tokens:
+        llm_kwargs["max_tokens"] = int(effective_max_tokens)
+        caller_max_tokens_ignored = True
+    else:
+        llm_kwargs["max_tokens"] = int(min(caller_max_tokens, model_token_cap))
     budget = context_state.setdefault("budget", {}) if isinstance(context_state, dict) else {}
     fallback_chars, fallback_source = _default_output_chars(model)
     allow_low = bool(boundary.get("allow_low_max_chat_output_chars", False))
@@ -379,6 +427,11 @@ async def call_llm_with_output_control(
     diagnostics["configured_budget_max_chat_output_chars"] = configured_budget_chars
     diagnostics["arg_max_chat_output_chars_ignored"] = arg_ignored
     diagnostics["configured_arg_max_chat_output_chars"] = configured_arg_chars
+    diagnostics["configured_max_tokens"] = max_token_diag.get("configured_max_tokens")
+    diagnostics["effective_max_tokens"] = int(llm_kwargs.get("max_tokens") or effective_max_tokens)
+    diagnostics["legacy_max_tokens_ignored"] = bool(max_token_diag.get("legacy_max_tokens_ignored") or caller_max_tokens_ignored)
+    diagnostics["caller_max_tokens"] = caller_max_tokens
+    diagnostics["caller_max_tokens_ignored"] = caller_max_tokens_ignored
     if isinstance(budget, dict):
         budget["session_id"] = session_id
 
@@ -420,6 +473,11 @@ async def call_llm_with_output_control(
         budget["configured_budget_max_chat_output_chars"] = configured_budget_chars
         budget["output_boundary_source"] = str(boundary.get("output_boundary_source") or fallback_source)
         budget["output_controller_stage"] = stage
+        budget["configured_max_tokens"] = max_token_diag.get("configured_max_tokens")
+        budget["effective_max_tokens"] = int(llm_kwargs.get("max_tokens") or effective_max_tokens)
+        budget["legacy_max_tokens_ignored"] = bool(max_token_diag.get("legacy_max_tokens_ignored") or caller_max_tokens_ignored)
+        budget["caller_max_tokens"] = caller_max_tokens
+        budget["caller_max_tokens_ignored"] = caller_max_tokens_ignored
 
     llm_result = await llm_client.responses(**llm_kwargs)
     llm_result, recovery_info = await recover_max_output_tokens(

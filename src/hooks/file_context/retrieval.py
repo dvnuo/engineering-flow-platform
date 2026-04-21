@@ -4,6 +4,8 @@ import re
 from collections import defaultdict
 from typing import List, Dict, Set, Tuple
 
+from src.config import config, resolve_model_limits
+
 from .models import Chunk, RetrievalRequest, RetrievalResult
 from .storage import storage
 
@@ -88,6 +90,26 @@ class RetrievalEngine:
         if include_images:
             return chunks
         return [c for c in chunks if c.type != 'image']
+
+    def _resolve_budget_thresholds(self, request: RetrievalRequest) -> Tuple[int, int, int]:
+        """Resolve retrieval thresholds from model prompt limits, with emergency legacy fallback."""
+        llm_cfg = config.llm if isinstance(config.llm, dict) else {}
+        model = str(llm_cfg.get("model") or "").strip()
+        known_model_keys = ("gpt-4o", "gpt-4.1", "gpt-5-mini", "gpt-5.3-codex", "gpt-5.4-mini", "gemini-2.5-pro")
+        model_limits = resolve_model_limits(model or None)
+        prompt_budget = int(model_limits.get("max_prompt_tokens") or 0) if any(k in model.lower() for k in known_model_keys) else 0
+        if prompt_budget <= 0:
+            try:
+                prompt_budget = int(request.max_tokens or 0)
+            except Exception:
+                prompt_budget = 0
+        if prompt_budget <= 0:
+            # Emergency fallback only if model/request budgets are unavailable.
+            return 1000, 4000, 8000
+        direct_threshold = max(1000, min(16000, int(prompt_budget * 0.05)))
+        topk_threshold = max(direct_threshold + 1, min(64000, int(prompt_budget * 0.20)))
+        summarize_threshold = max(topk_threshold + 1, min(128000, int(prompt_budget * 0.50)))
+        return direct_threshold, topk_threshold, summarize_threshold
     
     def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
         """Perform retrieval with budget control."""
@@ -135,11 +157,12 @@ class RetrievalEngine:
         estimated_tokens = self._estimate_tokens(chunks)
         
         # Determine budget status
-        if estimated_tokens < 1000:
+        direct_threshold, topk_threshold, summarize_threshold = self._resolve_budget_thresholds(request)
+        if estimated_tokens < direct_threshold:
             budget_status = "direct"
-        elif estimated_tokens < 4000:
+        elif estimated_tokens < topk_threshold:
             budget_status = "top-k"
-        elif estimated_tokens < 8000:
+        elif estimated_tokens < summarize_threshold:
             budget_status = "summarize"
         else:
             budget_status = "error"

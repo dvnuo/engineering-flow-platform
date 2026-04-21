@@ -338,7 +338,9 @@ async def test_run_skill_finalizer_uses_passed_max_tokens(monkeypatch):
 
     captured = {}
     original_max = core_mod.config.llm.get("max_tokens")
+    original_allow_lower = core_mod.config.llm.get("allow_lower_max_tokens_than_model_limit")
     core_mod.config.llm["max_tokens"] = 64000
+    core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = True
 
     async def fake_responses(**kwargs):
         captured["max_tokens"] = kwargs.get("max_tokens")
@@ -363,9 +365,54 @@ async def test_run_skill_finalizer_uses_passed_max_tokens(monkeypatch):
             core_mod.config.llm.pop("max_tokens", None)
         else:
             core_mod.config.llm["max_tokens"] = original_max
+        if original_allow_lower is None:
+            core_mod.config.llm.pop("allow_lower_max_tokens_than_model_limit", None)
+        else:
+            core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = original_allow_lower
 
     assert result.state == "succeeded"
     assert captured["max_tokens"] == 4096
+
+
+@pytest.mark.asyncio
+async def test_initial_skill_plan_direct_uses_model_derived_max_tokens(monkeypatch):
+    from src.agents import skill_mode
+
+    captured = {}
+    original_max = skill_mode.config.llm.get("max_tokens")
+    original_allow_lower = skill_mode.config.llm.get("allow_lower_max_tokens_than_model_limit")
+    original_model = skill_mode.config.llm.get("model")
+    skill_mode.config.llm["model"] = "gpt-5.4-mini"
+    skill_mode.config.llm["max_tokens"] = 64000
+    skill_mode.config.llm["allow_lower_max_tokens_than_model_limit"] = False
+
+    async def _fake_responses(**kwargs):
+        captured["max_tokens"] = kwargs.get("max_tokens")
+        return {"content": "{\"goal\":\"g\",\"steps\":[]}", "tool_calls": [], "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr(skill_mode, "llm_client", SimpleNamespace(responses=_fake_responses))
+    try:
+        result = await skill_mode._generate_initial_skill_plan_direct(
+            skill=SimpleNamespace(name="lookup", description="desc", strategy=[], tools=[]),
+            user_message="plan this",
+            model="gpt-5.4-mini",
+        )
+    finally:
+        if original_max is None:
+            skill_mode.config.llm.pop("max_tokens", None)
+        else:
+            skill_mode.config.llm["max_tokens"] = original_max
+        if original_allow_lower is None:
+            skill_mode.config.llm.pop("allow_lower_max_tokens_than_model_limit", None)
+        else:
+            skill_mode.config.llm["allow_lower_max_tokens_than_model_limit"] = original_allow_lower
+        if original_model is None:
+            skill_mode.config.llm.pop("model", None)
+        else:
+            skill_mode.config.llm["model"] = original_model
+
+    assert result.get("goal") == "g"
+    assert captured.get("max_tokens") == 128000
 
 
 @pytest.mark.asyncio
@@ -448,7 +495,7 @@ async def test_run_skill_finalizer_ignores_legacy_lower_config_cap_by_default(mo
             core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = original_allow_lower
 
     assert result.state == "succeeded"
-    assert captured["max_tokens"] == 4096
+    assert captured["max_tokens"] == 64000
 
 
 @pytest.mark.asyncio
@@ -547,7 +594,11 @@ async def test_continue_skill_mode_uses_budget_max_output_tokens_for_llm_calls(m
 
     captured = []
     original_max = core_mod.config.llm.get("max_tokens")
+    original_allow_lower = core_mod.config.llm.get("allow_lower_max_tokens_than_model_limit")
+    original_model = core_mod.config.llm.get("model")
+    core_mod.config.llm["model"] = "gpt-5-mini"
     core_mod.config.llm["max_tokens"] = 4096
+    core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = True
 
     monkeypatch.setattr(
         core_mod,
@@ -571,6 +622,14 @@ async def test_continue_skill_mode_uses_budget_max_output_tokens_for_llm_calls(m
             core_mod.config.llm.pop("max_tokens", None)
         else:
             core_mod.config.llm["max_tokens"] = original_max
+        if original_allow_lower is None:
+            core_mod.config.llm.pop("allow_lower_max_tokens_than_model_limit", None)
+        else:
+            core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = original_allow_lower
+        if original_model is None:
+            core_mod.config.llm.pop("model", None)
+        else:
+            core_mod.config.llm["model"] = original_model
 
     assert captured
     assert captured[0].get("max_tokens") == 4096
