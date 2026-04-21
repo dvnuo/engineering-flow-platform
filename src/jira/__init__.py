@@ -310,6 +310,7 @@ async def jira_prepare_issue_context(
     text_attachments_loaded = 0
     text_attachments_full_loaded = 0
     text_attachments_preview_only = 0
+    text_attachments_with_full_ref = 0
     partial_reasons: List[str] = []
     attachment_body_partial_reasons: List[str] = []
     attachment_list = fields.get("attachment", []) if isinstance(fields, dict) else []
@@ -362,6 +363,7 @@ async def jira_prepare_issue_context(
                             content=text_content,
                             metadata={"issue_key": issue_key, "filename": filename},
                         )
+                        text_attachments_with_full_ref += 1
                         attachment_body_partial_reasons.append(f"text_attachment_preview_only:{filename}")
                     text_attachments_loaded += 1
             except Exception as exc:
@@ -413,9 +415,10 @@ async def jira_prepare_issue_context(
             "text_attachments_loaded": text_attachments_loaded,
             "text_attachments_total": text_attachments_total,
             "text_attachments_complete": text_attachments_loaded >= text_attachments_total,
-            "text_attachment_bodies_complete": text_attachments_loaded >= text_attachments_total and text_attachments_preview_only == 0,
+            "text_attachment_bodies_complete": text_attachments_loaded >= text_attachments_total and text_attachments_with_full_ref >= text_attachments_preview_only,
             "text_attachments_full_loaded": text_attachments_full_loaded,
             "text_attachments_preview_only": text_attachments_preview_only,
+            "text_attachments_with_full_ref": text_attachments_with_full_ref,
             "binary_attachments_count": binary_attachments_count,
             "binary_attachment_bodies_available": False,
             "binary_attachment_bodies_skipped_count": binary_attachment_bodies_skipped_count,
@@ -432,15 +435,28 @@ async def jira_prepare_issue_context(
         },
     }
     ledger = bundle["completeness_ledger"]
+    ledger["source_metadata_complete"] = bool(
+        ledger.get("issue_fields_complete")
+        and ledger.get("names_loaded")
+        and ledger.get("rendered_fields_loaded")
+        and ledger.get("attachment_metadata_complete")
+    )
+    ledger["source_text_complete"] = bool(
+        ledger.get("comments_complete")
+        and ledger.get("text_attachment_bodies_complete")
+    )
+    ledger["source_tree_complete"] = True
+    ledger["source_complete_for_generation"] = bool(
+        ledger["source_metadata_complete"] and ledger["source_text_complete"]
+    )
+    ledger["source_complete_including_binary_bodies"] = bool(
+        ledger["source_complete_for_generation"]
+        and ledger.get("binary_attachment_bodies_available")
+        and int(ledger.get("binary_attachment_bodies_skipped_count", 0)) == 0
+    )
     blocking_partial_reasons = [r for r in ledger.get("partial_reasons", []) if not str(r).startswith("binary_attachment_body_skipped:")]
     ledger["source_complete"] = (
-        ledger["issue_loaded"]
-        and ledger["raw_issue_loaded"]
-        and ledger["comments_complete"]
-        and ledger["attachment_metadata_complete"]
-        and ledger["text_attachment_bodies_complete"]
-        and ledger["names_loaded"]
-        and ledger["rendered_fields_loaded"]
+        ledger["source_complete_for_generation"]
         and not blocking_partial_reasons
     )
     persisted = persist_jira_source_bundle_and_digest(session_id=session_id, issue_key=issue_key, bundle=bundle)
@@ -450,6 +466,11 @@ async def jira_prepare_issue_context(
         "context_ref": persisted["context_ref"],
         "digest_ref": persisted["digest_ref"],
         "source_complete": ledger["source_complete"],
+        "source_complete_for_generation": ledger["source_complete_for_generation"],
+        "source_complete_including_binary_bodies": ledger["source_complete_including_binary_bodies"],
+        "source_metadata_complete": ledger["source_metadata_complete"],
+        "source_text_complete": ledger["source_text_complete"],
+        "source_tree_complete": ledger["source_tree_complete"],
         "comments_loaded": f"{ledger['comments_loaded']}/{ledger['comments_total']}",
         "attachments_metadata_loaded": f"{ledger['attachments_metadata_loaded']}/{ledger['attachments_total']}",
         "text_attachments_loaded": f"{ledger['text_attachments_loaded']}/{ledger['text_attachments_total']}",

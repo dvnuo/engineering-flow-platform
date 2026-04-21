@@ -72,9 +72,13 @@ def ensure_staged_generation(
     gen["current_generation_phase"] = str(gen.get("current_generation_phase") or "manifest")
     gen["completed_phases"] = completed
     gen["next_phase"] = str(gen.get("next_phase") or "phase_1")
+    refs = gen.get("generated_artifact_refs")
+    gen["generated_artifact_refs"] = refs if isinstance(refs, list) else []
+    gen["generated_artifact_ref_count"] = len(gen["generated_artifact_refs"])
+    gen["generation_done"] = bool(gen.get("generation_done", False))
     gen["max_chat_output_chars"] = int(max_chat_output_chars)
     gen["output_controller_applied"] = True
-    gen["stage"] = stage
+    gen["output_controller_stage"] = stage
     return gen
 
 
@@ -242,6 +246,7 @@ async def call_llm_with_output_control(
         budget["output_risk_level"] = risk
         budget["generation_mode"] = generation_mode
         budget["output_token_limit"] = int(llm_kwargs.get("max_tokens") or 0)
+        budget["output_controller_stage"] = stage
 
     llm_result = await llm_client.responses(**llm_kwargs)
     llm_result, recovery_info = await recover_max_output_tokens(
@@ -259,7 +264,7 @@ async def call_llm_with_output_control(
             gen_state["output_controller_recovery_reason"] = "max_output_tokens"
 
     content = _extract_content_text(llm_result)
-    if content and generation_mode == "staged":
+    if content:
         bounded, bound_info = enforce_chat_output_bound(
             content,
             session_id=session_id or "unknown_session",
@@ -269,13 +274,30 @@ async def call_llm_with_output_control(
         if bound_info.get("bounded"):
             llm_result = dict(llm_result)
             llm_result["content"] = bounded
+            diagnostics["oversized_output_saved"] = True
         diagnostics["output_bounding"] = bound_info
         if isinstance(budget, dict):
             budget["output_bounded"] = bool(bound_info.get("bounded"))
             budget["max_chat_output_chars"] = int(max_chat_output_chars)
+            budget["oversized_output_saved"] = bool(bound_info.get("bounded"))
+            budget["partial_output_saved"] = bool(recovery_info.get("partial_ref"))
         if isinstance(gen_state, dict):
             gen_state["max_chat_output_chars"] = int(max_chat_output_chars)
             if bound_info.get("bounded"):
-                gen_state["next_phase"] = "phase_1"
+                ref = bound_info.get("ref")
+                if isinstance(ref, str):
+                    refs = gen_state.get("generated_artifact_refs")
+                    if not isinstance(refs, list):
+                        refs = []
+                    refs.append(ref)
+                    gen_state["generated_artifact_refs"] = refs
+                    gen_state["generated_artifact_ref_count"] = len(refs)
+                if gen_state.get("generation_mode") == "staged":
+                    gen_state["next_phase"] = "phase_1"
+            gen_state["partial_output_saved"] = bool(recovery_info.get("partial_ref"))
 
+    if isinstance(gen_state, dict):
+        diagnostics["generation"] = dict(gen_state)
+        diagnostics["generated_artifact_ref_count"] = int(gen_state.get("generated_artifact_ref_count") or 0)
+        diagnostics["generation_done"] = bool(gen_state.get("generation_done", False))
     return llm_result, diagnostics

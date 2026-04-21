@@ -607,6 +607,9 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
                 "context_input_context_usage_percent": budget.get("input_context_usage_percent"),
                 "context_max_output_recovery_applied": budget.get("max_output_recovery_applied"),
                 "context_max_output_recovery_attempts": budget.get("max_output_recovery_attempts"),
+                "context_output_controller_stage": budget.get("output_controller_stage"),
+                "context_oversized_output_saved": budget.get("oversized_output_saved"),
+                "context_partial_output_saved": budget.get("partial_output_saved"),
                 "context_context_blob_refs_created": (
                     len(budget.get("context_blob_refs_created"))
                     if isinstance(budget.get("context_blob_refs_created"), list)
@@ -628,7 +631,24 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
                 "context_comments_total": source.get("comments_total"),
                 "context_attachments_loaded": source.get("attachments_loaded"),
                 "context_attachments_total": source.get("attachments_total"),
+                "context_source_complete_for_generation": source.get("source_complete_for_generation"),
+                "context_source_complete_including_binary_bodies": source.get("source_complete_including_binary_bodies"),
+                "context_source_metadata_complete": source.get("source_metadata_complete"),
+                "context_source_text_complete": source.get("source_text_complete"),
+                "context_source_tree_complete": source.get("source_tree_complete"),
+                "context_descendants_loaded": source.get("descendants_loaded"),
+                "context_descendants_total": source.get("descendants_total"),
+                "context_descendants_complete": source.get("descendants_complete"),
                 "context_source_partial_reasons_count": source.get("source_partial_reasons_count"),
+            }
+        )
+    generation = context_state.get("generation") if isinstance(context_state.get("generation"), dict) else {}
+    if generation:
+        preview.update(
+            {
+                "context_generated_artifact_ref_count": generation.get("generated_artifact_ref_count"),
+                "context_generation_done": generation.get("generation_done"),
+                "context_output_controller_stage_generation": generation.get("output_controller_stage"),
             }
         )
     return {key: value for key, value in preview.items() if value not in (None, "")}

@@ -189,6 +189,7 @@ async def test_jira_prepare_issue_context_persists_all_comments_and_bounded_mani
     out = await jira_prepare_issue_context("PROJ-1", _session_id="s-jira-prepare")
     assert "[jira source bundle prepared]" in out
     assert "comments_loaded: 20/20" in out
+    assert "source_complete_for_generation: True" in out
     assert "source_digest_chunk_count:" in out
     assert len(out) < 8000
     ref = out.split("context_ref: ", 1)[1].split("\\n", 1)[0].strip().strip('"')
@@ -241,6 +242,7 @@ async def test_jira_prepare_issue_context_attachment_full_and_preview_ledger(mon
     assert "text_attachments_preview_only" in raw
     assert "binary_attachment_bodies_skipped_count" in raw
     assert "source_complete_definition" in raw
+    assert '"source_complete_including_binary_bodies": false' in raw.lower()
 
 
 @pytest.mark.asyncio

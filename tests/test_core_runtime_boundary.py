@@ -475,6 +475,7 @@ async def test_output_controller_bounds_huge_content_in_staged_mode():
     assert len(result.get("content") or "") <= 8000
     assert "context_read_ref(" in (result.get("content") or "")
     assert diag.get("output_bounding", {}).get("bounded") is True
+    assert diag.get("generated_artifact_ref_count", 0) >= 1
 
 
 @pytest.mark.asyncio
@@ -526,6 +527,7 @@ async def test_output_controller_generation_state_machine_advances_on_continue()
         latest_user_text="generate implementation",
     )
     assert diag1.get("generation", {}).get("current_generation_phase") == "manifest"
+    assert diag1.get("generation", {}).get("output_controller_stage") == "tool_loop"
     _, diag2 = await call_llm_with_output_control(
         llm_client=_Client(),
         llm_kwargs={"input_items": [], "system_prompt": "continue staged", "tools": []},
@@ -535,6 +537,29 @@ async def test_output_controller_generation_state_machine_advances_on_continue()
         latest_user_text="continue",
     )
     assert diag2.get("generation", {}).get("current_generation_phase") in {"phase_1", "phase_2"}
+
+
+@pytest.mark.asyncio
+async def test_output_controller_bounds_oversized_normal_risk_output():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "N" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "simple chat reply", "tools": []},
+        session_id="s-normal",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="hello",
+        max_chat_output_chars=8000,
+    )
+    assert len(result.get("content") or "") <= 8000
+    assert diag.get("output_bounding", {}).get("bounded") is True
+    assert state["budget"].get("oversized_output_saved") is True
 
 
 def test_core_and_skill_mode_do_not_call_llm_client_responses_directly():

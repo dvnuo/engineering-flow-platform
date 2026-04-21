@@ -165,6 +165,7 @@ async def test_confluence_prepare_page_context_persists_manifest(monkeypatch):
     assert "source_complete: False" in out
     assert "comments_loaded: 150/150" in out
     assert "descendants_not_supported" in out
+    assert "source_tree_complete: False" in out
 
 
 @pytest.mark.asyncio
@@ -186,6 +187,7 @@ async def test_confluence_prepare_page_context_marks_partial_when_pagination_inc
     out = await confluence_prepare_page_context("123", _session_id="s-conf-partial")
     assert "source_complete: False" in out
     assert "descendants_supported" in out
+    assert "source_complete_for_generation" in out
 
 
 @pytest.mark.asyncio
@@ -228,6 +230,8 @@ async def test_execute_tool_confluence_get_page_by_url_uses_session_scoped_conte
     assert result.success is True
     assert "ctx://context/s1/" in result.content
     assert "ctx://context/unknown_session/" not in result.content
+    assert "children_loaded:" in result.content
+    assert "descendants_supported:" in result.content
     ref = re.search(r"context_ref:\s*(ctx://context/[^\s\"\\]+)", result.content).group(1)
     read_back = await context_read_ref(ref=ref, _session_id="s1")
     assert "source bundle" in read_back.lower() or "metadata" in read_back.lower()
@@ -268,3 +272,18 @@ async def test_confluence_get_comments_is_ledger_aware_and_bounded(monkeypatch):
     ref = re.search(r"context_ref:\s*(ctx://context/[^\s\"\\]+)", out).group(1)
     raw = read_ref(ref, session_id="s-com", section="raw", max_chars=12000)
     assert "\"comments\"" in raw
+
+
+@pytest.mark.asyncio
+async def test_confluence_get_page_children_is_ledger_aware(monkeypatch):
+    from src.confluence import confluence_get_page_children
+
+    class _Channel:
+        def is_configured(self): return True
+        async def get_all_page_children_with_ledger(self, page_id, limit=100):
+            return [{"id": "c1", "title": "Child 1"}], {"loaded": 1, "total": 1, "complete": True}
+
+    monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
+    out = await confluence_get_page_children("42", limit=10)
+    assert "[confluence children prepared]" in out
+    assert "children_complete: True" in out

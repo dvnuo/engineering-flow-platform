@@ -379,6 +379,16 @@ async def confluence_prepare_page_context(
             "source_complete requires page_body_complete, comments_complete, attachments_complete, "
             "children_complete, and descendants coverage support. descendants are currently unsupported."
         )
+        ledger["source_metadata_complete"] = bool(ledger["page_body_complete"])
+        ledger["source_text_complete"] = bool(ledger["page_body_complete"] and ledger["comments_complete"])
+        ledger["source_tree_complete"] = bool(ledger["children_complete"] and ledger["descendants_supported"] and ledger["descendants_complete"])
+        ledger["source_complete_for_generation"] = bool(
+            ledger["source_metadata_complete"]
+            and ledger["source_text_complete"]
+            and ledger["attachments_complete"]
+            and ledger["children_complete"]
+        )
+        ledger["source_complete_including_binary_bodies"] = ledger["source_complete_for_generation"]
         ledger["source_complete"] = (
             not partial_reasons
             and ledger["page_body_complete"]
@@ -413,9 +423,16 @@ async def confluence_prepare_page_context(
             "context_ref": persisted["context_ref"],
             "digest_ref": persisted["digest_ref"],
             "source_complete": ledger["source_complete"],
+            "source_complete_for_generation": ledger["source_complete_for_generation"],
+            "source_complete_including_binary_bodies": ledger["source_complete_including_binary_bodies"],
+            "source_metadata_complete": ledger["source_metadata_complete"],
+            "source_text_complete": ledger["source_text_complete"],
+            "source_tree_complete": ledger["source_tree_complete"],
             "comments_loaded": f"{ledger['comments_loaded']}/{ledger['comments_total']}",
             "attachments_loaded": f"{ledger['attachments_loaded']}/{ledger['attachments_total']}",
             "children_loaded": f"{ledger['children_loaded']}/{ledger['children_total']}",
+            "descendants_loaded": 0,
+            "descendants_total": 0,
             "descendants_supported": ledger.get("descendants_supported", False),
             "descendants_complete": ledger.get("descendants_complete", False),
             "source_complete_definition": ledger.get("source_complete_definition", ""),
@@ -590,25 +607,28 @@ async def confluence_get_page_history(page_id: str) -> str:
 
 
 async def confluence_get_page_children(page_id: str, limit: int = 10) -> str:
-    """Get child pages of a Confluence page."""
+    """Get child pages of a Confluence page with ledger completeness."""
     try:
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
-        result = await confluence_channel.get_page_children(page_id, limit)
-        
-        if isinstance(result, list):
-            if not result:
-                return "No child pages found."
-            
-            lines = [f"**Child Pages** ({len(result)}):\n"]
-            for p in result:
-                if not isinstance(p, dict):
-                    continue
-                title = p.get("title", "Untitled")
-                child_id = p.get("id", "?")
-                lines.append(f"- **{title}** ({child_id})")
-            return "\n".join(lines)
-        return str(result)
+        children, ledger = await confluence_channel.get_all_page_children_with_ledger(page_id, limit=max(limit, 100))
+        children = children or []
+        ledger = ledger or {}
+        context_ref = put_text(
+            session_id=f"confluence-children-{page_id}",
+            kind="confluence_children_bundle",
+            source_id=page_id,
+            title=f"Confluence children {page_id}",
+            content=json.dumps({"page_id": page_id, "children": children}, ensure_ascii=False, indent=2),
+            metadata={"page_id": page_id, "children_complete": bool(ledger.get("complete", False))},
+        )
+        lines = [f"[confluence children prepared]\npage_id: {page_id}\ncontext_ref: {context_ref}"]
+        lines.append(f"children_loaded: {int(ledger.get('loaded', len(children)))}/{int(ledger.get('total', len(children)))}")
+        lines.append(f"children_complete: {bool(ledger.get('complete', False))}")
+        for p in children[:10]:
+            if isinstance(p, dict):
+                lines.append(f"- {p.get('title','Untitled')} ({p.get('id','?')})")
+        return "\n".join(lines)
     except Exception as e:
         return f"Error getting page children: {e}"
 
