@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from src.config import config, resolve_model_limits
 from src.sessions.manager import session_manager
 
 logger = logging.getLogger(__name__)
@@ -117,8 +118,24 @@ class SessionPruner:
 class SessionCompactor:
     """Compacts old conversation history into summaries."""
     
-    def __init__(self, max_context_tokens: int = 60000):
-        self.max_context_tokens = max_context_tokens
+    def __init__(self, max_context_tokens: Optional[int] = None, model: Optional[str] = None):
+        self.max_context_tokens = self._resolve_max_context_tokens(max_context_tokens, model=model)
+
+    @staticmethod
+    def _resolve_max_context_tokens(max_context_tokens: Optional[int], model: Optional[str] = None) -> int:
+        try:
+            if max_context_tokens is not None and int(max_context_tokens) > 0:
+                return int(max_context_tokens)
+        except Exception:
+            pass
+        llm_cfg = config.llm if isinstance(config.llm, dict) else {}
+        configured_model = str(model or llm_cfg.get("model") or "").strip()
+        limits = resolve_model_limits(configured_model or None)
+        prompt_tokens = int(limits.get("max_prompt_tokens") or 0)
+        if prompt_tokens > 0:
+            return prompt_tokens
+        # Emergency fallback only when limits cannot be resolved.
+        return 60000
     
     async def compact(
         self,

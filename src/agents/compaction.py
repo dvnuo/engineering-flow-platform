@@ -29,6 +29,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.utils.truncate import truncate
 from src.runtime.context_summary import build_context_state_from_messages, build_structured_summary
+from src.config import resolve_model_limits
 
 logger = logging.getLogger(__name__)
 
@@ -432,7 +433,7 @@ async def summarize_with_fallback(
     summarize_func: Optional[Callable] = None,
     reserve_tokens: int = 1000,
     max_chunk_tokens: int = 4000,
-    context_window: int = 8000,
+    context_window: Optional[int] = None,
     custom_instructions: Optional[str] = None,
     previous_summary: Optional[str] = None,
 ) -> str:
@@ -454,6 +455,7 @@ async def summarize_with_fallback(
     """
     if not messages:
         return previous_summary or DEFAULT_SUMMARY_FALLBACK
+    context_window = int(context_window or resolve_context_window_tokens(None))
     
     # Try full summarization first
     try:
@@ -508,7 +510,7 @@ async def summarize_in_stages(
     summarize_func: Optional[Callable] = None,
     reserve_tokens: int = 1000,
     max_chunk_tokens: int = 4000,
-    context_window: int = 8000,
+    context_window: Optional[int] = None,
     custom_instructions: Optional[str] = None,
     previous_summary: Optional[str] = None,
     parts: Optional[int] = None,
@@ -532,6 +534,7 @@ async def summarize_in_stages(
     """
     if not messages:
         return previous_summary or DEFAULT_SUMMARY_FALLBACK
+    context_window = int(context_window or resolve_context_window_tokens(None))
     
     normalized_parts = normalize_parts(parts or DEFAULT_PARTS, len(messages))
     total_tokens = estimate_messages_tokens(messages)
@@ -720,7 +723,7 @@ async def compact_messages(
     messages: List[AgentMessage],
     max_tokens: int,
     summarize_func: Optional[Callable] = None,
-    context_window: int = 8000,
+    context_window: Optional[int] = None,
     recent_count: int = 3,
 ) -> Tuple[List[AgentMessage], CompactionStats]:
     """Compact messages for token optimization.
@@ -739,6 +742,7 @@ async def compact_messages(
     """
     if not messages:
         return [], CompactionStats()
+    context_window = int(context_window or resolve_context_window_tokens(None))
     
     # Estimate current tokens
     current_tokens = estimate_messages_tokens(messages)
@@ -804,6 +808,10 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
     Returns:
         Context window size
     """
+    limits = resolve_model_limits(model)
+    if limits.get("max_context_window_tokens"):
+        return int(limits["max_context_window_tokens"])
+
     # Default context windows
     context_windows = {
         # GPT-4 series
@@ -812,13 +820,16 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
         "gpt-4o": 128000,
         "gpt-4o-mini": 128000,
         # GPT-5 series
+        "gpt-5.4-mini": 400000,
+        "gpt-5.3-codex": 400000,
         "gpt-5": 200000,
-        "gpt-5-mini": 200000,
+        "gpt-5-mini": 264000,
         "gpt-5-pro": 200000,
         # GPT-3.5
         "gpt-3.5-turbo": 16385,
         # Gemini series (64K context)
-        "gemini-2.5": 200000,
+        "gemini-2.5-pro": 128000,
+        "gemini-2.5": 128000,
         "minimax/MiniMax-M3": 200000,
         "gemini-2.0": 32000,
         "gemini-1.5": 32000,

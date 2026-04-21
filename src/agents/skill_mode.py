@@ -378,7 +378,7 @@ async def _generate_initial_skill_plan_direct(skill: Skill, user_message: str, m
         context_state={"budget": {}},
         active_skill=skill,
         latest_user_text=user_message,
-        max_chat_output_chars=8000,
+        max_chat_output_chars=None,
     )
     content = (result.get("content") or "").strip()
 

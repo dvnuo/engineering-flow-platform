@@ -49,6 +49,13 @@ def test_jira_preview_tools_not_model_facing():
     assert "export_issues_to_markdown" not in names
 
 
+def test_jira_get_comments_schema_is_model_facing():
+    from src.jira import get_tools_schemas
+
+    names = {s.get("function", {}).get("name") for s in get_tools_schemas()}
+    assert "jira_get_comments" in names
+
+
 @pytest.mark.asyncio
 async def test_jira_update_issue_summary_only(mock_jira_channel):
     """Test jira_update_issue with summary only"""
@@ -379,3 +386,23 @@ async def test_execute_tool_jira_get_issue_by_url_uses_session_scoped_context_re
     ref = re.search(r"context_ref:\s*(ctx://context/[^\s\"\\]+)", result.content).group(1)
     read_back = await context_read_ref(ref=ref, _session_id="s1")
     assert "source bundle" in read_back.lower() or "metadata" in read_back.lower()
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_jira_get_comments_dispatches_with_session(monkeypatch):
+    from src import execute_tool
+
+    captured = {}
+
+    async def _fake_jira_get_comments(issue_key, _session_id=None):
+        captured["issue_key"] = issue_key
+        captured["session_id"] = _session_id
+        return "[jira comments bundle prepared]\ncontext_ref: ctx://context/s1/blob-1\ncomments_loaded: 1/1"
+
+    monkeypatch.setattr("src.jira.jira_get_comments", _fake_jira_get_comments)
+    result = await execute_tool("jira_get_comments", issue_key="ABC-1", _session_id="s1")
+    assert result.success is True
+    assert captured["issue_key"] == "ABC-1"
+    assert captured["session_id"] == "s1"
+    assert "[jira comments bundle prepared]" in result.content
+    assert "ctx://context/s1/" in result.content

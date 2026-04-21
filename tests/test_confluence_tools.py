@@ -298,6 +298,26 @@ async def test_confluence_get_page_children_is_ledger_aware(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_tool_confluence_get_page_children_uses_active_session(monkeypatch):
+    from src import execute_tool
+    from src.context_tools import context_read_ref
+
+    class _Channel:
+        def is_configured(self): return True
+        async def get_all_page_children_with_ledger(self, page_id, limit=100):
+            return [{"id": "c1", "title": "Child 1"}], {"loaded": 1, "total": 1, "complete": True}
+
+    monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
+    result = await execute_tool("confluence_get_page_children", page_id="123", _session_id="s1")
+    assert result.success is True
+    assert "ctx://context/s1/" in result.content
+    assert "ctx://context/confluence-children-" not in result.content
+    ref = re.search(r"context_ref:\s*(ctx://context/[^\s\"\\]+)", result.content).group(1)
+    read_back = await context_read_ref(ref=ref, _session_id="s1")
+    assert "child" in read_back.lower()
+
+
+@pytest.mark.asyncio
 async def test_confluence_prepare_page_context_descendant_comment_incomplete_propagates(monkeypatch):
     from src.confluence import confluence_prepare_page_context
 
@@ -320,6 +340,7 @@ async def test_confluence_prepare_page_context_descendant_comment_incomplete_pro
     out = await confluence_prepare_page_context("123", include_children=True, _session_id="s-conf-desc")
     assert "descendants_comments_complete: False" in out
     assert "descendants_complete: False" in out
+    assert "source_tree_complete: False" in out
     assert "source_complete: False" in out
 
 
@@ -346,7 +367,61 @@ async def test_confluence_prepare_page_context_descendant_aggregates_complete(mo
     assert "descendants_pages_complete: True" in out
     assert "descendants_comments_complete: True" in out
     assert "descendants_attachments_complete: True" in out
+    assert "descendants_complete: True" in out
     assert "source_tree_complete: True" in out
+
+
+@pytest.mark.asyncio
+async def test_confluence_prepare_page_context_descendant_attachment_incomplete_propagates(monkeypatch):
+    from src.confluence import confluence_prepare_page_context
+
+    class _Channel:
+        def is_configured(self): return True
+        def get_instance_client(self, **kwargs): return self
+        async def get_page(self, page_id):
+            return {"id": page_id, "title": "Page", "space": {"key": "DOC"}, "body": {"storage": {"value": "<p>hello</p>"}}}
+        async def get_all_comments_with_ledger(self, page_id, limit=100):
+            return [], {"loaded": 0, "total": 0, "complete": True}
+        async def get_all_attachments_with_ledger(self, page_id, limit=100):
+            complete = False if page_id == "d1" else True
+            return [], {"loaded": 0, "total": 0, "complete": complete}
+        async def get_all_page_children_with_ledger(self, page_id, limit=100):
+            return [{"id": "c1"}], {"loaded": 1, "total": 1, "complete": True}
+        async def get_all_descendants_with_ledger(self, page_id, limit=100, max_depth=None):
+            return [{"id": "d1", "title": "Desc", "parent_id": page_id, "depth": 1}], {"loaded": 1, "total": 1, "complete": True, "partial_reasons": []}
+
+    monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
+    out = await confluence_prepare_page_context("123", include_children=True, _session_id="s-conf-desc-attach")
+    assert "descendants_attachments_complete: False" in out
+    assert "descendants_complete: False" in out
+    assert "source_complete: False" in out
+
+
+@pytest.mark.asyncio
+async def test_confluence_prepare_page_context_descendant_page_body_missing_propagates(monkeypatch):
+    from src.confluence import confluence_prepare_page_context
+
+    class _Channel:
+        def is_configured(self): return True
+        def get_instance_client(self, **kwargs): return self
+        async def get_page(self, page_id):
+            if page_id == "d1":
+                return {}
+            return {"id": page_id, "title": "Page", "space": {"key": "DOC"}, "body": {"storage": {"value": "<p>hello</p>"}}}
+        async def get_all_comments_with_ledger(self, page_id, limit=100):
+            return [], {"loaded": 0, "total": 0, "complete": True}
+        async def get_all_attachments_with_ledger(self, page_id, limit=100):
+            return [], {"loaded": 0, "total": 0, "complete": True}
+        async def get_all_page_children_with_ledger(self, page_id, limit=100):
+            return [{"id": "c1"}], {"loaded": 1, "total": 1, "complete": True}
+        async def get_all_descendants_with_ledger(self, page_id, limit=100, max_depth=None):
+            return [{"id": "d1", "title": "Desc", "parent_id": page_id, "depth": 1}], {"loaded": 1, "total": 1, "complete": True, "partial_reasons": []}
+
+    monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
+    out = await confluence_prepare_page_context("123", include_children=True, _session_id="s-conf-desc-page")
+    assert "descendants_pages_complete: False" in out
+    assert "descendants_complete: False" in out
+    assert "source_complete: False" in out
 
 
 @pytest.mark.asyncio

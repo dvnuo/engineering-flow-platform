@@ -696,5 +696,124 @@ class Config:
         return self._config.get("heartbeat", {})
 
 
+DEFAULT_MODEL_LIMITS: Dict[str, Dict[str, int]] = {
+    "gpt-4o": {
+        "max_context_window_tokens": 128_000,
+        "max_prompt_tokens": 64000,
+        "max_output_tokens": 16384,
+    },
+    "gpt-4.1": {
+        "max_context_window_tokens": 128_000,
+        "max_prompt_tokens": 128_000,
+        "max_output_tokens": 16384,
+    },
+    "gpt-5-mini": {
+        "max_context_window_tokens": 264000,
+        "max_prompt_tokens": 128000,
+        "max_output_tokens": 64000,
+    },
+    "gpt-5.3-codex": {
+        "max_context_window_tokens": 400000,
+        "max_prompt_tokens": 272000,
+        "max_output_tokens": 128000,
+    },
+    "gpt-5.4-mini": {
+        "max_context_window_tokens": 400000,
+        "max_prompt_tokens": 272000,
+        "max_output_tokens": 128000,
+    },
+    "gemini-2.5-pro": {
+        "max_context_window_tokens": 128_000,
+        "max_prompt_tokens": 128_000,
+        "max_output_tokens": 64000,
+    },
+}
+
+
+def _safe_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+        return parsed if parsed > 0 else default
+    except Exception:
+        return default
+
+
+def resolve_model_limits(model: Optional[str] = None) -> Dict[str, int]:
+    llm_cfg = config.llm if isinstance(config.llm, dict) else {}
+    configured_model = str(model or llm_cfg.get("model") or "").strip()
+    configured_limits = llm_cfg.get("model_limits") if isinstance(llm_cfg.get("model_limits"), dict) else {}
+    candidates: Dict[str, Dict[str, int]] = dict(DEFAULT_MODEL_LIMITS)
+    for key, raw in configured_limits.items():
+        if not isinstance(raw, dict):
+            continue
+        candidates[str(key).lower()] = {
+            "max_context_window_tokens": _safe_positive_int(raw.get("max_context_window_tokens"), 264000),
+            "max_prompt_tokens": _safe_positive_int(raw.get("max_prompt_tokens"), 128000),
+            "max_output_tokens": _safe_positive_int(raw.get("max_output_tokens"), _safe_positive_int(llm_cfg.get("max_tokens"), 64000)),
+        }
+
+    selected = candidates.get(configured_model.lower(), {})
+    if not selected and configured_model:
+        model_lower = configured_model.lower()
+        for key in sorted(candidates.keys(), key=len, reverse=True):
+            if key in model_lower:
+                selected = candidates[key]
+                break
+    if not selected:
+        selected = {
+            "max_context_window_tokens": 200000,
+            "max_prompt_tokens": 128000,
+            "max_output_tokens": _safe_positive_int(llm_cfg.get("max_tokens"), 64000),
+        }
+    selected = dict(selected)
+    selected["max_output_tokens"] = _safe_positive_int(selected.get("max_output_tokens"), _safe_positive_int(llm_cfg.get("max_tokens"), 64000))
+    selected["max_prompt_tokens"] = _safe_positive_int(selected.get("max_prompt_tokens"), 128000)
+    selected["max_context_window_tokens"] = _safe_positive_int(selected.get("max_context_window_tokens"), 264000)
+    return selected
+
+
+def resolve_output_boundary(model: Optional[str] = None) -> Dict[str, int | str]:
+    llm_cfg = config.llm if isinstance(config.llm, dict) else {}
+    output_cfg = llm_cfg.get("output_controller") if isinstance(llm_cfg.get("output_controller"), dict) else {}
+    limits = resolve_model_limits(model)
+    max_output_tokens = _safe_positive_int(limits.get("max_output_tokens"), _safe_positive_int(llm_cfg.get("max_tokens"), 64000))
+    configured_chat_tokens = output_cfg.get("max_chat_output_tokens")
+    default_chat_tokens = max(1, int(max_output_tokens * 0.9375))
+    max_chat_output_tokens = _safe_positive_int(configured_chat_tokens, default_chat_tokens)
+    max_chat_output_tokens = min(max_chat_output_tokens, max_output_tokens)
+    chars_per_token = _safe_positive_int(output_cfg.get("chars_per_token_estimate"), 4)
+    configured_chars = output_cfg.get("max_chat_output_chars")
+    derived_chars = max_chat_output_tokens * chars_per_token
+    min_reasonable_chars = int(derived_chars * 0.25)
+    legacy_ignored = False
+    boundary_source = "model_limits_derived"
+    if configured_chars in (None, "", "null"):
+        max_chat_output_chars = derived_chars
+    else:
+        parsed_chars = _safe_positive_int(configured_chars, derived_chars)
+        allow_low = bool(output_cfg.get("allow_low_max_chat_output_chars", False))
+        if parsed_chars < min_reasonable_chars and not allow_low:
+            max_chat_output_chars = derived_chars
+            legacy_ignored = True
+            boundary_source = "model_limits_legacy_override_ignored"
+        else:
+            max_chat_output_chars = parsed_chars
+            boundary_source = "config_override"
+    strategy = str(output_cfg.get("oversized_output_strategy") or "save_and_manifest")
+    return {
+        "max_context_window_tokens": int(limits.get("max_context_window_tokens") or 264000),
+        "max_prompt_tokens": int(limits.get("max_prompt_tokens") or 128000),
+        "max_output_tokens": max_output_tokens,
+        "max_chat_output_tokens": max_chat_output_tokens,
+        "chars_per_token_estimate": chars_per_token,
+        "max_chat_output_chars": max_chat_output_chars,
+        "allow_low_max_chat_output_chars": bool(output_cfg.get("allow_low_max_chat_output_chars", False)),
+        "configured_max_chat_output_chars": str(configured_chars) if configured_chars is not None else None,
+        "legacy_max_chat_output_chars_ignored": legacy_ignored,
+        "output_boundary_source": boundary_source,
+        "oversized_output_strategy": strategy,
+    }
+
+
 # Global config instance
 config = Config()

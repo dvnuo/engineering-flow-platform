@@ -33,7 +33,7 @@ from src.agents.llm import (
 from src.agents.memory import memory_system
 from src.memory.update_manager import MemoryUpdateManager
 from src.agents.thinking import ThinkLevel, normalize_think_level, format_runtime_info
-from src.config import config
+from src.config import config, resolve_output_boundary
 from src.utils.truncate import truncate, truncate_with_count
 from src.utils.redaction import safe_preview, redact_value, sanitize_exception_message
 from src.sessions.manager import session_manager
@@ -231,6 +231,30 @@ def _has_terminal_post_turn_context_snapshot(events: Any) -> bool:
         if stage == "post_turn" and terminal is True and _is_meaningful_context_state(context_state):
             return True
     return False
+
+
+def _resolve_effective_max_tokens(model_max_tokens: int) -> Tuple[int, Dict[str, Any]]:
+    llm_cfg = config.llm if isinstance(config.llm, dict) else {}
+    allow_lower = bool(llm_cfg.get("allow_lower_max_tokens_than_model_limit", False))
+    configured_raw = llm_cfg.get("max_tokens")
+    configured_max_tokens: Optional[int]
+    try:
+        configured_max_tokens = int(configured_raw) if configured_raw is not None else None
+    except Exception:
+        configured_max_tokens = None
+    if configured_max_tokens is not None and configured_max_tokens <= 0:
+        configured_max_tokens = None
+    legacy_ignored = False
+    if configured_max_tokens is not None and configured_max_tokens < int(model_max_tokens) and not allow_lower:
+        effective = int(model_max_tokens)
+        legacy_ignored = True
+    else:
+        effective = min(int(model_max_tokens), int(configured_max_tokens or model_max_tokens))
+    return effective, {
+        "configured_max_tokens": configured_max_tokens,
+        "effective_max_tokens": effective,
+        "legacy_max_tokens_ignored": legacy_ignored,
+    }
 
 
 def _merge_request_budget_into_context_state(
@@ -646,12 +670,17 @@ def _large_generation_output_guard(
     )
     if not is_generation:
         return ""
+    boundary = resolve_output_boundary(
+        getattr(active_skill_runtime, "model", None) or getattr(selected_skill, "model", None) or config.llm.get("model")
+    )
+    max_chars = int(boundary.get("max_chat_output_chars") or 0)
+    max_tokens = int(boundary.get("max_chat_output_tokens") or 0)
     return (
         "Large generation output guard: Do not emit a complete multi-file implementation or very long generated "
         "artifact in a single chat response. Generate one bounded phase/file at a time. Prefer writing artifacts/files "
         "through tools when available. In chat, return a concise manifest, file paths, and next step. "
-        "Keep response under 8000 characters.\n"
-        "generation_mode=staged\nmax_chat_output_chars=8000\ncurrent_phase=manifest"
+        f"Keep response within resolved output boundary (tokens≈{max_tokens}, chars≈{max_chars}).\n"
+        f"generation_mode=staged\nmax_chat_output_chars={max_chars}\ncurrent_phase=manifest"
     )
 
 
@@ -1212,7 +1241,7 @@ async def _run_skill_finalizer(
     track_usage: bool,
     usage_data: Dict[str, Any],
     remaining_llm_budget: int,
-    max_tokens: int = 64000,
+    max_tokens: Optional[int] = None,
 ) -> tuple[FinalizerResult, Dict[str, Any]]:
     raw_output = ""
     fallback_used = False
@@ -1230,10 +1259,12 @@ async def _run_skill_finalizer(
         items = list(input_items)
         items.append({"role": "user", "content": [{"type": "input_text", "text": prompt}]})
         loop_budget = resolve_prompt_budget(stage="skill_generation", model=model)
+        output_boundary = resolve_output_boundary(model)
         prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
-        configured_max = int(loop_budget.get("max_output_tokens") or config.llm.get("max_tokens", 64000) or 64000)
-        requested_max = int(max_tokens or configured_max)
-        budget_max_tokens = min(requested_max, configured_max)
+        model_max = int(loop_budget.get("max_output_tokens") or 64000)
+        effective_max_tokens, max_token_diag = _resolve_effective_max_tokens(model_max)
+        requested_max = int(max_tokens or effective_max_tokens)
+        budget_max_tokens = min(requested_max, effective_max_tokens)
         items_for_call = items
         request_estimated_tokens = estimate_llm_request_tokens(
             input_items=items_for_call,
@@ -1247,6 +1278,9 @@ async def _run_skill_finalizer(
             "safety_margin_tokens": loop_budget.get("safety_margin_tokens"),
             "max_prompt_tokens": loop_budget.get("max_prompt_tokens"),
             "max_output_tokens": budget_max_tokens,
+            "configured_max_tokens": max_token_diag.get("configured_max_tokens"),
+            "effective_max_tokens": max_token_diag.get("effective_max_tokens"),
+            "legacy_max_tokens_ignored": bool(max_token_diag.get("legacy_max_tokens_ignored")),
             "request_over_budget": request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False,
             "request_budget_stage": "skill_finalizer",
             "stage": "skill_finalizer",
@@ -1291,7 +1325,7 @@ async def _run_skill_finalizer(
             context_state={"budget": finalizer_request_budget},
             active_skill=None,
             latest_user_text="",
-            max_chat_output_chars=8000,
+            max_chat_output_chars=None,
         )
         skill_session.llm_call_count += 1
         if not result.get("error"):
@@ -2300,6 +2334,10 @@ You have access to the following tools. When a user asks you to do something tha
                 tools=loop_tools or [],
             )
             loop_budget = resolve_prompt_budget(stage="tool_loop", model=effective_model)
+            output_boundary = resolve_output_boundary(effective_model)
+            model_max_tokens = int(loop_budget.get("max_output_tokens") or 64000)
+            effective_max_tokens, max_token_diag = _resolve_effective_max_tokens(model_max_tokens)
+            llm_kwargs["max_tokens"] = effective_max_tokens
             if isinstance(loop_context_state, dict):
                 budget_state = loop_context_state.setdefault("budget", {})
                 prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
@@ -2314,9 +2352,13 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["large_generation_guard_reason"] = "classifier:skill_or_user_generation_request" if large_generation_guard_applied else ""
                 budget_state["generation_mode"] = "staged" if large_generation_guard_applied else "default"
                 budget_state["current_generation_phase"] = "manifest" if large_generation_guard_applied else ""
-                budget_state["max_chat_output_chars"] = 8000
+                budget_state["max_chat_output_tokens"] = output_boundary.get("max_chat_output_tokens")
+                budget_state["max_chat_output_chars"] = output_boundary.get("max_chat_output_chars")
                 budget_state["output_risk_level"] = "high" if large_generation_guard_applied else "normal"
                 budget_state["output_token_limit"] = loop_budget.get("max_output_tokens")
+                budget_state["configured_max_tokens"] = max_token_diag.get("configured_max_tokens")
+                budget_state["effective_max_tokens"] = max_token_diag.get("effective_max_tokens")
+                budget_state["legacy_max_tokens_ignored"] = bool(max_token_diag.get("legacy_max_tokens_ignored"))
                 budget_state["input_context_usage_percent"] = (
                     (loop_context_state.get("budget") or {}).get("usage_percent")
                     if isinstance(loop_context_state.get("budget"), dict)
@@ -2356,6 +2398,11 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["safety_margin_tokens"] = loop_budget.get("safety_margin_tokens")
                 budget_state["max_prompt_tokens"] = loop_budget.get("max_prompt_tokens")
                 budget_state["max_output_tokens"] = loop_budget.get("max_output_tokens")
+                budget_state["max_chat_output_tokens"] = output_boundary.get("max_chat_output_tokens")
+                budget_state["max_chat_output_chars"] = output_boundary.get("max_chat_output_chars")
+                budget_state["configured_max_tokens"] = max_token_diag.get("configured_max_tokens")
+                budget_state["effective_max_tokens"] = max_token_diag.get("effective_max_tokens")
+                budget_state["legacy_max_tokens_ignored"] = bool(max_token_diag.get("legacy_max_tokens_ignored"))
                 budget_state["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
                 budget_state["large_generation_guard_applied"] = large_generation_guard_applied
                 budget_state["output_size_guard_applied"] = large_generation_guard_applied
@@ -2391,7 +2438,7 @@ You have access to the following tools. When a user asks you to do something tha
                 context_state=loop_context_state if isinstance(loop_context_state, dict) else {"budget": {}},
                 active_skill=selected_skill,
                 latest_user_text=latest_user_text,
-                max_chat_output_chars=_safe_int(raw_max_chat, 8000),
+                max_chat_output_chars=raw_max_chat,
             )
             if isinstance(loop_context_state, dict) and isinstance(loop_context_state.get("budget"), dict):
                 loop_context_state["budget"]["output_controller_applied"] = True
@@ -3340,7 +3387,9 @@ You have access to the following tools. When a user asks you to do something tha
                 tools=available_tools or [],
             )
             loop_budget = resolve_prompt_budget(stage="skill_generation", model=llm_kwargs.get("model"))
-            effective_max_tokens = int(loop_budget.get("max_output_tokens") or config.llm.get("max_tokens", 64000) or 64000)
+            output_boundary = resolve_output_boundary(llm_kwargs.get("model"))
+            model_max_tokens = int(loop_budget.get("max_output_tokens") or 64000)
+            effective_max_tokens, max_token_diag = _resolve_effective_max_tokens(model_max_tokens)
             llm_kwargs["max_tokens"] = effective_max_tokens
             prompt_budget_tokens = int(loop_budget.get("prompt_budget_tokens", 0) or 0)
             skill_request_budget = {
@@ -3350,12 +3399,17 @@ You have access to the following tools. When a user asks you to do something tha
                 "safety_margin_tokens": loop_budget.get("safety_margin_tokens"),
                 "max_prompt_tokens": loop_budget.get("max_prompt_tokens"),
                 "max_output_tokens": loop_budget.get("max_output_tokens"),
+                "configured_max_tokens": max_token_diag.get("configured_max_tokens"),
+                "effective_max_tokens": max_token_diag.get("effective_max_tokens"),
+                "legacy_max_tokens_ignored": bool(max_token_diag.get("legacy_max_tokens_ignored")),
                 "request_over_budget": request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False,
                 "large_generation_guard_applied": large_generation_guard_applied,
                 "output_size_guard_applied": large_generation_guard_applied,
                 "large_generation_guard_reason": "classifier:skill_or_user_generation_request" if large_generation_guard_applied else "",
                 "generation_mode": "staged" if large_generation_guard_applied else "default",
                 "current_generation_phase": "manifest" if large_generation_guard_applied else "",
+                "max_chat_output_tokens": output_boundary.get("max_chat_output_tokens"),
+                "max_chat_output_chars": output_boundary.get("max_chat_output_chars"),
                 "request_budget_stage": "skill_generation",
                 "stage": "skill_generation",
             }
@@ -3411,7 +3465,7 @@ You have access to the following tools. When a user asks you to do something tha
                 context_state={"budget": skill_request_budget},
                 active_skill=skill,
                 latest_user_text=latest_user_text,
-                max_chat_output_chars=8000,
+                max_chat_output_chars=None,
             )
             skill_session.llm_call_count += 1
             turn_state.llm_call_count = skill_session.llm_call_count
