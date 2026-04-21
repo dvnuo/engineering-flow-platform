@@ -369,6 +369,48 @@ async def test_run_skill_finalizer_uses_passed_max_tokens(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_skill_finalizer_omitted_max_tokens_uses_model_limit(monkeypatch):
+    from src.agents import core as core_mod
+
+    captured = {}
+    original_max = core_mod.config.llm.get("max_tokens")
+    original_allow_lower = core_mod.config.llm.get("allow_lower_max_tokens_than_model_limit")
+    core_mod.config.llm["max_tokens"] = 64000
+    core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = False
+
+    async def fake_responses(**kwargs):
+        captured["max_tokens"] = kwargs.get("max_tokens")
+        return {"content": "[FINISH]\ndone", "usage": {}}
+
+    monkeypatch.setattr(core_mod, "llm_client", SimpleNamespace(responses=fake_responses))
+    try:
+        result, _usage = await core_mod._run_skill_finalizer(
+            input_items=[{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+            system_prompt="sys",
+            provider="openai",
+            model="gpt-5.4-mini",
+            skill_session=SkillSession(skill_name="lookup", original_user_request="x"),
+            track_usage=False,
+            usage_data={},
+            remaining_llm_budget=1,
+            max_tokens=None,
+        )
+    finally:
+        if original_max is None:
+            core_mod.config.llm.pop("max_tokens", None)
+        else:
+            core_mod.config.llm["max_tokens"] = original_max
+        if original_allow_lower is None:
+            core_mod.config.llm.pop("allow_lower_max_tokens_than_model_limit", None)
+        else:
+            core_mod.config.llm["allow_lower_max_tokens_than_model_limit"] = original_allow_lower
+
+    assert result.state == "succeeded"
+    assert captured["max_tokens"] == 128000
+    assert result.request_budget.get("legacy_max_tokens_ignored") is True
+
+
+@pytest.mark.asyncio
 async def test_run_skill_finalizer_ignores_legacy_lower_config_cap_by_default(monkeypatch):
     from src.agents import core as core_mod
 
@@ -448,6 +490,7 @@ async def test_run_skill_finalizer_honors_explicit_lower_config_cap(monkeypatch)
 
     assert result.state == "succeeded"
     assert captured["max_tokens"] == 2048
+    assert result.request_budget.get("legacy_max_tokens_ignored") is False
 
 
 @pytest.mark.asyncio
@@ -470,6 +513,7 @@ async def test_run_skill_finalizer_aborts_when_request_over_budget(monkeypatch):
         core_mod,
         "resolve_prompt_budget",
         lambda **kwargs: {
+            # Synthetic low-budget fixture: explicitly legacy/over-budget path test.
             "prompt_budget_tokens": 28000,
             "max_output_tokens": 4096,
             "reserved_output_tokens": 1000,
@@ -549,6 +593,7 @@ async def test_continue_skill_mode_finalizer_abort_includes_finalizer_request_bu
         core_mod,
         "resolve_prompt_budget",
         lambda **kwargs: {
+            # Synthetic low-budget fixture for explicit over-budget/finalizer abort behavior.
             "prompt_budget_tokens": 28000,
             "max_output_tokens": 4096,
             "reserved_output_tokens": 1000,
@@ -678,12 +723,14 @@ async def test_continue_skill_mode_over_budget_error_includes_skill_generation_s
     monkeypatch.setattr(
         core_mod,
         "estimate_llm_request_tokens",
+        # Synthetic over-budget request size fixture; not a model-limit expectation.
         lambda **kwargs: 60000,
     )
     monkeypatch.setattr(
         core_mod,
         "resolve_prompt_budget",
         lambda **kwargs: {
+            # Synthetic low-budget fixture for context-budget-exceeded path testing.
             "prompt_budget_tokens": 28000,
             "max_output_tokens": 4096,
             "reserved_output_tokens": 1000,

@@ -605,6 +605,7 @@ def test_resolve_output_boundary_uses_model_limit_tokens(monkeypatch):
     [
         ("gpt-4o", 16384, 15360, 61440),
         ("gpt-4.1", 16384, 15360, 61440),
+        # 60000 chat-token defaults are valid for 64k-output models (not for gpt-5.4-mini).
         ("gpt-5-mini", 64000, 60000, 240000),
         ("gpt-5.3-codex", 128000, 120000, 480000),
         ("gpt-5.4-mini", 128000, 120000, 480000),
@@ -916,6 +917,42 @@ async def test_output_controller_ignores_stale_budget_max_chat_output_chars(monk
     assert diag.get("max_chat_output_chars") == 480000
     assert diag.get("budget_max_chat_output_chars_ignored") is True
     assert diag.get("configured_budget_max_chat_output_chars") == "8000"
+
+
+@pytest.mark.asyncio
+async def test_output_controller_ignores_stale_arg_max_chat_output_chars(monkeypatch):
+    from src.config import config
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {
+            "model": "gpt-5.4-mini",
+            "max_tokens": 128000,
+            "output_controller": {"chars_per_token_estimate": 4},
+        },
+    )
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "M" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "chat", "tools": [], "model": "gpt-5.4-mini"},
+        session_id="s-stale-arg",
+        stage="tool_loop",
+        context_state={"budget": {}},
+        latest_user_text="normal response",
+        max_chat_output_chars=8000,
+    )
+    assert len(result.get("content") or "") == 50000
+    assert diag.get("output_bounding", {}).get("bounded") is False
+    assert diag.get("max_chat_output_chars") == 480000
+    assert diag.get("arg_max_chat_output_chars_ignored") is True
+    assert diag.get("configured_arg_max_chat_output_chars") == "8000"
+    assert diag.get("output_boundary_source") != "emergency_fallback_8000"
 
 
 @pytest.mark.asyncio

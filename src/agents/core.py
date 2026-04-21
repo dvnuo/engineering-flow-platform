@@ -1241,7 +1241,7 @@ async def _run_skill_finalizer(
     track_usage: bool,
     usage_data: Dict[str, Any],
     remaining_llm_budget: int,
-    max_tokens: int = 64000,
+    max_tokens: Optional[int] = None,
 ) -> tuple[FinalizerResult, Dict[str, Any]]:
     raw_output = ""
     fallback_used = False
