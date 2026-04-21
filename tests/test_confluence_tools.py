@@ -123,3 +123,31 @@ def test_confluence_get_page_by_url_schema_does_not_expose_max_chars():
     schemas = get_tools_schemas()
     schema = next(s for s in schemas if s["function"]["name"] == "confluence_get_page_by_url")
     assert "max_chars" not in schema["function"]["parameters"]["properties"]
+
+
+def test_confluence_prepare_page_context_schema_exists_without_max_chars():
+    from src.confluence import get_tools_schemas
+
+    schemas = get_tools_schemas()
+    schema = next(s for s in schemas if s["function"]["name"] == "confluence_prepare_page_context")
+    assert "max_chars" not in schema["function"]["parameters"]["properties"]
+
+
+@pytest.mark.asyncio
+async def test_confluence_prepare_page_context_persists_manifest(monkeypatch):
+    from src.confluence import confluence_prepare_page_context
+
+    class _Channel:
+        def is_configured(self): return True
+        def get_instance_client(self, **kwargs): return self
+        async def get_page(self, page_id):
+            return {"id": page_id, "title": "Page", "space": {"key": "DOC"}, "body": {"storage": {"value": "<p>hello</p>"}}}
+        async def get_comments(self, page_id): return [{"id": "1", "body": {"storage": {"value": "c1"}}}]
+        async def get_attachments(self, page_id): return [{"id": "a1", "title": "a.txt"}]
+        async def get_page_children(self, page_id): return [{"id": "c1", "title": "child"}]
+
+    monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
+    out = await confluence_prepare_page_context("123", include_children=True, _session_id="s-conf-prepare")
+    assert "[confluence source bundle prepared]" in out
+    assert "source_complete: True" in out
+    assert "comments_loaded: 1/1" in out

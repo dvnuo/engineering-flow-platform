@@ -27,6 +27,7 @@ def test_jira_get_issue_schema_does_not_expose_max_chars():
     schemas = get_tools_schemas()
     get_issue_schema = next(s for s in schemas if s["function"]["name"] == "jira_get_issue")
     assert "max_chars" not in get_issue_schema["function"]["parameters"]["properties"]
+    assert "max_comments" not in get_issue_schema["function"]["parameters"]["properties"]
 
 
 def test_jira_get_issue_by_url_schema_does_not_expose_max_chars():
@@ -35,6 +36,7 @@ def test_jira_get_issue_by_url_schema_does_not_expose_max_chars():
     schemas = get_tools_schemas()
     schema = next(s for s in schemas if s["function"]["name"] == "jira_get_issue_by_url")
     assert "max_chars" not in schema["function"]["parameters"]["properties"]
+    assert "max_comments" not in schema["function"]["parameters"]["properties"]
 
 
 @pytest.mark.asyncio
@@ -177,7 +179,9 @@ async def test_jira_prepare_issue_context_persists_all_comments_and_bounded_mani
     out = await jira_prepare_issue_context("PROJ-1", _session_id="s-jira-prepare")
     assert "[jira source bundle prepared]" in out
     assert "comments_loaded: 20/20" in out
+    assert "source_digest_chunk_count:" in out
     assert len(out) < 8000
     ref = out.split("context_ref: ", 1)[1].split("\\n", 1)[0].strip().strip('"')
     raw = read_ref(ref, session_id="s-jira-prepare", section="raw", max_chars=50000)
     assert '"comments_loaded": 20' in raw
+    assert '"comments_complete": true' in raw.lower()

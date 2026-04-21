@@ -360,6 +360,31 @@ def test_large_generation_output_guard_not_applied_to_normal_chat():
     assert text == ""
 
 
+def test_requires_source_complete_context_detects_full_source_generation_intent():
+    from src.agents import core
+
+    class Skill:
+        name = "api-test-generator"
+        description = "generate tests from jira"
+
+    assert core._requires_source_complete_context(
+        "please use all Jira information and generate all test cases from https://x/browse/ABC-1",
+        None,
+        Skill(),
+        [],
+    ) is True
+
+
+def test_agent_process_source_auto_invokes_source_prepare_and_max_output_recovery_paths_present():
+    from src.agents import core
+
+    process_source = inspect.getsource(core.Agent.process)
+    assert "_requires_source_complete_context(" in process_source
+    assert "jira_prepare_issue_context" in process_source
+    assert "confluence_prepare_page_context" in process_source
+    assert "max_output_tokens_exceeded" in process_source
+
+
 def test_mobilex_skill_prompt_contains_hard_output_constraints():
     from pathlib import Path
 

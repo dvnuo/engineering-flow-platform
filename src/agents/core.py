@@ -527,6 +527,12 @@ def _safe_request_budget_fields(budget: Optional[Dict[str, Any]]) -> Dict[str, A
         "large_generation_guard_reason",
         "generation_mode",
         "current_generation_phase",
+        "output_risk_level",
+        "max_chat_output_chars",
+        "output_token_limit",
+        "input_context_usage_percent",
+        "max_output_recovery_applied",
+        "max_output_recovery_attempts",
     )
     safe = {key: budget.get(key) for key in keys if key in budget}
     stage = budget.get("request_budget_stage")
@@ -637,6 +643,43 @@ def _large_generation_output_guard(
         "Keep response under 8000 characters.\n"
         "generation_mode=staged\nmax_chat_output_chars=8000\ncurrent_phase=manifest"
     )
+
+
+def _extract_jira_key_or_url(text: str) -> str:
+    raw = str(text or "")
+    url_match = re.search(r"https?://[^\s]+/browse/([A-Z][A-Z0-9_]*-\d+)", raw, re.IGNORECASE)
+    if url_match:
+        return url_match.group(0)
+    key_match = re.search(r"\b([A-Z][A-Z0-9_]*-\d+)\b", raw)
+    return key_match.group(1) if key_match else ""
+
+
+def _extract_confluence_page_hint(text: str) -> str:
+    raw = str(text or "")
+    url_match = re.search(r"https?://[^\s]+(?:/pages/\d+/?[^\s]*|[?&]pageId=\d+)", raw, re.IGNORECASE)
+    if url_match:
+        return url_match.group(0)
+    return ""
+
+
+def _requires_source_complete_context(
+    user_text: str,
+    active_skill_runtime: Optional[Any],
+    selected_skill: Optional[Any],
+    tool_results_or_messages: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
+    text = str(user_text or "").lower()
+    skill_name = str(getattr(active_skill_runtime, "skill_name", "") or getattr(selected_skill, "name", "")).lower()
+    skill_desc = str(getattr(selected_skill, "description", "")).lower()
+    full_source_markers = (
+        "全部 jira 信息", "所有 jira 信息", "完整 jira", "all jira information", "complete jira",
+        "based on all jira", "generate all test cases from jira", "获取全部 jira 信息并生成测试用例",
+    )
+    generation_markers = ("generate", "test", "code", "spec", "feature", "implementation", "review", "生成", "测试用例")
+    has_jira_or_conf = bool(_extract_jira_key_or_url(text) or _extract_confluence_page_hint(text) or (" jira" in text) or ("confluence" in text))
+    generation_intent = any(m in text for m in generation_markers) or any(m in skill_name for m in generation_markers) or any(m in skill_desc for m in generation_markers)
+    explicit_full = any(m in text for m in full_source_markers)
+    return has_jira_or_conf and (explicit_full or generation_intent)
 
 
 def degrade_projected_context_sources_in_responses_input_items(
@@ -2116,6 +2159,58 @@ You have access to the following tools. When a user asks you to do something tha
                 if isinstance(_m, dict) and _m.get("role") == "user":
                     latest_user_text = str(_m.get("content") or "")
                     break
+            if _requires_source_complete_context(latest_user_text, active_skill_runtime, selected_skill, loop_messages):
+                source_state = loop_context_state.setdefault("source", {}) if isinstance(loop_context_state, dict) else {}
+                if not source_state.get("source_complete"):
+                    jira_hint = _extract_jira_key_or_url(latest_user_text)
+                    confluence_hint = _extract_confluence_page_hint(latest_user_text)
+                    source_manifest = ""
+                    source_type = ""
+                    try:
+                        if jira_hint:
+                            prepared = await _execute_tool_via_runtime_bus(
+                                session_id=session_id,
+                                tool_name="jira_prepare_issue_context",
+                                args={"issue_key_or_url": jira_hint},
+                            )
+                            source_manifest = str(prepared.content or "")
+                            source_type = "jira"
+                        elif confluence_hint:
+                            prepared = await _execute_tool_via_runtime_bus(
+                                session_id=session_id,
+                                tool_name="confluence_prepare_page_context",
+                                args={"page_id_or_url": confluence_hint},
+                            )
+                            source_manifest = str(prepared.content or "")
+                            source_type = "confluence"
+                    except Exception:
+                        source_manifest = ""
+                    if source_manifest:
+                        loop_messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": f"auto_source_prepare_{iteration}",
+                                "tool_name": f"{source_type}_prepare_context",
+                                "content": source_manifest,
+                            }
+                        )
+                        input_items = build_responses_input_items(loop_messages, session_id=session_id)
+                        llm_kwargs["input_items"] = input_items
+                        source_state["source_type"] = source_type
+                        source_state["source_complete"] = "source_complete: True" in source_manifest
+                        comments_match = re.search(r"comments_loaded:\\s*([0-9]+)/([0-9]+)", source_manifest)
+                        if comments_match:
+                            source_state["comments_loaded"] = int(comments_match.group(1))
+                            source_state["comments_total"] = int(comments_match.group(2))
+                        attachments_match = re.search(r"attachments_(?:metadata_)?loaded:\\s*([0-9]+)/([0-9]+)", source_manifest)
+                        if attachments_match:
+                            source_state["attachments_loaded"] = int(attachments_match.group(1))
+                            source_state["attachments_total"] = int(attachments_match.group(2))
+                        source_state["source_bundle_ref_count"] = 1 if "context_ref:" in source_manifest else 0
+                        source_state["source_digest_ref_count"] = 1 if "digest_ref:" in source_manifest else 0
+                        chunk_match = re.search(r"source_digest_chunk_count:\\s*([0-9]+)", source_manifest)
+                        source_state["source_digest_chunk_count"] = int(chunk_match.group(1)) if chunk_match else 0
+                        source_state["source_partial_reasons_count"] = source_manifest.count("partial_reasons:")
             large_generation_guard = _large_generation_output_guard(
                 active_skill_runtime=active_skill_runtime,
                 selected_skill=selected_skill,
@@ -2152,6 +2247,14 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["large_generation_guard_reason"] = "classifier:skill_or_user_generation_request" if large_generation_guard_applied else ""
                 budget_state["generation_mode"] = "staged" if large_generation_guard_applied else "default"
                 budget_state["current_generation_phase"] = "manifest" if large_generation_guard_applied else ""
+                budget_state["max_chat_output_chars"] = 8000 if large_generation_guard_applied else None
+                budget_state["output_risk_level"] = "high" if large_generation_guard_applied else "normal"
+                budget_state["output_token_limit"] = loop_budget.get("max_output_tokens")
+                budget_state["input_context_usage_percent"] = (
+                    (loop_context_state.get("budget") or {}).get("usage_percent")
+                    if isinstance(loop_context_state.get("budget"), dict)
+                    else None
+                )
             if request_estimated_tokens > int(loop_budget.get("prompt_budget_tokens", 0) or 0):
                 loop_messages, loop_context_state = await prepare_progressive_messages(
                     messages=loop_messages,
@@ -2212,6 +2315,37 @@ You have access to the following tools. When a user asks you to do something tha
             # Check for LLM configuration error
             if llm_result.get("error"):
                 error_info = llm_result["error"]
+                if error_info.get("code") == "max_output_tokens_exceeded":
+                    retry_kwargs = dict(llm_kwargs)
+                    retry_kwargs["system_prompt"] = (
+                        (retry_kwargs.get("system_prompt") or "")
+                        + "\n\nRecovery mode: The previous output hit max_output_tokens. "
+                        "Return only staged generation manifest and next phase under 8000 chars. "
+                        "Do not emit full multi-file content."
+                    ).strip()
+                    retry_kwargs["input_items"] = list(retry_kwargs.get("input_items") or []) + [
+                        {"role": "user", "content": "Continue with concise staged output only: manifest + next phase."}
+                    ]
+                    retry_result = await llm_client.responses(**retry_kwargs)
+                    if isinstance(loop_context_state, dict):
+                        budget_state = loop_context_state.setdefault("budget", {})
+                        budget_state["max_output_recovery_applied"] = True
+                        budget_state["max_output_recovery_attempts"] = 1
+                    if not retry_result.get("error"):
+                        llm_result = retry_result
+                    else:
+                        fallback = {
+                            "content": (
+                                "The model output exceeded the per-response limit. I prepared staged mode and will continue "
+                                "in smaller phases. I can provide the manifest/phase-1 next."
+                            ),
+                            "tool_calls": [],
+                            "function_calls": [],
+                            "usage": llm_result.get("usage", {}),
+                        }
+                        llm_result = fallback
+                if llm_result.get("error"):
+                    error_info = llm_result["error"]
                 error_msg = error_info.get("message", "Unknown LLM error")
                 logger.error(f"LLM error: {error_msg}")
                 error_response = {
@@ -3104,6 +3238,27 @@ You have access to the following tools. When a user asks you to do something tha
             }
             latest_user_text = ""
             latest_user_text = str(message or "")
+            if _requires_source_complete_context(latest_user_text, skill_runtime_config, skill, []):
+                jira_hint = _extract_jira_key_or_url(latest_user_text)
+                confluence_hint = _extract_confluence_page_hint(latest_user_text)
+                source_manifest = ""
+                if jira_hint:
+                    prepared = await _execute_tool_via_runtime_bus(
+                        session_id=session_id,
+                        tool_name="jira_prepare_issue_context",
+                        args={"issue_key_or_url": jira_hint},
+                    )
+                    source_manifest = str(prepared.content or "")
+                elif confluence_hint:
+                    prepared = await _execute_tool_via_runtime_bus(
+                        session_id=session_id,
+                        tool_name="confluence_prepare_page_context",
+                        args={"page_id_or_url": confluence_hint},
+                    )
+                    source_manifest = str(prepared.content or "")
+                if source_manifest:
+                    input_items.append({"role": "assistant", "content": source_manifest})
+                    llm_kwargs["input_items"] = input_items
             large_generation_guard = _large_generation_output_guard(
                 active_skill_runtime=skill_runtime_config,
                 selected_skill=skill,
@@ -3193,6 +3348,24 @@ You have access to the following tools. When a user asks you to do something tha
 
             if llm_result.get("error"):
                 error_info = llm_result["error"]
+                if error_info.get("code") == "max_output_tokens_exceeded":
+                    retry_kwargs = dict(llm_kwargs)
+                    retry_kwargs["system_prompt"] = (
+                        (retry_kwargs.get("system_prompt") or "")
+                        + "\n\nRecovery mode: Output hit max_output_tokens. Return concise staged manifest only."
+                    ).strip()
+                    retry_kwargs["input_items"] = list(retry_kwargs.get("input_items") or []) + [
+                        {"role": "user", "content": [{"type": "input_text", "text": "Continue in staged concise mode only."}]}
+                    ]
+                    retry_result = await llm_client.responses(**retry_kwargs)
+                    skill_request_budget["max_output_recovery_applied"] = True
+                    skill_request_budget["max_output_recovery_attempts"] = 1
+                    if not retry_result.get("error"):
+                        llm_result = retry_result
+                    else:
+                        llm_result = {"content": "The requested output is too large for a single response. I will proceed by stages.", "function_calls": [], "usage": llm_result.get("usage", {})}
+                if llm_result.get("error"):
+                    error_info = llm_result["error"]
                 error_msg = error_info.get("message", "Unknown LLM error")
                 logger.error(f"[SkillMode] LLM error: {error_msg}")
                 error_response = {

@@ -395,11 +395,16 @@ def test_build_portal_context_preview_includes_source_and_generation_diagnostics
                 "large_generation_guard_reason": "classifier:skill_or_user_generation_request",
                 "generation_mode": "staged",
                 "current_generation_phase": "manifest",
+                "output_risk_level": "high",
+                "max_chat_output_chars": 8000,
+                "max_output_recovery_applied": True,
             },
             "source": {
                 "source_complete": True,
+                "source_type": "jira",
                 "source_bundle_ref_count": 1,
                 "source_digest_ref_count": 1,
+                "source_digest_chunk_count": 4,
                 "comments_loaded": 20,
                 "comments_total": 20,
                 "attachments_loaded": 2,
@@ -410,6 +415,8 @@ def test_build_portal_context_preview_includes_source_and_generation_diagnostics
     )
     assert preview["context_generation_mode"] == "staged"
     assert preview["context_source_complete"] is True
+    assert preview["context_output_risk_level"] == "high"
+    assert preview["context_source_digest_chunk_count"] == 4
 
 
 def test_progressive_context_dict_roundtrip_preserves_tool_name():

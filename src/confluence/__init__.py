@@ -1,6 +1,7 @@
 """Confluence Integration - Single source of truth for Confluence operations."""
 
 import logging
+import json
 from typing import Optional
 
 from src.utils.attachment import download_and_process_attachment
@@ -10,6 +11,7 @@ from .api import (
     confluence_channel,
 )
 from .adapter import ConfluenceFormatAdapter, _extract_page_id_from_url
+from src.source_context import persist_confluence_source_bundle_and_digest
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,7 @@ __all__ = [
     "confluence_watch_page",
     "confluence_unwatch_page",
     "confluence_search_by_title",
+    "confluence_prepare_page_context",
 ]
 
 
@@ -279,6 +282,96 @@ async def confluence_get_page_by_url(
         )
     except Exception as e:
         return f"Error getting page: {e}"
+
+
+async def confluence_prepare_page_context(
+    page_id_or_url: str,
+    include_comments: bool = True,
+    include_attachments: bool = True,
+    include_children: bool = False,
+    include_raw_snapshot: bool = True,
+    _session_id: Optional[str] = None,
+) -> str:
+    """Prepare source-complete Confluence page bundle + digest refs."""
+    try:
+        if not confluence_channel.is_configured():
+            return "Confluence is not configured. Please check your settings."
+
+        target = str(page_id_or_url or "").strip()
+        page_id = target
+        instance_channel = confluence_channel
+        if target.startswith("http://") or target.startswith("https://"):
+            extracted = _extract_page_id_from_url(target)
+            if not extracted:
+                return f"Could not extract page ID from URL: {page_id_or_url}"
+            page_id = extracted
+            instance_channel = confluence_channel.get_instance_client(url=target) or confluence_channel
+
+        page = await instance_channel.get_page(page_id)
+        comments = await instance_channel.get_comments(page_id) if include_comments else []
+        attachments = await instance_channel.get_attachments(page_id) if include_attachments else []
+        children = await instance_channel.get_page_children(page_id) if include_children else []
+
+        partial_reasons = []
+        comments = comments or []
+        attachments = attachments or []
+        children = children or []
+        if include_comments and not isinstance(comments, list):
+            comments = []
+            partial_reasons.append("comments_unavailable")
+        if include_attachments and not isinstance(attachments, list):
+            attachments = []
+            partial_reasons.append("attachments_unavailable")
+        if include_children and not isinstance(children, list):
+            children = []
+            partial_reasons.append("children_unavailable")
+
+        ledger = {
+            "comments_loaded": len(comments),
+            "comments_total": len(comments),
+            "attachments_loaded": len(attachments),
+            "attachments_total": len(attachments),
+            "children_loaded": len(children),
+            "children_total": len(children),
+            "partial_reasons": partial_reasons,
+        }
+        ledger["source_complete"] = not partial_reasons
+
+        adapter = ConfluenceFormatAdapter(instance_channel)
+        bundle = {
+            "metadata": {
+                "page_id": page_id,
+                "title": (page or {}).get("title"),
+                "space": ((page or {}).get("space") or {}).get("key") if isinstance((page or {}).get("space"), dict) else None,
+            },
+            "content_markdown": await adapter._to_markdown(page if isinstance(page, dict) else {}),
+            "comments": comments,
+            "attachments": attachments,
+            "children": children,
+            "raw_snapshot": page if include_raw_snapshot else {},
+            "completeness_ledger": ledger,
+        }
+        persisted = persist_confluence_source_bundle_and_digest(
+            session_id=_session_id or "unknown_session",
+            page_id=page_id,
+            bundle=bundle,
+        )
+        manifest = {
+            "page_id": page_id,
+            "context_ref": persisted["context_ref"],
+            "digest_ref": persisted["digest_ref"],
+            "source_complete": ledger["source_complete"],
+            "comments_loaded": f"{ledger['comments_loaded']}/{ledger['comments_total']}",
+            "attachments_loaded": f"{ledger['attachments_loaded']}/{ledger['attachments_total']}",
+            "children_loaded": f"{ledger['children_loaded']}/{ledger['children_total']}",
+            "partial_reasons": partial_reasons,
+            "sections": ["metadata", "content", "comments", "attachments", "children", "raw_snapshot"],
+        }
+        return "[confluence source bundle prepared]\n" + "\n".join(
+            f"{k}: {json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v}" for k, v in manifest.items()
+        )
+    except Exception as e:
+        return f"Error preparing confluence source context: {e}"
 
 
 async def confluence_create_page(
@@ -590,6 +683,24 @@ def get_tools_schemas() -> list:
                         },
                     },
                     "required": ["url"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "confluence_prepare_page_context",
+                "description": "Prepare complete-source Confluence page context for generation workflows.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "page_id_or_url": {"type": "string", "description": "Confluence page ID or full URL"},
+                        "include_comments": {"type": "boolean", "default": True},
+                        "include_attachments": {"type": "boolean", "default": True},
+                        "include_children": {"type": "boolean", "default": False},
+                        "include_raw_snapshot": {"type": "boolean", "default": True}
+                    },
+                    "required": ["page_id_or_url"]
                 }
             }
         },

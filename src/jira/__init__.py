@@ -289,12 +289,18 @@ async def jira_prepare_issue_context(
     text_attachments_loaded = 0
     partial_reasons: List[str] = []
     attachment_list = fields.get("attachment", []) if isinstance(fields, dict) else []
+    binary_attachments_count = 0
+    binary_attachment_bodies_skipped_count = 0
     for att in attachment_list:
         mime = str(att.get("mimeType") or "")
         filename = str(att.get("filename") or "unknown")
         is_text = mime.startswith("text/") or filename.lower().endswith((".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".xml", ".log"))
         if is_text:
             text_attachments_total += 1
+        else:
+            binary_attachments_count += 1
+            binary_attachment_bodies_skipped_count += 1
+            partial_reasons.append(f"binary_attachment_body_skipped:{filename}")
         item = {
             "id": att.get("id"),
             "filename": filename,
@@ -346,14 +352,24 @@ async def jira_prepare_issue_context(
             for c in comments
         ],
         "attachments": attachments,
-        "raw_snapshot": fields if include_raw_snapshot else {},
+        "raw_snapshot": issue if include_raw_snapshot else {},
+        "names": issue.get("names") if isinstance(issue, dict) else {},
+        "renderedFields": issue.get("renderedFields") if isinstance(issue, dict) else {},
         "completeness_ledger": {
+            "issue_loaded": bool(issue),
+            "raw_issue_loaded": bool(issue),
+            "names_loaded": bool(issue.get("names")) if isinstance(issue, dict) else False,
             "comments_loaded": len(comments),
             "comments_total": comments_total,
+            "comments_complete": len(comments) >= comments_total,
             "attachments_metadata_loaded": len(attachments),
             "attachments_total": len(attachment_list),
+            "attachments_metadata_complete": len(attachments) >= len(attachment_list),
             "text_attachments_loaded": text_attachments_loaded,
             "text_attachments_total": text_attachments_total,
+            "text_attachments_complete": text_attachments_loaded >= text_attachments_total,
+            "binary_attachments_count": binary_attachments_count,
+            "binary_attachment_bodies_skipped_count": binary_attachment_bodies_skipped_count,
             "raw_fields_loaded": bool(fields),
             "rendered_fields_loaded": bool(rendered_fields),
             "custom_fields_loaded": bool(issue.get("names")) if isinstance(issue, dict) else False,
@@ -362,8 +378,13 @@ async def jira_prepare_issue_context(
     }
     ledger = bundle["completeness_ledger"]
     ledger["source_complete"] = (
-        ledger["comments_loaded"] >= ledger["comments_total"]
-        and ledger["attachments_metadata_loaded"] >= ledger["attachments_total"]
+        ledger["issue_loaded"]
+        and ledger["raw_issue_loaded"]
+        and ledger["comments_complete"]
+        and ledger["attachments_metadata_complete"]
+        and ledger["text_attachments_complete"]
+        and ledger["names_loaded"]
+        and ledger["rendered_fields_loaded"]
         and not ledger["partial_reasons"]
     )
     persisted = persist_jira_source_bundle_and_digest(session_id=session_id, issue_key=issue_key, bundle=bundle)
@@ -378,6 +399,7 @@ async def jira_prepare_issue_context(
         "text_attachments_loaded": f"{ledger['text_attachments_loaded']}/{ledger['text_attachments_total']}",
         "binary_attachments_preserved": max(0, ledger["attachments_total"] - ledger["text_attachments_loaded"]),
         "partial_reasons": ledger["partial_reasons"],
+        "source_digest_chunk_count": persisted.get("source_digest_chunk_count", 0),
         "sections": ["metadata", "description", "acceptance_criteria", "comments", "attachments", "raw_snapshot"],
     }
     return (
@@ -546,7 +568,7 @@ def _get_all_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "jira_get_issue",
-                "description": "Get a Jira issue by key. Returns Markdown by default, including description, recent comments, and extracted acceptance criteria when visible.",
+                "description": "Get a Jira issue by key (preview tool). For complete-source generation workflows, use jira_prepare_issue_context.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -556,11 +578,6 @@ def _get_all_schemas() -> list:
                             "enum": ["markdown", "wiki", "raw"],
                             "default": "markdown",
                             "description": "Output format: markdown (LLM-friendly), wiki (renderable), or raw (JSON)"
-                        },
-                        "max_comments": {
-                            "type": "integer",
-                            "description": "Maximum number of comments to include",
-                            "default": 5
                         },
                         "include_fields": {
                             "type": "array",
@@ -586,7 +603,7 @@ def _get_all_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "jira_get_issue_by_url",
-                "description": "Get a Jira issue by its full URL. Returns Markdown by default.",
+                "description": "Get a Jira issue by its full URL (preview tool). For complete-source generation workflows, use jira_prepare_issue_context.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -597,7 +614,6 @@ def _get_all_schemas() -> list:
                             "default": "markdown",
                             "description": "Output format: markdown, wiki, or raw"
                         },
-                        "max_comments": {"type": "integer", "description": "Maximum comments to include", "default": 5},
                         "include_comments": {"type": "boolean", "description": "Include comments", "default": True},
                         "include_attachment_urls": {
                             "type": "boolean",

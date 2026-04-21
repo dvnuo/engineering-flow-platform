@@ -601,6 +601,12 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
                 "context_large_generation_guard_reason": budget.get("large_generation_guard_reason"),
                 "context_generation_mode": budget.get("generation_mode"),
                 "context_current_generation_phase": budget.get("current_generation_phase"),
+                "context_output_risk_level": budget.get("output_risk_level"),
+                "context_max_chat_output_chars": budget.get("max_chat_output_chars"),
+                "context_output_token_limit": budget.get("output_token_limit"),
+                "context_input_context_usage_percent": budget.get("input_context_usage_percent"),
+                "context_max_output_recovery_applied": budget.get("max_output_recovery_applied"),
+                "context_max_output_recovery_attempts": budget.get("max_output_recovery_attempts"),
                 "context_context_blob_refs_created": (
                     len(budget.get("context_blob_refs_created"))
                     if isinstance(budget.get("context_blob_refs_created"), list)
@@ -614,8 +620,10 @@ def build_portal_context_preview(context_state: dict | None) -> dict:
         preview.update(
             {
                 "context_source_complete": source.get("source_complete"),
+                "context_source_type": source.get("source_type"),
                 "context_source_bundle_ref_count": source.get("source_bundle_ref_count"),
                 "context_source_digest_ref_count": source.get("source_digest_ref_count"),
+                "context_source_digest_chunk_count": source.get("source_digest_chunk_count"),
                 "context_comments_loaded": source.get("comments_loaded"),
                 "context_comments_total": source.get("comments_total"),
                 "context_attachments_loaded": source.get("attachments_loaded"),

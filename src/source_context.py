@@ -135,12 +135,44 @@ def persist_jira_source_bundle_and_digest(
         metadata={"issue_key": issue_key, "source_complete": bundle.get("completeness_ledger", {}).get("source_complete")},
     )
     digest = build_jira_source_digest(bundle)
+    chunk_refs: List[str] = []
+    comments = bundle.get("comments") or []
+    attachments = bundle.get("attachments") or []
+    chunk_payloads = [
+        ("metadata_description_ac", json.dumps({
+            "metadata": bundle.get("metadata") or {},
+            "description": bundle.get("description") or "",
+            "acceptance_criteria": bundle.get("acceptance_criteria") or "",
+        }, ensure_ascii=False, indent=2)),
+        ("attachments", json.dumps({"attachments": attachments}, ensure_ascii=False, indent=2)),
+        ("raw_field_index", json.dumps({"raw_snapshot_keys": list((bundle.get("raw_snapshot") or {}).keys())}, ensure_ascii=False, indent=2)),
+    ]
+    if comments:
+        for i in range(0, len(comments), 25):
+            idx = i // 25 + 1
+            chunk_payloads.append((f"comments_chunk_{idx}", json.dumps({"comments": comments[i:i + 25]}, ensure_ascii=False, indent=2)))
+    for chunk_kind, chunk_body in chunk_payloads:
+        chunk_ref = put_text(
+            session_id=session_id,
+            kind="jira_source_digest_chunk",
+            source_id=f"{issue_key}_{chunk_kind}",
+            title=f"Jira digest chunk {chunk_kind}",
+            content=truncate(chunk_body, 12000),
+            metadata={"issue_key": issue_key, "chunk_kind": chunk_kind},
+        )
+        chunk_refs.append(chunk_ref)
+    digest_overview = (
+        digest["digest_text"]
+        + "\n\n[source digest chunks]\n"
+        + f"chunk_count: {len(chunk_refs)}\n"
+        + "\n".join(f"- {ref}" for ref in chunk_refs)
+    )
     digest_ref = put_text(
         session_id=session_id,
         kind="jira_source_digest",
         source_id=issue_key,
         title=f"Jira source digest {issue_key}",
-        content=digest["digest_text"],
+        content=digest_overview,
         metadata={"issue_key": issue_key, "source_ref": context_ref, "source_complete": digest["source_complete"]},
     )
     return {
@@ -150,9 +182,65 @@ def persist_jira_source_bundle_and_digest(
         "coverage": digest["coverage"],
         "source_complete": digest["source_complete"],
         "partial_reasons": digest["partial_reasons"],
+        "source_digest_chunk_refs": chunk_refs,
+        "source_digest_chunk_count": len(chunk_refs),
     }
 
 
 def extract_markdown_section(markdown_text: str, heading: str) -> str:
     pattern = re.escape(heading.lower())
     return _extract_section(markdown_text or "", (pattern,))
+
+
+def persist_confluence_source_bundle_and_digest(
+    *,
+    session_id: str,
+    page_id: str,
+    bundle: Dict[str, Any],
+) -> Dict[str, Any]:
+    bundle_text = "\n".join(
+        [
+            "# Confluence Source Bundle",
+            _heading_block("metadata", json.dumps(bundle.get("metadata") or {}, ensure_ascii=False, indent=2)),
+            _heading_block("content", str(bundle.get("content_markdown") or "")),
+            _heading_block("comments", json.dumps(bundle.get("comments") or [], ensure_ascii=False, indent=2)),
+            _heading_block("attachments", json.dumps(bundle.get("attachments") or [], ensure_ascii=False, indent=2)),
+            _heading_block("children", json.dumps(bundle.get("children") or [], ensure_ascii=False, indent=2)),
+            _heading_block("coverage_ledger", json.dumps(bundle.get("completeness_ledger") or {}, ensure_ascii=False, indent=2)),
+            _heading_block("raw_snapshot", json.dumps(bundle.get("raw_snapshot") or {}, ensure_ascii=False, indent=2)),
+        ]
+    )
+    context_ref = put_text(
+        session_id=session_id,
+        kind="confluence_source_bundle",
+        source_id=page_id,
+        title=f"Confluence source bundle {page_id}",
+        content=bundle_text,
+        metadata={"page_id": page_id, "source_complete": bundle.get("completeness_ledger", {}).get("source_complete")},
+    )
+    digest_text = truncate(
+        json.dumps(
+            {
+                "source_ref": context_ref,
+                "metadata": bundle.get("metadata") or {},
+                "coverage": bundle.get("completeness_ledger") or {},
+                "open_questions": bundle.get("open_questions") or [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        7000,
+    )
+    digest_ref = put_text(
+        session_id=session_id,
+        kind="confluence_source_digest",
+        source_id=page_id,
+        title=f"Confluence source digest {page_id}",
+        content=digest_text,
+        metadata={"page_id": page_id, "source_ref": context_ref},
+    )
+    return {
+        "context_ref": context_ref,
+        "digest_ref": digest_ref,
+        "source_complete": bool((bundle.get("completeness_ledger") or {}).get("source_complete")),
+    }

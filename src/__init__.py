@@ -509,6 +509,17 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await confluence_module.confluence_get_page_by_url(url, format=format, max_chars=max_chars)
         return ToolResult(success="Error" not in result, content=result)
 
+    elif name == "confluence_prepare_page_context":
+        result = await confluence_module.confluence_prepare_page_context(
+            page_id_or_url=kwargs.get("page_id_or_url", ""),
+            include_comments=True if kwargs.get("include_comments") is None else kwargs.get("include_comments"),
+            include_attachments=True if kwargs.get("include_attachments") is None else kwargs.get("include_attachments"),
+            include_children=False if kwargs.get("include_children") is None else kwargs.get("include_children"),
+            include_raw_snapshot=True if kwargs.get("include_raw_snapshot") is None else kwargs.get("include_raw_snapshot"),
+            _session_id=kwargs.get("_session_id"),
+        )
+        return ToolResult(success="Error" not in str(result), content=str(result))
+
     elif name == "context_read_ref":
         ref = kwargs.get("ref", "")
         section = kwargs.get("section")
