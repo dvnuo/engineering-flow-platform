@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.agents.llm import _normalize_provider_key, llm_client
+from src.runtime.output_controller import call_llm_with_output_control
 from src.config import config
 from src.skills.registry import Skill
 
@@ -369,7 +370,16 @@ async def _generate_initial_skill_plan_direct(skill: Skill, user_message: str, m
     if model:
         kwargs["model"] = model
 
-    result = await llm_client.responses(**kwargs)
+    result, _diag = await call_llm_with_output_control(
+        llm_client=llm_client,
+        llm_kwargs=kwargs,
+        session_id="unknown_session",
+        stage="skill_initial_plan",
+        context_state={"budget": {}},
+        active_skill=skill,
+        latest_user_text=user_message,
+        max_chat_output_chars=8000,
+    )
     content = (result.get("content") or "").strip()
 
     iter_usage = result.get("usage", {}) or {}

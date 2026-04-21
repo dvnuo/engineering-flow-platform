@@ -206,6 +206,7 @@ async def confluence_get_page(
     format: str = "markdown",
     max_chars: Optional[int] = None,
     preview: bool = False,
+    _session_id: Optional[str] = None,
 ) -> str:
     """Get a Confluence page by ID.
     
@@ -218,7 +219,7 @@ async def confluence_get_page(
     """
     try:
         if not preview:
-            return await confluence_prepare_page_context(page_id_or_url=page_id, _session_id=None)
+            return await confluence_prepare_page_context(page_id_or_url=page_id, _session_id=_session_id, include_children=True)
         if not confluence_channel.is_configured():
             return "Confluence is not configured. Please check your settings."
         
@@ -256,6 +257,7 @@ async def confluence_get_page_by_url(
     format: str = "markdown",
     max_chars: Optional[int] = None,
     preview: bool = False,
+    _session_id: Optional[str] = None,
 ) -> str:
     """Get a Confluence page by its URL.
     
@@ -270,7 +272,7 @@ async def confluence_get_page_by_url(
     """
     try:
         if not preview:
-            return await confluence_prepare_page_context(page_id_or_url=url, _session_id=None)
+            return await confluence_prepare_page_context(page_id_or_url=url, _session_id=_session_id, include_children=True)
         page_id = _extract_page_id_from_url(url)
         if not page_id:
             return f"Could not extract page ID from URL: {url}"
@@ -306,7 +308,7 @@ async def confluence_prepare_page_context(
     page_id_or_url: str,
     include_comments: bool = True,
     include_attachments: bool = True,
-    include_children: bool = False,
+    include_children: bool = True,
     include_raw_snapshot: bool = True,
     _session_id: Optional[str] = None,
 ) -> str:
@@ -326,9 +328,9 @@ async def confluence_prepare_page_context(
             instance_channel = confluence_channel.get_instance_client(url=target) or confluence_channel
 
         page = await instance_channel.get_page(page_id)
-        comments, comments_ledger = await instance_channel.get_all_comments_with_ledger(page_id) if include_comments else ([], {"loaded": 0, "total": 0, "complete": True})
-        attachments, attachments_ledger = await instance_channel.get_all_attachments_with_ledger(page_id) if include_attachments else ([], {"loaded": 0, "total": 0, "complete": True})
-        children, children_ledger = await instance_channel.get_all_page_children_with_ledger(page_id) if include_children else ([], {"loaded": 0, "total": 0, "complete": True})
+        comments, comments_ledger = await instance_channel.get_all_comments_with_ledger(page_id) if include_comments else ([], {"loaded": 0, "total": 0, "complete": False})
+        attachments, attachments_ledger = await instance_channel.get_all_attachments_with_ledger(page_id) if include_attachments else ([], {"loaded": 0, "total": 0, "complete": False})
+        children, children_ledger = await instance_channel.get_all_page_children_with_ledger(page_id) if include_children else ([], {"loaded": 0, "total": 0, "complete": False})
 
         partial_reasons = []
         comments = comments or []
@@ -343,6 +345,12 @@ async def confluence_prepare_page_context(
         if include_children and not isinstance(children, list):
             children = []
             partial_reasons.append("children_unavailable")
+        if not include_comments:
+            partial_reasons.append("comments_not_requested")
+        if not include_attachments:
+            partial_reasons.append("attachments_not_requested")
+        if not include_children:
+            partial_reasons.append("children_not_requested")
 
         ledger = {
             "comments_loaded": int(comments_ledger.get("loaded", len(comments))),
@@ -707,36 +715,6 @@ def get_tools_schemas() -> list:
                             "default": "markdown",
                             "description": "Output format: markdown (default) or storage"
                         },
-                    },
-                    "required": ["url"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "confluence_get_page_preview",
-                "description": "Preview-only Confluence page fetch (compact). Internal use only.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "page_id": {"type": "string"},
-                        "format": {"type": "string", "enum": ["markdown", "storage"], "default": "markdown"}
-                    },
-                    "required": ["page_id"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "confluence_get_page_by_url_preview",
-                "description": "Preview-only Confluence page URL fetch (compact). Internal use only.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "url": {"type": "string"},
-                        "format": {"type": "string", "enum": ["markdown", "storage"], "default": "markdown"}
                     },
                     "required": ["url"]
                 }

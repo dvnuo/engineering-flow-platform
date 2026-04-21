@@ -221,6 +221,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
             include_comments=include_comments, include_fields=include_fields,
             include_attachment_urls=include_attachment_urls,
             preview=kwargs.get("preview", False),
+            _session_id=kwargs.get("_session_id"),
         )
         # Ensure content is always a string (format="raw" returns dict)
         if isinstance(result, dict):
@@ -283,6 +284,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
             include_comments=include_comments, include_fields=include_fields,
             include_attachment_urls=include_attachment_urls,
             preview=kwargs.get("preview", False),
+            _session_id=kwargs.get("_session_id"),
         )
         # Ensure content is always a string (format="raw" returns dict)
         if isinstance(result, dict):
@@ -509,7 +511,13 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         page_id = kwargs.get("page_id", "")
         format = kwargs.get("format", "markdown")
         max_chars = kwargs.get("max_chars")
-        result = await confluence_module.confluence_get_page(page_id, format=format, max_chars=max_chars, preview=kwargs.get("preview", False))
+        result = await confluence_module.confluence_get_page(
+            page_id,
+            format=format,
+            max_chars=max_chars,
+            preview=kwargs.get("preview", False),
+            _session_id=kwargs.get("_session_id"),
+        )
         return ToolResult(success="Error" not in result, content=result)
     
     elif name == "confluence_search":
@@ -522,7 +530,13 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         url = kwargs.get("url", "")
         format = kwargs.get("format", "markdown")
         max_chars = kwargs.get("max_chars")
-        result = await confluence_module.confluence_get_page_by_url(url, format=format, max_chars=max_chars, preview=kwargs.get("preview", False))
+        result = await confluence_module.confluence_get_page_by_url(
+            url,
+            format=format,
+            max_chars=max_chars,
+            preview=kwargs.get("preview", False),
+            _session_id=kwargs.get("_session_id"),
+        )
         return ToolResult(success="Error" not in result, content=result)
 
     elif name == "confluence_get_page_preview":

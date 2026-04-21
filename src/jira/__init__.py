@@ -119,6 +119,7 @@ async def jira_get_issue(
     include_comments: bool = True,
     include_attachment_urls: bool = False,
     preview: bool = False,
+    _session_id: Optional[str] = None,
 ) -> Union[str, dict]:
     """Get a Jira issue by key.
     
@@ -140,7 +141,7 @@ async def jira_get_issue(
     """
     try:
         if not preview:
-            return await jira_prepare_issue_context(issue_key_or_url=issue_key, _session_id=None)
+            return await jira_prepare_issue_context(issue_key_or_url=issue_key, _session_id=_session_id)
         if not jira_channel.is_configured():
             return "Error: Jira is not configured. Please check your settings."
         
@@ -189,6 +190,7 @@ async def jira_get_issue_by_url(
     include_comments: bool = True,
     include_attachment_urls: bool = False,
     preview: bool = False,
+    _session_id: Optional[str] = None,
 ) -> Union[str, dict]:
     """Get a Jira issue by its URL.
     
@@ -212,7 +214,7 @@ async def jira_get_issue_by_url(
     
     try:
         if not preview:
-            return await jira_prepare_issue_context(issue_key_or_url=url, _session_id=None)
+            return await jira_prepare_issue_context(issue_key_or_url=url, _session_id=_session_id)
         # Extract issue key from URL (support letters, digits, underscores in project key)
         match = re.search(r'/browse/([A-Z][A-Z0-9_]*-\d+)', url, re.IGNORECASE)
         if not match:
@@ -283,7 +285,7 @@ async def jira_prepare_issue_context(
     issue_key = str(issue_key_or_url or "").strip()
     instance_channel = jira_channel
     if "/browse/" in issue_key:
-        match = re.search(r"/browse/([A-Z][A-Z0-9_]*-\\d+)", issue_key, re.IGNORECASE)
+        match = re.search(r"/browse/([A-Z][A-Z0-9_]*-\d+)", issue_key, re.IGNORECASE)
         if not match:
             return f"Could not extract issue key from URL: {issue_key_or_url}"
         issue_key = match.group(1).upper()
@@ -688,36 +690,6 @@ def _get_all_schemas() -> list:
                     "required": ["issue_key_or_url"],
                 },
             },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "jira_get_issue_preview",
-                "description": "Preview-only Jira issue fetch (partial/compact). Internal use only.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "issue_key": {"type": "string"},
-                        "format": {"type": "string", "enum": ["markdown", "wiki", "raw"], "default": "markdown"}
-                    },
-                    "required": ["issue_key"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "jira_get_issue_by_url_preview",
-                "description": "Preview-only Jira URL fetch (partial/compact). Internal use only.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "url": {"type": "string"},
-                        "format": {"type": "string", "enum": ["markdown", "wiki", "raw"], "default": "markdown"}
-                    },
-                    "required": ["url"]
-                }
-            }
         },
         {
             "type": "function",

@@ -301,7 +301,7 @@ class TestBackwardCompatibility:
             
             from src.confluence import confluence_get_page
             
-            result = await confluence_get_page("123", format="storage")
+            result = await confluence_get_page("123", format="storage", preview=True)
             # Should not error - verify it contains expected content
             assert "Error" not in result
             assert "<h1>Hello</h1>" in result or "Hello" in result

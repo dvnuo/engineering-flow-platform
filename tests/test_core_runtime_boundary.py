@@ -382,9 +382,9 @@ def test_agent_process_source_auto_invokes_source_prepare_and_max_output_recover
     assert "_requires_source_complete_context(" in process_source
     assert "jira_prepare_issue_context" in process_source
     assert "confluence_prepare_page_context" in process_source
-    assert "_recover_max_output_tokens(" in process_source
+    assert "call_llm_with_output_control(" in process_source
     assert "[auto source context prepared]" in process_source
-    assert "staged_oversized_output" in process_source
+    assert "output_controller_applied" in process_source
 
 
 @pytest.mark.asyncio
@@ -422,7 +422,68 @@ async def test_recover_max_output_tokens_fallback_path(monkeypatch):
     )
     assert did_recover is True
     assert "error" not in recovered
-    assert "staged chunks" in recovered.get("content", "")
+    assert "staged generation" in recovered.get("content", "")
+
+
+@pytest.mark.asyncio
+async def test_output_controller_recovers_max_output_without_raw_fatal():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+        async def responses(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {"error": {"code": "max_output_tokens_exceeded", "message": "Model output was truncated because max_output_tokens was reached"}}
+            return {"content": "manifest", "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate full implementation", "tools": []},
+        session_id="s-out",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="generate implementation from jira",
+    )
+    assert "error" not in result
+    assert "max_output_tokens was reached" not in (result.get("content") or "")
+    assert diag["max_output_recovery"]["applied"] is True
+    assert state["budget"]["generation_mode"] == "staged"
+    assert state["budget"]["output_risk_level"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_output_controller_bounds_huge_content_in_staged_mode():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "X" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    result, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "generate full implementation", "tools": []},
+        session_id="s-out-big",
+        stage="skill_generation",
+        context_state=state,
+        latest_user_text="generate all test cases",
+        max_chat_output_chars=8000,
+    )
+    assert len(result.get("content") or "") <= 8000
+    assert "context_read_ref(" in (result.get("content") or "")
+    assert diag.get("output_bounding", {}).get("bounded") is True
+
+
+def test_core_and_skill_mode_do_not_call_llm_client_responses_directly():
+    from src.agents import core
+    from src.agents import skill_mode
+
+    assert "llm_client.responses(" not in inspect.getsource(core.Agent.process)
+    assert "llm_client.responses(" not in inspect.getsource(core._run_skill_finalizer)
+    assert "llm_client.responses(" not in inspect.getsource(skill_mode._generate_initial_skill_plan_direct)
 
 
 def test_find_source_target_for_context_can_reuse_previous_jira_and_confluence_messages():

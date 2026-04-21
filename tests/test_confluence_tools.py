@@ -1,6 +1,7 @@
 """Tests for enhanced Confluence tools added in PR #219"""
 
 import pytest
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -133,6 +134,14 @@ def test_confluence_prepare_page_context_schema_exists_without_max_chars():
     assert "max_chars" not in schema["function"]["parameters"]["properties"]
 
 
+def test_confluence_preview_tools_not_model_facing():
+    from src.confluence import get_tools_schemas
+
+    names = {s.get("function", {}).get("name") for s in get_tools_schemas()}
+    assert "confluence_get_page_preview" not in names
+    assert "confluence_get_page_by_url_preview" not in names
+
+
 @pytest.mark.asyncio
 async def test_confluence_prepare_page_context_persists_manifest(monkeypatch):
     from src.confluence import confluence_prepare_page_context
@@ -174,3 +183,48 @@ async def test_confluence_prepare_page_context_marks_partial_when_pagination_inc
     monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
     out = await confluence_prepare_page_context("123", _session_id="s-conf-partial")
     assert "source_complete: False" in out
+
+
+@pytest.mark.asyncio
+async def test_confluence_get_page_default_requests_children(monkeypatch):
+    from src.confluence import confluence_get_page
+
+    captured = {}
+
+    async def _fake_prepare(*, page_id_or_url, include_comments=True, include_attachments=True, include_children=True, include_raw_snapshot=True, _session_id=None):
+        captured["include_children"] = include_children
+        captured["session_id"] = _session_id
+        return "[confluence source bundle prepared]\ncontext_ref: ctx://context/s1/k/abc"
+
+    monkeypatch.setattr("src.confluence.confluence_prepare_page_context", _fake_prepare)
+    out = await confluence_get_page("123", _session_id="s1")
+    assert "[confluence source bundle prepared]" in out
+    assert captured["include_children"] is True
+    assert captured["session_id"] == "s1"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_confluence_get_page_by_url_uses_session_scoped_context_ref(monkeypatch):
+    from src import execute_tool
+    from src.context_tools import context_read_ref
+
+    class _Channel:
+        def is_configured(self): return True
+        def get_instance_client(self, **kwargs): return self
+        async def get_page(self, page_id):
+            return {"id": page_id, "title": "Page", "space": {"key": "DOC"}, "body": {"storage": {"value": "<p>hello</p>"}}}
+        async def get_all_comments_with_ledger(self, page_id, limit=100):
+            return ([], {"loaded": 0, "total": 0, "complete": True})
+        async def get_all_attachments_with_ledger(self, page_id, limit=100):
+            return ([], {"loaded": 0, "total": 0, "complete": True})
+        async def get_all_page_children_with_ledger(self, page_id, limit=100):
+            return ([], {"loaded": 0, "total": 0, "complete": True})
+
+    monkeypatch.setattr("src.confluence.confluence_channel", _Channel())
+    result = await execute_tool("confluence_get_page_by_url", url="https://wiki.local/pages/123/Title", _session_id="s1")
+    assert result.success is True
+    assert "ctx://context/s1/" in result.content
+    assert "ctx://context/unknown_session/" not in result.content
+    ref = re.search(r"context_ref:\s*(ctx://context/[^\s\"\\]+)", result.content).group(1)
+    read_back = await context_read_ref(ref=ref, _session_id="s1")
+    assert "source bundle" in read_back.lower() or "metadata" in read_back.lower()

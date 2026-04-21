@@ -77,6 +77,7 @@ from src.runtime.progressive_context import (
 )
 from src.context_blob_store import build_section_map, put_text
 from src.agents.compaction import estimate_tokens
+from src.runtime.output_controller import call_llm_with_output_control, recover_max_output_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -722,35 +723,17 @@ async def _recover_max_output_tokens(
     loop_context_state: Optional[Dict[str, Any]],
     stage_hint: str,
 ) -> Tuple[Dict[str, Any], bool]:
-    error = llm_result.get("error") if isinstance(llm_result, dict) else None
-    if not isinstance(error, dict) or error.get("code") != "max_output_tokens_exceeded":
-        return llm_result, False
-    retry_kwargs = dict(llm_kwargs)
-    retry_kwargs["system_prompt"] = (
-        (retry_kwargs.get("system_prompt") or "")
-        + "\n\nRecovery mode: previous output exceeded max_output_tokens. Return concise staged manifest only."
-    ).strip()
-    retry_kwargs["input_items"] = list(retry_kwargs.get("input_items") or []) + [
-        {"role": "user", "content": "Continue in strict staged mode. Manifest and next phase only."}
-    ]
-    retry_result = await llm_client.responses(**retry_kwargs)
-    budget = loop_context_state.setdefault("budget", {}) if isinstance(loop_context_state, dict) else {}
-    if isinstance(budget, dict):
-        budget["max_output_recovery_applied"] = True
-        budget["max_output_recovery_attempts"] = 1
-        budget["request_budget_stage"] = stage_hint
-    if isinstance(retry_result, dict) and not retry_result.get("error"):
-        return retry_result, True
-    fallback = {
-        "content": (
-            "The model output exceeded the per-response limit. I will continue in smaller staged chunks "
-            "(manifest first, then phase-by-phase generation)."
-        ),
-        "tool_calls": [],
-        "function_calls": [],
-        "usage": llm_result.get("usage", {}) if isinstance(llm_result, dict) else {},
-    }
-    return fallback, True
+    state = loop_context_state.setdefault("budget", {}) if isinstance(loop_context_state, dict) else {}
+    recovered, info = await recover_max_output_tokens(
+        llm_client=llm_client,
+        llm_result=llm_result,
+        llm_kwargs=llm_kwargs,
+        state=state,
+        stage=stage_hint,
+    )
+    if isinstance(state, dict):
+        state["request_budget_stage"] = stage_hint
+    return recovered, bool(info.get("applied"))
 
 
 def degrade_projected_context_sources_in_responses_input_items(
@@ -1283,14 +1266,23 @@ async def _run_skill_finalizer(
                 ),
                 usage_data,
             )
-        result = await llm_client.responses(
-            input_items=items_for_call,
-            system_prompt=system_prompt,
-            tools=None,
-            reasoning_replay=False,
-            provider=_normalize_provider_key(provider),
-            max_tokens=budget_max_tokens,
-            **({"model": model} if model else {}),
+        result, _output_diag = await call_llm_with_output_control(
+            llm_client=llm_client,
+            llm_kwargs={
+                "input_items": items_for_call,
+                "system_prompt": system_prompt,
+                "tools": None,
+                "reasoning_replay": False,
+                "provider": _normalize_provider_key(provider),
+                "max_tokens": budget_max_tokens,
+                **({"model": model} if model else {}),
+            },
+            session_id=getattr(skill_session, "session_id", None) or "unknown_session",
+            stage="skill_finalizer",
+            context_state={"budget": finalizer_request_budget},
+            active_skill=None,
+            latest_user_text="",
+            max_chat_output_chars=8000,
         )
         skill_session.llm_call_count += 1
         if not result.get("error"):
@@ -2377,32 +2369,39 @@ You have access to the following tools. When a user asks you to do something tha
                     "Write artifacts/files via tools when possible; otherwise output a concise manifest and ask to continue file-by-file."
                 )
             
-            llm_result = await llm_client.responses(**llm_kwargs)
+            llm_result, output_diag = await call_llm_with_output_control(
+                llm_client=llm_client,
+                llm_kwargs=llm_kwargs,
+                session_id=session_id,
+                stage="tool_loop",
+                context_state=loop_context_state if isinstance(loop_context_state, dict) else {"budget": {}},
+                active_skill=selected_skill,
+                latest_user_text=latest_user_text,
+                max_chat_output_chars=int((loop_context_state.get("budget", {}) or {}).get("max_chat_output_chars", 8000)) if isinstance(loop_context_state, dict) else 8000,
+            )
+            if isinstance(loop_context_state, dict) and isinstance(loop_context_state.get("budget"), dict):
+                loop_context_state["budget"]["output_controller_applied"] = True
+                if isinstance(output_diag, dict):
+                    loop_context_state["budget"]["output_risk_level"] = output_diag.get("output_risk_level")
+                    loop_context_state["budget"]["generation_mode"] = output_diag.get("generation_mode") or loop_context_state["budget"].get("generation_mode")
             # Check for LLM configuration error
             if llm_result.get("error"):
-                llm_result, _recovered = await _recover_max_output_tokens(
-                    llm_result=llm_result,
-                    llm_kwargs=llm_kwargs,
-                    loop_context_state=loop_context_state,
-                    stage_hint="tool_loop",
-                )
-                if llm_result.get("error"):
-                    error_info = llm_result["error"]
-                    error_msg = error_info.get("message", "Unknown LLM error")
-                    logger.error(f"LLM error: {error_msg}")
-                    error_response = {
-                        "error": error_msg,
-                        "error_type": error_info.get("type", "llm_error"),
-                        "code": error_info.get("code", "")
-                    }
-                    details = error_info.get("details")
-                    status_code = error_info.get("status_code")
-                    if isinstance(details, dict):
-                        error_response["details"] = details
-                    if isinstance(status_code, int):
-                        error_response["status_code"] = status_code
-                    _merge_budget_into_error_details(error_response, latest_request_budget)
-                    return attach_runtime_events(error_response)
+                error_info = llm_result["error"]
+                error_msg = error_info.get("message", "Unknown LLM error")
+                logger.error(f"LLM error: {error_msg}")
+                error_response = {
+                    "error": error_msg,
+                    "error_type": error_info.get("type", "llm_error"),
+                    "code": error_info.get("code", "")
+                }
+                details = error_info.get("details")
+                status_code = error_info.get("status_code")
+                if isinstance(details, dict):
+                    error_response["details"] = details
+                if isinstance(status_code, int):
+                    error_response["status_code"] = status_code
+                _merge_budget_into_error_details(error_response, latest_request_budget)
+                return attach_runtime_events(error_response)
             
             # Debug logging for LLM response
             if _is_debug_enabled():
@@ -2432,22 +2431,6 @@ You have access to the following tools. When a user asks you to do something tha
             function_calls = llm_result.get("function_calls", [])
             tool_calls = function_calls  # alias
             staged_mode = bool(isinstance(loop_context_state, dict) and isinstance(loop_context_state.get("budget"), dict) and (loop_context_state.get("budget") or {}).get("generation_mode") == "staged")
-            max_chat_chars = int(((loop_context_state.get("budget") or {}).get("max_chat_output_chars") if isinstance(loop_context_state, dict) else 8000) or 8000)
-            if staged_mode and content and len(content) > max_chat_chars:
-                full_ref = put_text(
-                    session_id=session_id,
-                    kind="assistant_output",
-                    source_id=f"staged_response_iter_{iteration}",
-                    title="staged_oversized_output",
-                    content=content,
-                    metadata={"stage": "tool_loop", "generation_mode": "staged"},
-                )
-                content = (
-                    f"Output was too large for one response. Saved full draft to context blob. "
-                    f"Here is a concise manifest-style continuation.\nref_count=1\nnext_phase=phase_1\n"
-                    f"Use context_read_ref(ref=\"{full_ref}\") only if needed."
-                )
-                llm_result["content"] = content
             
             # Save intermediate chatlog after EVERY LLM call (for recovery on interruption)
             # Use asyncio.to_thread to avoid blocking the event loop
@@ -3404,37 +3387,43 @@ You have access to the following tools. When a user asks you to do something tha
                 return error_response
 
             logger.debug(f"[SkillMode] Calling LLM with model={llm_kwargs.get('model')}, max_tokens={llm_kwargs.get('max_tokens')}")
-            llm_result = await llm_client.responses(**llm_kwargs)
+            llm_result, output_diag = await call_llm_with_output_control(
+                llm_client=llm_client,
+                llm_kwargs=llm_kwargs,
+                session_id=session_id,
+                stage="skill_generation",
+                context_state={"budget": skill_request_budget},
+                active_skill=skill,
+                latest_user_text=latest_user_text,
+                max_chat_output_chars=8000,
+            )
             skill_session.llm_call_count += 1
             turn_state.llm_call_count = skill_session.llm_call_count
             logger.debug(f"[SkillMode] LLM response keys={llm_result.keys() if llm_result else None}")
             logger.debug(f"[SkillMode] LLM response content length={len(llm_result.get('content', '') or '')}")
 
+            if isinstance(output_diag, dict):
+                skill_request_budget["output_controller_applied"] = True
+                skill_request_budget["output_risk_level"] = output_diag.get("output_risk_level")
+                skill_request_budget["generation_mode"] = output_diag.get("generation_mode") or skill_request_budget.get("generation_mode")
             if llm_result.get("error"):
-                llm_result, _recovered = await _recover_max_output_tokens(
-                    llm_result=llm_result,
-                    llm_kwargs=llm_kwargs,
-                    loop_context_state={"budget": skill_request_budget},
-                    stage_hint="skill_generation",
-                )
-                if llm_result.get("error"):
-                    error_info = llm_result["error"]
-                    error_msg = error_info.get("message", "Unknown LLM error")
-                    logger.error(f"[SkillMode] LLM error: {error_msg}")
-                    error_response = {
-                        "error": error_msg,
-                        "error_type": error_info.get("type", "llm_error"),
-                        "code": error_info.get("code", ""),
-                        "user_message_id": user_message_id,
-                    }
-                    details = error_info.get("details")
-                    status_code = error_info.get("status_code")
-                    if isinstance(details, dict):
-                        error_response["details"] = details
-                    if isinstance(status_code, int):
-                        error_response["status_code"] = status_code
-                    _merge_budget_into_error_details(error_response, skill_request_budget)
-                    return error_response
+                error_info = llm_result["error"]
+                error_msg = error_info.get("message", "Unknown LLM error")
+                logger.error(f"[SkillMode] LLM error: {error_msg}")
+                error_response = {
+                    "error": error_msg,
+                    "error_type": error_info.get("type", "llm_error"),
+                    "code": error_info.get("code", ""),
+                    "user_message_id": user_message_id,
+                }
+                details = error_info.get("details")
+                status_code = error_info.get("status_code")
+                if isinstance(details, dict):
+                    error_response["details"] = details
+                if isinstance(status_code, int):
+                    error_response["status_code"] = status_code
+                _merge_budget_into_error_details(error_response, skill_request_budget)
+                return error_response
 
             if track_usage:
                 iter_usage = llm_result.get("usage", {}) or {}
@@ -3445,19 +3434,6 @@ You have access to the following tools. When a user asks you to do something tha
                 }
 
             raw_output = (llm_result.get("content") or "").strip()
-            if skill_request_budget.get("generation_mode") == "staged" and isinstance(raw_output, str) and len(raw_output) > 8000:
-                full_ref = put_text(
-                    session_id=session_id,
-                    kind="assistant_skill_output",
-                    source_id=f"skill_staged_round_{round_num+1}",
-                    title="skill_staged_oversized_output",
-                    content=raw_output,
-                    metadata={"generation_mode": "staged"},
-                )
-                raw_output = (
-                    "Output was too large for one response. Saved full draft to context blob and continuing in staged mode.\n"
-                    f"ref_count=1\nnext_phase=phase_1\nUse context_read_ref(ref=\"{full_ref}\") if needed."
-                )
             function_calls = llm_result.get("function_calls", []) or llm_result.get("tool_calls", []) or []
             turn_state.has_function_calls = bool(function_calls)
 

@@ -1,6 +1,7 @@
 """Tests for enhanced Jira tools added in PR #219"""
 
 import pytest
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -37,6 +38,14 @@ def test_jira_get_issue_by_url_schema_does_not_expose_max_chars():
     schema = next(s for s in schemas if s["function"]["name"] == "jira_get_issue_by_url")
     assert "max_chars" not in schema["function"]["parameters"]["properties"]
     assert "max_comments" not in schema["function"]["parameters"]["properties"]
+
+
+def test_jira_preview_tools_not_model_facing():
+    from src.jira import get_tools_schemas
+
+    names = {s.get("function", {}).get("name") for s in get_tools_schemas()}
+    assert "jira_get_issue_preview" not in names
+    assert "jira_get_issue_by_url_preview" not in names
 
 
 @pytest.mark.asyncio
@@ -253,3 +262,46 @@ async def test_jira_digest_chunks_do_not_silently_truncate_long_comment(monkeypa
     ref = out.split("context_ref: ", 1)[1].split("\\n", 1)[0].strip().strip('"')
     raw = read_ref(ref, session_id="s-jira-long", section="raw", max_chars=60000)
     assert "L" * 1000 in raw
+
+
+@pytest.mark.asyncio
+async def test_jira_prepare_issue_context_extracts_issue_key_from_url(monkeypatch):
+    from src.jira import jira_prepare_issue_context
+
+    class _Channel:
+        api_version = "3"
+        _auth_header = {}
+        def is_configured(self): return True
+        def get_instance_client(self, **kwargs): return self
+        async def get_issue(self, issue_key, expand=None):
+            return {"key": issue_key, "fields": {"summary": "Demo", "description": "D", "comment": {"comments": [], "total": 0}, "attachment": []}}
+        async def get_comments(self, issue_key): return []
+
+    monkeypatch.setattr("src.jira.jira_channel", _Channel())
+    out = await jira_prepare_issue_context("https://jira.systems.com/browse/MMGFX-13887", _session_id="s-jira-url")
+    assert "issue_key: MMGFX-13887" in out
+    assert "Could not extract issue key" not in out
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_jira_get_issue_by_url_uses_session_scoped_context_ref(monkeypatch):
+    from src import execute_tool
+    from src.context_tools import context_read_ref
+
+    class _Channel:
+        api_version = "3"
+        _auth_header = {}
+        def is_configured(self): return True
+        def get_instance_client(self, **kwargs): return self
+        async def get_issue(self, issue_key, expand=None):
+            return {"key": issue_key, "fields": {"summary": "Demo", "description": "Body", "comment": {"comments": [], "total": 0}, "attachment": []}}
+        async def get_comments(self, issue_key): return []
+
+    monkeypatch.setattr("src.jira.jira_channel", _Channel())
+    result = await execute_tool("jira_get_issue_by_url", url="https://jira.systems.com/browse/MMGFX-13887", _session_id="s1")
+    assert result.success is True
+    assert "ctx://context/s1/" in result.content
+    assert "ctx://context/unknown_session/" not in result.content
+    ref = re.search(r"context_ref:\s*(ctx://context/[^\s\"\\]+)", result.content).group(1)
+    read_back = await context_read_ref(ref=ref, _session_id="s1")
+    assert "source bundle" in read_back.lower() or "metadata" in read_back.lower()
