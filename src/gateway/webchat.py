@@ -1032,6 +1032,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
     Returns: text/event-stream with chunks of the response
     """
     response: Optional[web.StreamResponse] = None
+    response_prepared = False
     run_task: Optional[asyncio.Task] = None
     session_id: Optional[str] = None
     request_id: Optional[str] = None
@@ -1072,6 +1073,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         )
 
         await response.prepare(request)
+        response_prepared = True
 
         # Send start event
         await response.write(
@@ -1203,7 +1205,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             error_type=type(e).__name__,
             metadata=execution_metadata,
         )
-        if response is not None and run_task is not None:
+        if response is not None and response_prepared:
             error_data = json.dumps({'error': str(e)})
             try:
                 await response.write(f"event: error\ndata: {error_data}\n\n".encode())

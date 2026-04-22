@@ -714,6 +714,62 @@ async def test_api_chat_stream_generic_exception_still_returns_error_response():
 
 
 @pytest.mark.asyncio
+async def test_api_chat_stream_failure_persists_system_error_state(monkeypatch):
+    from src.gateway import webchat
+
+    persist_calls = []
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data.decode())
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        raise RuntimeError("stream boom")
+
+    async def _fake_persist_chat_failure_state(**kwargs):
+        persist_calls.append(kwargs)
+
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _request: ("agent-1", "Agent One"))
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "_persist_chat_failure_state", _fake_persist_chat_failure_state)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+    monkeypatch.setattr(
+        webchat.global_config,
+        "_config",
+        {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}},
+        raising=False,
+    )
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {"message": "hello stream", "session_id": "s-stream-failure"}
+
+    response = await webchat.api_chat_stream(_Request())
+
+    assert isinstance(response, _FakeStreamResponse)
+    assert len(persist_calls) == 1
+    call = persist_calls[0]
+    assert call["agent_id"] == "agent-1"
+    assert call["session_id"] == "s-stream-failure"
+    assert call["request_id"]
+    assert "stream boom" in call["user_message"]
+    assert call["error_type"] == "RuntimeError"
+    assert isinstance(call["metadata"], dict)
+
+
+@pytest.mark.asyncio
 async def test_api_chat_resolves_portal_identity_from_headers(monkeypatch):
     from src.gateway import webchat
 
