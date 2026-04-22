@@ -505,6 +505,42 @@ class SessionManager:
             )
         
         return deleted_count
+
+    async def delete_messages_from(self, session_id: str, message_id: str, wait_for_save: bool = False) -> int:
+        """Delete the target message and all following messages.
+
+        Returns:
+            Number of messages deleted. Returns 0 if message_id is not found.
+        """
+        session = await self.get_session(session_id)
+        history = session.get("history", [])
+
+        target_index = -1
+        for i, msg in enumerate(history):
+            if msg.get("id") == message_id:
+                target_index = i
+                break
+
+        if target_index == -1:
+            return 0
+
+        deleted_count = len(history) - target_index
+        session["history"] = history[:target_index]
+        session["updated_at"] = datetime.now().isoformat()
+
+        if self.auto_save and self.persistence_enabled:
+            save_task = asyncio.create_task(
+                session_persistence.save_session(
+                    session_id=session_id,
+                    channel=session.get("channel", ""),
+                    messages=session["history"],
+                    metadata=session.get("metadata", {}),
+                )
+            )
+            if wait_for_save:
+                await save_task
+
+        return deleted_count
     
     async def get_history(self, session_id: str) -> List[Dict[str, str]]:
         """Get conversation history for a session."""
