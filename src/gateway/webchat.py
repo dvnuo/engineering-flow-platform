@@ -235,6 +235,8 @@ async def _persist_chat_failure_state(
                     "request_id": request_id,
                     "error_type": error_type,
                     "exclude_from_model_context": True,
+                    "ui_hint": "system_error",
+                    **({"display_message": summary} if summary else {}),
                 },
             },
         )

@@ -694,6 +694,8 @@ async def test_api_chat_failure_persists_system_error_and_failed_metadata(monkey
     assert add_message_calls[0]["extra"]["author_name"] == "System"
     assert add_message_calls[0]["extra"]["metadata"]["kind"] == "system_error"
     assert add_message_calls[0]["extra"]["metadata"]["exclude_from_model_context"] is True
+    assert add_message_calls[0]["extra"]["metadata"]["ui_hint"] == "system_error"
+    assert "boom" in add_message_calls[0]["extra"]["metadata"]["display_message"]
     assert metadata_calls
     assert metadata_calls[-1]["latest_event_type"] == "chat.failed"
     assert metadata_calls[-1]["latest_event_state"] == "error"
@@ -767,6 +769,13 @@ async def test_api_chat_stream_failure_persists_system_error_state(monkeypatch):
     assert "stream boom" in call["user_message"]
     assert call["error_type"] == "RuntimeError"
     assert isinstance(call["metadata"], dict)
+
+
+def test_webchat_source_keeps_chat_started_completed_failed_metadata_event_names():
+    source = (Path(__file__).parent.parent / "src" / "gateway" / "webchat.py").read_text(encoding="utf-8")
+    assert 'latest_event_type="chat.started"' in source
+    assert 'default_event_type="chat.completed"' in source
+    assert 'latest_event_type="chat.failed"' in source
 
 
 @pytest.mark.asyncio
