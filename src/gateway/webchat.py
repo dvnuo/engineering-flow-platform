@@ -15,6 +15,7 @@ import time
 import io
 import mimetypes
 import shutil
+import unicodedata
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -1713,6 +1714,28 @@ def _server_file_content_type(path: Path) -> str:
     return mimetypes.guess_type(str(path))[0] or "application/octet-stream"
 
 
+def _safe_download_filename(name: str, fallback: str = "server-files") -> str:
+    raw_name = "" if name is None else str(name)
+    sanitized = ''.join(ch for ch in raw_name if not unicodedata.category(ch).startswith("C"))
+    sanitized = sanitized.replace('/', '').replace('\\', '').replace('"', "'").strip()
+    return sanitized or fallback
+
+
+def _attachment_disposition(filename: str) -> str:
+    safe_name = _safe_download_filename(filename, fallback="download")
+    return f'attachment; filename="{safe_name}"'
+
+
+def _server_files_archive_name(paths: List[Path]) -> str:
+    if len(paths) != 1:
+        return "server-files-selection.zip"
+
+    base_name = _safe_download_filename(paths[0].name, fallback="server-files")
+    if base_name.lower().endswith('.zip'):
+        return base_name
+    return f"{base_name}.zip"
+
+
 def _create_server_files_zip(paths: List[Path]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -1995,15 +2018,15 @@ async def api_server_files_download(request: web.Request) -> web.Response:
             file_path = resolved_paths[0]
             response = web.FileResponse(file_path)
             response.content_type = _server_file_content_type(file_path)
-            response.headers['Content-Disposition'] = f'attachment; filename="{file_path.name}"'
+            response.headers['Content-Disposition'] = _attachment_disposition(file_path.name)
             return response
 
         archive = await asyncio.to_thread(_create_server_files_zip, resolved_paths)
-        archive_name = f"{resolved_paths[0].name}.zip" if len(resolved_paths) == 1 else "files.zip"
+        archive_name = _server_files_archive_name(resolved_paths)
         return web.Response(
             body=archive,
             content_type='application/zip',
-            headers={'Content-Disposition': f'attachment; filename="{archive_name}"'},
+            headers={'Content-Disposition': _attachment_disposition(archive_name)},
         )
     except web.HTTPBadRequest as exc:
         return web.json_response({'success': False, **json.loads(exc.text)}, status=400)

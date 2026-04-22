@@ -2240,10 +2240,13 @@
     }
 
     function updateServerFilesToolbarState() {
+        const downloadBtn = fileExplorerContent.querySelector('#serverFilesDownloadBtn');
         const deleteBtn = fileExplorerContent.querySelector('#serverFilesDeleteBtn');
-        if (!deleteBtn) return;
+        if (!downloadBtn || !deleteBtn) return;
         const count = selectedServerFilePaths.size;
+        downloadBtn.disabled = count === 0;
         deleteBtn.disabled = count === 0;
+        downloadBtn.textContent = count > 0 ? `Download (${count})` : 'Download';
         deleteBtn.textContent = count > 0 ? `Delete (${count})` : 'Delete';
     }
 
@@ -2309,6 +2312,20 @@
         }
     }
 
+    function downloadServerFiles(paths) {
+        if (!paths.length) return;
+        const url = new URL('/api/server-files/download', window.location.origin);
+        paths.forEach(path => url.searchParams.append('paths', path));
+
+        const link = document.createElement('a');
+        link.href = url.toString();
+        link.download = '';
+        link.rel = 'noopener';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+    }
+
     // Show My Uploads (user's uploaded files)
     async function showMyUploads() {
         fileExplorerPanel.classList.add('show');
@@ -2365,6 +2382,7 @@
             pathHtml += `
                 <div class="file-explorer-toolbar" style="display:flex;gap:8px;margin:8px 0 10px 0;">
                     <button type="button" id="serverFilesUploadBtn">Upload</button>
+                    <button type="button" id="serverFilesDownloadBtn" disabled>Download</button>
                     <button type="button" id="serverFilesDeleteBtn" disabled>Delete</button>
                 </div>
             `;
@@ -2385,7 +2403,7 @@
                 <div class="file-explorer-list">
                     ${data.items.map(item => `
                         <div class="file-explorer-item" data-path="${item.path}" data-is-dir="${item.is_dir}">
-                            <input type="checkbox" class="server-file-select" data-path="${item.path}" title="Select for delete" />
+                            <input type="checkbox" class="server-file-select" data-path="${item.path}" title="Select for download/delete" />
                             ${item.is_dir ?
                                 '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>' :
                                 '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
@@ -2407,6 +2425,12 @@
             if (deleteBtn) {
                 deleteBtn.addEventListener('click', () => {
                     deleteServerFiles(Array.from(selectedServerFilePaths));
+                });
+            }
+            const downloadBtn = fileExplorerContent.querySelector('#serverFilesDownloadBtn');
+            if (downloadBtn) {
+                downloadBtn.addEventListener('click', () => {
+                    downloadServerFiles(Array.from(selectedServerFilePaths));
                 });
             }
             fileExplorerContent.querySelectorAll('.server-file-select').forEach(checkbox => {

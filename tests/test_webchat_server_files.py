@@ -312,17 +312,31 @@ async def test_server_files_delete_multiple_paths(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_server_files_download_single_file(monkeypatch, tmp_path):
     workspace_root = _patch_workspace_home(monkeypatch, tmp_path)
-    file_path = workspace_root / "single.txt"
-    file_path.write_text("one", encoding="utf-8")
+    file_path = workspace_root / "single.md"
+    file_path.write_text("# one", encoding="utf-8")
 
     response = await webchat.api_server_files_download(_Request({"path": str(file_path)}))
 
     assert isinstance(response, web.FileResponse)
-    assert response.headers["Content-Disposition"] == 'attachment; filename="single.txt"'
+    assert response.content_type == "text/markdown"
+    assert response.headers["Content-Disposition"] == 'attachment; filename="single.md"'
 
 
 @pytest.mark.asyncio
-async def test_server_files_download_directory_as_zip(monkeypatch, tmp_path):
+async def test_server_files_download_inline_type_still_forces_attachment(monkeypatch, tmp_path):
+    workspace_root = _patch_workspace_home(monkeypatch, tmp_path)
+    file_path = workspace_root / "data.json"
+    file_path.write_text('{\"ok\":true}', encoding="utf-8")
+
+    response = await webchat.api_server_files_download(_Request({"path": str(file_path)}))
+
+    assert isinstance(response, web.FileResponse)
+    assert response.content_type == "application/json"
+    assert response.headers["Content-Disposition"] == 'attachment; filename="data.json"'
+
+
+@pytest.mark.asyncio
+async def test_server_files_download_directory_uses_directory_zip_name(monkeypatch, tmp_path):
     workspace_root = _patch_workspace_home(monkeypatch, tmp_path)
     dir_path = workspace_root / "bundle"
     dir_path.mkdir(parents=True)
@@ -332,6 +346,44 @@ async def test_server_files_download_directory_as_zip(monkeypatch, tmp_path):
 
     assert response.status == 200
     assert response.content_type == "application/zip"
+    assert response.headers["Content-Disposition"] == 'attachment; filename="bundle.zip"'
     with zipfile.ZipFile(io.BytesIO(response.body), "r") as archive:
         names = archive.namelist()
     assert "bundle/a.txt" in names
+
+
+@pytest.mark.asyncio
+async def test_server_files_download_multiple_paths_uses_selection_zip_name(monkeypatch, tmp_path):
+    workspace_root = _patch_workspace_home(monkeypatch, tmp_path)
+    file_a = workspace_root / "a.txt"
+    file_b = workspace_root / "b.md"
+    file_a.write_text("A", encoding="utf-8")
+    file_b.write_text("B", encoding="utf-8")
+
+    response = await webchat.api_server_files_download(_Request([("paths", str(file_a)), ("paths", str(file_b))]))
+
+    assert response.status == 200
+    assert response.content_type == "application/zip"
+    assert response.headers["Content-Disposition"] == 'attachment; filename="server-files-selection.zip"'
+    with zipfile.ZipFile(io.BytesIO(response.body), "r") as archive:
+        names = archive.namelist()
+    assert "a.txt" in names
+    assert "b.md" in names
+
+
+def test_safe_download_filename_sanitizes_control_characters():
+    sanitized = webchat._safe_download_filename('bad"\r\n\t\x00name.txt')
+
+    assert '\"' not in sanitized
+    assert "\r" not in sanitized
+    assert "\n" not in sanitized
+    assert "\t" not in sanitized
+    assert "\x00" not in sanitized
+    assert webchat._safe_download_filename("notes.md") == "notes.md"
+
+
+def test_safe_download_filename_removes_path_separators():
+    assert "/" not in webchat._safe_download_filename("../bad/name.txt")
+    assert "\\" not in webchat._safe_download_filename("bad\\name.txt")
+    assert webchat._safe_download_filename("../bad/name.txt")
+    assert webchat._safe_download_filename("bad\\name.txt")
