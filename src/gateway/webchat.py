@@ -197,6 +197,8 @@ def _extract_trusted_model_override(request: web.Request, data: Dict[str, Any]) 
 
 
 def _resolve_webchat_session_id(data: Dict[str, Any]) -> str:
+    # Keep explicit client IDs (trimmed), but generate collision-safe defaults.
+    # The UUID suffix avoids same-second timestamp collisions across rapid new sessions.
     candidate = data.get("session_id")
     if isinstance(candidate, str) and candidate.strip():
         return candidate.strip()
@@ -212,6 +214,8 @@ async def _persist_chat_failure_state(
     error_type: str,
     metadata: Optional[Dict[str, Any]],
 ) -> None:
+    # Best-effort only: persistence/metadata failures must never mask the original request failure.
+    # Persisted system errors are excluded from model context so retry turns are not polluted.
     if not session_id:
         return
 

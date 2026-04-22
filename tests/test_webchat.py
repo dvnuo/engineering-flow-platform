@@ -273,7 +273,7 @@ def test_extract_trusted_model_override_ignores_untrusted_request():
     assert webchat._extract_trusted_model_override(request, {"model_override": "gpt-5"}) is None
 
 
-def test_resolve_webchat_session_id_generates_unique_ids_without_client_session():
+def test_resolve_webchat_session_id_avoids_same_second_collisions_without_client_session():
     from src.gateway import webchat
 
     first = webchat._resolve_webchat_session_id({})
@@ -771,7 +771,7 @@ async def test_api_chat_stream_failure_persists_system_error_state(monkeypatch):
     assert isinstance(call["metadata"], dict)
 
 
-def test_webchat_source_keeps_chat_started_completed_failed_metadata_event_names():
+def test_webchat_source_guards_against_chat_metadata_event_name_drift():
     source = (Path(__file__).parent.parent / "src" / "gateway" / "webchat.py").read_text(encoding="utf-8")
     assert 'latest_event_type="chat.started"' in source
     assert 'default_event_type="chat.completed"' in source
