@@ -274,6 +274,15 @@ def test_agent_process_source_uses_per_tool_feedback_policy_for_all_tool_feedbac
     assert module_source.count("_tool_feedback_text_for_tool(") >= 4
 
 
+def test_agent_process_source_filters_messages_excluded_from_model_context():
+    from src.agents import core
+
+    process_source = inspect.getsource(core.Agent.process)
+    assert 'metadata = msg.get("metadata") if isinstance(msg, dict) else None' in process_source
+    assert 'metadata.get("exclude_from_model_context")' in process_source
+    assert 'msg.get("exclude_from_model_context")' in process_source
+
+
 def test_to_input_items_source_uses_per_tool_feedback_policy():
     from src.agents import core
 

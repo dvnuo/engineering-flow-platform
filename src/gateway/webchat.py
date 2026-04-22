@@ -197,6 +197,83 @@ def _extract_trusted_model_override(request: web.Request, data: Dict[str, Any]) 
     return value or None
 
 
+def _resolve_webchat_session_id(data: Dict[str, Any]) -> str:
+    # Keep explicit client IDs (trimmed), but generate collision-safe defaults.
+    # The UUID suffix avoids same-second timestamp collisions across rapid new sessions.
+    candidate = data.get("session_id")
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate.strip()
+    return f"webchat_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+
+
+async def _persist_chat_failure_state(
+    *,
+    agent_id: Optional[str],
+    session_id: Optional[str],
+    request_id: Optional[str],
+    user_message: str,
+    error_type: str,
+    metadata: Optional[Dict[str, Any]],
+) -> None:
+    # Best-effort only: persistence/metadata failures must never mask the original request failure.
+    # Persisted system errors are excluded from model context so retry turns are not polluted.
+    if not session_id:
+        return
+
+    try:
+        if not session_manager._initialized:
+            await session_manager.initialize()
+
+        summary = user_message.strip() if isinstance(user_message, str) else ""
+        content = f"System error: {summary}" if summary else "System error: request failed."
+        await session_manager.add_message(
+            session_id,
+            "assistant",
+            content,
+            wait_for_save=True,
+            extra={
+                "author_name": "System",
+                "author_source": "system",
+                "exclude_from_model_context": True,
+                "metadata": {
+                    "kind": "system_error",
+                    "request_id": request_id,
+                    "error_type": error_type,
+                    "exclude_from_model_context": True,
+                    "ui_hint": "system_error",
+                    **({"display_message": summary} if summary else {}),
+                },
+            },
+        )
+
+        if agent_id and session_id:
+            await publish_session_metadata(
+                agent_id=agent_id,
+                session_id=session_id,
+                last_execution_id=request_id,
+                latest_event_type="chat.failed",
+                latest_event_state="error",
+                snapshot_version=None,
+                runtime_events=[
+                    {
+                        "event_type": "execution.failed",
+                        "state": "error",
+                        "request_id": request_id,
+                        "session_id": session_id,
+                        "summary": summary,
+                        "detail_payload": {
+                            "message": summary,
+                            "error_type": error_type,
+                        },
+                        "created_at": datetime.utcnow().isoformat() + "Z",
+                    }
+                ],
+                metadata=metadata or {},
+            )
+    except Exception:
+        logger.warning("Best-effort chat failure persistence failed", exc_info=True)
+
+
 def _require_non_empty_string(data: Dict[str, Any], key: str) -> str:
     value = data.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -656,12 +733,16 @@ async def api_chat(request: web.Request) -> web.Response:
     POST /api/chat
     Body: {"message": "...", "session_id": "optional", "attachments": ["file_id1", "file_id2"], "reasoning_replay": false}
     """
+    session_id: Optional[str] = None
+    request_id: Optional[str] = None
+    runtime_agent_id: Optional[str] = None
+    execution_metadata: Dict[str, Any] = {}
     try:
         data = await request.json()
         message = (data.get('message') or '').strip()
         
-        # Dynamic session_id with timestamp-based default for multi-session support
-        session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
+        # Dynamic session_id with collision-safe default for multi-session support
+        session_id = _resolve_webchat_session_id(data)
         
         # Get reasoning_replay setting
         reasoning_replay = data.get('reasoning_replay', None)
@@ -926,13 +1007,27 @@ async def api_chat(request: web.Request) -> web.Response:
             # Use the error's message
             user_message = e.message
             status_code = e.status_code or status_code
-        
-        return web.json_response({
+
+        await _persist_chat_failure_state(
+            agent_id=runtime_agent_id,
+            session_id=session_id,
+            request_id=request_id,
+            user_message=user_message,
+            error_type=error_type,
+            metadata=execution_metadata,
+        )
+
+        error_response = {
             'error': user_message,
             'error_type': error_type,
             'details': error_details.get("details", {}),
             'timestamp': error_details.get("timestamp"),
-        }, status=status_code)
+        }
+        if session_id:
+            error_response['session_id'] = session_id
+        if request_id:
+            error_response['request_id'] = request_id
+        return web.json_response(error_response, status=status_code)
 
 
 async def api_chat_stream(request: web.Request) -> web.StreamResponse:
@@ -944,11 +1039,16 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
     Returns: text/event-stream with chunks of the response
     """
     response: Optional[web.StreamResponse] = None
+    response_prepared = False
     run_task: Optional[asyncio.Task] = None
+    session_id: Optional[str] = None
+    request_id: Optional[str] = None
+    runtime_agent_id: Optional[str] = None
+    execution_metadata: Dict[str, Any] = {}
     try:
         data = await request.json()
         message = (data.get('message') or '').strip()
-        session_id = data.get('session_id', f'webchat_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
+        session_id = _resolve_webchat_session_id(data)
         attachments = data.get('attachments')
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
@@ -980,6 +1080,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         )
 
         await response.prepare(request)
+        response_prepared = True
 
         # Send start event
         await response.write(
@@ -1103,7 +1204,15 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         raise
     except Exception as e:
         logger.error(f"Stream error: {e}")
-        if response is not None and run_task is not None:
+        await _persist_chat_failure_state(
+            agent_id=runtime_agent_id,
+            session_id=session_id,
+            request_id=request_id,
+            user_message=str(e),
+            error_type=type(e).__name__,
+            metadata=execution_metadata,
+        )
+        if response is not None and response_prepared:
             error_data = json.dumps({'error': str(e)})
             try:
                 await response.write(f"event: error\ndata: {error_data}\n\n".encode())
