@@ -15,6 +15,7 @@ import time
 import io
 import mimetypes
 import shutil
+import unicodedata
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -1714,7 +1715,8 @@ def _server_file_content_type(path: Path) -> str:
 
 
 def _safe_download_filename(name: str, fallback: str = "server-files") -> str:
-    sanitized = ''.join(ch for ch in name if ch >= ' ' and ch != '\x7f')
+    raw_name = "" if name is None else str(name)
+    sanitized = ''.join(ch for ch in raw_name if not unicodedata.category(ch).startswith("C"))
     sanitized = sanitized.replace('/', '').replace('\\', '').replace('"', "'").strip()
     return sanitized or fallback
 

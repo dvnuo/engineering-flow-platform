@@ -372,9 +372,18 @@ async def test_server_files_download_multiple_paths_uses_selection_zip_name(monk
 
 
 def test_safe_download_filename_sanitizes_control_characters():
-    sanitized = webchat._safe_download_filename('bad"\\r\\nname.txt')
+    sanitized = webchat._safe_download_filename('bad"\r\n\t\x00name.txt')
 
     assert '\"' not in sanitized
     assert "\r" not in sanitized
     assert "\n" not in sanitized
+    assert "\t" not in sanitized
+    assert "\x00" not in sanitized
     assert webchat._safe_download_filename("notes.md") == "notes.md"
+
+
+def test_safe_download_filename_removes_path_separators():
+    assert "/" not in webchat._safe_download_filename("../bad/name.txt")
+    assert "\\" not in webchat._safe_download_filename("bad\\name.txt")
+    assert webchat._safe_download_filename("../bad/name.txt")
+    assert webchat._safe_download_filename("bad\\name.txt")
