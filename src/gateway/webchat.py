@@ -2191,30 +2191,17 @@ async def api_delete_conversation_from(request: web.Request) -> web.Response:
         if not session_id or not message_id:
             return web.json_response({'error': 'Missing session_id or message_id', 'user_message_id': message_id}, status=400)
         
-        # Delete this message and all messages after it
-        # First get the message index, then delete from there
         history = await session_manager.get_history(session_id)
-        
-        # Find the message index
-        msg_index = None
-        for i, msg in enumerate(history):
-            if msg.get('id') == message_id:
-                msg_index = i
-                break
-        
-        if msg_index is None:
+
+        if not any(msg.get('id') == message_id for msg in history):
             return web.json_response({'error': 'Message not found', 'user_message_id': message_id}, status=404)
-        
-        # Delete messages from msg_index onwards
-        deleted_count = 0
-        if msg_index < len(history):
-            # Get IDs of messages to delete, skipping any without an 'id'
-            ids_to_delete = [msg.get('id') for msg in history[msg_index:] if msg.get('id')]
-            for mid in ids_to_delete:
-                success = await session_manager.delete_message(session_id, mid)
-                if success:
-                    deleted_count += 1
-        
+
+        deleted_count = await session_manager.delete_messages_from(
+            session_id,
+            message_id,
+            wait_for_save=True,
+        )
+
         return web.json_response({
             'success': True,
             'deleted_count': deleted_count
