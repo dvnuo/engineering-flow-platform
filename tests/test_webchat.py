@@ -3311,6 +3311,49 @@ async def test_api_delete_session_returns_404_when_missing(monkeypatch):
     assert payload["error"] == "Session not found"
 
 
+@pytest.mark.asyncio
+async def test_api_delete_conversation_from_deletes_target_message_and_following_messages(monkeypatch):
+    from src.gateway import webchat
+
+    history = [
+        {"id": "u1", "role": "user", "content": "first"},
+        {"id": "a1", "role": "assistant", "content": "first answer"},
+        {"id": "u2", "role": "user", "content": "second"},
+        {"id": "a2", "role": "assistant", "content": "second answer"},
+    ]
+
+    async def _fake_get_history(_session_id):
+        return history
+
+    async def _fake_delete_message(_session_id, message_id):
+        for i, msg in enumerate(history):
+            if msg.get("id") == message_id:
+                history.pop(i)
+                return True
+        return False
+
+    monkeypatch.setattr(webchat.session_manager, "get_history", _fake_get_history)
+    monkeypatch.setattr(webchat.session_manager, "delete_message", _fake_delete_message)
+
+    class _Request:
+        match_info = {"session_id": "s1", "message_id": "u2"}
+
+    resp = await webchat.api_delete_conversation_from(_Request())
+    assert resp.status == 200
+    payload = json.loads(resp.text)
+    assert payload["success"] is True
+    assert payload["deleted_count"] == 2
+    assert [m["id"] for m in history] == ["u1", "a1"]
+
+    class _MissingRequest:
+        match_info = {"session_id": "s1", "message_id": "missing"}
+
+    missing_resp = await webchat.api_delete_conversation_from(_MissingRequest())
+    assert missing_resp.status == 404
+    missing_payload = json.loads(missing_resp.text)
+    assert missing_payload["error"] == "Message not found"
+
+
 def test_agent_assistant_display_helpers_minimal_payload():
     from src.agents.core import Agent
 
