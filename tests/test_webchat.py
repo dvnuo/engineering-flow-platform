@@ -273,6 +273,18 @@ def test_extract_trusted_model_override_ignores_untrusted_request():
     assert webchat._extract_trusted_model_override(request, {"model_override": "gpt-5"}) is None
 
 
+def test_resolve_webchat_session_id_generates_unique_ids_without_client_session():
+    from src.gateway import webchat
+
+    first = webchat._resolve_webchat_session_id({})
+    second = webchat._resolve_webchat_session_id({})
+    assert first != second
+    assert first.startswith("webchat_")
+    assert second.startswith("webchat_")
+    assert webchat._resolve_webchat_session_id({"session_id": "  s-1  "}) == "s-1"
+    assert webchat._resolve_webchat_session_id({"session_id": ""}).startswith("webchat_")
+
+
 @pytest.mark.asyncio
 async def test_chat_execution_bus_adapter_non_stream(monkeypatch):
     from src.gateway import webchat
@@ -618,6 +630,73 @@ async def test_api_chat_generic_exception_still_returns_error_response():
 
     response = await webchat.api_chat(_Request())
     assert response.status == 500
+
+
+@pytest.mark.asyncio
+async def test_api_chat_failure_persists_system_error_and_failed_metadata(monkeypatch):
+    from src.gateway import webchat
+
+    add_message_calls = []
+    metadata_calls = []
+
+    monkeypatch.setattr(
+        webchat.global_config,
+        "_config",
+        {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}},
+        raising=False,
+    )
+    monkeypatch.setattr(webchat, "inject_context", lambda **kwargs: (kwargs["message"], "ok", []))
+    monkeypatch.setattr(webchat, "_resolve_runtime_agent_identity", lambda _request: ("agent-1", "Agent One"))
+    async def _failing_run_chat_via_execution_bus(**kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _failing_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+
+    async def _fake_add_message(session_id, role, content, wait_for_save=False, extra=None):
+        add_message_calls.append(
+            {
+                "session_id": session_id,
+                "role": role,
+                "content": content,
+                "wait_for_save": wait_for_save,
+                "extra": extra or {},
+            }
+        )
+        return "msg-system-error"
+
+    async def _fake_publish_session_metadata(**kwargs):
+        metadata_calls.append(kwargs)
+
+    monkeypatch.setattr(webchat.session_manager, "add_message", _fake_add_message)
+    monkeypatch.setattr(webchat, "publish_session_metadata", _fake_publish_session_metadata)
+
+    class _Request:
+        app = {}
+        headers = {"X-Portal-Author-Source": "portal"}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-failure"}
+
+    response = await webchat.api_chat(_Request())
+    payload = json.loads(response.text)
+
+    assert response.status == 500
+    assert "boom" in payload["error"] or payload["error"]
+    assert payload["request_id"]
+    assert payload["session_id"] == "s-failure"
+    assert len(add_message_calls) == 1
+    assert add_message_calls[0]["session_id"] == "s-failure"
+    assert add_message_calls[0]["role"] == "assistant"
+    assert add_message_calls[0]["wait_for_save"] is True
+    assert "System error" in add_message_calls[0]["content"]
+    assert "boom" in add_message_calls[0]["content"]
+    assert add_message_calls[0]["extra"]["author_name"] == "System"
+    assert add_message_calls[0]["extra"]["metadata"]["kind"] == "system_error"
+    assert add_message_calls[0]["extra"]["metadata"]["exclude_from_model_context"] is True
+    assert metadata_calls
+    assert metadata_calls[-1]["latest_event_type"] == "chat.failed"
+    assert metadata_calls[-1]["latest_event_state"] == "error"
 
 
 @pytest.mark.asyncio

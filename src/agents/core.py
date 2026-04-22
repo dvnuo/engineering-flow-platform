@@ -1732,6 +1732,11 @@ You have access to the following tools. When a user asks you to do something tha
         # This handles tool messages that were saved with tool_call_id
         transformed_messages = []
         for msg in messages:
+            metadata = msg.get("metadata") if isinstance(msg, dict) else None
+            if isinstance(metadata, dict) and metadata.get("exclude_from_model_context"):
+                continue
+            if isinstance(msg, dict) and msg.get("exclude_from_model_context"):
+                continue
             transformed = {"role": msg.get("role", "user"), "content": msg.get("content", "")}
             # Preserve tool_calls for assistant messages
             if msg.get("tool_calls"):
