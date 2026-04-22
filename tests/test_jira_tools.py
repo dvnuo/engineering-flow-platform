@@ -46,7 +46,7 @@ def test_jira_preview_tools_not_model_facing():
     names = {s.get("function", {}).get("name") for s in get_tools_schemas()}
     assert "jira_get_issue_preview" not in names
     assert "jira_get_issue_by_url_preview" not in names
-    assert "export_issues_to_markdown" not in names
+    assert "export_issues_to_markdown" in names
 
 
 def test_jira_get_comments_schema_is_model_facing():

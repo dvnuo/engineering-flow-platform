@@ -68,6 +68,9 @@ def test_default_registry_includes_skill_and_adapter_capabilities():
     assert portal_actions
     assert all(item.metadata.get("internal_portal_api") is True for item in portal_actions)
     assert any(item.capability_id == "adapter:jira:add_comment" for item in adapters)
+    export_descriptor = next(item for item in adapters if item.capability_id == "adapter:jira:export_issues_to_markdown")
+    assert "filesystem_write" in export_descriptor.policy_tags
+    assert "attachment_download" in export_descriptor.policy_tags
 
 
 def test_descriptor_fields_preserved():
