@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 import time
@@ -42,15 +43,34 @@ def _summary_to_slug(summary: str, max_len: int = 80) -> str:
     return s or "untitled"
 
 
-def _workspace_root() -> Path:
-    return Path.home() / ".efp" / "workspace"
+def _allowed_workspace_roots() -> list[Path]:
+    roots: list[Path] = []
+    env_root = os.getenv("EFP_WORKSPACE_ROOT")
+    if env_root:
+        roots.append(Path(env_root).expanduser())
+    roots.append(Path.home() / ".efp" / "workspace")
+    roots.append(Path("/root/.efp/workspace"))
+
+    resolved: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            r = root.resolve()
+        except Exception:
+            r = root.expanduser().absolute()
+        key = str(r)
+        if key not in seen:
+            seen.add(key)
+            resolved.append(r)
+    return resolved
 
 
 def _resolve_output_directory(output_directory: str) -> Path:
     output = Path(output_directory).expanduser().resolve()
-    workspace = _workspace_root().expanduser().resolve()
-    if output != workspace and workspace not in output.parents:
-        raise ValueError("output_directory must be under ~/.efp/workspace")
+    allowed_roots = _allowed_workspace_roots()
+    if not any(output == root or root in output.parents for root in allowed_roots):
+        allowed = ", ".join(str(root) for root in allowed_roots)
+        raise ValueError(f"output_directory must be under an EFP workspace root: {allowed}")
     output.mkdir(parents=True, exist_ok=True)
     return output
 
@@ -102,8 +122,10 @@ async def _download_issue_attachments(
     attachments_retries: int,
     attachments_backoff: Optional[List[int]],
     attachments_preserve_binary: bool,
+    source_channel: Any = None,
 ) -> list[dict]:
-    auth_header = jira_channel._auth_header if jira_channel.is_configured() else None
+    channel = source_channel or jira_channel
+    auth_header = channel._auth_header if channel and channel.is_configured() else None
     issue_dir = output_dir / attachments_dir / issue_key
     issue_dir.mkdir(parents=True, exist_ok=True)
     sem = asyncio.Semaphore(max(1, int(concurrency or 1)))
@@ -243,6 +265,20 @@ async def export_issues_to_markdown(
                 break
         selected_keys = all_keys
 
+    if not selected_keys:
+        errors.append("No Jira issues matched the selector.")
+        return {
+            "success": False,
+            "status": "failed",
+            "run_id": run_id,
+            "selector": selector,
+            "output_mode": output_mode,
+            "output_directory": output_directory,
+            "issues": [],
+            "artifacts": {},
+            "errors": errors,
+        }
+
     resolved_output_mode = output_mode
     zip_after_export = False
     if output_mode == "auto":
@@ -283,6 +319,7 @@ async def export_issues_to_markdown(
                 include_attachments=True,
                 include_raw_snapshot=include_raw_snapshot,
                 session_id=_session_id or "unknown_session",
+                attachment_body_policy="metadata_only" if download_attachments else "source_complete",
             )
             issue_result["context_ref"] = source.manifest.get("context_ref")
             issue_result["digest_ref"] = source.manifest.get("digest_ref")
@@ -303,6 +340,7 @@ async def export_issues_to_markdown(
                     attachments_retries=attachments_retries,
                     attachments_backoff=attachments_backoff,
                     attachments_preserve_binary=attachments_preserve_binary,
+                    source_channel=source.channel,
                 )
 
             markdown = render_jira_issue_export_markdown(
@@ -342,23 +380,48 @@ async def export_issues_to_markdown(
             artifacts["combined_content"] = combined
 
     if output_dir_path:
-        manifest = {
-            "run_id": run_id,
-            "selector": selector,
-            "output_mode": output_mode,
-            "resolved_output_mode": resolved_output_mode,
-            "issues": issues_out,
-            "artifacts": artifacts,
-            "errors": errors,
-        }
         manifest_path = output_dir_path / "manifest.json"
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         artifacts["manifest_path"] = str(manifest_path)
 
         if zip_after_export:
+            pre_zip_manifest = {
+                "run_id": run_id,
+                "selector": selector,
+                "output_mode": output_mode,
+                "resolved_output_mode": resolved_output_mode,
+                "output_directory": str(output_dir_path),
+                "issues": issues_out,
+                "artifacts": artifacts,
+                "errors": errors,
+            }
+            manifest_path.write_text(json.dumps(pre_zip_manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
             zip_path = _unique_path(output_dir_path / "jira-export.zip")
-            _zip_export_tree(output_dir_path, zip_path)
             artifacts["zip_path"] = str(zip_path)
+            final_manifest = {
+                "run_id": run_id,
+                "selector": selector,
+                "output_mode": output_mode,
+                "resolved_output_mode": resolved_output_mode,
+                "output_directory": str(output_dir_path),
+                "issues": issues_out,
+                "artifacts": artifacts,
+                "errors": errors,
+            }
+            manifest_path.write_text(json.dumps(final_manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+            _zip_export_tree(output_dir_path, zip_path)
+        else:
+            final_manifest = {
+                "run_id": run_id,
+                "selector": selector,
+                "output_mode": output_mode,
+                "resolved_output_mode": resolved_output_mode,
+                "output_directory": str(output_dir_path),
+                "issues": issues_out,
+                "artifacts": artifacts,
+                "errors": errors,
+            }
+            manifest_path.write_text(json.dumps(final_manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
     exported_count = sum(1 for x in issues_out if x["status"] == "exported")
     if exported_count == len(issues_out) and issues_out:

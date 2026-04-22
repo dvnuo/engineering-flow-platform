@@ -194,12 +194,14 @@ async def test_jira_prepare_issue_context_persists_all_comments_and_bounded_mani
 
     monkeypatch.setattr("src.jira.jira_channel", _Channel())
     out = await jira_prepare_issue_context("PROJ-1", _session_id="s-jira-prepare")
+    assert "\\nissue_key:" not in out
+    assert "\nissue_key:" in out
     assert "[jira source bundle prepared]" in out
     assert "comments_loaded: 20/20" in out
     assert "source_complete_for_generation: True" in out
     assert "source_digest_chunk_count:" in out
     assert len(out) < 8000
-    ref = out.split("context_ref: ", 1)[1].split("\\n", 1)[0].strip().strip('"')
+    ref = out.split("context_ref: ", 1)[1].split("\n", 1)[0].strip().strip('"')
     raw = read_ref(ref, session_id="s-jira-prepare", section="raw", max_chars=50000)
     assert '"comments_loaded": 20' in raw
     assert '"comments_complete": true' in raw.lower()
@@ -241,8 +243,10 @@ async def test_jira_prepare_issue_context_attachment_full_and_preview_ledger(mon
     monkeypatch.setattr("src.jira.jira_channel", _Channel())
     monkeypatch.setattr("src.jira.download_and_process_attachment", _fake_download)
     out = await jira_prepare_issue_context("PROJ-2", _session_id="s-jira-attach")
+    assert "\\nissue_key:" not in out
+    assert "\nissue_key:" in out
     assert "text_attachments_loaded: 2/2" in out
-    ref = out.split("context_ref: ", 1)[1].split("\\n", 1)[0].strip().strip('"')
+    ref = out.split("context_ref: ", 1)[1].split("\n", 1)[0].strip().strip('"')
     from src.context_blob_store import read_ref
     raw = read_ref(ref, session_id="s-jira-attach", section="coverage_ledger", max_chars=50000)
     assert "text_attachments_full_loaded" in raw
@@ -280,7 +284,9 @@ async def test_jira_preview_only_text_attachment_marks_text_incomplete(monkeypat
     monkeypatch.setattr("src.jira.download_and_process_attachment", _fake_download)
     monkeypatch.setattr("src.jira.put_text", _raise_put_text)
     out = await jira_prepare_issue_context("PROJ-9", _session_id="s-jira-preview")
-    ref = out.split("context_ref: ", 1)[1].split("\\n", 1)[0].strip().strip('"')
+    assert "\\nissue_key:" not in out
+    assert "\nissue_key:" in out
+    ref = out.split("context_ref: ", 1)[1].split("\n", 1)[0].strip().strip('"')
     raw = read_ref(ref, session_id="s-jira-preview", section="coverage_ledger", max_chars=50000)
     assert '"text_attachment_bodies_complete": false' in raw.lower()
     assert '"source_complete_for_generation": false' in raw.lower()
@@ -305,7 +311,9 @@ async def test_jira_digest_chunks_do_not_silently_truncate_long_comment(monkeypa
 
     monkeypatch.setattr("src.jira.jira_channel", _Channel())
     out = await jira_prepare_issue_context("PROJ-3", _session_id="s-jira-long")
-    ref = out.split("context_ref: ", 1)[1].split("\\n", 1)[0].strip().strip('"')
+    assert "\\nissue_key:" not in out
+    assert "\nissue_key:" in out
+    ref = out.split("context_ref: ", 1)[1].split("\n", 1)[0].strip().strip('"')
     raw = read_ref(ref, session_id="s-jira-long", section="raw", max_chars=60000)
     assert "L" * 1000 in raw
 

@@ -1351,7 +1351,7 @@ def get_tools_schemas() -> list:
                         "page_size": {"type": "integer", "default": 50},
                         "max_issues": {"type": "integer", "default": 100},
                         "output_mode": {"type": "string", "enum": ["auto", "single_combined", "one_file_per_issue", "zip"], "default": "auto"},
-                        "output_directory": {"type": "string", "description": "Must be under ~/.efp/workspace. Example: /root/.efp/workspace/FXOW/FXLanding"},
+                        "output_directory": {"type": "string", "description": "Must be under ~/.efp/workspace. Example: /root/.efp/workspace/FXOW/FXLanding. Allowed roots are ~/.efp/workspace, /root/.efp/workspace, or EFP_WORKSPACE_ROOT when configured."},
                         "download_attachments": {"type": "boolean", "description": "If omitted, defaults to true when output_directory is provided."},
                         "attachments_dir": {"type": "string", "default": "attachments"},
                         "include_raw_snapshot": {"type": "boolean", "default": False},

@@ -32,6 +32,7 @@ async def prepare_jira_issue_source(
     include_attachments: bool = True,
     include_raw_snapshot: bool = True,
     session_id: str = "unknown_session",
+    attachment_body_policy: str = "source_complete",
 ) -> JiraIssueSourceResult:
     from src import jira as jira_module
 
@@ -99,7 +100,14 @@ async def prepare_jira_issue_source(
             "attachment_text_preview_only": False,
         }
 
-        if include_attachments and is_text and att.get("content"):
+        should_load_text_body = (
+            include_attachments
+            and attachment_body_policy == "source_complete"
+            and is_text
+            and att.get("content")
+        )
+
+        if should_load_text_body:
             try:
                 auth_header = instance_channel._auth_header if instance_channel.is_configured() else None
                 result = await downloader(
@@ -131,6 +139,9 @@ async def prepare_jira_issue_source(
             except Exception as exc:
                 partial_reasons.append(f"attachment_text_processing_failed:{filename}:{type(exc).__name__}")
                 attachment_body_partial_reasons.append(f"attachment_text_processing_failed:{filename}:{type(exc).__name__}")
+        elif include_attachments and attachment_body_policy == "metadata_only" and is_text:
+            partial_reasons.append(f"text_attachment_body_metadata_only:{filename}")
+            attachment_body_partial_reasons.append(f"text_attachment_body_metadata_only:{filename}")
         attachments.append(item)
 
     rendered_fields = issue.get("renderedFields") if isinstance(issue, dict) else None
@@ -270,11 +281,12 @@ async def prepare_jira_issue_source(
 
 
 def format_jira_source_manifest(result: JiraIssueSourceResult) -> str:
-    return (
-        "[jira source bundle prepared]\\n"
-        + "\\n".join(
-            f"{k}: {json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v}"
-            for k, v in result.manifest.items()
-        )
-        + f"\\n\\nUse context_read_ref(ref=\\\"{result.persisted['context_ref']}\\\", section=\\\"...\\\") to inspect source sections."
+    lines = ["[jira source bundle prepared]"]
+    for k, v in result.manifest.items():
+        rendered = json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v
+        lines.append(f"{k}: {rendered}")
+    lines.append("")
+    lines.append(
+        f'Use context_read_ref(ref="{result.persisted["context_ref"]}", section="...") to inspect source sections.'
     )
+    return "\n".join(lines)

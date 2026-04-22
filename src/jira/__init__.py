@@ -285,6 +285,7 @@ async def jira_prepare_issue_context(
             include_attachments=include_attachments,
             include_raw_snapshot=include_raw_snapshot,
             session_id=_session_id or "unknown_session",
+            attachment_body_policy="source_complete",
         )
         return format_jira_source_manifest(result)
     except Exception as e:
@@ -473,8 +474,8 @@ def get_tools_schemas() -> list:
         if name not in seen_names:
             result.append(schema)
 
-    # Export tool is intentionally internal/export-oriented; keep it out of
-    # model-facing default schemas to avoid partial source acquisition paths.
+    # Preview tools remain internal. The export tool is model-facing because users
+    # explicitly ask for "Jira tickets to markdown / save to folder / download attachments".
     return [
         schema for schema in result
         if schema.get("function", {}).get("name") not in {"jira_get_issue_preview", "jira_get_issue_by_url_preview"}
