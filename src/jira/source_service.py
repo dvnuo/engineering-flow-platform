@@ -7,6 +7,8 @@ from typing import Any
 
 from src.context_blob_store import put_text
 from src.source_context import persist_jira_source_bundle_and_digest
+from src.file_artifacts import can_project_to_text
+from src.file_artifacts.service import bind_artifact_to_source_bundle, build_artifact_ref_dict
 from src.utils.attachment import download_and_process_attachment as _default_download_and_process_attachment
 
 from .adapter import JiraFormatAdapter
@@ -76,13 +78,16 @@ async def prepare_jira_issue_source(
     attachment_list = fields.get("attachment", []) if isinstance(fields, dict) else []
     binary_attachments_count = 0
     binary_attachment_bodies_skipped_count = 0
+    artifact_refs: list[dict] = []
+    projectable_attachments_total = 0
 
     for att in attachment_list:
         mime = str(att.get("mimeType") or "")
         filename = str(att.get("filename") or "unknown")
-        is_text = mime.startswith("text/") or filename.lower().endswith((".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".xml", ".log"))
-        if is_text:
+        is_projectable = can_project_to_text(mime, filename)
+        if is_projectable:
             text_attachments_total += 1
+            projectable_attachments_total += 1
         else:
             binary_attachments_count += 1
             binary_attachment_bodies_skipped_count += 1
@@ -103,7 +108,7 @@ async def prepare_jira_issue_source(
         should_load_text_body = (
             include_attachments
             and attachment_body_policy == "source_complete"
-            and is_text
+            and is_projectable
             and att.get("content")
         )
 
@@ -115,6 +120,10 @@ async def prepare_jira_issue_source(
                     session_id=f"jira-source-{issue_key}",
                     options={"include_image_data": False},
                     auth_header=auth_header,
+                    source_type="jira",
+                    source_kind="issue_attachment",
+                    source_locator=f"{issue_key}:{att.get('id')}",
+                    provider_metadata={"issue_key": issue_key, "attachment_id": att.get("id")},
                 )
                 if getattr(result, "content_format", "") == "text":
                     text_content = str(getattr(result, "content", "") or "")
@@ -136,10 +145,16 @@ async def prepare_jira_issue_source(
                         text_attachments_with_full_ref += 1
                         attachment_body_partial_reasons.append(f"text_attachment_preview_only:{filename}")
                     text_attachments_loaded += 1
+                if getattr(result, "artifact_id", None):
+                    from src.file_artifacts.storage import storage as artifact_storage
+                    record = artifact_storage.get_artifact(result.artifact_id)
+                    if record:
+                        bind_artifact_to_source_bundle(record.artifact_id, f"jira:{issue_key}")
+                        artifact_refs.append(build_artifact_ref_dict(record, text_ref=item.get("text_ref")))
             except Exception as exc:
                 partial_reasons.append(f"attachment_text_processing_failed:{filename}:{type(exc).__name__}")
                 attachment_body_partial_reasons.append(f"attachment_text_processing_failed:{filename}:{type(exc).__name__}")
-        elif include_attachments and attachment_body_policy == "metadata_only" and is_text:
+        elif include_attachments and attachment_body_policy == "metadata_only" and is_projectable:
             partial_reasons.append(f"text_attachment_body_metadata_only:{filename}")
             attachment_body_partial_reasons.append(f"text_attachment_body_metadata_only:{filename}")
         attachments.append(item)
@@ -170,6 +185,7 @@ async def prepare_jira_issue_source(
             for c in comments
         ],
         "attachments": attachments,
+        "artifact_refs": artifact_refs,
         "raw_snapshot": issue if include_raw_snapshot else {},
         "names": issue.get("names") if isinstance(issue, dict) else {},
         "renderedFields": issue.get("renderedFields") if isinstance(issue, dict) else {},
@@ -187,6 +203,8 @@ async def prepare_jira_issue_source(
             "attachment_metadata_complete": len(attachments) >= len(attachment_list),
             "text_attachments_loaded": text_attachments_loaded,
             "text_attachments_total": text_attachments_total,
+            "projectable_attachments_total": projectable_attachments_total,
+            "artifact_refs_created": len(artifact_refs),
             "text_attachments_complete": text_attachments_loaded >= text_attachments_total,
             "text_attachment_bodies_complete": text_attachments_loaded >= text_attachments_total and text_attachments_with_full_ref >= text_attachments_preview_only,
             "text_attachments_full_loaded": text_attachments_full_loaded,

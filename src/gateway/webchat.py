@@ -27,6 +27,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.file_parser.storage import init_storage, _file_metadata, StoredFileNotFoundError, get_metadata
 init_storage()
 from src.utils.file_parser import parse_file
+from src.file_artifacts.service import (
+    bind_artifact_to_session,
+    register_existing_file_as_artifact,
+    update_projection_from_parse_result,
+)
 from src.utils.truncate import truncate
 from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception_message
 from src.utils.logger import clear_log_context, set_log_context
@@ -2798,6 +2803,28 @@ async def api_files_upload(request: web.Request) -> web.Response:
             max_size_mb=max_size_mb
         )
         logger.info(f"[api_files_upload] saved metadata.session_id={metadata.session_id}")
+
+        if session_id:
+            from src.hooks.file_context.models import SessionFileMeta
+            from src.hooks.file_context.storage import storage as file_context_storage
+
+            file_context_storage.add_file_to_session(
+                session_id,
+                SessionFileMeta(
+                    file_id=metadata.file_id,
+                    session_id=session_id,
+                    filename=metadata.original_filename,
+                    content_type=metadata.content_type,
+                    parse_status="pending",
+                ),
+            )
+            register_existing_file_as_artifact(
+                metadata.file_id,
+                source_type="chat",
+                source_kind="uploaded_file",
+                session_id=session_id,
+            )
+            bind_artifact_to_session(metadata.file_id, session_id, role="attachment")
         
         return web.json_response({
             'success': True,
@@ -2830,113 +2857,107 @@ async def api_files_upload(request: web.Request) -> web.Response:
 
 async def api_files_parse(request: web.Request) -> web.Response:
     """Parse a file.
-    
+
     POST /api/files/parse
     Content-Type: application/json
     Body: {"file_id": "...", "options": {...}}
-    
+
     Returns:
         200: {"success": true, "markdown": "...", "blocks": [...], ...}
         400: {"success": false, "error": "..."}
     """
     try:
-        
-        
+        from src.hooks.file_context.models import Chunk, SessionFileMeta
+        from src.hooks.file_context.retrieval import retrieval_engine
+        from src.hooks.file_context.storage import storage as file_context_storage
+        import hashlib
+
         try:
             data = await request.json()
         except json.JSONDecodeError:
-            return web.json_response({
-                'success': False,
-                'error': 'Invalid JSON body'
-            }, status=400)
-        
+            return web.json_response({'success': False, 'error': 'Invalid JSON body'}, status=400)
+
         file_id = data.get('file_id')
-        
         if not file_id:
-            return web.json_response({
-                'success': False,
-                'error': 'file_id is required'
-            }, status=400)
-        
-        # Validate session ownership
+            return web.json_response({'success': False, 'error': 'file_id is required'}, status=400)
+
         session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
-        try:
-            metadata = get_metadata(file_id)
-            # If the file is bound to a session, require a matching session_id
-            if metadata.session_id:
-                if not session_id or metadata.session_id != session_id:
-                    return web.json_response({
-                        'success': False,
-                        'error': 'File not found'
-                    }, status=404)
-        except StoredFileNotFoundError:
-            pass  # Will be caught below
-        
-        options = data.get('options', {})
-        
-        # Parse file
-        result = await parse_file(file_id, options)
-        
-        # Save chunks to file context storage
-        if result.success and result.blocks:
-            try:
-                from src.hooks.file_context import storage
-                from src.hooks.file_context.models import Chunk, SessionFileMeta
-                import hashlib
-                
-                # Update file status to processing
-                storage.update_file_status(
-                    session_id=session_id,
-                    file_id=file_id,
-                    status="processing"
-                )
-                
-                # Save chunks
-                total_chars = 0
-                for block in result.blocks:
-                    # Generate chunk_id if not present
-                    chunk_id = block.get('chunk_id') or f"{file_id}_{block.get('type', 'chunk')}_{block.get('page', 1)}_{block.get('index', 1)}"
-                    
-                    # Compute content hash for deduplication
-                    content = block.get('content', '')
-                    content_hash = hashlib.sha256(content.encode()).hexdigest()
-                    
-                    chunk = Chunk(
-                        chunk_id=chunk_id,
+        metadata = get_metadata(file_id)
+        if metadata.session_id and (not session_id or metadata.session_id != session_id):
+            return web.json_response({'success': False, 'error': 'File not found'}, status=404)
+
+        if session_id:
+            if not file_context_storage.get_file_meta(session_id, file_id):
+                file_context_storage.add_file_to_session(
+                    session_id,
+                    SessionFileMeta(
                         file_id=file_id,
-                        session_id=session_id or '',
-                        type=block.get('type', 'paragraph'),
-                        content=content,
-                        markdown=block.get('markdown'),
-                        page=block.get('page'),
-                        index=block.get('index', 1),
-                        source=block.get('method', 'unknown'),
-                        confidence=block.get('confidence', 0.95),
-                        content_hash=content_hash
-                    )
-                    storage.save_chunk(chunk)
-                    total_chars += len(content)
-                
-                # Update file status to completed
-                storage.update_file_status(
-                    session_id=session_id,
-                    file_id=file_id,
-                    status="completed",
-                    chunk_count=len(result.blocks),
-                    total_chars=total_chars
+                        session_id=session_id,
+                        filename=metadata.original_filename,
+                        content_type=metadata.content_type,
+                        parse_status="pending",
+                    ),
                 )
-                
-                logger.info(f"[api_files_parse] Saved {len(result.blocks)} chunks for file {file_id}")
-            except Exception as e:
-                logger.error(f"[api_files_parse] Failed to save chunks: {e}")
-                # Continue anyway, parse succeeded
-        
+            if not register_existing_file_as_artifact(
+                file_id,
+                source_type="chat",
+                source_kind="uploaded_file",
+                session_id=session_id,
+            ):
+                pass
+            bind_artifact_to_session(file_id, session_id, role="attachment")
+            file_context_storage.update_file_status(session_id, file_id, status="processing")
+        from src.file_artifacts.storage import storage as artifact_storage
+        artifact_storage.update_artifact_status(file_id, parse_status="processing")
+
+        options = data.get('options', {})
+        result = await parse_file(file_id, options)
+
         if not result.success:
-            return web.json_response({
-                'success': False,
-                'error': result.error
-            }, status=400)
-        
+            if session_id:
+                file_context_storage.update_file_status(session_id, file_id, status="failed", error=result.error)
+            artifact_storage.update_artifact_status(file_id, parse_status="failed", parse_error=result.error)
+            return web.json_response({'success': False, 'error': result.error}, status=400)
+
+        total_chars = 0
+        saved_chunks = 0
+        for block in (result.blocks or []):
+            block_data = block.model_dump(by_alias=True, exclude_none=True)
+            content = block_data.get('content', '')
+            chunk_id = block_data.get('chunk_id') or f"{file_id}_{block_data.get('type', 'chunk')}_{block_data.get('page', 1)}_{block_data.get('index', saved_chunks + 1)}"
+            chunk = Chunk(
+                chunk_id=chunk_id,
+                file_id=file_id,
+                session_id=session_id or '',
+                type=block_data.get('type', 'paragraph'),
+                content=content,
+                markdown=block_data.get('markdown'),
+                page=block_data.get('page'),
+                index=block_data.get('index', saved_chunks + 1),
+                row_range=block_data.get('row_range'),
+                source=block_data.get('method', 'unknown'),
+                confidence=block_data.get('confidence', 0.95),
+                content_hash=hashlib.sha256(content.encode()).hexdigest(),
+                bbox=block_data.get('bbox'),
+                table_json=json.dumps(block_data.get('json')) if block_data.get('json') is not None else None,
+            )
+            file_context_storage.save_chunk(chunk)
+            total_chars += len(content)
+            saved_chunks += 1
+
+        preview = (result.markdown or '')[:2000]
+        update_projection_from_parse_result(file_id, result, preview=preview)
+
+        if session_id:
+            file_context_storage.update_file_status(
+                session_id=session_id,
+                file_id=file_id,
+                status="completed",
+                chunk_count=saved_chunks,
+                total_chars=total_chars,
+            )
+            retrieval_engine.rebuild_index(session_id)
+
         return web.json_response({
             'success': True,
             'content_type': result.content_type,
@@ -2945,21 +2966,14 @@ async def api_files_parse(request: web.Request) -> web.Response:
             'markdown': result.markdown,
             'blocks': [b.model_dump(by_alias=True, exclude_none=True) for b in result.blocks],
             'json': result.json,
-            'parse_time_ms': result.parse_time_ms
+            'parse_time_ms': result.parse_time_ms,
         })
-        
+
     except StoredFileNotFoundError as e:
-        return web.json_response({
-            'success': False,
-            'error': str(e)
-        }, status=404)
-        
+        return web.json_response({'success': False, 'error': str(e)}, status=404)
     except Exception as e:
         logger.error(f"File parse error: {e}")
-        return web.json_response({
-            'success': False,
-            'error': str(e)
-        }, status=500)
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 
 async def api_files_preview(request: web.Request) -> web.Response:

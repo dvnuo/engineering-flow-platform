@@ -74,6 +74,9 @@ async def _load_github_doc_sources(bundle_ref: Dict[str, Any], doc_paths: List[s
                     "path": doc_ref.path,
                 },
                 "content": raw,
+                "artifact_refs": [],
+                "context_ref": None,
+                "digest_ref": None,
             }
         )
     return items

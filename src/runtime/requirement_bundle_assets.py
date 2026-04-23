@@ -5,11 +5,11 @@ import io
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
-from urllib.parse import urlparse
-
 from ruamel.yaml import YAML
 
 from src.github import github_channel
+from src.github.doc_refs import GitHubDocRef, parse_github_doc_ref as _parse_github_doc_ref
+from src.github.source_service import prepare_github_file_source
 from src.github.url_utils import normalize_github_api_base_url
 from src.runtime.bundle_template_registry import require_bundle_template, resolve_bundle_template_id_from_manifest
 from src.utils.redaction import safe_preview, sanitize_exception_message
@@ -76,24 +76,6 @@ class RequirementBundleError(ValueError):
     """Validation or IO error for requirement bundle assets."""
 
 
-@dataclass(frozen=True)
-class GitHubDocRef:
-    owner: str
-    repo: str
-    branch: str
-    path: str
-
-
-def _allowed_github_hosts() -> set[str]:
-    hosts = {"github.com"}
-
-    base_url = str(getattr(github_channel, "base_url", "") or "").strip()
-    if base_url:
-        parsed_base_url = urlparse(normalize_github_api_base_url(base_url))
-        if parsed_base_url.netloc:
-            hosts.add(parsed_base_url.netloc.lower())
-
-    return hosts
 
 
 def parse_bundle_ref(bundle_ref: Dict[str, Any]) -> BundleRef:
@@ -137,32 +119,11 @@ async def read_repo_text(ref: BundleRef, repo_relative_file: str) -> str:
 
 
 def parse_github_doc_ref(raw: str, default_ref: BundleRef) -> GitHubDocRef:
-    normalized = str(raw or "").strip()
-    if not normalized:
-        raise RequirementBundleError("github_doc_ref is required")
+    try:
+        return _parse_github_doc_ref(raw, default_ref)
+    except Exception as exc:
+        raise RequirementBundleError(str(exc)) from exc
 
-    if normalized.startswith("http://") or normalized.startswith("https://"):
-        parsed = urlparse(normalized)
-        if parsed.netloc.lower() not in _allowed_github_hosts():
-            raise RequirementBundleError(f"Unsupported GitHub doc URL host: {parsed.netloc}")
-        parts = [part for part in parsed.path.split("/") if part]
-        # /owner/repo/blob/branch/path/to/file
-        if len(parts) < 5 or parts[2] != "blob":
-            raise RequirementBundleError("GitHub doc URL must be in /owner/repo/blob/<branch>/<path> format")
-        owner = parts[0]
-        repo = parts[1]
-        branch = parts[3]
-        path = "/".join(parts[4:]).strip("/")
-        if not owner or not repo or not branch or not path:
-            raise RequirementBundleError("GitHub doc URL is missing owner/repo/branch/path")
-        return GitHubDocRef(owner=owner, repo=repo, branch=branch, path=path)
-
-    return GitHubDocRef(
-        owner=default_ref.owner,
-        repo=default_ref.repo,
-        branch=default_ref.branch,
-        path=normalized.strip("/"),
-    )
 
 
 async def read_github_doc_text(raw: str, default_ref: BundleRef) -> tuple[GitHubDocRef, str]:
@@ -170,56 +131,44 @@ async def read_github_doc_text(raw: str, default_ref: BundleRef) -> tuple[GitHub
     logger.debug("Read GitHub doc start | input_kind=%s", input_kind)
     doc_ref: GitHubDocRef | None = None
     try:
-        doc_ref = parse_github_doc_ref(raw, default_ref)
-        logger.debug(
-            "Read GitHub doc resolved | owner=%s repo=%s branch=%s path=%s",
-            doc_ref.owner,
-            doc_ref.repo,
-            doc_ref.branch,
-            doc_ref.path,
-        )
-        file_data = await github_channel.get_file(doc_ref.owner, doc_ref.repo, doc_ref.path, doc_ref.branch)
-        content = file_data.get("content")
-        if not isinstance(content, str) or not content.strip():
-            logger.warning("Read GitHub doc missing content | owner=%s repo=%s branch=%s path=%s", doc_ref.owner, doc_ref.repo, doc_ref.branch, doc_ref.path)
-            raise RequirementBundleError(f"File not found or empty: {doc_ref.owner}/{doc_ref.repo}/{doc_ref.path}@{doc_ref.branch}")
-        try:
-            decoded = base64.b64decode(content).decode("utf-8")
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("Read GitHub doc decode failed | owner=%s repo=%s branch=%s path=%s error=%s", doc_ref.owner, doc_ref.repo, doc_ref.branch, doc_ref.path, exc.__class__.__name__)
+        prepared = await prepare_github_file_source(raw, default_ref)
+        doc_ref = prepared["doc_ref"]
+        bundle = prepared["bundle"]
+        text = str(bundle.get("content_markdown") or "").strip()
+        if not text:
             raise RequirementBundleError(
-                f"Failed to decode file content: {doc_ref.owner}/{doc_ref.repo}/{doc_ref.path}@{doc_ref.branch}"
-            ) from exc
+                f"GitHub file is not projectable to text: {doc_ref.owner}/{doc_ref.repo}/{doc_ref.path}@{doc_ref.branch}"
+            )
         logger.info("Read GitHub doc success | owner=%s repo=%s branch=%s path=%s", doc_ref.owner, doc_ref.repo, doc_ref.branch, doc_ref.path)
-        return doc_ref, decoded
+        return doc_ref, text
     except RequirementBundleError as exc:
         _log_bundle_asset_failure(
-            "read_github_doc_text",
-            exc,
-            raw=raw if doc_ref is None else None,
+            "read_github_doc_text", exc, raw=raw if doc_ref is None else None,
             extra={
                 "input_kind": input_kind,
-                "owner": doc_ref.owner if doc_ref is not None else None,
-                "repo_name": doc_ref.repo if doc_ref is not None else None,
-                "doc_branch": doc_ref.branch if doc_ref is not None else None,
-                "doc_path": doc_ref.path if doc_ref is not None else None,
-            },
+                "owner": doc_ref.owner if doc_ref else None,
+                "repo_name": doc_ref.repo if doc_ref else None,
+                "doc_branch": doc_ref.branch if doc_ref else None,
+                "doc_path": doc_ref.path if doc_ref else None,
+            }
         )
         raise
     except Exception as exc:
         _log_bundle_asset_failure(
-            "read_github_doc_text",
-            exc,
-            raw=raw if doc_ref is None else None,
+            "read_github_doc_text", exc, raw=raw if doc_ref is None else None,
             extra={
                 "input_kind": input_kind,
-                "owner": doc_ref.owner if doc_ref is not None else None,
-                "repo_name": doc_ref.repo if doc_ref is not None else None,
-                "doc_branch": doc_ref.branch if doc_ref is not None else None,
-                "doc_path": doc_ref.path if doc_ref is not None else None,
-            },
+                "owner": doc_ref.owner if doc_ref else None,
+                "repo_name": doc_ref.repo if doc_ref else None,
+                "doc_branch": doc_ref.branch if doc_ref else None,
+                "doc_path": doc_ref.path if doc_ref else None,
+            }
         )
-        raise
+        if doc_ref:
+            raise RequirementBundleError(
+                f"Failed to materialize GitHub doc: {doc_ref.owner}/{doc_ref.repo}/{doc_ref.path}@{doc_ref.branch}"
+            ) from exc
+        raise RequirementBundleError(str(exc)) from exc
 
 
 async def read_bundle_yaml(ref: BundleRef, relative_file: str) -> Dict[str, Any]:

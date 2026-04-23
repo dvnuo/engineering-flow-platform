@@ -4,6 +4,8 @@ import logging
 import json
 from typing import Optional
 
+from src.file_artifacts import can_project_to_text
+from src.file_artifacts.service import bind_artifact_to_source_bundle, build_artifact_ref_dict
 from src.utils.attachment import download_and_process_attachment
 
 from .api import (
@@ -374,6 +376,8 @@ async def confluence_prepare_page_context(
             "attachments_loaded": int(attachments_ledger.get("loaded", len(attachments))),
             "attachments_total": int(attachments_ledger.get("total", len(attachments))),
             "attachments_complete": bool(attachments_ledger.get("complete", False)),
+            "artifact_refs_created": 0,
+            "projectable_attachments_total": 0,
             "children_loaded": int(children_ledger.get("loaded", len(children))),
             "children_total": int(children_ledger.get("total", len(children))),
             "children_complete": bool(children_ledger.get("complete", False)),
@@ -412,6 +416,44 @@ async def confluence_prepare_page_context(
         )
 
         adapter = ConfluenceFormatAdapter(instance_channel)
+        artifact_refs = []
+        if include_attachments and attachments:
+            base_url = instance_channel.base_url.rstrip("/")
+            auth_header = instance_channel._auth_header if instance_channel.is_configured() else None
+            for att in attachments:
+                filename = str(att.get("title") or "unknown")
+                media_type = _infer_attachment_media_type(att, filename)
+                is_image = media_type.startswith("image/")
+                if is_image:
+                    continue
+                if not can_project_to_text(media_type, filename):
+                    continue
+                link = (att.get("_links") or {}).get("download")
+                if not link:
+                    continue
+                try:
+                    result = await download_and_process_attachment(
+                        url=f"{base_url}{link}",
+                        session_id=f"confluence-{page_id}",
+                        options={"include_image_data": False, "prefer_text_for_images": False, "vision_enabled": False},
+                        auth_header=auth_header,
+                        source_type="confluence",
+                        source_kind="page_attachment",
+                        source_locator=f"{page_id}:{att.get('id')}",
+                        provider_metadata={"page_id": page_id, "attachment_id": att.get("id")},
+                    )
+                    if getattr(result, "artifact_id", None):
+                        from src.file_artifacts.storage import storage as artifact_storage
+                        record = artifact_storage.get_artifact(result.artifact_id)
+                        if record:
+                            bind_artifact_to_source_bundle(record.artifact_id, f"confluence:{page_id}")
+                            artifact_ref = build_artifact_ref_dict(record)
+                            artifact_refs.append(artifact_ref)
+                            att["text_preview"] = (result.preview or result.content or "")[:1000]
+                            att["text_ref"] = None
+                except Exception as att_exc:
+                    logger.warning(f"Failed attachment materialization for {filename}: {att_exc}")
+
         bundle = {
             "metadata": {
                 "page_id": page_id,
@@ -421,6 +463,7 @@ async def confluence_prepare_page_context(
             "content_markdown": await adapter._to_markdown(page if isinstance(page, dict) else {}),
             "comments": comments,
             "attachments": attachments,
+            "artifact_refs": artifact_refs,
             "children": children,
             "descendants": descendants,
             "raw_snapshot": page if include_raw_snapshot else {},
@@ -473,6 +516,8 @@ async def confluence_prepare_page_context(
                     descendants_attachments_complete = False
                     ledger["partial_reasons"].append(f"descendant_enrich_failed:{desc_id}:{type(desc_item_exc).__name__}")
             bundle["descendants"] = descendants_enriched
+        ledger["artifact_refs_created"] = len(artifact_refs)
+        ledger["projectable_attachments_total"] = len([a for a in attachments if can_project_to_text(_infer_attachment_media_type(a, str(a.get("title") or "")), str(a.get("title") or "")) and not _is_image_attachment(a, str(a.get("title") or ""))])
         ledger["descendants_pages_complete"] = descendants_pages_complete
         ledger["descendants_comments_complete"] = descendants_comments_complete
         ledger["descendants_attachments_complete"] = descendants_attachments_complete
