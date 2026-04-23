@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.jira.exporter import _resolve_output_directory, export_issues_to_markdown
+from src.jira.exporter import _download_issue_attachments, _resolve_output_directory, export_issues_to_markdown
 from src.jira.selector import (
     extract_issue_keys_from_text,
     extract_output_directory_from_text,
@@ -306,3 +306,182 @@ async def test_download_attachments_uses_source_channel_auth_header(tmp_path, mo
         source_channel=source_channel,
     )
     assert seen["auth_header"] == {"Authorization": "Basic source"}
+
+
+def _fake_source_result(issue_key: str, attachment=True):
+    class FakeAdapter:
+        def _strip_acceptance_criteria_from_markdown_description(self, text): return text
+        def _convert_description_to_markdown(self, body): return str(body or "")
+
+    fields = {"summary": "S", "attachment": []}
+    if attachment:
+        fields["attachment"] = [{"filename": "a.txt", "mimeType": "text/plain", "size": 1, "content": "http://x"}]
+    bundle = {"metadata": {"title": "S"}, "description": "D", "acceptance_criteria": "AC", "comments": [], "attachments": [], "completeness_ledger": {}}
+    return JiraIssueSourceResult(
+        issue_key=issue_key,
+        issue={},
+        fields=fields,
+        bundle=bundle,
+        manifest={"context_ref": "c", "digest_ref": "d", "source_complete": True, "source_complete_for_generation": True, "partial_reasons": []},
+        persisted={},
+        channel=SimpleNamespace(is_configured=lambda: True, _auth_header={"Authorization": "Basic source"}),
+        adapter=FakeAdapter(),
+        attachment_list=fields["attachment"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_attachments_dir_rejects_path_traversal(tmp_path, monkeypatch):
+    source_file = tmp_path / "source.txt"
+    source_file.write_text("x", encoding="utf-8")
+
+    async def fake_download(url, session_id=None, options=None, auth_header=None):
+        return SimpleNamespace(file_id="fid", filename="a.txt", metadata={"size": 1}, content_type="text/plain", content_format="text", content="x")
+
+    monkeypatch.setattr("src.jira.exporter.download_and_process_attachment", fake_download)
+    monkeypatch.setattr("src.jira.exporter.get_file_path", lambda file_id: source_file)
+
+    output_dir = tmp_path / "home" / ".efp" / "workspace" / "out"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(ValueError):
+        await _download_issue_attachments(
+            "MMGFX-1",
+            [{"filename": "a.txt", "mimeType": "text/plain", "size": 1, "content": "http://x"}],
+            output_dir=output_dir,
+            attachments_dir="../../escape",
+            concurrency=1,
+            attachments_max_size=1024,
+            attachments_inline_text_threshold=10,
+            attachments_retries=1,
+            attachments_backoff=[0],
+            attachments_preserve_binary=True,
+            source_channel=SimpleNamespace(is_configured=lambda: True, _auth_header={}),
+        )
+    with pytest.raises(ValueError):
+        await _download_issue_attachments(
+            "MMGFX-1",
+            [{"filename": "a.txt", "mimeType": "text/plain", "size": 1, "content": "http://x"}],
+            output_dir=output_dir,
+            attachments_dir="/tmp/escape",
+            concurrency=1,
+            attachments_max_size=1024,
+            attachments_inline_text_threshold=10,
+            attachments_retries=1,
+            attachments_backoff=[0],
+            attachments_preserve_binary=True,
+            source_channel=SimpleNamespace(is_configured=lambda: True, _auth_header={}),
+        )
+    assert not (output_dir.parent.parent / "escape").exists()
+
+
+@pytest.mark.asyncio
+async def test_zip_does_not_include_preexisting_files(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    output_dir = home / ".efp" / "workspace" / "FXOW" / "FXLanding"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "stale.txt").write_text("stale", encoding="utf-8")
+
+    async def fake_prepare(issue_key_or_url, **kwargs):
+        return _fake_source_result(issue_key_or_url, attachment=True)
+
+    async def fake_download(*args, **kwargs):
+        out = kwargs["output_dir"]
+        issue_key = args[0]
+        p = out / "attachments" / issue_key / "a.txt"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x", encoding="utf-8")
+        return [{"filename": "a.txt", "status": "saved", "path": f"attachments/{issue_key}/a.txt", "absolute_path": str(p), "size": 1, "mime_type": "text/plain"}]
+
+    monkeypatch.setattr("src.jira.exporter.prepare_jira_issue_source", fake_prepare)
+    monkeypatch.setattr("src.jira.exporter._download_issue_attachments", fake_download)
+
+    result = await export_issues_to_markdown(input=["MMGFX-1"], output_mode="zip", output_directory=str(output_dir))
+    with zipfile.ZipFile(result["artifacts"]["zip_path"]) as zf:
+        names = set(zf.namelist())
+        assert "manifest.json" in names
+        assert any(name.endswith(".md") for name in names)
+        assert "attachments/MMGFX-1/a.txt" in names
+        assert "stale.txt" not in names
+
+
+@pytest.mark.asyncio
+async def test_attachment_failure_marks_export_partial(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    output_dir = home / ".efp" / "workspace" / "FXOW" / "FXLanding"
+
+    async def fake_prepare(issue_key_or_url, **kwargs):
+        return _fake_source_result(issue_key_or_url, attachment=True)
+
+    async def fake_download(*args, **kwargs):
+        return [{"filename": "a.txt", "status": "failed", "reason": "download_failed:TimeoutError"}]
+
+    monkeypatch.setattr("src.jira.exporter.prepare_jira_issue_source", fake_prepare)
+    monkeypatch.setattr("src.jira.exporter._download_issue_attachments", fake_download)
+
+    result = await export_issues_to_markdown(input=["MMGFX-1"], output_directory=str(output_dir))
+    assert result["status"] == "partial"
+    assert result["success"] is True
+    assert result["warnings"]
+    issue = result["issues"][0]
+    assert issue["status"] == "exported"
+    assert issue["attachment_download_complete"] is False
+    assert any("attachment_failed:a.txt" in r for r in issue["export_partial_reasons"])
+
+
+@pytest.mark.asyncio
+async def test_metadata_only_source_partial_does_not_force_export_partial(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    output_dir = home / ".efp" / "workspace" / "FXOW" / "FXLanding"
+
+    async def fake_prepare(issue_key_or_url, **kwargs):
+        result = _fake_source_result(issue_key_or_url, attachment=True)
+        result.manifest["partial_reasons"] = ["text_attachment_body_metadata_only:a.txt"]
+        return result
+
+    async def fake_download(*args, **kwargs):
+        out = kwargs["output_dir"]
+        issue_key = args[0]
+        p = out / "attachments" / issue_key / "a.txt"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x", encoding="utf-8")
+        return [{"filename": "a.txt", "status": "saved", "path": f"attachments/{issue_key}/a.txt", "absolute_path": str(p), "size": 1, "mime_type": "text/plain"}]
+
+    monkeypatch.setattr("src.jira.exporter.prepare_jira_issue_source", fake_prepare)
+    monkeypatch.setattr("src.jira.exporter._download_issue_attachments", fake_download)
+
+    result = await export_issues_to_markdown(input=["MMGFX-1"], output_directory=str(output_dir), download_attachments=True)
+    assert result["status"] == "success"
+    issue = result["issues"][0]
+    assert "text_attachment_body_metadata_only:a.txt" in issue["source_partial_reasons"]
+    assert issue["export_partial_reasons"] == []
+    assert issue["partial_reasons"] == []
+
+
+@pytest.mark.asyncio
+async def test_attachment_markdown_paths_are_posix_relative(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    output_dir = home / ".efp" / "workspace" / "FXOW" / "FXLanding"
+
+    async def fake_prepare(issue_key_or_url, **kwargs):
+        return _fake_source_result(issue_key_or_url, attachment=True)
+
+    async def fake_download(*args, **kwargs):
+        out = kwargs["output_dir"]
+        issue_key = args[0]
+        p = out / "attachments" / issue_key / "a.txt"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x", encoding="utf-8")
+        return [{"filename": "a.txt", "status": "saved", "path": f"attachments/{issue_key}/a.txt", "absolute_path": str(p), "size": 1, "mime_type": "text/plain"}]
+
+    monkeypatch.setattr("src.jira.exporter.prepare_jira_issue_source", fake_prepare)
+    monkeypatch.setattr("src.jira.exporter._download_issue_attachments", fake_download)
+
+    result = await export_issues_to_markdown(input=["MMGFX-1"], output_directory=str(output_dir))
+    md = Path(result["issues"][0]["markdown_path"]).read_text(encoding="utf-8")
+    assert "attachments/MMGFX-1/a.txt" in md
+    assert "\\" not in md
+    assert str(output_dir) not in md

@@ -71,6 +71,7 @@ def test_default_registry_includes_skill_and_adapter_capabilities():
     export_descriptor = next(item for item in adapters if item.capability_id == "adapter:jira:export_issues_to_markdown")
     assert "filesystem_write" in export_descriptor.policy_tags
     assert "attachment_download" in export_descriptor.policy_tags
+    assert "warnings" in export_descriptor.output_schema.get("properties", {})
 
 
 def test_descriptor_fields_preserved():

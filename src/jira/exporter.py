@@ -94,14 +94,57 @@ def _unique_path(path: Path) -> Path:
         idx += 1
 
 
-def _zip_export_tree(export_dir: Path, zip_path: Path) -> None:
+def _sanitize_attachments_dir(attachments_dir: str) -> str:
+    raw = str(attachments_dir or "attachments").strip()
+    if not raw:
+        return "attachments"
+    p = Path(raw)
+    if p.is_absolute():
+        raise ValueError("attachments_dir must be a relative directory name")
+    if any(part in {"..", ""} for part in p.parts):
+        raise ValueError("attachments_dir must not contain path traversal")
+    if len(p.parts) != 1:
+        raise ValueError("attachments_dir must be a simple directory name")
+    safe = sanitize_filename(raw)
+    if not safe or safe in {".", ".."}:
+        raise ValueError("attachments_dir is invalid")
+    return safe
+
+
+def _resolve_attachment_issue_dir(output_dir: Path, attachments_dir: str, issue_key: str) -> tuple[Path, str]:
+    safe_attachments_dir = _sanitize_attachments_dir(attachments_dir)
+    safe_issue_key = sanitize_filename(issue_key.upper())
+    issue_dir = (output_dir / safe_attachments_dir / safe_issue_key).resolve()
+    output_root = output_dir.resolve()
+    if issue_dir != output_root and output_root not in issue_dir.parents:
+        raise ValueError("attachment directory must stay under output_directory")
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    return issue_dir, safe_attachments_dir
+
+
+def _zip_export_paths(export_dir: Path, zip_path: Path, paths: list[Path]) -> None:
+    export_root = export_dir.resolve()
+    normalized: list[Path] = []
+    seen: set[str] = set()
+    for p in paths:
+        if not p:
+            continue
+        rp = Path(p).resolve()
+        if not rp.exists() or not rp.is_file():
+            continue
+        if rp == zip_path.resolve():
+            continue
+        if export_root not in rp.parents and rp != export_root:
+            continue
+        key = str(rp)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(rp)
+
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for file_path in export_dir.rglob("*"):
-            if not file_path.is_file():
-                continue
-            if file_path.resolve() == zip_path.resolve():
-                continue
-            zf.write(file_path, arcname=str(file_path.relative_to(export_dir)))
+        for file_path in normalized:
+            zf.write(file_path, arcname=file_path.relative_to(export_root).as_posix())
 
 
 def _is_probably_text_attachment(att: dict, result: Any) -> bool:
@@ -126,8 +169,7 @@ async def _download_issue_attachments(
 ) -> list[dict]:
     channel = source_channel or jira_channel
     auth_header = channel._auth_header if channel and channel.is_configured() else None
-    issue_dir = output_dir / attachments_dir / issue_key
-    issue_dir.mkdir(parents=True, exist_ok=True)
+    issue_dir, safe_attachments_dir = _resolve_attachment_issue_dir(output_dir, attachments_dir, issue_key)
     sem = asyncio.Semaphore(max(1, int(concurrency or 1)))
     backoff = attachments_backoff or DEFAULT_BACKOFF
 
@@ -174,16 +216,23 @@ async def _download_issue_attachments(
 
                 src = get_file_path(result.file_id)
                 target_name = sanitize_filename(getattr(result, "filename", "") or filename)
-                target_path = _unique_path(issue_dir / target_name)
-                shutil.copyfile(src, target_path)
+                if not target_name:
+                    target_name = "attachment"
+                candidate_path = _unique_path(issue_dir / target_name).resolve()
+                output_root = output_dir.resolve()
+                if output_root not in candidate_path.parents:
+                    raise ValueError("attachment target path escaped output_directory")
+                if issue_dir not in candidate_path.parents and candidate_path.parent != issue_dir:
+                    raise ValueError("attachment target path escaped issue attachment directory")
+                shutil.copyfile(src, candidate_path)
 
-                rel_path = target_path.relative_to(output_dir)
+                rel_path = candidate_path.relative_to(output_root).as_posix()
                 item.update(
                     {
                         "status": "saved",
-                        "path": str(rel_path),
-                        "absolute_path": str(target_path),
-                        "size": int(getattr(result, "metadata", {}).get("size") or size or target_path.stat().st_size),
+                        "path": rel_path,
+                        "absolute_path": str(candidate_path),
+                        "size": int(getattr(result, "metadata", {}).get("size") or size or candidate_path.stat().st_size),
                         "mime_type": getattr(result, "content_type", mime_type),
                     }
                 )
@@ -299,6 +348,7 @@ async def export_issues_to_markdown(
     issues_out = []
     combined_chunks: list[str] = []
     artifacts: dict[str, Any] = {}
+    created_paths: list[Path] = []
 
     for key in selected_keys:
         issue_result = {
@@ -310,7 +360,10 @@ async def export_issues_to_markdown(
             "digest_ref": None,
             "source_complete": False,
             "source_complete_for_generation": False,
+            "source_partial_reasons": [],
+            "export_partial_reasons": [],
             "partial_reasons": [],
+            "attachment_download_complete": True,
         }
         try:
             source = await prepare_jira_issue_source(
@@ -325,7 +378,7 @@ async def export_issues_to_markdown(
             issue_result["digest_ref"] = source.manifest.get("digest_ref")
             issue_result["source_complete"] = bool(source.manifest.get("source_complete"))
             issue_result["source_complete_for_generation"] = bool(source.manifest.get("source_complete_for_generation"))
-            issue_result["partial_reasons"] = list(source.manifest.get("partial_reasons") or [])
+            issue_result["source_partial_reasons"] = list(source.manifest.get("partial_reasons") or [])
 
             downloaded = []
             if download_attachments and output_dir_path:
@@ -343,6 +396,19 @@ async def export_issues_to_markdown(
                     source_channel=source.channel,
                 )
 
+            export_partial_reasons = []
+            for att in downloaded:
+                if att.get("status") in {"failed", "skipped"}:
+                    filename = att.get("filename") or "unknown"
+                    reason = att.get("reason") or "unknown"
+                    export_partial_reasons.append(f"attachment_{att.get('status')}:{filename}:{reason}")
+                if att.get("status") == "saved" and att.get("absolute_path"):
+                    created_paths.append(Path(att["absolute_path"]))
+
+            issue_result["export_partial_reasons"] = export_partial_reasons
+            issue_result["partial_reasons"] = export_partial_reasons
+            issue_result["attachment_download_complete"] = not export_partial_reasons
+
             markdown = render_jira_issue_export_markdown(
                 source,
                 downloaded_attachments=downloaded if downloaded else None,
@@ -359,6 +425,7 @@ async def export_issues_to_markdown(
                     raise ValueError("output_directory is required for one_file_per_issue export")
                 md_path = _unique_path(output_dir_path / _safe_issue_markdown_filename(key, summary))
                 md_path.write_text(markdown, encoding="utf-8")
+                created_paths.append(md_path)
                 issue_result["markdown_path"] = str(md_path)
             else:
                 combined_chunks.append(markdown)
@@ -366,7 +433,9 @@ async def export_issues_to_markdown(
         except Exception as exc:
             issue_result["status"] = "failed"
             msg = f"{key}: {type(exc).__name__}: {exc}"
+            issue_result["export_partial_reasons"].append(msg)
             issue_result["partial_reasons"].append(msg)
+            issue_result["attachment_download_complete"] = False
             errors.append(msg)
         issues_out.append(issue_result)
 
@@ -375,29 +444,26 @@ async def export_issues_to_markdown(
         if output_dir_path:
             combined_path = _unique_path(output_dir_path / "jira-export.md")
             combined_path.write_text(combined, encoding="utf-8")
+            created_paths.append(combined_path)
             artifacts["combined_markdown_path"] = str(combined_path)
         else:
             artifacts["combined_content"] = combined
+
+    warnings: list[str] = []
+    if selector.get("truncated"):
+        warnings.extend(selector.get("partial_reasons") or [])
+    for issue in issues_out:
+        for reason in issue.get("export_partial_reasons") or []:
+            warnings.append(f"{issue.get('issue_key')}: {reason}")
 
     if output_dir_path:
         manifest_path = output_dir_path / "manifest.json"
         artifacts["manifest_path"] = str(manifest_path)
 
         if zip_after_export:
-            pre_zip_manifest = {
-                "run_id": run_id,
-                "selector": selector,
-                "output_mode": output_mode,
-                "resolved_output_mode": resolved_output_mode,
-                "output_directory": str(output_dir_path),
-                "issues": issues_out,
-                "artifacts": artifacts,
-                "errors": errors,
-            }
-            manifest_path.write_text(json.dumps(pre_zip_manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-
             zip_path = _unique_path(output_dir_path / "jira-export.zip")
             artifacts["zip_path"] = str(zip_path)
+
             final_manifest = {
                 "run_id": run_id,
                 "selector": selector,
@@ -406,10 +472,12 @@ async def export_issues_to_markdown(
                 "output_directory": str(output_dir_path),
                 "issues": issues_out,
                 "artifacts": artifacts,
+                "warnings": warnings,
                 "errors": errors,
             }
             manifest_path.write_text(json.dumps(final_manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-            _zip_export_tree(output_dir_path, zip_path)
+            created_paths.append(manifest_path)
+            _zip_export_paths(output_dir_path, zip_path, created_paths)
         else:
             final_manifest = {
                 "run_id": run_id,
@@ -419,17 +487,24 @@ async def export_issues_to_markdown(
                 "output_directory": str(output_dir_path),
                 "issues": issues_out,
                 "artifacts": artifacts,
+                "warnings": warnings,
                 "errors": errors,
             }
             manifest_path.write_text(json.dumps(final_manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+            created_paths.append(manifest_path)
 
     exported_count = sum(1 for x in issues_out if x["status"] == "exported")
-    if exported_count == len(issues_out) and issues_out:
-        status = "success"
-    elif exported_count > 0:
+    failed_count = len(issues_out) - exported_count
+    has_export_warnings = bool(selector.get("truncated")) or any(
+        x.get("export_partial_reasons") for x in issues_out
+    )
+
+    if exported_count == 0:
+        status = "failed"
+    elif failed_count > 0 or has_export_warnings:
         status = "partial"
     else:
-        status = "failed"
+        status = "success"
 
     return {
         "success": status in {"success", "partial"},
@@ -440,6 +515,7 @@ async def export_issues_to_markdown(
         "output_directory": str(output_dir_path) if output_dir_path else None,
         "issues": issues_out,
         "artifacts": artifacts,
+        "warnings": warnings,
         "errors": errors,
     }
 

@@ -134,6 +134,7 @@ def build_jira_adapter_capabilities() -> List[AdapterActionDescriptor]:
                     "issues": {"type": "array"},
                     "artifacts": {"type": "object"},
                     "errors": {"type": "array"},
+                    "warnings": {"type": "array"},
                 },
             },
             policy_tags=["jira", "read", "export", "artifact_write", "filesystem_write", "attachment_download"],
