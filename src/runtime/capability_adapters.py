@@ -119,7 +119,7 @@ def build_jira_adapter_capabilities() -> List[AdapterActionDescriptor]:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "input": {},
+                    "input": {"type": "string"},
                     "issue_keys": {"type": "array", "items": {"type": "string"}},
                     "jql": {"type": "string"},
                     "output_mode": {"type": "string", "enum": ["auto", "single_combined", "one_file_per_issue", "zip"]},

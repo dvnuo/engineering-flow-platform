@@ -1339,12 +1339,13 @@ def get_tools_schemas() -> list:
                     "type": "object",
                     "properties": {
                         "input": {
-                            "anyOf": [
-                                {"type": "string"},
-                                {"type": "array", "items": {"type": "string"}},
-                                {"type": "object"}
-                            ],
-                            "description": "Can be a single issue key, newline-separated keys, comma-separated keys, a JSON list, a dict with jql, or the original user text containing issue keys."
+                            "type": "string",
+                            "description": (
+                                "Original user text or Jira issue keys. Use this for natural-language requests "
+                                "such as 'convert these Jira tickets to markdown and save to folder: ...'. "
+                                "It may contain newline-separated, comma-separated, or space-separated issue keys. "
+                                "For structured calls, use issue_keys or jql fields instead."
+                            ),
                         },
                         "issue_keys": {"type": "array", "items": {"type": "string"}},
                         "jql": {"type": "string"},

@@ -56,6 +56,35 @@ def test_jira_get_comments_schema_is_model_facing():
     assert "jira_get_comments" in names
 
 
+def test_export_issues_to_markdown_schema_is_strict_responses_compatible():
+    from src.jira import get_tools_schemas
+    from src.agents.llm import _convert_tools_schema
+
+    schema = next(
+        s for s in get_tools_schemas()
+        if s.get("function", {}).get("name") == "export_issues_to_markdown"
+    )
+
+    input_schema = schema["function"]["parameters"]["properties"]["input"]
+
+    # The model-facing schema must not expose anyOf with a bare object branch.
+    assert "anyOf" not in input_schema
+    assert input_schema["type"] == "string"
+
+    converted = _convert_tools_schema([schema])[0]
+    assert converted["strict"] is True
+    assert converted["parameters"]["additionalProperties"] is False
+
+    converted_input = converted["parameters"]["properties"]["input"]
+
+    # Optional top-level string fields become nullable under Responses strict conversion.
+    assert "null" in converted_input["type"]
+    assert "string" in converted_input["type"]
+
+    # No nested object schema should remain under input.
+    assert "anyOf" not in converted_input
+
+
 @pytest.mark.asyncio
 async def test_jira_update_issue_summary_only(mock_jira_channel):
     """Test jira_update_issue with summary only"""
@@ -414,3 +443,74 @@ async def test_execute_tool_jira_get_comments_dispatches_with_session(monkeypatc
     assert captured["session_id"] == "s1"
     assert "[jira comments bundle prepared]" in result.content
     assert "ctx://context/s1/" in result.content
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_export_handles_strict_nullable_optional_args(monkeypatch):
+    from src import execute_tool
+
+    prompt = (
+        "帮我把下面jira ticket 转成markdown, 并save到folder："
+        "/root/.efp/workspace/FXOW/FXLanding，如果ticket有attachment，请一并下载 "
+        "MMGFX-14839 MMGFX-14838"
+    )
+
+    captured = {}
+
+    async def fake_export_issues_to_markdown(**kwargs):
+        captured.update(kwargs)
+        return {
+            "success": True,
+            "status": "success",
+            "run_id": "test-run",
+            "selector": {"issue_keys": ["MMGFX-14839", "MMGFX-14838"]},
+            "output_mode": kwargs.get("output_mode"),
+            "output_directory": "/root/.efp/workspace/FXOW/FXLanding",
+            "issues": [],
+            "artifacts": {},
+            "warnings": [],
+            "errors": [],
+        }
+
+    monkeypatch.setattr("src.jira.export_issues_to_markdown", fake_export_issues_to_markdown)
+
+    result = await execute_tool(
+        "export_issues_to_markdown",
+        input=prompt,
+        issue_keys=None,
+        jql=None,
+        page_size=None,
+        max_issues=None,
+        output_mode=None,
+        output_directory=None,
+        download_attachments=None,
+        attachments_dir=None,
+        include_raw_snapshot=None,
+        include_coverage_ledger=None,
+        max_comments=None,
+        comments_order=None,
+        attachments_concurrency=None,
+        attachments_max_size=None,
+        attachments_inline_text_threshold=None,
+        attachments_retries=None,
+        attachments_backoff=None,
+        attachments_preserve_binary=None,
+    )
+
+    assert result.success is True
+    assert captured["input"] == prompt
+
+    # These should fall back to dispatch defaults after _strip_none_values removes None.
+    assert captured["page_size"] == 50
+    assert captured["max_issues"] == 100
+    assert captured["output_mode"] == "auto"
+    assert captured["attachments_dir"] == "attachments"
+    assert captured["include_raw_snapshot"] is False
+    assert captured["include_coverage_ledger"] is True
+    assert captured["comments_order"] == "latest_first"
+    assert captured["attachments_concurrency"] == 4
+    assert captured["attachments_max_size"] == 52428800
+    assert captured["attachments_inline_text_threshold"] == 2000
+    assert captured["attachments_retries"] == 3
+    assert captured["attachments_backoff"] == [1, 2, 4]
+    assert captured["attachments_preserve_binary"] is True

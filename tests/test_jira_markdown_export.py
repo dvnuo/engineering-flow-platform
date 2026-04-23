@@ -31,6 +31,21 @@ def test_selector_extracts_exact_user_prompt():
     assert selector["issue_keys"] == keys
 
 
+def test_selector_extracts_current_required_prompt():
+    prompt = (
+        "帮我把下面jira ticket 转成markdown, 并save到folder："
+        "/root/.efp/workspace/FXOW/FXLanding，如果ticket有attachment，请一并下载 "
+        "MMGFX-14839 MMGFX-14838"
+    )
+
+    assert extract_output_directory_from_text(prompt) == "/root/.efp/workspace/FXOW/FXLanding"
+    assert extract_issue_keys_from_text(prompt) == ["MMGFX-14839", "MMGFX-14838"]
+
+    selector = normalize_jira_issue_selector(input=prompt)
+    assert selector["selector_type"] == "issue_keys"
+    assert selector["issue_keys"] == ["MMGFX-14839", "MMGFX-14838"]
+
+
 def test_json_string_input_list():
     selector = normalize_jira_issue_selector(input='["MMGFX-14839","MMGFX-14838"]')
     assert selector["issue_keys"] == ["MMGFX-14839", "MMGFX-14838"]
