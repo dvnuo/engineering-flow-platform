@@ -48,6 +48,9 @@ def _isolated_home(tmp_path, monkeypatch):
 
 def _mk_session_manager(calls):
     class FakeSessionManager:
+        def __init__(self):
+            self._active_skill_sessions = {}
+
         async def add_message(self, session_id, role, content, extra=None):
             message = {
                 "session_id": session_id,
@@ -62,7 +65,14 @@ def _mk_session_manager(calls):
         async def get_history(self, session_id):
             return []
 
+        async def get_active_skill_session(self, session_id):
+            return self._active_skill_sessions.get(session_id)
+
         async def set_active_skill_session(self, session_id, state):
+            if state is None:
+                self._active_skill_sessions.pop(session_id, None)
+            else:
+                self._active_skill_sessions[session_id] = state
             return None
 
     return FakeSessionManager()
