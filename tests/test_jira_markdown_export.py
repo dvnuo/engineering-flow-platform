@@ -5,7 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.jira.exporter import _download_issue_attachments, _resolve_output_directory, jira_export_issues_to_markdown
+from src.jira.exporter import (
+    _download_issue_attachments,
+    _resolve_output_directory,
+    _safe_export_attachment_filename,
+    jira_export_issues_to_markdown,
+)
 from src.jira.selector import (
     extract_issue_keys_from_text,
     extract_output_directory_from_text,
@@ -56,6 +61,16 @@ def test_json_string_input_jql():
     assert selector["selector_type"] == "jql"
     assert selector["jql"] == "project = MMGFX"
     assert selector["page_size"] == 25
+
+
+def test_safe_export_attachment_filename_extension_only_uses_default_stem():
+    assert _safe_export_attachment_filename("   .pdf") == "attachment.pdf"
+    assert _safe_export_attachment_filename(".docx") == "attachment.docx"
+
+
+def test_safe_export_attachment_filename_empty_or_unsafe_stem_preserves_extension():
+    assert _safe_export_attachment_filename("../?.xlsx") == "attachment.xlsx"
+    assert _safe_export_attachment_filename("  !!!.txt  ") == "attachment.txt"
 
 
 def test_output_directory_workspace_guard(tmp_path, monkeypatch):

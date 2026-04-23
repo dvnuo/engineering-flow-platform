@@ -84,8 +84,14 @@ def _safe_export_attachment_filename(
     raw = "".join(ch for ch in raw if ord(ch) >= 32)
     raw = raw.replace("/", "_").replace("\\", "_")
 
-    ext = Path(raw).suffix
-    stem = raw[: -len(ext)] if ext else raw
+    # Path('.pdf').suffix treats this as a hidden file with no extension.
+    # For export artifacts we want extension-only names to become attachment.<ext>.
+    if raw.startswith(".") and raw.count(".") == 1 and len(raw) > 1:
+        stem = ""
+        ext = raw
+    else:
+        ext = Path(raw).suffix
+        stem = raw[: -len(ext)] if ext else raw
 
     out_chars: list[str] = []
     for ch in stem:
@@ -101,14 +107,14 @@ def _safe_export_attachment_filename(
     safe_stem = re.sub(r"-{2,}", "-", safe_stem)
     safe_stem = safe_stem.strip("._-")
 
-    if not safe_stem:
-        safe_stem = default_stem
-
     safe_ext = ""
     if ext:
         ext_body = re.sub(r"[^A-Za-z0-9]+", "", ext.lstrip("."))
         if ext_body:
             safe_ext = f".{ext_body}"
+
+    if not safe_stem:
+        safe_stem = default_stem
 
     max_stem_len = max(1, max_len - len(safe_ext))
     safe_stem = safe_stem[:max_stem_len].rstrip("._-")
