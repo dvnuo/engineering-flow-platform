@@ -6,6 +6,64 @@ import pytest
 from src.runtime.contracts import make_execution_result
 
 
+def test_direct_active_skill_contract_non_continuation_does_not_auto_continue():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "active",
+        "execution_style": "direct",
+        "planning_mode": "auto",
+        "staging_mode": "auto",
+    }
+    registry = type("Registry", (), {"match_skill": lambda self, message: []})()
+    assert core._should_continue_existing_active_skill(contract, "write a release note", registry) is False
+
+
+def test_direct_active_skill_contract_explicit_continue_message_continues():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "active",
+        "execution_style": "direct",
+        "planning_mode": "auto",
+        "staging_mode": "auto",
+    }
+    registry = type("Registry", (), {"match_skill": lambda self, message: []})()
+    assert core._should_continue_existing_active_skill(contract, "continue", registry) is True
+
+
+def test_stepwise_active_skill_contract_clear_continuation_keeps_skill():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "active",
+        "execution_style": "stepwise",
+        "planning_mode": "required",
+        "staging_mode": "required",
+    }
+    matched = [type("Skill", (), {"name": "alpha"})()]
+    registry = type("Registry", (), {"match_skill": lambda self, message: matched})()
+    assert core._should_continue_existing_active_skill(contract, "next", registry) is True
+
+
+def test_stepwise_active_skill_contract_yields_when_new_skill_matches():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "active",
+        "execution_style": "stepwise",
+        "planning_mode": "required",
+        "staging_mode": "required",
+    }
+    matched = [type("Skill", (), {"name": "beta"})()]
+    registry = type("Registry", (), {"match_skill": lambda self, message: matched})()
+    assert core._should_continue_existing_active_skill(contract, "use beta skill", registry) is False
+
+
 @pytest.mark.asyncio
 async def test_execute_tool_via_runtime_bus_propagates_governance_passthrough_hint(monkeypatch):
     from src.agents import core

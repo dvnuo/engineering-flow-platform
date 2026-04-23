@@ -17,17 +17,11 @@ DEFAULT_RESPONSE_FLOW_CONFIG: Dict[str, Any] = {
 _PLAN_PHRASES = (
     "plan first",
     "preview first",
-    "manifest first",
-    "step by step",
     "先给计划",
     "先做计划",
     "先预览",
     "先给大纲",
-    "先给 manifest",
     "先不要直接生成",
-    "分步骤",
-    "按阶段",
-    "逐步",
 )
 
 _STAGING_PHRASES = (
@@ -181,7 +175,7 @@ def decide_response_flow(
     elif staging_policy == "never":
         staging_required = False
     else:
-        if explicit_staging or explicit_plan:
+        if explicit_staging:
             staging_required = True
             reasons.append("explicit_user_request")
         elif complex_request:

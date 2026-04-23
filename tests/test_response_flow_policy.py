@@ -4,6 +4,7 @@ from src.runtime.response_flow_policy import decide_response_flow
 def test_explicit_plan_request_chinese_sets_plan_required():
     decision = decide_response_flow(user_text="先给计划，再继续")
     assert decision.plan_required is True
+    assert decision.staging_required is False
 
 
 def test_explicit_staged_request_chinese_sets_staging_required():
@@ -13,6 +14,16 @@ def test_explicit_staged_request_chinese_sets_staging_required():
 
 def test_generic_generate_implementation_not_staged_without_budget_pressure():
     decision = decide_response_flow(user_text="generate implementation")
+    assert decision.staging_required is False
+
+
+def test_generic_step_by_step_does_not_force_staging():
+    decision = decide_response_flow(user_text="Please do this step by step")
+    assert decision.staging_required is False
+
+
+def test_generic_zh_stepwise_does_not_force_staging():
+    decision = decide_response_flow(user_text="请逐步处理")
     assert decision.staging_required is False
 
 

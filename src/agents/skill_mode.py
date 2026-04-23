@@ -190,7 +190,8 @@ def _build_skill_plan_system_prompt(skill: Skill) -> str:
 
 
 def _build_skill_plan_user_prompt(skill: Skill, user_message: str) -> str:
-    strategy_hint = "\n".join(f"- {s}" for s in skill.strategy) if skill.strategy else "(none)"
+    strategy = getattr(skill, "strategy", None) or []
+    strategy_hint = "\n".join(f"- {s}" for s in strategy) if strategy else "(none)"
     return (
         f"User request: {user_message}\n"
         f"Skill strategy hints:\n{strategy_hint}\n"
@@ -220,7 +221,8 @@ def _build_skill_mode_system_prompt(
     ) or "(none)"
 
     # Include skill strategy for ongoing sessions
-    strategy_hint = "\n".join(f"- {s}" for s in skill.strategy) if skill.strategy else "(none)"
+    strategy = getattr(skill, "strategy", None) or []
+    strategy_hint = "\n".join(f"- {s}" for s in strategy) if strategy else "(none)"
     artifacts_summary = _build_artifacts_summary(skill_session)
     
     # Load skill references

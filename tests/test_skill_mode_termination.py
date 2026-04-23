@@ -9,6 +9,9 @@ class FakeTracer:
     def log_tool_call(self, *args, **kwargs):
         return None
 
+    def log_skill_mode_entry(self, *args, **kwargs):
+        return None
+
     def log_skill_mode_action(self, *args, **kwargs):
         return None
 
@@ -29,6 +32,93 @@ def make_agent():
     agent.agent_id = None
     return agent
 
+
+def test_direct_skill_prompt_no_clear_switch_confirmation_bias():
+    from src.skills.runtime import build_skill_prompt_blocks
+
+    skill = SimpleNamespace(
+        name="direct-skill",
+        description="Direct skill",
+        path="",
+        tools=[],
+        task_tools=[],
+        strategy=[],
+        body="Do the thing",
+        execution_style="direct",
+        planning_mode="auto",
+        staging_mode="auto",
+    )
+    blocks = build_skill_prompt_blocks(skill)
+    assert "ask whether to clear/switch" not in blocks.system_rules.lower()
+    assert "without asking for switch permission" in blocks.system_rules
+
+
+@pytest.mark.asyncio
+async def test_start_skill_mode_skips_initial_plan_when_not_explicit_or_complex(monkeypatch):
+    from src.agents import core as core_mod
+
+    captured = {}
+
+    def fake_resolve(skill, message, *, request_estimated_tokens=None, prompt_budget_tokens=None):
+        captured["request_estimated_tokens"] = request_estimated_tokens
+        captured["prompt_budget_tokens"] = prompt_budget_tokens
+        return {"plan_required": False, "execution_style": "direct", "ask_user_policy": "blocked_only"}
+
+    async def fake_continue(self, **kwargs):
+        return {"response": "ok", "usage": {}, "events": []}
+
+    async def fake_set_active(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(core_mod, "resolve_skill_response_flow", fake_resolve)
+    monkeypatch.setattr(core_mod, "estimate_llm_request_tokens", lambda **kwargs: 3000)
+    monkeypatch.setattr(core_mod, "resolve_prompt_budget", lambda **kwargs: {"prompt_budget_tokens": 32000})
+    monkeypatch.setattr(core_mod.Agent, "_continue_skill_mode", fake_continue)
+    monkeypatch.setattr(core_mod.session_manager, "set_active_skill_session", fake_set_active)
+    monkeypatch.setattr("src.skills.get_tracer", lambda: FakeTracer())
+
+    agent = make_agent()
+    skill = SimpleNamespace(name="lookup", description="search issue", path="")
+    await agent._start_skill_mode("small request", "s1", "u1", skill)
+    assert captured["request_estimated_tokens"] == 3000
+    assert captured["prompt_budget_tokens"] == 32000
+
+
+@pytest.mark.asyncio
+async def test_start_skill_mode_complex_first_turn_can_trigger_initial_plan(monkeypatch):
+    from src.agents import core as core_mod
+
+    plan_calls = {"n": 0}
+
+    async def fake_continue(self, **kwargs):
+        return {"response": "ok", "usage": {}, "events": []}
+
+    async def fake_set_active(*args, **kwargs):
+        return None
+
+    async def fake_generate_initial_plan(*args, **kwargs):
+        plan_calls["n"] += 1
+        return "goal", [{"id": "s1", "type": "execute", "title": "step"}], {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+
+    monkeypatch.setattr(core_mod, "estimate_llm_request_tokens", lambda **kwargs: 30000)
+    monkeypatch.setattr(core_mod, "resolve_prompt_budget", lambda **kwargs: {"prompt_budget_tokens": 32000})
+    monkeypatch.setattr(core_mod.Agent, "_continue_skill_mode", fake_continue)
+    monkeypatch.setattr(core_mod.session_manager, "set_active_skill_session", fake_set_active)
+    monkeypatch.setattr(core_mod, "generate_initial_skill_plan", fake_generate_initial_plan)
+    monkeypatch.setattr("src.skills.get_tracer", lambda: FakeTracer())
+
+    agent = make_agent()
+    skill = SimpleNamespace(
+        name="lookup",
+        description="search issue",
+        path="",
+        planning_mode="auto",
+        staging_mode="auto",
+        execution_style="direct",
+        ask_user_policy="blocked_only",
+    )
+    await agent._start_skill_mode("big request", "s1", "u1", skill)
+    assert plan_calls["n"] == 1
 
 async def run_replay_case(
     monkeypatch,

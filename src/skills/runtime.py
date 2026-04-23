@@ -373,11 +373,20 @@ def build_skill_prompt_blocks(
     else:
         allowed_tools_text = "all currently available tools"
     task_tools_text = ", ".join(effective_task_tools) if effective_task_tools else "none"
+    resolved_execution_style = str((runtime_config.execution_style if runtime_config else getattr(skill, "execution_style", "direct")) or "direct")
+    resolved_planning_mode = str((runtime_config.planning_mode if runtime_config else getattr(skill, "planning_mode", "auto")) or "auto")
+    resolved_staging_mode = str((runtime_config.staging_mode if runtime_config else getattr(skill, "staging_mode", "auto")) or "auto")
+    direct_mode = resolved_execution_style == "direct" and resolved_planning_mode != "required" and resolved_staging_mode != "required"
+    continuity_rule = (
+        "For direct skills, if the user gives a clear new request, treat that as leaving this prior skill and handle the new request directly without asking for switch permission."
+        if direct_mode
+        else "For stepwise/required-plan/required-staging skills, continue the flow when the user clearly continues; only ask continue-vs-switch if the latest user turn is genuinely ambiguous."
+    )
     system_rules = (
         f"Active skill: {skill.name}.\n"
-        "You are operating under this active skill contract until the user explicitly clears or switches skill.\n"
-        "Stay within the skill's instructions, constraints, output contract, reference usage, and allowed tool policy.\n"
-        "If the user request conflicts with the active skill, ask whether to clear/switch the skill instead of silently ignoring it.\n"
+        "Stay within the skill's instructions, constraints, output contract, reference usage, and allowed tool policy while this skill is active.\n"
+        f"{continuity_rule}\n"
+        "If the user's latest request is clearly different, allow switching/leaving this skill instead of forcing confirmation.\n"
         "Do not invent tool results, references, or external facts that were not provided.\n"
         f"Runtime policy: only use allowed tools ({allowed_tools_text}).\n"
         f"Task-capable tools: {task_tools_text}."

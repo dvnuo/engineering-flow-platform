@@ -96,6 +96,59 @@ def _run_post_tool_hooks_via_governance(**kwargs):
     return run_post_tool_hooks(**kwargs)
 
 
+_EXPLICIT_SKILL_CONTINUATION_MESSAGES = {
+    "continue",
+    "next",
+    "go on",
+    "继续",
+    "继续生成",
+    "下一步",
+    "接着来",
+}
+
+
+def _is_explicit_skill_continuation_message(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    if not normalized:
+        return False
+    return normalized in _EXPLICIT_SKILL_CONTINUATION_MESSAGES
+
+
+def _is_effectively_direct_skill_contract(existing_contract: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(existing_contract, dict):
+        return True
+    execution_style = str(existing_contract.get("execution_style") or "direct").strip().lower()
+    planning_mode = str(existing_contract.get("planning_mode") or "auto").strip().lower()
+    staging_mode = str(existing_contract.get("staging_mode") or "auto").strip().lower()
+    return execution_style == "direct" and planning_mode != "required" and staging_mode != "required"
+
+
+def _should_continue_existing_active_skill(
+    existing_contract: Optional[Dict[str, Any]],
+    message: str,
+    skill_registry: Any,
+) -> bool:
+    if not is_active_skill_contract_usable(existing_contract):
+        return False
+
+    existing_skill_name = get_contract_skill_name(existing_contract)
+    if not existing_skill_name:
+        return False
+
+    if _is_effectively_direct_skill_contract(existing_contract):
+        return _is_explicit_skill_continuation_message(message)
+
+    try:
+        matched_skills = skill_registry.match_skill(message) or []
+    except Exception:
+        matched_skills = []
+    if matched_skills:
+        top_match_name = str(getattr(matched_skills[0], "name", "") or "").strip()
+        if top_match_name and top_match_name != existing_skill_name:
+            return False
+    return True
+
+
 
 def _enrich_runtime_event_context(
     data: Dict[str, Any],
@@ -1850,10 +1903,14 @@ You have access to the following tools. When a user asks you to do something tha
                         event_data={"reason": "skill_not_found", "skill": explicit_skill_name},
                     )
             else:
-                continued_skill = skill_registry.get_skill(existing_skill_name)
-                if continued_skill and not getattr(continued_skill, "deprecated", False):
-                    selected_skill = continued_skill
-                    activation_reason = "continued"
+                if _should_continue_existing_active_skill(existing_active_skill_contract, message, skill_registry):
+                    continued_skill = skill_registry.get_skill(existing_skill_name)
+                    if continued_skill and not getattr(continued_skill, "deprecated", False):
+                        selected_skill = continued_skill
+                        activation_reason = "continued"
+                    else:
+                        await session_manager.set_active_skill_session(session_id, None)
+                        set_skill_workdir(None)
                 else:
                     await session_manager.set_active_skill_session(session_id, None)
                     set_skill_workdir(None)
@@ -3071,7 +3128,28 @@ You have access to the following tools. When a user asks you to do something tha
         tracer.log_skill_mode_entry(skill.name, message, session_id)
         send_skill_event("skill_mode_start", {"skill": skill.name, "message": safe_preview(message, 100)})
 
-        flow = resolve_skill_response_flow(skill, message)
+        initial_skill_session = SkillSession(skill_name=skill.name, original_user_request=message)
+        initial_system_prompt = _build_skill_mode_system_prompt(
+            skill,
+            initial_skill_session,
+            execution_style=str(getattr(skill, "execution_style", "direct") or "direct"),
+            ask_user_policy=str(getattr(skill, "ask_user_policy", "blocked_only") or "blocked_only"),
+        )
+        initial_user_prompt = _build_skill_mode_user_prompt(message, initial_skill_session)
+        initial_input_items = [{"role": "user", "content": [{"type": "input_text", "text": initial_user_prompt}]}]
+        initial_request_estimated_tokens = estimate_llm_request_tokens(
+            input_items=initial_input_items,
+            system_prompt=initial_system_prompt,
+            tools=[],
+        )
+        initial_prompt_budget = resolve_prompt_budget(stage="skill_generation", model=(self.model or config.llm.get("model", "gpt-5-mini")))
+        initial_prompt_budget_tokens = int(initial_prompt_budget.get("prompt_budget_tokens", 0) or 0)
+        flow = resolve_skill_response_flow(
+            skill,
+            message,
+            request_estimated_tokens=initial_request_estimated_tokens,
+            prompt_budget_tokens=initial_prompt_budget_tokens,
+        )
         if flow.get("plan_required"):
             tracer.log_skill_mode_step("GENERATE_PLAN", "started", f"Creating plan for: {safe_preview(message, 50)}")
             send_skill_event("skill_step", {"step": "GENERATE_PLAN", "status": "started", "detail": "Creating plan..."})
