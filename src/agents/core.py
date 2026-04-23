@@ -2430,8 +2430,9 @@ You have access to the following tools. When a user asks you to do something tha
             if request_estimated_tokens > prompt_budget_tokens:
                 llm_kwargs["system_prompt"] = (
                     (llm_kwargs.get("system_prompt") or "")
-                    + "\n\nBudget guard: Do not emit all generated files in chat. "
-                    "Write artifacts/files via tools when possible; otherwise output a concise manifest and ask to continue file-by-file."
+                    + "\n\nBudget guard: Keep the chat response concise and within the current output budget. "
+                    "Prefer writing artifacts/files via tools when available. "
+                    "Do not dump extremely large multi-file content in a single reply."
                 )
             
             raw_max_chat = (

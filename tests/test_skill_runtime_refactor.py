@@ -1019,6 +1019,49 @@ async def test_explicit_slash_invocation_calls_match_skill(monkeypatch, base_age
 
 
 @pytest.mark.asyncio
+async def test_over_budget_prompt_guard_does_not_inject_manifest_continue_wording(monkeypatch, base_agent):
+    agent, _ = base_agent
+    captured_prompts = []
+
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(
+            _initialized=True,
+            match_skill=lambda *_: [],
+            get_skill=lambda *_: None,
+            get_skill_runtime_config=lambda *_args, **_kwargs: None,
+        ),
+    )
+    monkeypatch.setattr("src.agents.core.estimate_llm_request_tokens", lambda *args, **kwargs: 103)
+    monkeypatch.setattr(
+        "src.agents.core.resolve_prompt_budget",
+        lambda *args, **kwargs: {
+            "prompt_budget_tokens": 100,
+            "reserved_output_tokens": 20,
+            "safety_margin_tokens": 0,
+            "max_prompt_tokens": 100,
+            "max_output_tokens": 256,
+        },
+    )
+
+    async def fake_responses(**kwargs):
+        captured_prompts.append(kwargs.get("system_prompt", ""))
+        return {"content": "done", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+
+    result = await agent.process("please generate the full implementation for this feature", session_id="s-budget-guard")
+    assert result["response"] == "done"
+    assert captured_prompts
+    prompt = captured_prompts[0].lower()
+    assert "budget guard:" in prompt
+    assert "manifest" not in prompt
+    assert "ask to continue" not in prompt
+    assert "file-by-file" not in prompt
+    assert "phase output" not in prompt
+
+
+@pytest.mark.asyncio
 async def test_active_skill_contract_unknown_explicit_switch_returns_without_llm(monkeypatch, base_agent):
     agent, sess = base_agent
     sess.active_skill_session = {
