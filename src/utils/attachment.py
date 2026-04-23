@@ -15,7 +15,9 @@ from .file_parser import (
     parse_file,
     get_file_path,
     compress_image_for_llm,
+    is_parse_supported,
 )
+from .file_parser.context_materializer import ensure_file_parsed_for_session
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -105,10 +107,13 @@ async def download_and_process_attachment(
         else:
             content = f"[Image: {filename}]"
             content_format = "text"
-    elif content_type.startswith("text/") or _is_text_type(content_type):
-        # Extract text
+    elif is_parse_supported(content_type):
+        # Extract text from parse-supported non-image files
         try:
-            result = await parse_file(metadata.file_id)
+            if session_id:
+                result = await ensure_file_parsed_for_session(metadata.file_id, session_id)
+            else:
+                result = await parse_file(metadata.file_id)
             content = result.markdown[:max_text_chars] if result.markdown else ""
             content_format = "text"
         except Exception as e:
@@ -204,17 +209,6 @@ def _extract_filename(header: str) -> str:
     return ""
 
 
-def _is_text_type(content_type: str) -> bool:
-    """Check if content type is text-based."""
-    text_types = [
-        "text/",
-        "application/json",
-        "application/xml",
-        "application/javascript",
-    ]
-    return any(content_type.startswith(t) for t in text_types)
-
-
 def _detect_content_type(filename: str, content: bytes) -> str:
     """Detect content type from filename or content."""
     try:
@@ -238,8 +232,24 @@ def _detect_content_type(filename: str, content: bytes) -> str:
         "doc": "application/msword",
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "txt": "text/plain",
+        "md": "text/markdown",
         "json": "application/json",
+        "yaml": "application/yaml",
+        "yml": "application/yaml",
         "xml": "application/xml",
+        "log": "text/plain",
+        "py": "text/plain",
+        "js": "text/plain",
+        "ts": "text/plain",
+        "tsx": "text/plain",
+        "java": "text/plain",
+        "go": "text/plain",
+        "rs": "text/plain",
+        "sh": "text/plain",
+        "sql": "text/plain",
+        "properties": "text/plain",
+        "ini": "text/plain",
+        "cfg": "text/plain",
     }
     return mapping.get(ext, "application/octet-stream")
 

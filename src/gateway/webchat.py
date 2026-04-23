@@ -26,7 +26,12 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.file_parser.storage import init_storage, _file_metadata, StoredFileNotFoundError, get_metadata
 init_storage()
-from src.utils.file_parser import parse_file
+from src.utils.file_parser import parse_file, is_parse_supported
+from src.utils.file_parser.context_materializer import (
+    ensure_file_parsed_for_session,
+    ensure_session_file_registered,
+)
+from src.hooks.file_context.storage import storage as file_context_storage
 from src.utils.truncate import truncate
 from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception_message
 from src.utils.logger import clear_log_context, set_log_context
@@ -394,6 +399,45 @@ async def _collect_attached_images(
             await process_file(file_id)
 
     return attached_images
+
+
+async def _collect_attached_file_ids_for_context(
+    *,
+    session_id: str,
+    attachments: Optional[List[str]],
+) -> List[str]:
+    """Collect and lazily parse non-image, parser-supported attached files."""
+    scoped_file_ids: List[str] = []
+    processed: Set[str] = set()
+
+    if not attachments or not isinstance(attachments, list):
+        return scoped_file_ids
+
+    for file_id in attachments:
+        if not isinstance(file_id, str) or not file_id or file_id in processed:
+            continue
+        processed.add(file_id)
+        try:
+            metadata = get_metadata(file_id)
+            if metadata.session_id and metadata.session_id != session_id:
+                logger.warning(f"[api_chat] File {file_id} belongs to different session")
+                continue
+
+            content_type = metadata.content_type or ""
+            if content_type.startswith("image/") or not is_parse_supported(content_type):
+                continue
+
+            ensure_session_file_registered(session_id, file_id)
+            file_meta = file_context_storage.get_file_meta(session_id, file_id)
+            if not file_meta or file_meta.parse_status != "completed":
+                await ensure_file_parsed_for_session(file_id=file_id, session_id=session_id)
+            scoped_file_ids.append(file_id)
+        except StoredFileNotFoundError:
+            logger.warning(f"[api_chat] File {file_id} not found")
+        except Exception as e:
+            logger.warning(f"[api_chat] Failed to prepare attached file {safe_preview(file_id, 80)}: {sanitize_exception_message(e)}")
+
+    return scoped_file_ids
 
 
 def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]]:
@@ -781,9 +825,15 @@ async def api_chat(request: web.Request) -> web.Response:
             message=message,
             attachments=attachments if isinstance(attachments, list) else None,
         )
+        attached_file_ids = await _collect_attached_file_ids_for_context(
+            session_id=session_id,
+            attachments=attachments if isinstance(attachments, list) else None,
+        )
         
-        # Set placeholder message if only images
-        if attached_images and not message.strip():
+        # Set placeholder message for attachment-only messages
+        if attached_file_ids and not message.strip():
+            message = "Please analyze the attached file(s)."
+        elif attached_images and not message.strip():
             message = "[image]"
         
         # Always ensure input field is present for Copilot API downstream
@@ -804,7 +854,8 @@ async def api_chat(request: web.Request) -> web.Response:
                 session_id=session_id,
                 message=message,
                 top_k=5,
-                max_tokens=4000
+                max_tokens=4000,
+                preferred_file_ids=attached_file_ids if attached_file_ids else None,
             )
             if enhanced_message and enhanced_message != message:
                 logger.info(f"[api_chat] File context injected: status={budget_status}, chunks={len(citations)}")
@@ -1061,12 +1112,31 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             message=message,
             attachments=attachments if isinstance(attachments, list) else None,
         )
-        if attached_images and not message.strip():
+        attached_file_ids = await _collect_attached_file_ids_for_context(
+            session_id=session_id,
+            attachments=attachments if isinstance(attachments, list) else None,
+        )
+        if attached_file_ids and not message.strip():
+            message = "Please analyze the attached file(s)."
+        elif attached_images and not message.strip():
             message = "[image]"
 
         if not message.strip() and not attached_images:
             response = web.json_response({'error': 'Empty message'}, status=400)
             return response
+
+        try:
+            enhanced_message, _, _ = inject_context(
+                session_id=session_id,
+                message=message,
+                top_k=5,
+                max_tokens=4000,
+                preferred_file_ids=attached_file_ids if attached_file_ids else None,
+            )
+            if enhanced_message:
+                message = enhanced_message
+        except Exception as e:
+            logger.warning(f"[api_chat_stream] File context injection failed: {sanitize_exception_message(e)}")
 
         # Create streaming response
         response = web.StreamResponse(
@@ -2798,15 +2868,24 @@ async def api_files_upload(request: web.Request) -> web.Response:
             max_size_mb=max_size_mb
         )
         logger.info(f"[api_files_upload] saved metadata.session_id={metadata.session_id}")
+        parse_status = None
+        if session_id:
+            ensure_session_file_registered(session_id=session_id, file_id=metadata.file_id)
+            parse_status = "pending"
         
-        return web.json_response({
+        payload = {
             'success': True,
             'file_id': metadata.file_id,
             'filename': metadata.original_filename,
             'content_type': metadata.content_type,
             'size': metadata.size,
-            'uploaded_at': metadata.uploaded_at
-        }, status=201)
+            'uploaded_at': metadata.uploaded_at,
+        }
+        if session_id:
+            payload['session_id'] = session_id
+            payload['parse_status'] = parse_status
+
+        return web.json_response(payload, status=201)
         
     except FileTooLargeError as e:
         return web.json_response({
@@ -2874,62 +2953,11 @@ async def api_files_parse(request: web.Request) -> web.Response:
         
         options = data.get('options', {})
         
-        # Parse file
-        result = await parse_file(file_id, options)
-        
-        # Save chunks to file context storage
-        if result.success and result.blocks:
-            try:
-                from src.hooks.file_context import storage
-                from src.hooks.file_context.models import Chunk, SessionFileMeta
-                import hashlib
-                
-                # Update file status to processing
-                storage.update_file_status(
-                    session_id=session_id,
-                    file_id=file_id,
-                    status="processing"
-                )
-                
-                # Save chunks
-                total_chars = 0
-                for block in result.blocks:
-                    # Generate chunk_id if not present
-                    chunk_id = block.get('chunk_id') or f"{file_id}_{block.get('type', 'chunk')}_{block.get('page', 1)}_{block.get('index', 1)}"
-                    
-                    # Compute content hash for deduplication
-                    content = block.get('content', '')
-                    content_hash = hashlib.sha256(content.encode()).hexdigest()
-                    
-                    chunk = Chunk(
-                        chunk_id=chunk_id,
-                        file_id=file_id,
-                        session_id=session_id or '',
-                        type=block.get('type', 'paragraph'),
-                        content=content,
-                        markdown=block.get('markdown'),
-                        page=block.get('page'),
-                        index=block.get('index', 1),
-                        source=block.get('method', 'unknown'),
-                        confidence=block.get('confidence', 0.95),
-                        content_hash=content_hash
-                    )
-                    storage.save_chunk(chunk)
-                    total_chars += len(content)
-                
-                # Update file status to completed
-                storage.update_file_status(
-                    session_id=session_id,
-                    file_id=file_id,
-                    status="completed",
-                    chunk_count=len(result.blocks),
-                    total_chars=total_chars
-                )
-                
-                logger.info(f"[api_files_parse] Saved {len(result.blocks)} chunks for file {file_id}")
-            except Exception as e:
-                logger.error(f"[api_files_parse] Failed to save chunks: {e}")
-                # Continue anyway, parse succeeded
+        # Parse file and optionally materialize into file context storage
+        if session_id:
+            result = await ensure_file_parsed_for_session(file_id=file_id, session_id=session_id, options=options)
+        else:
+            result = await parse_file(file_id, options)
         
         if not result.success:
             return web.json_response({
@@ -3046,9 +3074,25 @@ async def api_files_list(request: web.Request) -> web.Response:
         session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
         
         files = list_files(session_id) if session_id else list_files()
-        
-        return web.json_response({
-            'files': [
+        file_payloads = []
+        if session_id:
+            session_files = {f.file_id: f for f in file_context_storage.get_session_files(session_id)}
+            for f in files:
+                session_meta = session_files.get(f.file_id)
+                file_payloads.append({
+                    'file_id': f.file_id,
+                    'filename': f.original_filename,
+                    'content_type': f.content_type,
+                    'size': f.size,
+                    'uploaded_at': f.uploaded_at,
+                    'parse_status': session_meta.parse_status if session_meta else 'pending',
+                    'parse_error': session_meta.parse_error if session_meta else None,
+                    'chunk_count': session_meta.chunk_count if session_meta else 0,
+                    'total_chars': session_meta.total_chars if session_meta else 0,
+                    'parsed_at': session_meta.parsed_at if session_meta else None,
+                })
+        else:
+            file_payloads = [
                 {
                     'file_id': f.file_id,
                     'filename': f.original_filename,
@@ -3058,7 +3102,8 @@ async def api_files_list(request: web.Request) -> web.Response:
                 }
                 for f in files
             ]
-        })
+
+        return web.json_response({'files': file_payloads})
         
     except Exception as e:
         logger.error(f"File list error: {e}")

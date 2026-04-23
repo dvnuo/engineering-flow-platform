@@ -284,6 +284,24 @@ def _detect_mime_type(content: bytes, ext: str) -> str:
         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ".csv": "text/csv",
         ".txt": "text/plain",
+        ".md": "text/markdown",
+        ".json": "application/json",
+        ".yml": "application/yaml",
+        ".yaml": "application/yaml",
+        ".xml": "application/xml",
+        ".log": "text/plain",
+        ".py": "text/plain",
+        ".js": "text/plain",
+        ".ts": "text/plain",
+        ".tsx": "text/plain",
+        ".java": "text/plain",
+        ".go": "text/plain",
+        ".rs": "text/plain",
+        ".sh": "text/plain",
+        ".sql": "text/plain",
+        ".properties": "text/plain",
+        ".ini": "text/plain",
+        ".cfg": "text/plain",
     }
     
     # Try content-based detection first
@@ -320,5 +338,11 @@ def _mime_to_extension(mime_type: str) -> str:
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
         "text/csv": ".csv",
         "text/plain": ".txt",
+        "text/markdown": ".md",
+        "application/json": ".json",
+        "application/yaml": ".yaml",
+        "text/yaml": ".yaml",
+        "application/xml": ".xml",
+        "text/xml": ".xml",
     }
     return mime_to_ext.get(mime_type, "")

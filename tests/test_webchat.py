@@ -6,6 +6,7 @@ import os
 import subprocess
 import pytest
 from pathlib import Path
+from types import SimpleNamespace
 
 try:
     from src.gateway.webchat import setup_webchat_routes, load_template
@@ -1334,6 +1335,205 @@ async def test_api_chat_stream_forwards_all_attached_images(monkeypatch, tmp_pat
     assert captured["attached_images"][0].endswith("b25l")
     assert captured["attached_images"][1].endswith("dHdv")
     assert captured["attachments"] == ["f1", "f2"]
+
+
+@pytest.mark.asyncio
+async def test_api_chat_attachment_only_non_image_scopes_context(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+    inject_calls = {}
+
+    class _Meta:
+        session_id = "s-doc"
+        content_type = "application/pdf"
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    def _fake_inject_context(**kwargs):
+        inject_calls.update(kwargs)
+        return kwargs["message"], "ok", []
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", _fake_inject_context)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat.session_manager, "_initialized", True)
+    monkeypatch.setattr(webchat.session_manager, "get_session", lambda _sid: asyncio.sleep(0, result={"history": [{}], "channel": "", "metadata": {}}))
+    monkeypatch.setattr(webchat.session_persistence, "save_session", lambda **kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(webchat, "get_metadata", lambda _file_id: _Meta())
+    monkeypatch.setattr(webchat, "is_parse_supported", lambda _ct: True)
+    monkeypatch.setattr(webchat, "ensure_session_file_registered", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(webchat.file_context_storage, "get_file_meta", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(webchat, "ensure_file_parsed_for_session", lambda *_args, **_kwargs: asyncio.sleep(0, result=SimpleNamespace(success=True, blocks=[])))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "", "session_id": "s-doc", "attachments": ["file-doc"]}
+
+    response = await webchat.api_chat(_Request())
+    assert response.status == 200
+    assert captured["message"] == "Please analyze the attached file(s)."
+    assert inject_calls["preferred_file_ids"] == ["file-doc"]
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_attachment_only_non_image_scopes_context(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+    inject_calls = {}
+
+    class _Meta:
+        session_id = "s-doc-stream"
+        content_type = "application/pdf"
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data)
+
+    async def _fake_run_chat_via_execution_bus(**kwargs):
+        captured.update(kwargs)
+        return {"response": "ok", "usage": {}}
+
+    def _fake_inject_context(**kwargs):
+        inject_calls.update(kwargs)
+        return kwargs["message"], "ok", []
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat, "inject_context", _fake_inject_context)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+    monkeypatch.setattr(webchat.global_config, "_config", {"llm": {"api_key": "k", "model": "gpt-5-mini", "provider": "openai"}}, raising=False)
+    monkeypatch.setattr(webchat, "get_metadata", lambda _file_id: _Meta())
+    monkeypatch.setattr(webchat, "is_parse_supported", lambda _ct: True)
+    monkeypatch.setattr(webchat, "ensure_session_file_registered", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(webchat.file_context_storage, "get_file_meta", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(webchat, "ensure_file_parsed_for_session", lambda *_args, **_kwargs: asyncio.sleep(0, result=SimpleNamespace(success=True, blocks=[])))
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "", "session_id": "s-doc-stream", "attachments": ["file-doc"]}
+
+    response = await webchat.api_chat_stream(_Request())
+    assert response.status == 200
+    assert captured["message"] == "Please analyze the attached file(s)."
+    assert inject_calls["preferred_file_ids"] == ["file-doc"]
+
+
+@pytest.mark.asyncio
+async def test_api_files_parse_materializes_via_helper(monkeypatch):
+    from src.gateway import webchat
+
+    parse_result = SimpleNamespace(
+        success=True,
+        content_type="text/plain",
+        file_id="file-parse",
+        filename="note.txt",
+        markdown="hello",
+        blocks=[
+            SimpleNamespace(model_dump=lambda **_kwargs: {"chunk_id": "c1", "content": "hello"})
+        ],
+        json={},
+        parse_time_ms=5,
+    )
+
+    monkeypatch.setattr(webchat, "get_metadata", lambda _file_id: SimpleNamespace(session_id="session-1"))
+    materialize_mock = lambda **_kwargs: asyncio.sleep(0, result=parse_result)
+    monkeypatch.setattr(webchat, "ensure_file_parsed_for_session", materialize_mock)
+
+    class _Request:
+        query = {}
+        headers = {"X-Session-ID": "session-1"}
+
+        async def json(self):
+            return {"file_id": "file-parse", "options": {}}
+
+    response = await webchat.api_files_parse(_Request())
+    payload = json.loads(response.text)
+    assert response.status == 200
+    assert payload["success"] is True
+    assert payload["blocks"][0]["chunk_id"] == "c1"
+
+
+@pytest.mark.asyncio
+async def test_api_files_list_with_session_includes_parse_state(monkeypatch):
+    from src.gateway import webchat
+
+    monkeypatch.setattr(
+        webchat,
+        "file_context_storage",
+        SimpleNamespace(
+            get_session_files=lambda _session_id: [
+                SimpleNamespace(
+                    file_id="f1",
+                    parse_status="completed",
+                    parse_error=None,
+                    chunk_count=3,
+                    total_chars=42,
+                    parsed_at="2026-01-01T00:00:00Z",
+                )
+            ]
+        ),
+    )
+
+    class _Meta:
+        file_id = "f1"
+        original_filename = "a.txt"
+        content_type = "text/plain"
+        size = 10
+        uploaded_at = "2026-01-01T00:00:00Z"
+
+    monkeypatch.setattr("src.utils.file_parser.init_storage", lambda: None)
+    monkeypatch.setattr("src.utils.file_parser.list_files", lambda _sid=None: [_Meta()])
+
+    class _Request:
+        query = {"session_id": "session-1"}
+        headers = {}
+
+    response = await webchat.api_files_list(_Request())
+    payload = json.loads(response.text)
+    assert response.status == 200
+    assert payload["files"][0]["parse_status"] == "completed"
+    assert payload["files"][0]["chunk_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_api_files_list_without_session_is_backward_compatible(monkeypatch):
+    from src.gateway import webchat
+
+    class _Meta:
+        file_id = "f2"
+        original_filename = "b.txt"
+        content_type = "text/plain"
+        size = 11
+        uploaded_at = "2026-01-01T00:00:00Z"
+
+    monkeypatch.setattr("src.utils.file_parser.init_storage", lambda: None)
+    monkeypatch.setattr("src.utils.file_parser.list_files", lambda _sid=None: [_Meta()])
+
+    class _Request:
+        query = {}
+        headers = {}
+
+    response = await webchat.api_files_list(_Request())
+    payload = json.loads(response.text)
+    assert response.status == 200
+    assert "parse_status" not in payload["files"][0]
 
 
 @pytest.mark.asyncio

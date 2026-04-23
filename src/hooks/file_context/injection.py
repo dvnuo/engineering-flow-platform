@@ -1,6 +1,6 @@
 """Context injection for AI prompts."""
 
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 from .models import Chunk, RetrievalResult
 from .retrieval import retrieval_engine
@@ -112,7 +112,8 @@ def inject_context(
     message: str,
     top_k: int = 5,
     max_tokens: int = 4000,
-    include_images: bool = False
+    include_images: bool = False,
+    preferred_file_ids: Optional[List[str]] = None,
 ) -> Tuple[str, str, List[dict]]:
     """Inject file context into user message.
     
@@ -127,6 +128,7 @@ def inject_context(
     
     # Resolve references to file IDs
     file_ids = CommandParser.resolve_references(references, session_files)
+    effective_file_ids = file_ids if file_ids else (preferred_file_ids or None)
     
     # Check for explicit chunk references
     chunk_ids = CommandParser.extract_chunk_refs(references)
@@ -158,7 +160,7 @@ def inject_context(
             query=cleaned_message,
             top_k=top_k,
             max_tokens=max_tokens,
-            file_ids=file_ids if file_ids else None,
+            file_ids=effective_file_ids,
             include_images=include_images
         )
         retrieval_result = retrieval_engine.retrieve(retrieval_request)

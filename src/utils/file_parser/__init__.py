@@ -77,6 +77,40 @@ def _get_excel_module():
     return _async_modules['excel']
 
 
+def _get_text_module():
+    """Lazy load text module."""
+    if 'text' not in _async_modules:
+        from . import text as _text
+        _async_modules['text'] = _text
+    return _async_modules['text']
+
+
+PARSEABLE_EXACT_MIME_TYPES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/csv",
+    "text/plain",
+    "text/markdown",
+    "application/json",
+    "application/yaml",
+    "text/yaml",
+    "application/xml",
+    "text/xml",
+}
+
+
+def is_parse_supported(content_type: str) -> bool:
+    """Return whether runtime parser supports this MIME type."""
+    if not content_type:
+        return False
+    if content_type.startswith("image/"):
+        return True
+    if content_type in PARSEABLE_EXACT_MIME_TYPES:
+        return True
+    return content_type.startswith("text/") and content_type != "text/csv"
+
+
 async def upload_file(
     content: bytes,
     filename: str,
@@ -161,6 +195,19 @@ async def parse_file(file_id: str, options: dict = None) -> ParseResult:
         result = await excel_mod.parse_csv(str(path), options)
         result.file_id = file_id
         result.filename = metadata.original_filename
+        return result
+
+    if is_parse_supported(content_type):
+        text_mod = _get_text_module()
+        result = await text_mod.parse_text_file(
+            str(path),
+            {
+                **(options or {}),
+                "file_id": file_id,
+                "filename": metadata.original_filename,
+                "content_type": content_type,
+            },
+        )
         return result
     
     # Unsupported file type
@@ -249,15 +296,34 @@ def _detect_mime_type(content: bytes, filename: str) -> str:
         pass
     
     # Text-based formats
-    if ext in {".txt", ".csv"}:
+    text_ext_to_mime = {
+        ".txt": "text/plain",
+        ".md": "text/markdown",
+        ".json": "application/json",
+        ".yml": "application/yaml",
+        ".yaml": "application/yaml",
+        ".xml": "application/xml",
+        ".log": "text/plain",
+        ".py": "text/plain",
+        ".js": "text/plain",
+        ".ts": "text/plain",
+        ".tsx": "text/plain",
+        ".java": "text/plain",
+        ".go": "text/plain",
+        ".rs": "text/plain",
+        ".sh": "text/plain",
+        ".sql": "text/plain",
+        ".properties": "text/plain",
+        ".ini": "text/plain",
+        ".cfg": "text/plain",
+        ".csv": "text/csv",
+    }
+    if ext in text_ext_to_mime:
         try:
             header.decode("utf-8")
         except UnicodeDecodeError:
             return "application/octet-stream"
-        # If extension is .csv and file decodes as text, treat as CSV
-        if ext == ".csv":
-            return "text/csv"
-        return "text/plain"
+        return text_ext_to_mime[ext]
     
     # Fallback: unknown content, treat as generic binary
     # Don't rely on extension to avoid accepting renamed malware
@@ -306,6 +372,7 @@ __all__ = [
     "parse_file",
     "upload_file",
     "preview_file",
+    "is_parse_supported",
     # Image
     "compress_image_for_llm",
     "get_image_for_llm",

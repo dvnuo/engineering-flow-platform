@@ -69,3 +69,32 @@ async def test_download_and_process_attachment_falls_back_to_base64_when_ocr_emp
 
     assert result.content_format == "base64"
     assert result.content == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_download_and_process_attachment_uses_parser_registry_for_non_image(monkeypatch):
+    from src.utils import attachment
+
+    monkeypatch.setattr(
+        attachment,
+        "_download_file",
+        AsyncMock(return_value=(b"%PDF-1.7", "application/pdf", "spec.pdf")),
+    )
+    metadata = SimpleNamespace(file_id="file-3", size=10, uploaded_at="2026-01-01")
+    monkeypatch.setattr(attachment, "save_uploaded_file", AsyncMock(return_value=metadata))
+    monkeypatch.setattr(attachment, "get_file_path", lambda _file_id: "/tmp/spec.pdf")
+    monkeypatch.setattr(attachment, "is_parse_supported", lambda content_type: content_type == "application/pdf")
+    parser_mock = AsyncMock(return_value=SimpleNamespace(success=True, markdown="parsed content"))
+    materialized_mock = AsyncMock(return_value=SimpleNamespace(success=True, markdown="parsed content"))
+    monkeypatch.setattr(attachment, "parse_file", parser_mock)
+    monkeypatch.setattr(attachment, "ensure_file_parsed_for_session", materialized_mock)
+
+    result = await attachment.download_and_process_attachment(
+        url="https://example.com/spec.pdf",
+        session_id="s-1",
+    )
+
+    assert result.content_format == "text"
+    assert "parsed content" in result.content
+    materialized_mock.assert_awaited_once_with("file-3", "s-1")
+    parser_mock.assert_not_called()

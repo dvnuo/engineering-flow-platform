@@ -16,7 +16,16 @@ ALLOWED_MIME_TYPES = {
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ],
-    "text": ["text/csv", "text/plain"],
+    "text": [
+        "text/csv",
+        "text/plain",
+        "text/markdown",
+        "application/json",
+        "application/yaml",
+        "text/yaml",
+        "application/xml",
+        "text/xml",
+    ],
 }
 
 # Filename pattern: alphanumeric, dot, underscore, hyphen, 1-200 chars
@@ -127,7 +136,36 @@ def sanitize_filename(filename: str) -> str:
     return name
 
 
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".docx", ".xlsx", ".csv", ".txt"}
+ALLOWED_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".pdf",
+    ".docx",
+    ".xlsx",
+    ".csv",
+    ".txt",
+    ".md",
+    ".json",
+    ".yml",
+    ".yaml",
+    ".xml",
+    ".log",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".java",
+    ".go",
+    ".rs",
+    ".sh",
+    ".sql",
+    ".properties",
+    ".ini",
+    ".cfg",
+}
 
 
 def get_safe_extension(filename: str) -> str:
@@ -193,5 +231,23 @@ def get_mime_type(file_path: str) -> str:
         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ".csv": "text/csv",
         ".txt": "text/plain",
+        ".md": "text/markdown",
+        ".json": "application/json",
+        ".yml": "application/yaml",
+        ".yaml": "application/yaml",
+        ".xml": "application/xml",
+        ".log": "text/plain",
+        ".py": "text/plain",
+        ".js": "text/plain",
+        ".ts": "text/plain",
+        ".tsx": "text/plain",
+        ".java": "text/plain",
+        ".go": "text/plain",
+        ".rs": "text/plain",
+        ".sh": "text/plain",
+        ".sql": "text/plain",
+        ".properties": "text/plain",
+        ".ini": "text/plain",
+        ".cfg": "text/plain",
     }
     return mime_map.get(ext, "application/octet-stream")
