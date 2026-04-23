@@ -256,7 +256,7 @@ async def _download_issue_attachments(
     return await asyncio.gather(*[_handle(att) for att in attachment_list])
 
 
-async def export_issues_to_markdown(
+async def jira_export_issues_to_markdown(
     input: Any = None,
     *,
     issue_keys: Optional[List[str]] = None,
@@ -520,4 +520,4 @@ async def export_issues_to_markdown(
     }
 
 
-__all__ = ["export_issues_to_markdown"]
+__all__ = ["jira_export_issues_to_markdown"]

@@ -46,7 +46,8 @@ def test_jira_preview_tools_not_model_facing():
     names = {s.get("function", {}).get("name") for s in get_tools_schemas()}
     assert "jira_get_issue_preview" not in names
     assert "jira_get_issue_by_url_preview" not in names
-    assert "export_issues_to_markdown" in names
+    assert "jira_export_issues_to_markdown" in names
+    assert "export_issues_to_markdown" not in names
 
 
 def test_jira_get_comments_schema_is_model_facing():
@@ -56,13 +57,13 @@ def test_jira_get_comments_schema_is_model_facing():
     assert "jira_get_comments" in names
 
 
-def test_export_issues_to_markdown_schema_is_strict_responses_compatible():
+def test_jira_export_issues_to_markdown_schema_is_strict_responses_compatible():
     from src.jira import get_tools_schemas
     from src.agents.llm import _convert_tools_schema
 
     schema = next(
         s for s in get_tools_schemas()
-        if s.get("function", {}).get("name") == "export_issues_to_markdown"
+        if s.get("function", {}).get("name") == "jira_export_issues_to_markdown"
     )
 
     input_schema = schema["function"]["parameters"]["properties"]["input"]
@@ -457,7 +458,7 @@ async def test_execute_tool_export_handles_strict_nullable_optional_args(monkeyp
 
     captured = {}
 
-    async def fake_export_issues_to_markdown(**kwargs):
+    async def fake_jira_export_issues_to_markdown(**kwargs):
         captured.update(kwargs)
         return {
             "success": True,
@@ -472,10 +473,10 @@ async def test_execute_tool_export_handles_strict_nullable_optional_args(monkeyp
             "errors": [],
         }
 
-    monkeypatch.setattr("src.jira.export_issues_to_markdown", fake_export_issues_to_markdown)
+    monkeypatch.setattr("src.jira.jira_export_issues_to_markdown", fake_jira_export_issues_to_markdown)
 
     result = await execute_tool(
-        "export_issues_to_markdown",
+        "jira_export_issues_to_markdown",
         input=prompt,
         issue_keys=None,
         jql=None,
@@ -514,3 +515,16 @@ async def test_execute_tool_export_handles_strict_nullable_optional_args(monkeyp
     assert captured["attachments_retries"] == 3
     assert captured["attachments_backoff"] == [1, 2, 4]
     assert captured["attachments_preserve_binary"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_old_export_name_is_not_supported():
+    from src import execute_tool
+
+    result = await execute_tool(
+        "export_issues_to_markdown",
+        input="MMGFX-14839",
+    )
+
+    assert result.success is False
+    assert "not implemented" in (result.error or result.content or "")

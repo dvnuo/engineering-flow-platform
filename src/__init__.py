@@ -338,8 +338,8 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await jira_module.jira_assign_issue(issue_key, assignee)
         return ToolResult(success="Error" not in result, content=result)
 
-    elif name == "export_issues_to_markdown":
-        result = await jira_module.export_issues_to_markdown(
+    elif name == "jira_export_issues_to_markdown":
+        result = await jira_module.jira_export_issues_to_markdown(
             input=kwargs.get("input"),
             issue_keys=kwargs.get("issue_keys"),
             jql=kwargs.get("jql"),

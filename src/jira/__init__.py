@@ -23,7 +23,7 @@ from .api import (
 )
 from .adapter import JiraFormatAdapter
 from src.utils.attachment import download_and_process_attachment
-from .exporter import export_issues_to_markdown
+from .exporter import jira_export_issues_to_markdown
 from src.source_context import persist_jira_source_bundle_and_digest
 from src.context_blob_store import put_text
 from .source_service import prepare_jira_issue_source, format_jira_source_manifest
@@ -51,7 +51,7 @@ __all__ = [
     "jira_get_versions",
     "jira_get_worklog",
     "jira_add_worklog",
-    "export_issues_to_markdown",
+    "jira_export_issues_to_markdown",
 ]
 
 

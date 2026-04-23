@@ -71,10 +71,10 @@ async def test_execute_adapter_action_add_comment(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_execute_adapter_action_jira_export(monkeypatch):
-    async def _fake_export_issues_to_markdown(**kwargs):
+    async def _fake_jira_export_issues_to_markdown(**kwargs):
         return {"success": True, "status": "success", "issues": [], "artifacts": {}, "errors": []}
 
-    monkeypatch.setattr("src.jira.export_issues_to_markdown", _fake_export_issues_to_markdown)
+    monkeypatch.setattr("src.jira.jira_export_issues_to_markdown", _fake_jira_export_issues_to_markdown)
     result = await execute_adapter_action("adapter:jira:export_issues_to_markdown", {"input": ["PROJ-1"]})
 
     assert result["success"] is True

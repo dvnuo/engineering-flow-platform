@@ -1333,8 +1333,11 @@ def get_tools_schemas() -> list:
         {
             "type": "function",
             "function": {
-                "name": "export_issues_to_markdown",
-                "description": "Export Jira tickets/issues to Markdown files. Use this when the user asks to convert Jira tickets to markdown, save to a folder, or download Jira attachments. Supports newline-separated issue keys and natural language text containing issue keys.",
+                "name": "jira_export_issues_to_markdown",
+                "description": (
+                    "Export Jira tickets/issues to Markdown files. Use this when the user asks to convert Jira tickets to markdown, "
+                    "save Jira tickets to a folder, or download Jira ticket attachments. Supports natural language text containing Jira issue keys."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
