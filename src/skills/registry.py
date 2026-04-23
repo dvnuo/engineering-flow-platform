@@ -44,6 +44,10 @@ class Skill:
     hooks: List[str] = field(default_factory=list)
     task_tools: List[str] = field(default_factory=list)
     risk_level: str = ""
+    planning_mode: str = "auto"
+    staging_mode: str = "auto"
+    execution_style: str = "direct"
+    ask_user_policy: str = "blocked_only"
 
     # Compiled patterns for fast matching
     trigger_patterns: List[re.Pattern] = field(default_factory=list)
@@ -71,6 +75,10 @@ class Skill:
             hooks=data.get("hooks", []) or [],
             task_tools=data.get("task_tools", []) or [],
             risk_level=data.get("risk_level", "") or "",
+            planning_mode=str(data.get("planning_mode", "auto") or "auto"),
+            staging_mode=str(data.get("staging_mode", "auto") or "auto"),
+            execution_style=str(data.get("execution_style", "direct") or "direct"),
+            ask_user_policy=str(data.get("ask_user_policy", "blocked_only") or "blocked_only"),
             trigger_patterns=patterns,
         )
 

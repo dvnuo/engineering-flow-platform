@@ -9,6 +9,9 @@ triggers:
   - 需求澄清测试范围
   - 测试范围梳理
 tools: []
+planning_mode: required
+execution_style: stepwise
+ask_user_policy: blocked_only
 strategy:
   - "1. 面对模糊需求，先识别不确定项并 ASK_USER 最小必要问题。"
   - "2. 每轮只推进一个澄清点，避免一次提太多问题。"

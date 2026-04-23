@@ -9,6 +9,9 @@ triggers:
   - 根据 feature 补 step definitions
   - cucumber step 骨架
 tools: []
+planning_mode: required
+execution_style: stepwise
+ask_user_policy: blocked_only
 strategy:
   - "1. 先解析现有 feature 场景与参数。"
   - "2. 缺少技术约定（测试框架、目录、命名）时 ASK_USER。"

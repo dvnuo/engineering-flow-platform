@@ -54,6 +54,10 @@ class SkillRuntimeConfig:
     model_override: Optional[str] = None
     hooks: List[str] = field(default_factory=list)
     workdir: str = ""
+    planning_mode: str = "auto"
+    staging_mode: str = "auto"
+    execution_style: str = "direct"
+    ask_user_policy: str = "blocked_only"
     prompt_blocks: SkillPromptBlocks = field(default_factory=SkillPromptBlocks)
     references: List[str] = field(default_factory=list)
 
@@ -359,6 +363,7 @@ def build_skill_prompt_blocks(
     allowed_tools: Optional[List[str]] = None,
     task_tools: Optional[List[str]] = None,
     tool_policy_declared: Optional[bool] = None,
+    runtime_config: Optional[SkillRuntimeConfig] = None,
 ) -> SkillPromptBlocks:
     declared_policy = bool(skill.tools) if tool_policy_declared is None else bool(tool_policy_declared)
     effective_allowed_tools = list(skill.tools or []) if allowed_tools is None else list(allowed_tools or [])
@@ -377,6 +382,17 @@ def build_skill_prompt_blocks(
         f"Runtime policy: only use allowed tools ({allowed_tools_text}).\n"
         f"Task-capable tools: {task_tools_text}."
     )
+    if runtime_config and (
+        runtime_config.execution_style != "direct"
+        or runtime_config.planning_mode != "auto"
+        or runtime_config.staging_mode != "auto"
+        or runtime_config.ask_user_policy != "blocked_only"
+    ):
+        system_rules += (
+            f"\nSkill behavior: execution_style={runtime_config.execution_style}, "
+            f"planning_mode={runtime_config.planning_mode}, staging_mode={runtime_config.staging_mode}, "
+            f"ask_user_policy={runtime_config.ask_user_policy}."
+        )
 
     strategy = "\n".join(f"- {item}" for item in (skill.strategy or []))
     body = (skill.body or "").strip()
@@ -470,14 +486,7 @@ def build_skill_runtime_config(
             effective_allowed_tool_set = set(effective_allowed_tools)
             effective_task_tools = [tool_name for tool_name in effective_task_tools if tool_name in effective_allowed_tool_set]
 
-    prompt_blocks = build_skill_prompt_blocks(
-        skill,
-        references=references,
-        allowed_tools=effective_allowed_tools,
-        task_tools=effective_task_tools,
-        tool_policy_declared=tool_policy_declared,
-    )
-    return SkillRuntimeConfig(
+    runtime_config = SkillRuntimeConfig(
         skill_name=skill.name,
         allowed_tools=effective_allowed_tools,
         allowed_tools_set=set(effective_allowed_tools),
@@ -486,6 +495,19 @@ def build_skill_runtime_config(
         model_override=skill.model or None,
         hooks=list(skill.hooks or []),
         workdir=skill.path or "",
-        prompt_blocks=prompt_blocks,
+        planning_mode=str(getattr(skill, "planning_mode", "auto") or "auto"),
+        staging_mode=str(getattr(skill, "staging_mode", "auto") or "auto"),
+        execution_style=str(getattr(skill, "execution_style", "direct") or "direct"),
+        ask_user_policy=str(getattr(skill, "ask_user_policy", "blocked_only") or "blocked_only"),
         references=references,
     )
+    prompt_blocks = build_skill_prompt_blocks(
+        skill,
+        references=references,
+        allowed_tools=effective_allowed_tools,
+        task_tools=effective_task_tools,
+        tool_policy_declared=tool_policy_declared,
+        runtime_config=runtime_config,
+    )
+    runtime_config.prompt_blocks = prompt_blocks
+    return runtime_config

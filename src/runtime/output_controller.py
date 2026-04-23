@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.context_blob_store import put_text
 from src.config import config, resolve_model_limits, resolve_output_boundary
+from src.runtime.response_flow_policy import ResponseFlowDecision, decide_response_flow
 
 
 def _safe_int(value: Any, default: int) -> int:
@@ -76,19 +77,69 @@ def resolve_effective_max_tokens_for_model(model: Optional[str]) -> Tuple[int, D
     }
 
 
-def classify_output_risk(user_text: str, active_skill: Any, system_prompt: str, source_state: Optional[Dict[str, Any]] = None) -> str:
-    text = (str(user_text or "") + " " + str(system_prompt or "")).lower()
-    skill_name = str(getattr(active_skill, "name", "") or getattr(active_skill, "skill_name", "")).lower()
-    markers = ("generate", "test", "implementation", "spec", "feature", "all jira", "all confluence", "全部", "生成")
-    if any(m in text for m in markers) or any(m in skill_name for m in markers):
-        return "high"
-    if len(text) > 1200:
-        return "medium"
-    return "normal"
+def _resolve_output_flow_decision(
+    *,
+    user_text: str,
+    active_skill: Any,
+    source_state: Optional[Dict[str, Any]],
+) -> ResponseFlowDecision:
+    budget_state = source_state.get("budget") if isinstance(source_state, dict) and isinstance(source_state.get("budget"), dict) else {}
+    llm_cfg = config.llm if isinstance(config.llm, dict) else {}
+    skill_planning_mode = str(
+        getattr(active_skill, "planning_mode", None)
+        or (source_state or {}).get("planning_mode")
+        or "auto"
+    )
+    skill_staging_mode = str(
+        getattr(active_skill, "staging_mode", None)
+        or (source_state or {}).get("staging_mode")
+        or "auto"
+    )
+    skill_execution_style = str(
+        getattr(active_skill, "execution_style", None)
+        or (source_state or {}).get("execution_style")
+        or ""
+    )
+    skill_ask_user_policy = str(
+        getattr(active_skill, "ask_user_policy", None)
+        or (source_state or {}).get("ask_user_policy")
+        or ""
+    )
+    return decide_response_flow(
+        config_block=llm_cfg.get("response_flow"),
+        user_text=user_text,
+        request_estimated_tokens=budget_state.get("request_estimated_tokens"),
+        prompt_budget_tokens=budget_state.get("prompt_budget_tokens"),
+        planning_mode=skill_planning_mode,
+        staging_mode=skill_staging_mode,
+        execution_style=skill_execution_style,
+        ask_user_policy=skill_ask_user_policy,
+        generation_state_mode=str(((source_state or {}).get("generation") or {}).get("generation_mode") or ""),
+        max_output_recovery_active=bool((source_state or {}).get("max_output_recovery_applied")),
+    )
 
 
-def build_output_guard(risk: str, generation_mode: str) -> str:
-    if generation_mode != "staged" and risk != "high":
+def classify_output_risk(
+    user_text: str,
+    active_skill: Any,
+    system_prompt: str,
+    source_state: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, ResponseFlowDecision]:
+    _ = system_prompt
+    decision = _resolve_output_flow_decision(
+        user_text=user_text,
+        active_skill=active_skill,
+        source_state=source_state,
+    )
+    if decision.staging_required:
+        return "high", decision
+    if len(str(user_text or "").strip()) > 1200:
+        return "medium", decision
+    return "normal", decision
+
+
+def build_output_guard(risk: str, generation_mode: str, *, staging_required: bool = False) -> str:
+    if generation_mode != "staged" and not staging_required and risk != "high":
         return ""
     return (
         "Large generation output guard: staged mode is enforced. "
@@ -435,24 +486,31 @@ async def call_llm_with_output_control(
     if isinstance(budget, dict):
         budget["session_id"] = session_id
 
-    risk = classify_output_risk(
+    risk, flow_decision = classify_output_risk(
         user_text=latest_user_text,
         active_skill=active_skill,
         system_prompt=str(llm_kwargs.get("system_prompt") or ""),
         source_state=context_state,
     )
-    generation_mode = "staged" if risk == "high" else str((budget or {}).get("generation_mode") or "normal")
+    generation_mode = "staged" if flow_decision.staging_required else str((budget or {}).get("generation_mode") or "normal")
     gen_state = get_generation_state(context_state)
     if generation_mode == "staged" or (isinstance(gen_state, dict) and gen_state.get("generation_mode") == "staged"):
         generation_mode = "staged"
         gen_state = ensure_staged_generation(context_state, stage=stage, max_chat_output_chars=max_chat_output_chars)
         initialize_completion_criteria(gen_state, generation_mode="staged")
         gen_state = advance_generation_phase(context_state, latest_user_text=latest_user_text)
-    guard = build_output_guard(risk=risk, generation_mode=generation_mode)
+    guard = build_output_guard(risk=risk, generation_mode=generation_mode, staging_required=flow_decision.staging_required)
     if guard:
         llm_kwargs = dict(llm_kwargs)
         llm_kwargs["system_prompt"] = ((llm_kwargs.get("system_prompt") or "") + "\n\n" + guard).strip()
-    diagnostics.update({"output_risk_level": risk, "generation_mode": generation_mode, "guard_applied": bool(guard)})
+    diagnostics.update(
+        {
+            "output_risk_level": risk,
+            "generation_mode": generation_mode,
+            "guard_applied": bool(guard),
+            "response_flow_reasons": list(flow_decision.reasons),
+        }
+    )
     if isinstance(gen_state, dict) and gen_state:
         diagnostics["generation"] = dict(gen_state)
 
@@ -460,6 +518,7 @@ async def call_llm_with_output_control(
         budget["output_controller_applied"] = True
         budget["output_risk_level"] = risk
         budget["generation_mode"] = generation_mode
+        budget["large_generation_guard_reason"] = ",".join(flow_decision.reasons)
         budget["output_token_limit"] = int(llm_kwargs.get("max_tokens") or boundary.get("max_output_tokens") or 0)
         budget["max_chat_output_tokens"] = int(boundary.get("max_chat_output_tokens") or 0)
         budget["max_chat_output_chars"] = max_chat_output_chars

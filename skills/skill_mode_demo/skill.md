@@ -8,6 +8,9 @@ triggers:
   - 草稿助手
   - 需求澄清
 tools: []
+planning_mode: required
+execution_style: stepwise
+ask_user_policy: blocked_only
 strategy:
   - "1. 分析用户目标与约束"
   - "2. 缺少关键信息时只问最小必要问题"

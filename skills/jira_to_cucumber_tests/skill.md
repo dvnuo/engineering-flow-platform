@@ -11,6 +11,9 @@ triggers:
 tools:
   - jira_get_issue
   - jira_search
+planning_mode: required
+execution_style: stepwise
+ask_user_policy: blocked_only
 strategy:
   - "1. 优先提取 Jira issue 的 acceptance criteria、业务流程和限制条件。"
   - "2. 若 issue 信息不足，不要过度猜测；先 ASK_USER 补关键验收条件。"

@@ -9,6 +9,9 @@ triggers:
   - 根据 pr 生成测试点
   - 代码变更测试点
 tools: []
+planning_mode: required
+execution_style: stepwise
+ask_user_policy: blocked_only
 strategy:
   - "1. 识别 PR 目标、改动范围、风险路径；必要时使用工具读取差异。"
   - "2. 信息不足时 ASK_USER（如发布范围、关键业务影响）。"

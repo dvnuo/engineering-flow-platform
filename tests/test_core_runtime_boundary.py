@@ -443,8 +443,7 @@ def test_large_generation_output_guard_applies_to_non_mobilex_generation_skill()
         description = "Generate integration tests and implementation files"
 
     text = core._large_generation_output_guard(None, Skill(), {"skill_name": "api-test-generator"}, "generate all test cases from this Jira")
-    assert "Large generation output guard:" in text
-    assert "generation_mode=staged" in text
+    assert text == ""
 
 
 def test_large_generation_output_guard_not_applied_to_normal_chat():
@@ -536,7 +535,7 @@ async def test_output_controller_recovers_max_output_without_raw_fatal():
                 return {"error": {"code": "max_output_tokens_exceeded", "message": "Model output was truncated because max_output_tokens was reached"}}
             return {"content": "manifest", "tool_calls": [], "function_calls": [], "usage": {}}
 
-    state = {"budget": {}}
+    state = {"budget": {"request_estimated_tokens": 30000, "prompt_budget_tokens": 30000}}
     result, diag = await call_llm_with_output_control(
         llm_client=_Client(),
         llm_kwargs={"input_items": [], "system_prompt": "generate full implementation", "tools": []},
@@ -567,7 +566,7 @@ async def test_output_controller_bounds_huge_content_in_staged_mode():
         session_id="s-out-big",
         stage="skill_generation",
         context_state=state,
-        latest_user_text="generate all test cases",
+        latest_user_text="phase by phase",
         max_chat_output_chars=480000,
     )
     assert len(result.get("content") or "") == 50000
@@ -577,7 +576,7 @@ async def test_output_controller_bounds_huge_content_in_staged_mode():
 
 
 @pytest.mark.asyncio
-async def test_output_controller_allows_20k_high_risk_without_oversize_manifest():
+async def test_output_controller_allows_20k_direct_without_oversize_manifest():
     from src.runtime.output_controller import call_llm_with_output_control
 
     class _Client:
@@ -597,6 +596,7 @@ async def test_output_controller_allows_20k_high_risk_without_oversize_manifest(
     assert len(result.get("content") or "") == 20000
     assert "saved the oversized draft" not in (result.get("content") or "").lower()
     assert diag.get("output_bounding", {}).get("bounded") is False
+    assert diag.get("generation_mode") != "staged"
 
 
 def test_resolve_output_boundary_uses_model_limit_tokens(monkeypatch):
@@ -770,7 +770,7 @@ async def test_output_controller_generation_state_machine_advances_on_continue()
         session_id="s-gen",
         stage="tool_loop",
         context_state=state,
-        latest_user_text="generate implementation",
+        latest_user_text="one file at a time",
     )
     assert diag1.get("generation", {}).get("current_generation_phase") == "manifest"
     assert diag1.get("generation", {}).get("output_controller_stage") == "tool_loop"

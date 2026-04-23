@@ -104,8 +104,19 @@ hooks:
 task_tools:
   - run_command
 risk_level: medium
+planning_mode: auto   # auto|required|off
+staging_mode: auto    # auto|required|off
+execution_style: direct  # direct|stepwise
+ask_user_policy: blocked_only  # blocked_only|permissive
 ---
 ```
+
+### Response flow frontmatter
+
+- `planning_mode`: `required` forces an initial plan; `off` disables plan-first behavior; `auto` follows runtime policy.
+- `staging_mode`: `required` forces staged/phase output; `off` disables staged output; `auto` follows runtime policy.
+- `execution_style`: `direct` completes in one turn when possible; `stepwise` keeps one-step progression.
+- `ask_user_policy`: `blocked_only` asks only for truly blocking inputs; `permissive` allows broader clarification.
 
 ## Development Guide
 

@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from src.agents.llm import _normalize_provider_key, llm_client
 from src.runtime.output_controller import call_llm_with_output_control
 from src.config import config
+from src.runtime.response_flow_policy import decide_response_flow
 from src.skills.registry import Skill
 
 logger = logging.getLogger(__name__)
@@ -197,7 +198,13 @@ def _build_skill_plan_user_prompt(skill: Skill, user_message: str) -> str:
     )
 
 
-def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -> str:
+def _build_skill_mode_system_prompt(
+    skill: Skill,
+    skill_session: SkillSession,
+    *,
+    execution_style: str = "direct",
+    ask_user_policy: str = "blocked_only",
+) -> str:
     # Calculate available tokens for completed steps
     available_tokens = get_available_context_tokens()
     # Estimate ~100 chars per step entry, so ~10 tokens per step
@@ -220,6 +227,39 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
     references = list_skill_reference_files(getattr(skill, 'path', '') or '')
     skill_scripts = _list_skill_scripts(getattr(skill, 'path', '') or '')
 
+    output_rules = [
+        "1) First line MUST be exactly one marker: [EXECUTE] or [ASK_USER] or [FINISH]",
+        "2) No other prefix before first line",
+        "3) Plain text: no markdown wrappers needed",
+        "4) Code blocks: ALWAYS use triple backticks with language hint (```python, ```javascript, etc.)",
+    ]
+    if execution_style == "stepwise":
+        output_rules.extend(
+            [
+                "5) Advance only ONE small step this turn",
+                "6) If key missing info blocks progress -> [ASK_USER] and ask ONE minimal necessary question with brief reason",
+            ]
+        )
+    else:
+        output_rules.extend(
+            [
+                "5) Complete the skill directly when enough information is available",
+                "6) Use [ASK_USER] only when required missing information blocks safe progress",
+                "7) Do not ask user confirmation merely to continue ordinary work",
+            ]
+        )
+    output_rules.extend(
+        [
+            "8) If enough info and task can progress -> [EXECUTE]",
+            "9) If goal is done -> [FINISH] with concise final summary",
+            "10) Tools should only be used when they clearly help progress the current skill",
+            "11) Do not call tools speculatively",
+            "12) If key user information is missing, ask user instead of over-searching with tools",
+            "13) If you create or update a file, always show the complete code in a markdown code block",
+            f"14) ASK_USER policy: {ask_user_policy}",
+        ]
+    )
+
     return (
         "You are running an active skill-mode session.\n"
         f"Skill: {skill.name}\n"
@@ -237,18 +277,8 @@ def _build_skill_mode_system_prompt(skill: Skill, skill_session: SkillSession) -
         "  run_command(cmd='python3', args=['/path/to/script.py', '--arg', 'value'])  # Run script\n"
         "- discover_commands(prefix, contains): Find available commands\n\n"
         "Output rules (STRICT):\n"
-        "1) First line MUST be exactly one marker: [EXECUTE] or [ASK_USER] or [FINISH]\n"
-        "2) No other prefix before first line\n"
-        "3) Plain text: no markdown wrappers needed\n"
-        "4) Code blocks: ALWAYS use triple backticks with language hint (```python, ```javascript, etc.)\n"
-        "5) Advance only ONE small step this turn\n"
-        "6) If key missing info blocks progress -> [ASK_USER] and ask ONE minimal necessary question with brief reason\n"
-        "7) If enough info and task can progress -> [EXECUTE]\n"
-        "8) If goal is done -> [FINISH] with concise final summary\n"
-        "9) Tools should only be used when they clearly help progress the current skill\n"
-        "10) Do not call tools speculatively\n"
-        "11) If key user information is missing, ask user instead of over-searching with tools\n"
-        "12) If you create or update a file, always show the complete code in a markdown code block\n"
+        + "\n".join(output_rules)
+        + "\n"
     )
 
 
@@ -292,12 +322,29 @@ def _normalize_plan(raw: Dict[str, Any], fallback_goal: str) -> Tuple[str, List[
             }
         )
     if not normalized_steps:
-        normalized_steps = [
-            {"id": "analyze_request", "type": "execute", "title": "Analyze user request"},
-            {"id": "collect_missing_info", "type": "user_input_if_needed", "title": "Ask for missing required input"},
-            {"id": "generate_output", "type": "execute", "title": "Generate final output"},
-        ]
+        normalized_steps = [{"id": "complete_task", "type": "execute", "title": "Complete the request"}]
     return goal, normalized_steps
+
+
+def resolve_skill_response_flow(skill: Skill, user_message: str, *, request_estimated_tokens: Optional[int] = None, prompt_budget_tokens: Optional[int] = None) -> Dict[str, Any]:
+    llm_cfg = config.llm if isinstance(config.llm, dict) else {}
+    decision = decide_response_flow(
+        config_block=llm_cfg.get("response_flow"),
+        user_text=user_message,
+        request_estimated_tokens=request_estimated_tokens,
+        prompt_budget_tokens=prompt_budget_tokens,
+        planning_mode=str(getattr(skill, "planning_mode", "auto") or "auto"),
+        staging_mode=str(getattr(skill, "staging_mode", "auto") or "auto"),
+        execution_style=str(getattr(skill, "execution_style", "") or ""),
+        ask_user_policy=str(getattr(skill, "ask_user_policy", "") or ""),
+    )
+    return {
+        "plan_required": decision.plan_required,
+        "staging_required": decision.staging_required,
+        "execution_style": decision.execution_style,
+        "ask_user_policy": decision.ask_user_policy,
+        "reasons": list(decision.reasons),
+    }
 
 
 async def generate_initial_skill_plan(
