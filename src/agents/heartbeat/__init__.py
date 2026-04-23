@@ -61,30 +61,23 @@ class HeartbeatChecker:
     async def _check_emails(self) -> Dict[str, Any]:
         """Check emails based on thinking level."""
         detail_level = self._get_check_detail_level()
-        
-        try:
-            from src.jira_api import jira_get_issue
-        except ImportError:
-            return {"status": "unavailable", "reason": "Jira not configured"}
-        
+
         if detail_level == "simplified":
-            # Just get unread count (fast)
             return {
                 "type": "emails",
                 "detail_level": "simplified",
-                "unread_count": 0,  # Would call API for actual count
+                "unread_count": 0,
                 "message": "Quick email check - unread count only",
             }
-        else:
-            # Detailed analysis (slower)
-            return {
-                "type": "emails",
-                "detail_level": "detailed",
-                "unread_count": 0,
-                "important_count": 0,
-                "action_required": [],
-                "message": "Detailed email analysis - considering importance and urgency",
-            }
+
+        return {
+            "type": "emails",
+            "detail_level": "detailed",
+            "unread_count": 0,
+            "important_count": 0,
+            "action_required": [],
+            "message": "Detailed email analysis - considering importance and urgency",
+        }
     
     async def _check_calendar(self) -> Dict[str, Any]:
         """Check calendar based on thinking level."""

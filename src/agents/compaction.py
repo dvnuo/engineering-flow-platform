@@ -808,6 +808,7 @@ def resolve_context_window_tokens(model: Optional[str] = None) -> int:
     """
     context_windows = {
         "gpt-4": 8192,
+        "gpt-4.1": 128000,
         "gpt-4-turbo": 128000,
         "gpt-4o": 128000,
         "gpt-4o-mini": 128000,

@@ -5,11 +5,13 @@ Supports per-session, per-model, and per-provider breakdowns.
 """
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+logger = logging.getLogger(__name__)
 
 # Token pricing (per 1M tokens) - can be extended with more models
 TOKEN_PRICING = {
@@ -153,6 +155,18 @@ class UsageTracker:
             }
         }
         stats = self._parse_usage_from_response(response, model)
+        usage_entry = {
+            "type": "usage",
+            "provider": provider,
+            "session_id": session_id,
+            "task_type": task_type,
+            **stats.to_dict(),
+        }
+        with open(self.session_file, "a", encoding="utf-8") as session_handle:
+            session_handle.write(json.dumps(usage_entry) + "\n")
+        with open(self.global_file, "a", encoding="utf-8") as global_handle:
+            global_handle.write(json.dumps(usage_entry) + "\n")
+        return stats
 
     def get_session_usage(self, session_id: str) -> List[UsageStats]:
         """Get usage stats for a specific session."""

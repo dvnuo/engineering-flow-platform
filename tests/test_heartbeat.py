@@ -225,12 +225,12 @@ class TestHeartbeatGlobalFunctions:
     
     def test_get_heartbeat(self):
         """Test getting global heartbeat instance."""
-        from src.agents.heartbeat import get_heartbeat, _heartbeat
+        from src.agents.heartbeat import get_heartbeat
         from src.agents.thinking import ThinkLevel
+        import src.agents.heartbeat as heartbeat_mod
         
         # Reset global
-        import agent.heartbeat
-        agent.heartbeat._heartbeat = None
+        heartbeat_mod._heartbeat = None
         
         heartbeat = get_heartbeat(ThinkLevel.HIGH)
         
@@ -238,12 +238,12 @@ class TestHeartbeatGlobalFunctions:
         assert heartbeat.think_level == ThinkLevel.HIGH
         
         # Reset
-        agent.heartbeat._heartbeat = None
+        heartbeat_mod._heartbeat = None
     
     def test_start_stop_heartbeat(self):
         """Test starting and stopping heartbeat."""
-        import agent.heartbeat
-        agent.heartbeat._heartbeat = None
+        import src.agents.heartbeat as heartbeat_mod
+        heartbeat_mod._heartbeat = None
         
         from src.agents.heartbeat import start_heartbeat, stop_heartbeat
         from src.agents.thinking import ThinkLevel

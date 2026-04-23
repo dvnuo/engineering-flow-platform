@@ -116,17 +116,15 @@ class TestExecutionQueue:
     @pytest.mark.asyncio
     async def test_list_all_queues(self, queue):
         """Test listing all queue statuses."""
-        # Add tasks to multiple sessions
-        async def dummy_coro():
-            await asyncio.sleep(0.1)
+        async def slow_coro():
+            await asyncio.sleep(0.2)
             return True
-        
-        await queue.enqueue("s1", dummy_coro)
-        await queue.enqueue("s2", dummy_coro)
-        
+
+        task = asyncio.create_task(queue.enqueue("s1", slow_coro))
+        await asyncio.sleep(0.05)
         status = await queue.list_all_queues()
-        
-        assert "s1" in status or "s2" in status
+        assert "s1" in status
+        task.cancel()
     
     @pytest.mark.asyncio
     async def test_clear_session(self, queue):
@@ -152,8 +150,8 @@ class TestExecutionQueue:
         # Add multiple sessions
         queue._session_queues["s1"] = asyncio.Queue()
         queue._session_queues["s2"] = asyncio.Queue()
-        queue._session_queues["s1"].put(lambda: None)
-        queue._session_queues["s2"].put(lambda: None)
+        await queue._session_queues["s1"].put(lambda: None)
+        await queue._session_queues["s2"].put(lambda: None)
         
         # Clear all
         total = await queue.clear_all()

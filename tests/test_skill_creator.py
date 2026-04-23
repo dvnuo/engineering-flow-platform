@@ -70,6 +70,7 @@ metadata:
         assert result["metadata"]["emoji"] == "🧪"
 
 
+@pytest.mark.skip(reason="skill_creator runtime function was removed in PR #131; init/package helpers remain covered")
 class TestSkillCreatorSkill:
     """Tests for skill_creator function."""
     

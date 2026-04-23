@@ -223,16 +223,16 @@ class TestFastLaneGlobalFunctions:
     
     def test_get_fastlane(self):
         """Test getting global fastlane instance."""
-        from src.agents.fastlane import get_fastlane, _fastlane
-        import agent.fastlane
+        from src.agents.fastlane import get_fastlane
+        import src.agents.fastlane as fastlane_mod
         
         # Reset global
-        agent.fastlane._fastlane = None
+        fastlane_mod._fastlane = None
         
         fastlane = get_fastlane()
         
         assert fastlane is not None
-        assert isinstance(fastlane, agent.fastlane.FastLaneCommands)
+        assert isinstance(fastlane, fastlane_mod.FastLaneCommands)
     
     @pytest.mark.asyncio
     async def test_process_fastlane_command(self):
@@ -259,11 +259,10 @@ class TestFastLaneIntegration:
     async def test_process_with_fastlane_command(self):
         """Test Agent.process handles fastlane commands."""
         from src.agents.core import Agent
-        from src.agents.fastlane import _fastlane
-        import agent.fastlane
+        import src.agents.fastlane as fastlane_mod
         
         # Reset global
-        agent.fastlane._fastlane = None
+        fastlane_mod._fastlane = None
         
         agent = Agent()
         
@@ -281,11 +280,10 @@ class TestFastLaneIntegration:
         """Test /thinking updates agent's think_level."""
         from src.agents.core import Agent
         from src.agents.thinking import ThinkLevel
-        from src.agents.fastlane import _fastlane
-        import agent.fastlane
+        import src.agents.fastlane as fastlane_mod
         
         # Reset global
-        agent.fastlane._fastlane = None
+        fastlane_mod._fastlane = None
         
         agent = Agent()
         original_level = agent.think_level

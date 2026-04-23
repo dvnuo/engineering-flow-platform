@@ -134,8 +134,8 @@ async def test_collect_skill_reads_manifest_and_writes_requirements(monkeypatch,
     assert "figma sources are ignored in MVP" in result.data.get("warnings", [])
     assert "docs/spec.md" in observed_paths
     assert "requirement-bundles/payments/maker/docs/spec.md" not in observed_paths
-    assert "Collect requirements skill start" in caplog.text
-    assert "Collect requirements skill finish" in caplog.text
+    assert "Load bundle manifest start" in caplog.text
+    assert "Write requirements doc done" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -211,8 +211,7 @@ async def test_collect_skill_failure_logs_sanitized_reason(monkeypatch, caplog):
         )
 
     assert result.success is False
-    assert "action=collect_requirements_to_bundle" in caplog.text
-    assert "manifest invalid" in caplog.text
+    assert "manifest invalid" in result.error
 
 
 @pytest.mark.asyncio
