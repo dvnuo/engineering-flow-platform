@@ -21,6 +21,7 @@ from src.agents.skill_mode import (
     _parse_skill_control_marker,
     _update_skill_memory_summary,
     generate_initial_skill_plan,
+    resolve_skill_response_flow,
 )
 
 from src.agents.heartbeat import get_heartbeat, start_heartbeat, stop_heartbeat
@@ -78,6 +79,7 @@ from src.runtime.progressive_context import (
 from src.context_blob_store import build_section_map, put_text
 from src.agents.compaction import estimate_tokens
 from src.runtime.output_controller import call_llm_with_output_control, recover_max_output_tokens
+from src.runtime.response_flow_policy import decide_response_flow
 
 logger = logging.getLogger(__name__)
 
@@ -652,23 +654,25 @@ def _large_generation_output_guard(
     active_skill_contract: Optional[Dict[str, Any]],
     latest_user_text: str = "",
 ) -> str:
-    skill_name = (
-        getattr(active_skill_runtime, "skill_name", None)
-        or getattr(selected_skill, "name", None)
-        or (active_skill_contract or {}).get("skill_name")
+    llm_cfg = config.llm if isinstance(config.llm, dict) else {}
+    request_estimated_tokens = None
+    prompt_budget_tokens = None
+    if isinstance(active_skill_contract, dict):
+        request_estimated_tokens = active_skill_contract.get("request_estimated_tokens")
+        prompt_budget_tokens = active_skill_contract.get("prompt_budget_tokens")
+    decision = decide_response_flow(
+        config_block=llm_cfg.get("response_flow"),
+        user_text=latest_user_text,
+        request_estimated_tokens=request_estimated_tokens,
+        prompt_budget_tokens=prompt_budget_tokens,
+        planning_mode=str(getattr(active_skill_runtime, "planning_mode", None) or getattr(selected_skill, "planning_mode", None) or "auto"),
+        staging_mode=str(getattr(active_skill_runtime, "staging_mode", None) or getattr(selected_skill, "staging_mode", None) or (active_skill_contract or {}).get("staging_mode") or "auto"),
+        execution_style=str(getattr(active_skill_runtime, "execution_style", None) or getattr(selected_skill, "execution_style", None) or ""),
+        ask_user_policy=str(getattr(active_skill_runtime, "ask_user_policy", None) or getattr(selected_skill, "ask_user_policy", None) or ""),
+        generation_state_mode=str((active_skill_contract or {}).get("generation_mode") or ""),
+        max_output_recovery_active=bool((active_skill_contract or {}).get("max_output_recovery_applied")),
     )
-    normalized = str(skill_name or "").strip().lower()
-    skill_desc = str(getattr(selected_skill, "description", "") or "")
-    skill_or_desc = f"{normalized} {skill_desc}".lower()
-    user_text = str(latest_user_text or "").lower()
-    generation_markers = (
-        "test", "code", "generate", "implementation", "spec", "feature", "step definition", "step_definitions",
-        "multi-file", "all test cases", "generate all", "全部内容", "生成全部", "all jira information",
-    )
-    is_generation = any(marker in skill_or_desc for marker in generation_markers) or any(
-        marker in user_text for marker in generation_markers
-    )
-    if not is_generation:
+    if not decision.staging_required:
         return ""
     boundary = resolve_output_boundary(
         getattr(active_skill_runtime, "model", None) or getattr(selected_skill, "model", None) or config.llm.get("model")
@@ -680,6 +684,7 @@ def _large_generation_output_guard(
         "artifact in a single chat response. Generate one bounded phase/file at a time. Prefer writing artifacts/files "
         "through tools when available. In chat, return a concise manifest, file paths, and next step. "
         f"Keep response within resolved output boundary (tokens≈{max_tokens}, chars≈{max_chars}).\n"
+        f"staging_reasons={','.join(decision.reasons)}\n"
         f"generation_mode=staged\nmax_chat_output_chars={max_chars}\ncurrent_phase=manifest"
     )
 
@@ -2326,6 +2331,10 @@ You have access to the following tools. When a user asks you to do something tha
             if large_generation_guard:
                 llm_kwargs["system_prompt"] = ((llm_kwargs.get("system_prompt") or "") + "\n\n" + large_generation_guard).strip()
             large_generation_guard_applied = bool(large_generation_guard)
+            large_generation_guard_reason = ""
+            if large_generation_guard_applied:
+                reason_match = re.search(r"staging_reasons=([^\n]+)", large_generation_guard)
+                large_generation_guard_reason = reason_match.group(1).strip() if reason_match else "policy:staging_required"
             if effective_model:
                 llm_kwargs["model"] = effective_model
             
@@ -2354,7 +2363,7 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
                 budget_state["large_generation_guard_applied"] = large_generation_guard_applied
                 budget_state["output_size_guard_applied"] = large_generation_guard_applied
-                budget_state["large_generation_guard_reason"] = "classifier:skill_or_user_generation_request" if large_generation_guard_applied else ""
+                budget_state["large_generation_guard_reason"] = large_generation_guard_reason
                 budget_state["generation_mode"] = "staged" if large_generation_guard_applied else "default"
                 budget_state["current_generation_phase"] = "manifest" if large_generation_guard_applied else ""
                 budget_state["max_chat_output_tokens"] = output_boundary.get("max_chat_output_tokens")
@@ -2411,6 +2420,7 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["request_over_budget"] = request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False
                 budget_state["large_generation_guard_applied"] = large_generation_guard_applied
                 budget_state["output_size_guard_applied"] = large_generation_guard_applied
+                budget_state["large_generation_guard_reason"] = large_generation_guard_reason
                 budget_state["request_budget_stage"] = "tool_loop"
                 latest_request_budget = dict(budget_state)
                 emit_context_snapshot("tool_loop_budget", loop_context_state, iteration=iteration)
@@ -2424,11 +2434,16 @@ You have access to the following tools. When a user asks you to do something tha
                 _merge_budget_into_error_details(error_response, latest_request_budget)
                 return attach_runtime_events(error_response)
             if request_estimated_tokens > prompt_budget_tokens:
-                llm_kwargs["system_prompt"] = (
-                    (llm_kwargs.get("system_prompt") or "")
-                    + "\n\nBudget guard: Do not emit all generated files in chat. "
-                    "Write artifacts/files via tools when possible; otherwise output a concise manifest and ask to continue file-by-file."
+                budget_guard_suffix = (
+                    "\n\nBudget guard: Do not emit all generated files in chat. "
+                    "Prefer context reduction and writing artifacts/files via tools; otherwise return a bounded direct response."
                 )
+                if large_generation_guard_applied:
+                    budget_guard_suffix = (
+                        "\n\nBudget guard: Do not emit all generated files in chat. "
+                        "Use staged mode: output a concise manifest and continue file-by-file only when the user requests continuation."
+                    )
+                llm_kwargs["system_prompt"] = ((llm_kwargs.get("system_prompt") or "") + budget_guard_suffix)
             
             raw_max_chat = (
                 ((loop_context_state.get("budget", {}) or {}).get("max_chat_output_chars"))
@@ -3056,14 +3071,17 @@ You have access to the following tools. When a user asks you to do something tha
         tracer.log_skill_mode_entry(skill.name, message, session_id)
         send_skill_event("skill_mode_start", {"skill": skill.name, "message": safe_preview(message, 100)})
 
-        # Generate initial plan (always returns 3-tuple: goal, steps, usage)
-        tracer.log_skill_mode_step("GENERATE_PLAN", "started", f"Creating plan for: {safe_preview(message, 50)}")
-        send_skill_event("skill_step", {"step": "GENERATE_PLAN", "status": "started", "detail": f"Creating plan..."})
-        
-        goal, steps, plan_usage = await generate_initial_skill_plan(skill, message, model=self.model)
-        
-        tracer.log_skill_mode_step("GENERATE_PLAN", "completed", f"Goal: {goal[:50]}...")
-        send_skill_event("skill_step", {"step": "GENERATE_PLAN", "status": "completed", "detail": f"Goal: {goal[:100]}..."})
+        flow = resolve_skill_response_flow(skill, message)
+        if flow.get("plan_required"):
+            tracer.log_skill_mode_step("GENERATE_PLAN", "started", f"Creating plan for: {safe_preview(message, 50)}")
+            send_skill_event("skill_step", {"step": "GENERATE_PLAN", "status": "started", "detail": "Creating plan..."})
+            goal, steps, plan_usage = await generate_initial_skill_plan(skill, message, model=self.model)
+            tracer.log_skill_mode_step("GENERATE_PLAN", "completed", f"Goal: {goal[:50]}...")
+            send_skill_event("skill_step", {"step": "GENERATE_PLAN", "status": "completed", "detail": f"Goal: {goal[:100]}..."})
+        else:
+            goal = str(message or "").strip() or (str(getattr(skill, "description", "") or "").strip() or "Complete the request")
+            steps = [{"id": "complete_task", "type": "execute", "title": str(getattr(skill, "description", "") or "Complete the request")}]
+            plan_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         skill_session = SkillSession(
             skill_name=skill.name,
@@ -3071,6 +3089,7 @@ You have access to the following tools. When a user asks you to do something tha
             goal=goal,
             plan=steps,
             status="active",
+            execution_mode=str(flow.get("execution_style") or "direct"),
         )
 
         await session_manager.set_active_skill_session(session_id, skill_session.to_dict())
@@ -3285,7 +3304,13 @@ You have access to the following tools. When a user asks you to do something tha
                 )
             
             # Build prompts with potentially compacted session
-            system_prompt = _build_skill_mode_system_prompt(skill, skill_session)
+            flow = resolve_skill_response_flow(skill, message)
+            system_prompt = _build_skill_mode_system_prompt(
+                skill,
+                skill_session,
+                execution_style=str(flow.get("execution_style") or "direct"),
+                ask_user_policy=str(flow.get("ask_user_policy") or "blocked_only"),
+            )
             
             logger.debug(f"[SkillMode] system_prompt length={len(system_prompt)}")
             logger.debug(f"[SkillMode] input_items count={len(input_items)}")
@@ -3383,6 +3408,10 @@ You have access to the following tools. When a user asks you to do something tha
             if large_generation_guard:
                 llm_kwargs["system_prompt"] = ((llm_kwargs.get("system_prompt") or "") + "\n\n" + large_generation_guard).strip()
             large_generation_guard_applied = bool(large_generation_guard)
+            large_generation_guard_reason = ""
+            if large_generation_guard_applied:
+                reason_match = re.search(r"staging_reasons=([^\n]+)", large_generation_guard)
+                large_generation_guard_reason = reason_match.group(1).strip() if reason_match else "policy:staging_required"
             if self.model:
                 llm_kwargs["model"] = self.model
 
@@ -3410,7 +3439,7 @@ You have access to the following tools. When a user asks you to do something tha
                 "request_over_budget": request_estimated_tokens > prompt_budget_tokens if prompt_budget_tokens else False,
                 "large_generation_guard_applied": large_generation_guard_applied,
                 "output_size_guard_applied": large_generation_guard_applied,
-                "large_generation_guard_reason": "classifier:skill_or_user_generation_request" if large_generation_guard_applied else "",
+                "large_generation_guard_reason": large_generation_guard_reason,
                 "generation_mode": "staged" if large_generation_guard_applied else "default",
                 "current_generation_phase": "manifest" if large_generation_guard_applied else "",
                 "max_chat_output_tokens": output_boundary.get("max_chat_output_tokens"),
@@ -3420,7 +3449,13 @@ You have access to the following tools. When a user asks you to do something tha
             }
             if request_estimated_tokens > prompt_budget_tokens:
                 skill_session = compact_skill_session_sync(skill_session, max_chars=4000)
-                system_prompt = _build_skill_mode_system_prompt(skill, skill_session)
+                flow = resolve_skill_response_flow(skill, message, request_estimated_tokens=request_estimated_tokens, prompt_budget_tokens=prompt_budget_tokens)
+                system_prompt = _build_skill_mode_system_prompt(
+                    skill,
+                    skill_session,
+                    execution_style=str(flow.get("execution_style") or "direct"),
+                    ask_user_policy=str(flow.get("ask_user_policy") or "blocked_only"),
+                )
                 input_items = degrade_projected_context_sources_in_responses_input_items(input_items)
                 llm_kwargs["system_prompt"] = system_prompt
                 if large_generation_guard:

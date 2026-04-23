@@ -23,6 +23,32 @@ def test_portal_managed_field_tree_provider_sections_do_not_include_automation()
     assert "review_requests" not in managed_tree_repr
     assert "assignments" not in managed_tree_repr
     assert "mentions" not in managed_tree_repr
+    assert Config.PORTAL_MANAGED_FIELD_TREE["llm"]["response_flow"] is True
+
+
+def test_set_managed_overlay_allows_llm_response_flow_subtree(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay(
+        "rp-response-flow",
+        1,
+        {
+            "llm": {
+                "provider": "openai",
+                "response_flow": {
+                    "plan_policy": "explicit_or_complex",
+                    "staging_policy": "explicit_or_complex",
+                    "default_skill_execution_style": "direct",
+                    "ask_user_policy": "blocked_only",
+                },
+            }
+        },
+    )
+    cfg.load()
+    effective = cfg.get_effective_config()
+    assert effective["llm"]["response_flow"]["plan_policy"] == "explicit_or_complex"
 
 
 def test_set_managed_overlay_ignores_provider_automation_subtrees(tmp_path):

@@ -11,6 +11,9 @@ triggers:
 tools:
   - jira_get_issue
   - jira_search
+planning_mode: required
+execution_style: stepwise
+ask_user_policy: blocked_only
 strategy:
   - "1. 先提取 issue 的目标、验收标准、依赖条件。"
   - "2. 信息不足时 ASK_USER 补关键前置条件与判定标准。"

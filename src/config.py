@@ -112,6 +112,7 @@ class Config:
             "tools": True,
             "context_budget": True,
             "context_projection": True,
+            "response_flow": True,
         },
         "proxy": {
             "enabled": True,

@@ -9,6 +9,9 @@ triggers:
   - 缺陷复现场景
   - 生成缺陷回归测试
 tools: []
+planning_mode: required
+execution_style: stepwise
+ask_user_policy: blocked_only
 strategy:
   - "1. 先提炼复现前置条件、触发步骤、实际结果与期望结果。"
   - "2. 缺少关键复现条件时 ASK_USER，不盲猜环境与数据。"

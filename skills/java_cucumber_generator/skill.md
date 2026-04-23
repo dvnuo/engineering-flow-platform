@@ -9,6 +9,9 @@ triggers:
   - generate cucumber for java
   - 生成 java cucumber
 tools: []
+planning_mode: required
+execution_style: stepwise
+ask_user_policy: blocked_only
 strategy:
   - "1. 先识别业务目标、角色、关键规则；信息不足时先 ASK_USER。"
   - "2. 每轮只推进一个有价值小步骤：例如先给 feature 草稿，再给 step definitions 骨架。"

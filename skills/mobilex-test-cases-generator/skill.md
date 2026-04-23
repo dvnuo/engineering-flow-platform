@@ -18,6 +18,10 @@ tools:
   - git_commit
   - git_push
   - run_command
+planning_mode: required
+execution_style: stepwise
+ask_user_policy: blocked_only
+staging_mode: required
 strategy:
   - "1. Parse Jira ticket(s) - supports single or multiple (e.g., EFP-123 or EFP-123,EFP-456)"
   - "2. Call jira_get_issue_by_url to fetch each ticket's details"

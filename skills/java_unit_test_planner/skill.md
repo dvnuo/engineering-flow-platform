@@ -9,6 +9,9 @@ triggers:
   - 生成 java 单元测试思路
   - java 测试设计
 tools: []
+planning_mode: required
+execution_style: stepwise
+ask_user_policy: blocked_only
 strategy:
   - "1. 先确定被测对象职责、输入输出、依赖与异常路径。"
   - "2. 缺少方法签名或关键业务规则时 ASK_USER。"

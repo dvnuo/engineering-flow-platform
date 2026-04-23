@@ -9,6 +9,9 @@ triggers:
   - 接口测试场景
   - 生成 api 测试
 tools: []
+planning_mode: required
+execution_style: stepwise
+ask_user_policy: blocked_only
 strategy:
   - "1. 识别接口路径、请求字段、响应结构、状态码与业务规则。"
   - "2. 缺关键字段或判定规则时先 ASK_USER，再继续生成。"

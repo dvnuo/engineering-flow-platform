@@ -40,6 +40,7 @@ async def run_replay_case(
     capture_llm_kwargs=None,
     tracer_factory=None,
     skill_name="lookup",
+    skill_metadata=None,
 ):
     from src.agents import core as core_mod
 
@@ -75,7 +76,14 @@ async def run_replay_case(
     tracer_provider = tracer_factory or (lambda: FakeTracer())
     monkeypatch.setattr("src.skills.get_tracer", tracer_provider)
 
-    skill = SimpleNamespace(name=skill_name, description="search issue", path="", tools=[], strategy=[])
+    metadata = {"planning_mode": "auto", "staging_mode": "auto", "execution_style": "direct", "ask_user_policy": "blocked_only"}
+    if isinstance(skill_metadata, dict):
+        metadata.update(skill_metadata)
+    if skill_name == "mobilex-test-cases-generator":
+        metadata["staging_mode"] = "required"
+        metadata["execution_style"] = "stepwise"
+        metadata["planning_mode"] = "required"
+    skill = SimpleNamespace(name=skill_name, description="search issue", path="", tools=[], strategy=[], **metadata)
     agent = make_agent()
 
     skill_session = initial_session or SkillSession(skill_name=skill_name, original_user_request=message)
@@ -925,3 +933,46 @@ async def test_continue_skill_mode_mobilex_budget_marks_large_generation_guard_a
     assert result["request_budget"].get("request_budget_stage") == "skill_generation"
     assert result["request_budget"].get("large_generation_guard_applied") is True
     assert result["request_budget"].get("output_size_guard_applied") is True
+    assert "skill_metadata" in str(result["request_budget"].get("large_generation_guard_reason") or "")
+
+
+@pytest.mark.asyncio
+async def test_start_skill_mode_direct_skill_skips_initial_plan(monkeypatch):
+    from src.agents import core as core_mod
+
+    plan_called = {"v": False}
+
+    async def fake_plan(*args, **kwargs):
+        plan_called["v"] = True
+        return "x", [{"id": "s1", "type": "execute", "title": "x"}], {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+
+    monkeypatch.setattr(core_mod, "generate_initial_skill_plan", fake_plan)
+    async def _fake_set_active(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(core_mod.session_manager, "set_active_skill_session", _fake_set_active)
+
+    async def _fake_continue(**kwargs):
+        return {"response": "ok", "usage": {}}
+
+    agent = make_agent()
+    agent._continue_skill_mode = _fake_continue
+    skill = SimpleNamespace(name="create-pull-request", description="create pr", path="", planning_mode="auto", staging_mode="auto", execution_style="direct", ask_user_policy="blocked_only")
+    await agent._start_skill_mode("create a PR", "s", "u", skill)
+    assert plan_called["v"] is False
+
+
+def test_skill_mode_prompt_direct_does_not_force_one_small_step():
+    from src.agents.skill_mode import _build_skill_mode_system_prompt
+
+    skill = SimpleNamespace(name="direct", description="desc", path="", strategy=[])
+    prompt = _build_skill_mode_system_prompt(skill, SkillSession(skill_name="direct", original_user_request="x"), execution_style="direct")
+    assert "Advance only ONE small step this turn" not in prompt
+
+
+def test_skill_mode_prompt_stepwise_keeps_one_small_step_rule():
+    from src.agents.skill_mode import _build_skill_mode_system_prompt
+
+    skill = SimpleNamespace(name="stepwise", description="desc", path="", strategy=[])
+    prompt = _build_skill_mode_system_prompt(skill, SkillSession(skill_name="stepwise", original_user_request="x"), execution_style="stepwise")
+    assert "Advance only ONE small step this turn" in prompt

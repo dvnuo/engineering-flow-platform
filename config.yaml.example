@@ -93,6 +93,15 @@ llm:
     chars_per_token_estimate: 4
     max_chat_output_chars: null
     oversized_output_strategy: "save_and_manifest"
+  response_flow:
+    # Direct completion is the default.
+    plan_policy: "explicit_or_complex"
+    staging_policy: "explicit_or_complex"
+    default_skill_execution_style: "direct"
+    ask_user_policy: "blocked_only"
+    # Staging/planning activates only on explicit request or true budget pressure.
+    complexity_prompt_budget_ratio: 0.85
+    complexity_min_request_tokens: 24000
   context_projection:
     recent_protected_messages: 6
     jira_confluence:
