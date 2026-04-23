@@ -112,6 +112,35 @@ def build_jira_adapter_capabilities() -> List[AdapterActionDescriptor]:
             requires_identity_binding=True,
             source_ref="src.jira",
         ),
+        AdapterActionDescriptor(
+            action_id="adapter:jira:export_issues_to_markdown",
+            adapter="jira",
+            name="export_issues_to_markdown",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "input": {},
+                    "issue_keys": {"type": "array", "items": {"type": "string"}},
+                    "jql": {"type": "string"},
+                    "output_mode": {"type": "string", "enum": ["auto", "single_combined", "one_file_per_issue", "zip"]},
+                    "output_directory": {"type": "string"},
+                    "download_attachments": {"type": "boolean"},
+                },
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string"},
+                    "issues": {"type": "array"},
+                    "artifacts": {"type": "object"},
+                    "errors": {"type": "array"},
+                    "warnings": {"type": "array"},
+                },
+            },
+            policy_tags=["jira", "read", "export", "artifact_write", "filesystem_write", "attachment_download"],
+            requires_identity_binding=True,
+            source_ref="src.jira.exporter",
+        ),
     ])
 
 

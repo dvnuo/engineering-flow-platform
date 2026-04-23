@@ -110,6 +110,8 @@ async def execute_jira_workflow_action(action_name: str, kwargs: Dict[str, Any])
                 "action_name": action,
             }
         raw = await jira_module.jira_add_comment(issue_key=issue_key, comment=comment)
+    elif action == "export_issues_to_markdown":
+        raw = await jira_module.export_issues_to_markdown(**payload)
     else:
         return {"success": False, "error": f"Unsupported jira action: {action}", "system": "jira", "action_name": action}
 
@@ -262,6 +264,7 @@ ACTION_ID_TO_EXECUTOR = {
     "adapter:jira:assign_issue": lambda payload: _exec_jira("assign_issue", payload),
     "adapter:jira:transition_issue": lambda payload: _exec_jira("transition_issue", payload),
     "adapter:jira:add_comment": lambda payload: _exec_jira("add_comment", payload),
+    "adapter:jira:export_issues_to_markdown": lambda payload: _exec_jira("export_issues_to_markdown", payload),
     "adapter:github:review_pull_request": lambda payload: _exec_github("review_pull_request", payload),
     "adapter:github:add_comment": lambda payload: _exec_github("add_comment", payload),
     "adapter:portal:create_delegation": lambda payload: _exec_portal("create_delegation", payload),

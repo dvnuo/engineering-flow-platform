@@ -1334,35 +1334,37 @@ def get_tools_schemas() -> list:
             "type": "function",
             "function": {
                 "name": "export_issues_to_markdown",
-                "description": "Export one or more Jira issues to Markdown. Supports single issue key, comma-separated keys, a list of keys, or a JQL input (pass a dict with 'jql'). Can write per-issue files, a combined file, or produce a zip.",
+                "description": "Export Jira tickets/issues to Markdown files. Use this when the user asks to convert Jira tickets to markdown, save to a folder, or download Jira attachments. Supports newline-separated issue keys and natural language text containing issue keys.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "input": {
-                            "type": "string",
-                            "description": "Issue input: single key (e.g., PROJ-123), comma-separated keys (e.g., PROJ-1,PROJ-2), a JSON list like [\"PROJ-1\",\"PROJ-2\"], or a JSON object like {\"jql\": \"project = PROJ\"}. For complex inputs, pass a JSON-encoded string."
+                            "anyOf": [
+                                {"type": "string"},
+                                {"type": "array", "items": {"type": "string"}},
+                                {"type": "object"}
+                            ],
+                            "description": "Can be a single issue key, newline-separated keys, comma-separated keys, a JSON list, a dict with jql, or the original user text containing issue keys."
                         },
-                        "jql": {"type": "string", "description": "Optional JQL query string (alternative to using 'input' with a dict)"},
-                        "page_size": {"type": "integer", "description": "Optional page size when using JQL", "default": 50},
-                        "output_mode": {"type": "string", "enum": ["single_combined", "one_file_per_issue", "zip_per_issue"], "default": "single_combined"},
-                        "output_directory": {"type": "string", "description": "Directory to write files (required for file modes)"},
-                        "download_attachments": {"type": "boolean", "description": "Whether to download attachments"},
-                        "attachments_dir": {"type": "string", "description": "Relative attachments directory under output_directory"},
-                        "attachments_concurrency": {"type": "integer", "description": "Concurrent downloads for attachments", "default": 4},
-                        "attachments_max_size": {"type": "integer", "description": "Maximum attachment download size in bytes", "default": 52428800},
-                        "attachments_inline_text_threshold": {"type": "integer", "description": "Max chars for inline text embedding", "default": 2000},
-                        "attachments_retries": {"type": "integer", "description": "Retry attempts for attachment downloads", "default": 3},
-                        "attachments_backoff": {"type": "array", "items": {"type": "integer"}, "description": "Backoff seconds for retries", "default": [1, 2, 4]},
-                        "attachments_preserve_binary": {"type": "boolean", "description": "Whether to preserve and copy the original binary files", "default": True},
-                        "include_raw_snapshot": {"type": "boolean", "description": "Include a raw fields snapshot in the Markdown"},
-                        "max_comments": {"type": "integer", "description": "Maximum number of comments to include", "default": 10},
+                        "issue_keys": {"type": "array", "items": {"type": "string"}},
+                        "jql": {"type": "string"},
+                        "page_size": {"type": "integer", "default": 50},
+                        "max_issues": {"type": "integer", "default": 100},
+                        "output_mode": {"type": "string", "enum": ["auto", "single_combined", "one_file_per_issue", "zip"], "default": "auto"},
+                        "output_directory": {"type": "string", "description": "Must be under ~/.efp/workspace. Example: /root/.efp/workspace/FXOW/FXLanding. Allowed roots are ~/.efp/workspace, /root/.efp/workspace, or EFP_WORKSPACE_ROOT when configured."},
+                        "download_attachments": {"type": "boolean", "description": "If omitted, defaults to true when output_directory is provided."},
+                        "attachments_dir": {"type": "string", "default": "attachments"},
+                        "include_raw_snapshot": {"type": "boolean", "default": False},
+                        "include_coverage_ledger": {"type": "boolean", "default": True},
+                        "max_comments": {"type": "integer", "default": 10},
                         "comments_order": {"type": "string", "enum": ["latest_first", "oldest_first"], "default": "latest_first"},
-                        "field_match_threshold": {"type": "number", "description": "Similarity threshold for custom field matching", "default": 0.9},
-                        "field_similarity_threshold": {"type": "number", "description": "Similarity threshold for content de-duplication", "default": 0.9},
-                        "array_inline_max_items": {"type": "integer", "default": 3},
-                        "array_inline_max_element_length": {"type": "integer", "default": 40}
-                    },
-                    "required": ["input"]
+                        "attachments_concurrency": {"type": "integer", "default": 4},
+                        "attachments_max_size": {"type": "integer", "default": 52428800},
+                        "attachments_inline_text_threshold": {"type": "integer", "default": 2000},
+                        "attachments_retries": {"type": "integer", "default": 3},
+                        "attachments_backoff": {"type": "array", "items": {"type": "integer"}, "default": [1, 2, 4]},
+                        "attachments_preserve_binary": {"type": "boolean", "default": True}
+                    }
                 }
             }
         },
