@@ -58,6 +58,7 @@ from src.skills.active_contract import (
     get_contract_skill_name,
     is_active_skill_contract_usable,
     is_clear_active_skill_command,
+    is_explicit_skill_invocation,
     parse_explicit_skill_switch_name,
 )
 from src.runtime.chat_orchestration_adapter import execute_tool_or_task_orchestration
@@ -676,11 +677,11 @@ def _large_generation_output_guard(
     max_chars = int(boundary.get("max_chat_output_chars") or 0)
     max_tokens = int(boundary.get("max_chat_output_tokens") or 0)
     return (
-        "Large generation output guard: Do not emit a complete multi-file implementation or very long generated "
-        "artifact in a single chat response. Generate one bounded phase/file at a time. Prefer writing artifacts/files "
-        "through tools when available. In chat, return a concise manifest, file paths, and next step. "
+        "Large generation output guard: Keep output bounded to the current response budget. "
+        "Do not dump extremely large multi-file content in one reply. Prefer writing artifacts/files "
+        "through tools when available and summarize what was produced. "
         f"Keep response within resolved output boundary (tokens≈{max_tokens}, chars≈{max_chars}).\n"
-        f"generation_mode=staged\nmax_chat_output_chars={max_chars}\ncurrent_phase=manifest"
+        f"max_chat_output_chars={max_chars}"
     )
 
 
@@ -1860,16 +1861,21 @@ You have access to the following tools. When a user asks you to do something tha
                 selected_skill = explicit_skill
                 activation_reason = "matched"
             else:
-                not_found_message = f"Skill not found: {explicit_skill_name}"
-                await self._persist_assistant_message(session_id, not_found_message)
-                return build_early_result(
-                    not_found_message,
-                    state="failed",
-                    event_type="execution.failed",
-                    event_data={"reason": "skill_not_found", "skill": explicit_skill_name},
-                )
+                matched_skills = skill_registry.match_skill(message) if is_explicit_skill_invocation(message) else []
+                if matched_skills:
+                    selected_skill = matched_skills[0]
+                    activation_reason = "matched"
+                else:
+                    not_found_message = f"Skill not found: {explicit_skill_name}"
+                    await self._persist_assistant_message(session_id, not_found_message)
+                    return build_early_result(
+                        not_found_message,
+                        state="failed",
+                        event_type="execution.failed",
+                        event_data={"reason": "skill_not_found", "skill": explicit_skill_name},
+                    )
 
-        if selected_skill is None:
+        if selected_skill is None and is_explicit_skill_invocation(message):
             matched_skills = skill_registry.match_skill(message)
             if matched_skills:
                 selected_skill = matched_skills[0]
@@ -2355,8 +2361,6 @@ You have access to the following tools. When a user asks you to do something tha
                 budget_state["large_generation_guard_applied"] = large_generation_guard_applied
                 budget_state["output_size_guard_applied"] = large_generation_guard_applied
                 budget_state["large_generation_guard_reason"] = "classifier:skill_or_user_generation_request" if large_generation_guard_applied else ""
-                budget_state["generation_mode"] = "staged" if large_generation_guard_applied else "default"
-                budget_state["current_generation_phase"] = "manifest" if large_generation_guard_applied else ""
                 budget_state["max_chat_output_tokens"] = output_boundary.get("max_chat_output_tokens")
                 budget_state["max_chat_output_chars"] = output_boundary.get("max_chat_output_chars")
                 budget_state["output_risk_level"] = "high" if large_generation_guard_applied else "normal"
@@ -3411,8 +3415,6 @@ You have access to the following tools. When a user asks you to do something tha
                 "large_generation_guard_applied": large_generation_guard_applied,
                 "output_size_guard_applied": large_generation_guard_applied,
                 "large_generation_guard_reason": "classifier:skill_or_user_generation_request" if large_generation_guard_applied else "",
-                "generation_mode": "staged" if large_generation_guard_applied else "default",
-                "current_generation_phase": "manifest" if large_generation_guard_applied else "",
                 "max_chat_output_tokens": output_boundary.get("max_chat_output_tokens"),
                 "max_chat_output_chars": output_boundary.get("max_chat_output_chars"),
                 "request_budget_stage": "skill_generation",

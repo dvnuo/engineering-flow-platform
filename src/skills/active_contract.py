@@ -70,6 +70,17 @@ def parse_explicit_skill_switch_name(message: str) -> str:
     return ""
 
 
+def is_explicit_skill_invocation(message: str) -> bool:
+    raw = str(message or "").strip()
+    if not raw:
+        return False
+    if is_clear_active_skill_command(raw):
+        return True
+    if parse_explicit_skill_switch_name(raw):
+        return True
+    return raw.startswith("/")
+
+
 def get_contract_skill_name(contract: Optional[dict]) -> str:
     if not isinstance(contract, dict):
         return ""

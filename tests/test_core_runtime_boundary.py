@@ -444,7 +444,8 @@ def test_large_generation_output_guard_applies_to_non_mobilex_generation_skill()
 
     text = core._large_generation_output_guard(None, Skill(), {"skill_name": "api-test-generator"}, "generate all test cases from this Jira")
     assert "Large generation output guard:" in text
-    assert "generation_mode=staged" in text
+    assert "generation_mode=staged" not in text
+    assert "current_phase=manifest" not in text
 
 
 def test_large_generation_output_guard_not_applied_to_normal_chat():
@@ -560,7 +561,7 @@ async def test_output_controller_bounds_huge_content_in_staged_mode():
         async def responses(self, **kwargs):
             return {"content": "X" * 50000, "tool_calls": [], "function_calls": [], "usage": {}}
 
-    state = {"budget": {}}
+    state = {"budget": {"generation_mode": "staged"}}
     result, diag = await call_llm_with_output_control(
         llm_client=_Client(),
         llm_kwargs={"input_items": [], "system_prompt": "generate full implementation", "tools": []},
@@ -763,7 +764,7 @@ async def test_output_controller_generation_state_machine_advances_on_continue()
         async def responses(self, **kwargs):
             return {"content": "phase content", "tool_calls": [], "function_calls": [], "usage": {}}
 
-    state = {"budget": {}}
+    state = {"budget": {"generation_mode": "staged"}}
     _, diag1 = await call_llm_with_output_control(
         llm_client=_Client(),
         llm_kwargs={"input_items": [], "system_prompt": "generate implementation", "tools": []},
@@ -832,7 +833,7 @@ async def test_output_controller_tracks_generated_artifacts_by_phase_when_bounde
         async def responses(self, **kwargs):
             return {"content": "X" * 500000, "tool_calls": [], "function_calls": [], "usage": {}}
 
-    state = {"budget": {}}
+    state = {"budget": {"generation_mode": "staged"}}
     _, diag1 = await call_llm_with_output_control(
         llm_client=_Client(),
         llm_kwargs={"input_items": [], "system_prompt": "generate implementation", "tools": []},

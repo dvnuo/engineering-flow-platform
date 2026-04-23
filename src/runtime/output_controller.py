@@ -81,15 +81,20 @@ def classify_output_risk(user_text: str, active_skill: Any, system_prompt: str, 
     skill_name = str(getattr(active_skill, "name", "") or getattr(active_skill, "skill_name", "")).lower()
     markers = ("generate", "test", "implementation", "spec", "feature", "all jira", "all confluence", "全部", "生成")
     if any(m in text for m in markers) or any(m in skill_name for m in markers):
-        return "high"
+        return "medium"
     if len(text) > 1200:
         return "medium"
     return "normal"
 
 
 def build_output_guard(risk: str, generation_mode: str) -> str:
-    if generation_mode != "staged" and risk != "high":
-        return ""
+    if generation_mode != "staged":
+        if risk != "high":
+            return ""
+        return (
+            "Large generation output guard: keep this response concise and bounded. "
+            "Avoid dumping very large multi-file content in a single chat reply."
+        )
     return (
         "Large generation output guard: staged mode is enforced. "
         "Return manifest/phase output only; do not emit full multi-file content. "
@@ -441,7 +446,7 @@ async def call_llm_with_output_control(
         system_prompt=str(llm_kwargs.get("system_prompt") or ""),
         source_state=context_state,
     )
-    generation_mode = "staged" if risk == "high" else str((budget or {}).get("generation_mode") or "normal")
+    generation_mode = str((budget or {}).get("generation_mode") or "normal")
     gen_state = get_generation_state(context_state)
     if generation_mode == "staged" or (isinstance(gen_state, dict) and gen_state.get("generation_mode") == "staged"):
         generation_mode = "staged"

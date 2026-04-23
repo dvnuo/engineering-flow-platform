@@ -624,7 +624,12 @@ async def test_matched_skill_does_not_route_to_legacy_skill_mode(monkeypatch, ba
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
+        SimpleNamespace(
+            _initialized=True,
+            match_skill=lambda *_: [matched_skill],
+            get_skill=lambda name: matched_skill if name == "runtime-skill" else None,
+            get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names),
+        ),
     )
 
     async def fake_responses(**kwargs):
@@ -701,7 +706,7 @@ async def test_active_skill_contract_continues_without_rematch(monkeypatch, base
     monkeypatch.setattr(agent, "_start_skill_mode", fail_start)
     monkeypatch.setattr(agent, "_continue_skill_mode", fail_continue)
 
-    first = await agent.process("runtime test", session_id="s1")
+    first = await agent.process("/runtime-skill start", session_id="s1")
     second = await agent.process("continue", session_id="s1")
 
     assert first["response"] == "done"
@@ -931,6 +936,88 @@ def test_parse_explicit_skill_switch_name_requires_name_for_switch_use_activate(
     assert parse_explicit_skill_switch_name("/skill use review-pull-request") == "review-pull-request"
 
 
+def test_is_explicit_skill_invocation_only_for_slash_forms():
+    from src.skills.active_contract import is_explicit_skill_invocation
+
+    assert is_explicit_skill_invocation("/skill review-pull-request") is True
+    assert is_explicit_skill_invocation("/review-pull-request MMGFX-1") is True
+    assert is_explicit_skill_invocation("/skill clear") is True
+    assert is_explicit_skill_invocation("please generate test cases for MMGFX-1") is False
+
+
+@pytest.mark.asyncio
+async def test_plain_natural_language_does_not_call_match_skill(monkeypatch, base_agent):
+    agent, _ = base_agent
+    match_calls = {"count": 0}
+
+    class _Registry:
+        _initialized = True
+
+        def match_skill(self, message):
+            match_calls["count"] += 1
+            return []
+
+        def get_skill(self, _name):
+            return None
+
+        def get_skill_runtime_config(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr("src.skills.skill_registry", _Registry())
+
+    async def fake_responses(**kwargs):
+        return {"content": "done", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+
+    result = await agent.process("please generate test cases for MMGFX-14839", session_id="s1")
+    assert result["response"] == "done"
+    assert match_calls["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_explicit_slash_invocation_calls_match_skill(monkeypatch, base_agent):
+    agent, _ = base_agent
+    matched_skill = SimpleNamespace(
+        name="jira_to_manual_test_cases",
+        description="Generate tests",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="Use Jira context.",
+        references=[],
+        model="",
+        hooks=[],
+        deprecated=False,
+    )
+    match_calls = {"count": 0}
+
+    class _Registry:
+        _initialized = True
+
+        def match_skill(self, message):
+            match_calls["count"] += 1
+            return [matched_skill]
+
+        def get_skill(self, _name):
+            return None
+
+        def get_skill_runtime_config(self, skill, globally_allowed_tool_names=None):
+            return build_skill_runtime_config(skill, globally_allowed_tool_names=globally_allowed_tool_names)
+
+    monkeypatch.setattr("src.skills.skill_registry", _Registry())
+
+    async def fake_responses(**kwargs):
+        return {"content": "done", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+
+    result = await agent.process("/jira_to_manual_test_cases MMGFX-14839", session_id="s1")
+    assert result["response"] == "done"
+    assert match_calls["count"] == 1
+
+
 @pytest.mark.asyncio
 async def test_active_skill_contract_unknown_explicit_switch_returns_without_llm(monkeypatch, base_agent):
     agent, sess = base_agent
@@ -1031,6 +1118,7 @@ async def test_matched_skill_workdir_updates_and_clears_when_path_falsy(monkeypa
         SimpleNamespace(
             _initialized=True,
             match_skill=_match_skill,
+            get_skill=lambda name: skill_with_path if name == "runtime-path" else (skill_without_path if name == "runtime-empty-path" else None),
             get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names),
         ),
     )
@@ -1041,11 +1129,11 @@ async def test_matched_skill_workdir_updates_and_clears_when_path_falsy(monkeypa
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
 
     set_skill_workdir(None)
-    first = await agent.process("run with path", session_id="s-workdir-1")
+    first = await agent.process("/runtime-path run with path", session_id="s-workdir-1")
     assert first["response"] == "done"
     assert get_skill_workdir() == str(tmp_path)
 
-    second = await agent.process("run without path", session_id="s-workdir-2")
+    second = await agent.process("/runtime-empty-path run without path", session_id="s-workdir-2")
     assert second["response"] == "done"
     assert get_skill_workdir() is None
 
@@ -1072,7 +1160,12 @@ async def test_disallowed_tool_is_denied_and_allowed_tool_executes(monkeypatch, 
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
+        SimpleNamespace(
+            _initialized=True,
+            match_skill=lambda *_: [matched_skill],
+            get_skill=lambda name: matched_skill if name == "runtime-skill" else None,
+            get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names),
+        ),
     )
 
     calls = {"execute": 0, "names": []}
@@ -1094,7 +1187,7 @@ async def test_disallowed_tool_is_denied_and_allowed_tool_executes(monkeypatch, 
         return responses.pop(0)
 
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
-    result = await agent.process("runtime test", session_id="s2", stream_callback=stream_callback)
+    result = await agent.process("/runtime-skill run", session_id="s2", stream_callback=stream_callback)
     assert result["response"] == "done"
     assert calls["execute"] == 1
     assert calls["names"] == ["allowed_tool"]
@@ -1125,6 +1218,7 @@ async def test_skill_declared_tools_empty_intersection_sends_empty_llm_tool_surf
         SimpleNamespace(
             _initialized=True,
             match_skill=lambda *_: [matched_skill],
+            get_skill=lambda name: matched_skill if name == "runtime-skill" else None,
             get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(
                 s,
                 globally_allowed_tool_names=globally_allowed_tool_names,
@@ -1152,7 +1246,7 @@ async def test_skill_declared_tools_empty_intersection_sends_empty_llm_tool_surf
 
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=_fake_responses, default_provider="openai"))
 
-    result = await agent.process("runtime test", session_id="s-empty-intersection")
+    result = await agent.process("/runtime-skill run", session_id="s-empty-intersection")
     assert result["response"] == "done"
     assert seen_llm_tools
     assert seen_llm_tools[0] == []
@@ -1181,7 +1275,12 @@ async def test_hooks_and_task_path_emit_events(monkeypatch, base_agent):
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
+        SimpleNamespace(
+            _initialized=True,
+            match_skill=lambda *_: [matched_skill],
+            get_skill=lambda name: matched_skill if name == "runtime-skill" else None,
+            get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names),
+        ),
     )
 
     async def _exec(*args, **kwargs):
@@ -1199,7 +1298,7 @@ async def test_hooks_and_task_path_emit_events(monkeypatch, base_agent):
 
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
 
-    result = await agent.process("runtime test", session_id="s3", stream_callback=stream_callback)
+    result = await agent.process("/runtime-skill run", session_id="s3", stream_callback=stream_callback)
     assert result["response"] == "done"
     assert any('"type": "skill_hook"' in e for e in events)
     assert any('"type": "task_started"' in e for e in events)
@@ -1224,7 +1323,12 @@ async def test_hook_failure_does_not_break_request(monkeypatch, base_agent):
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
+        SimpleNamespace(
+            _initialized=True,
+            match_skill=lambda *_: [matched_skill],
+            get_skill=lambda name: matched_skill if name == "runtime-skill" else None,
+            get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names),
+        ),
     )
 
     async def _exec(*args, **kwargs):
@@ -1263,7 +1367,12 @@ async def test_pre_hook_can_modify_args(monkeypatch, base_agent):
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
+        SimpleNamespace(
+            _initialized=True,
+            match_skill=lambda *_: [matched_skill],
+            get_skill=lambda name: matched_skill if name == "runtime-skill" else None,
+            get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names),
+        ),
     )
     captured = {}
 
@@ -1280,7 +1389,7 @@ async def test_pre_hook_can_modify_args(monkeypatch, base_agent):
         return responses.pop(0)
 
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=_fake_responses, default_provider="openai"))
-    result = await agent.process("runtime test", session_id="s-mod-args")
+    result = await agent.process("/runtime-skill run", session_id="s-mod-args")
     assert result["response"] == "done"
     assert captured.get("a") == "2"
 
@@ -1308,7 +1417,12 @@ async def test_pre_hook_can_short_circuit(monkeypatch, base_agent):
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
+        SimpleNamespace(
+            _initialized=True,
+            match_skill=lambda *_: [matched_skill],
+            get_skill=lambda name: matched_skill if name == "runtime-skill" else None,
+            get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names),
+        ),
     )
     called = {"tool": 0}
 
@@ -1325,7 +1439,7 @@ async def test_pre_hook_can_short_circuit(monkeypatch, base_agent):
         return responses.pop(0)
 
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=_fake_responses, default_provider="openai"))
-    result = await agent.process("runtime test", session_id="s-short", stream_callback=stream_callback)
+    result = await agent.process("/runtime-skill run", session_id="s-short", stream_callback=stream_callback)
     assert result["response"] == "done"
     assert called["tool"] == 0
     assert any('"type": "tool_result"' in e and "allowed_tool" in e for e in events)
@@ -1354,7 +1468,12 @@ async def test_pre_hook_short_circuit_failure_emits_failed_tool_result(monkeypat
     )
     monkeypatch.setattr(
         "src.skills.skill_registry",
-        SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
+        SimpleNamespace(
+            _initialized=True,
+            match_skill=lambda *_: [matched_skill],
+            get_skill=lambda name: matched_skill if name == "runtime-skill" else None,
+            get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names),
+        ),
     )
     called = {"tool": 0}
 
@@ -1372,7 +1491,7 @@ async def test_pre_hook_short_circuit_failure_emits_failed_tool_result(monkeypat
         return responses.pop(0)
 
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=_fake_responses, default_provider="openai"))
-    result = await agent.process("runtime test", session_id="s-short-fail", stream_callback=stream_callback)
+    result = await agent.process("/runtime-skill run", session_id="s-short-fail", stream_callback=stream_callback)
     assert result["response"] == "done"
     assert called["tool"] == 0
     assert any('"type": "tool_result"' in e and '"success": false' in e for e in events)
