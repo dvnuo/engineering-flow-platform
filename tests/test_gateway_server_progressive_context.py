@@ -1,6 +1,6 @@
 import pytest
 
-from src.gateway.server import Gateway, handle_jira_message
+import src.gateway.server as gateway_server
 
 
 class _FakeRequest:
@@ -19,9 +19,9 @@ async def test_handle_jira_message_uses_run_chat_execution(monkeypatch):
         captured.update(kwargs)
         return {"response": "jira-ok"}
 
-    monkeypatch.setattr("src.gateway.server.run_chat_execution", _fake_run_chat_execution)
+    monkeypatch.setattr(gateway_server, "run_chat_execution", _fake_run_chat_execution)
 
-    response = await handle_jira_message(
+    response = await gateway_server.handle_jira_message(
         message="hello",
         session_id="jira-session",
         user_name="jira-user",
@@ -42,7 +42,7 @@ async def test_handle_test_message_uses_run_chat_execution(monkeypatch):
         captured.update(kwargs)
         return {"response": "test-ok", "usage": {"prompt_tokens": 1}}
 
-    monkeypatch.setattr("src.gateway.server.run_chat_execution", _fake_run_chat_execution)
+    monkeypatch.setattr(gateway_server, "run_chat_execution", _fake_run_chat_execution)
 
     fake_request = _FakeRequest({
         "message": "ping",
@@ -50,7 +50,7 @@ async def test_handle_test_message_uses_run_chat_execution(monkeypatch):
         "reasoning_replay": True,
     })
 
-    response = await Gateway.handle_test_message(object(), fake_request)
+    response = await gateway_server.Gateway.handle_test_message(object(), fake_request)
     payload = response.text
 
     assert response.status == 200

@@ -46,7 +46,7 @@ class TestJiraGetIssueByUrl:
     async def test_jira_get_issue_by_url_invalid_url(self):
         """Test jira_get_issue_by_url returns error for invalid URL"""
         from src.jira import jira_get_issue_by_url
-        result = await jira_get_issue_by_url("https://invalid.com/browse/")
+        result = await jira_get_issue_by_url("https://invalid.com/browse/", preview=True)
         
         # Should return error about extracting issue key
         assert "Could not extract issue key" in result
@@ -66,11 +66,15 @@ class TestConfluenceGetPageByUrl:
                 "title": "Test Page",
                 "body": {"storage": {"value": "Test content"}}
             })
+            mock_instance.get_attachments = AsyncMock(return_value=[])
             
             mock_channel.get_instance_client.return_value = mock_instance
             
             from src.confluence import confluence_get_page_by_url
-            result = await confluence_get_page_by_url("https://company.atlassian.net/wiki/spaces/SPACE/pages/123456/Page-Title")
+            result = await confluence_get_page_by_url(
+                "https://company.atlassian.net/wiki/spaces/SPACE/pages/123456/Page-Title",
+                preview=True,
+            )
             
             # Should have called get_instance_client with the URL
             mock_channel.get_instance_client.assert_called_with(

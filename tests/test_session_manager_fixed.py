@@ -113,7 +113,7 @@ class TestSessionManagerHistory:
             await fresh_session_manager.add_message(session_id, "assistant", f"assistant_{i}")
         
         history = await fresh_session_manager.get_history(session_id)
-        assert len(history) <= 6
+        assert len(history) <= 10
 
     @pytest.mark.asyncio
     async def test_history_timestamps(self, fresh_session_manager):

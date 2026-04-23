@@ -2660,7 +2660,10 @@ async def test_execution_bus_uses_injected_execute_tool_callable_for_tool_and_ta
         execution_bus_module.task_manager.run_tool_task = original_runner
 
     assert task_result.status == "success"
-    assert calls == [("tool_a", {"v": 1}), ("tool_b", {"v": 2})]
+    assert calls == [
+        ("tool_a", {"v": 1, "_session_id": "s-injected"}),
+        ("tool_b", {"v": 2, "_session_id": "s-injected"}),
+    ]
 
 
 @pytest.mark.asyncio

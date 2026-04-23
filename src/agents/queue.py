@@ -66,6 +66,8 @@ class ExecutionQueue:
             needs_start = not self._running.get(session_id, False)
             
             await queue.put((task_id, coro, args, kwargs))
+            if self._global_queue:
+                await self._global_queue.put(task_id)
             
             if needs_start:
                 self._running[session_id] = True

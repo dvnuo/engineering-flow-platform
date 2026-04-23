@@ -37,7 +37,8 @@ async def test_confluence_get_page_by_url_processes_attachments_with_instance_ch
         from src.confluence import confluence_get_page_by_url
 
         result = await confluence_get_page_by_url(
-            "https://right.example/wiki/spaces/SPACE/pages/123456/Page-Title"
+            "https://right.example/wiki/spaces/SPACE/pages/123456/Page-Title",
+            preview=True,
         )
 
         assert "# Test Page" in result
@@ -80,7 +81,7 @@ async def test_confluence_get_page_does_not_emit_raw_base64_for_image_attachment
 
         from src.confluence import confluence_get_page
 
-        result = await confluence_get_page("1")
+        result = await confluence_get_page("1", preview=True)
 
         assert "**Attachments:**" in result
         assert "image.png" in result
@@ -108,7 +109,7 @@ async def test_confluence_get_page_by_url_works_even_if_default_channel_not_conf
         from src.confluence import confluence_get_page_by_url
 
         url = "https://right.example/wiki/spaces/SPACE/pages/123456/Page-Title"
-        result = await confluence_get_page_by_url(url)
+        result = await confluence_get_page_by_url(url, preview=True)
 
         assert "# Test Page" in result
         mock_channel.get_instance_client.assert_called_once_with(url=url, strict=True)
@@ -126,7 +127,8 @@ async def test_confluence_get_page_by_url_returns_instance_error_when_url_does_n
         from src.confluence import confluence_get_page_by_url
 
         result = await confluence_get_page_by_url(
-            "https://unknown.example/wiki/spaces/SPACE/pages/123456/Page-Title"
+            "https://unknown.example/wiki/spaces/SPACE/pages/123456/Page-Title",
+            preview=True,
         )
 
         assert "Confluence instance for URL is not configured" in result

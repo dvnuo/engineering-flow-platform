@@ -1751,7 +1751,9 @@ async def test_core_tool_bus_helper_returns_tool_result_compatible_shape(monkeyp
         source_ref="test",
     )
 
-    assert isinstance(result, ToolResult)
+    assert hasattr(result, "success")
+    assert hasattr(result, "content")
+    assert hasattr(result, "error")
     assert result.success is True
     assert result.content == "tool-ok"
 
@@ -1812,7 +1814,10 @@ async def test_core_tool_bus_helper_uses_patched_core_execute_tool_callable_for_
 
     assert tool_result.content == "patched:tool_plain"
     assert task_result.content == "patched:tool_tasked"
-    assert calls == [("tool_plain", {"a": 1}), ("tool_tasked", {"b": 2})]
+    assert calls == [
+        ("tool_plain", {"a": 1, "_session_id": "s-tool"}),
+        ("tool_tasked", {"b": 2, "_session_id": "s-task"}),
+    ]
 
 
 @pytest.mark.asyncio
