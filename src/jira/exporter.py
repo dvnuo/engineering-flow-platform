@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import time
+import unicodedata
 import uuid
 import zipfile
 from pathlib import Path
@@ -30,17 +31,6 @@ DEFAULT_MAX_DOWNLOAD_SIZE = 50 * 1024 * 1024
 DEFAULT_INLINE_TEXT_THRESHOLD = 2000
 DEFAULT_RETRIES = 3
 DEFAULT_BACKOFF = [1, 2, 4]
-
-
-def _summary_to_slug(summary: str, max_len: int = 80) -> str:
-    if not summary:
-        return "untitled"
-    s = summary.lower()
-    s = re.sub(r"[^a-z0-9]+", "-", s)
-    s = re.sub(r"-{2,}", "-", s).strip("-")
-    if len(s) > max_len:
-        s = s[:max_len].rstrip("-")
-    return s or "untitled"
 
 
 def _allowed_workspace_roots() -> list[Path]:
@@ -75,10 +65,63 @@ def _resolve_output_directory(output_directory: str) -> Path:
     return output
 
 
-def _safe_issue_markdown_filename(issue_key: str, summary: str) -> str:
+def _safe_issue_markdown_filename(issue_key: str) -> str:
     issue_part = sanitize_filename(issue_key.upper())
-    slug = sanitize_filename(_summary_to_slug(summary or "untitled"))
-    return f"{issue_part} - {slug}.md"
+    if not issue_part:
+        raise ValueError(f"Invalid issue key for markdown filename: {issue_key}")
+    return f"{issue_part}.md"
+
+
+def _safe_export_attachment_filename(
+    jira_filename: str,
+    fallback_filename: str = "",
+    default_stem: str = "attachment",
+    max_len: int = 200,
+) -> str:
+    raw = str(jira_filename or fallback_filename or "").strip()
+    raw = Path(raw).name
+    raw = unicodedata.normalize("NFKC", raw)
+    raw = "".join(ch for ch in raw if ord(ch) >= 32)
+    raw = raw.replace("/", "_").replace("\\", "_")
+
+    # Path('.pdf').suffix treats this as a hidden file with no extension.
+    # For export artifacts we want extension-only names to become attachment.<ext>.
+    if raw.startswith(".") and raw.count(".") == 1 and len(raw) > 1:
+        stem = ""
+        ext = raw
+    else:
+        ext = Path(raw).suffix
+        stem = raw[: -len(ext)] if ext else raw
+
+    out_chars: list[str] = []
+    for ch in stem:
+        if ch.isalnum():
+            out_chars.append(ch)
+        elif ch in {" ", ".", "_", "-"}:
+            out_chars.append("_" if ch == " " else ch)
+        else:
+            out_chars.append("_")
+
+    safe_stem = "".join(out_chars)
+    safe_stem = re.sub(r"_+", "_", safe_stem)
+    safe_stem = re.sub(r"-{2,}", "-", safe_stem)
+    safe_stem = safe_stem.strip("._-")
+
+    safe_ext = ""
+    if ext:
+        ext_body = re.sub(r"[^A-Za-z0-9]+", "", ext.lstrip("."))
+        if ext_body:
+            safe_ext = f".{ext_body}"
+
+    if not safe_stem:
+        safe_stem = default_stem
+
+    max_stem_len = max(1, max_len - len(safe_ext))
+    safe_stem = safe_stem[:max_stem_len].rstrip("._-")
+    if not safe_stem:
+        safe_stem = default_stem[:max_stem_len] or "attachment"
+
+    return f"{safe_stem}{safe_ext}"
 
 
 def _unique_path(path: Path) -> Path:
@@ -215,9 +258,10 @@ async def _download_issue_attachments(
                     return item
 
                 src = get_file_path(result.file_id)
-                target_name = sanitize_filename(getattr(result, "filename", "") or filename)
-                if not target_name:
-                    target_name = "attachment"
+                target_name = _safe_export_attachment_filename(
+                    jira_filename=filename,
+                    fallback_filename=getattr(result, "filename", "") or "",
+                )
                 candidate_path = _unique_path(issue_dir / target_name).resolve()
                 output_root = output_dir.resolve()
                 if output_root not in candidate_path.parents:
@@ -256,7 +300,7 @@ async def _download_issue_attachments(
     return await asyncio.gather(*[_handle(att) for att in attachment_list])
 
 
-async def export_issues_to_markdown(
+async def jira_export_issues_to_markdown(
     input: Any = None,
     *,
     issue_keys: Optional[List[str]] = None,
@@ -419,11 +463,10 @@ async def export_issues_to_markdown(
             )
 
             issue_result["attachments"] = downloaded
-            summary = source.fields.get("summary") or source.bundle.get("metadata", {}).get("title") or ""
             if resolved_output_mode == "one_file_per_issue":
                 if not output_dir_path:
                     raise ValueError("output_directory is required for one_file_per_issue export")
-                md_path = _unique_path(output_dir_path / _safe_issue_markdown_filename(key, summary))
+                md_path = _unique_path(output_dir_path / _safe_issue_markdown_filename(key))
                 md_path.write_text(markdown, encoding="utf-8")
                 created_paths.append(md_path)
                 issue_result["markdown_path"] = str(md_path)
@@ -520,4 +563,4 @@ async def export_issues_to_markdown(
     }
 
 
-__all__ = ["export_issues_to_markdown"]
+__all__ = ["jira_export_issues_to_markdown"]

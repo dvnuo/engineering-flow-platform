@@ -5,7 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.jira.exporter import _download_issue_attachments, _resolve_output_directory, export_issues_to_markdown
+from src.jira.exporter import (
+    _download_issue_attachments,
+    _resolve_output_directory,
+    _safe_export_attachment_filename,
+    jira_export_issues_to_markdown,
+)
 from src.jira.selector import (
     extract_issue_keys_from_text,
     extract_output_directory_from_text,
@@ -31,6 +36,21 @@ def test_selector_extracts_exact_user_prompt():
     assert selector["issue_keys"] == keys
 
 
+def test_selector_extracts_current_required_prompt():
+    prompt = (
+        "帮我把下面jira ticket 转成markdown, 并save到folder："
+        "/root/.efp/workspace/FXOW/FXLanding，如果ticket有attachment，请一并下载 "
+        "MMGFX-14839 MMGFX-14838"
+    )
+
+    assert extract_output_directory_from_text(prompt) == "/root/.efp/workspace/FXOW/FXLanding"
+    assert extract_issue_keys_from_text(prompt) == ["MMGFX-14839", "MMGFX-14838"]
+
+    selector = normalize_jira_issue_selector(input=prompt)
+    assert selector["selector_type"] == "issue_keys"
+    assert selector["issue_keys"] == ["MMGFX-14839", "MMGFX-14838"]
+
+
 def test_json_string_input_list():
     selector = normalize_jira_issue_selector(input='["MMGFX-14839","MMGFX-14838"]')
     assert selector["issue_keys"] == ["MMGFX-14839", "MMGFX-14838"]
@@ -41,6 +61,16 @@ def test_json_string_input_jql():
     assert selector["selector_type"] == "jql"
     assert selector["jql"] == "project = MMGFX"
     assert selector["page_size"] == 25
+
+
+def test_safe_export_attachment_filename_extension_only_uses_default_stem():
+    assert _safe_export_attachment_filename("   .pdf") == "attachment.pdf"
+    assert _safe_export_attachment_filename(".docx") == "attachment.docx"
+
+
+def test_safe_export_attachment_filename_empty_or_unsafe_stem_preserves_extension():
+    assert _safe_export_attachment_filename("../?.xlsx") == "attachment.xlsx"
+    assert _safe_export_attachment_filename("  !!!.txt  ") == "attachment.txt"
 
 
 def test_output_directory_workspace_guard(tmp_path, monkeypatch):
@@ -118,7 +148,7 @@ async def test_export_exact_prompt_writes_markdown_and_attachments(tmp_path, mon
     monkeypatch.setattr("src.jira.exporter.prepare_jira_issue_source", fake_prepare)
     monkeypatch.setattr("src.jira.exporter._download_issue_attachments", fake_download)
 
-    result = await export_issues_to_markdown(input=prompt, _session_id="test-session")
+    result = await jira_export_issues_to_markdown(input=prompt, _session_id="test-session")
     assert result["status"] == "success"
     assert len(result["issues"]) == 4
     manifest_path = Path(result["artifacts"]["manifest_path"])
@@ -133,6 +163,32 @@ async def test_export_exact_prompt_writes_markdown_and_attachments(tmp_path, mon
     assert "## Attachments" in text
     assert f"attachments/{first_issue['issue_key']}/note.txt" in text
     assert (manifest_path.parent / "attachments" / first_issue["issue_key"] / "note.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_issue_markdown_filename_defaults_to_issue_key_only(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    out = home / ".efp" / "workspace" / "FXOW" / "FXLanding"
+
+    class FakeAdapter:
+        def _strip_acceptance_criteria_from_markdown_description(self, text): return text
+        def _convert_description_to_markdown(self, body): return str(body or "")
+
+    async def fake_prepare(issue_key_or_url, **kwargs):
+        key = issue_key_or_url
+        result = _fake_source_result(key, attachment=False)
+        result.fields["summary"] = "Landing page CTA alignment bug"
+        result.bundle["metadata"]["title"] = "Landing page CTA alignment bug"
+        result.adapter = FakeAdapter()
+        return result
+
+    monkeypatch.setattr("src.jira.exporter.prepare_jira_issue_source", fake_prepare)
+
+    result = await jira_export_issues_to_markdown(input=["MMGFX-14839"], output_directory=str(out))
+    md_name = Path(result["issues"][0]["markdown_path"]).name
+    assert md_name == "MMGFX-14839.md"
+    assert " - " not in md_name
 
 
 def test_comments_latest_first_sorts_before_truncating():
@@ -205,7 +261,7 @@ async def test_zip_includes_attachments_and_manifest(tmp_path, monkeypatch):
     monkeypatch.setattr("src.jira.exporter.prepare_jira_issue_source", fake_prepare)
     monkeypatch.setattr("src.jira.exporter._download_issue_attachments", fake_download)
 
-    result = await export_issues_to_markdown(input=["MMGFX-1"], output_mode="zip", output_directory=str(out))
+    result = await jira_export_issues_to_markdown(input=["MMGFX-1"], output_mode="zip", output_directory=str(out))
     zp = Path(result["artifacts"]["zip_path"])
     assert zp.exists()
     with zipfile.ZipFile(zp) as zf:
@@ -242,7 +298,7 @@ async def test_manifest_contains_final_artifacts(tmp_path, monkeypatch):
     monkeypatch.setattr("src.jira.exporter.prepare_jira_issue_source", fake_prepare)
     monkeypatch.setattr("src.jira.exporter._download_issue_attachments", fake_download)
 
-    result = await export_issues_to_markdown(input=["MMGFX-1"], output_mode="zip", output_directory=str(out))
+    result = await jira_export_issues_to_markdown(input=["MMGFX-1"], output_mode="zip", output_directory=str(out))
     manifest = json.loads(Path(result["artifacts"]["manifest_path"]).read_text(encoding="utf-8"))
     assert manifest["artifacts"]["manifest_path"] == result["artifacts"]["manifest_path"]
     assert manifest["artifacts"]["zip_path"] == result["artifacts"]["zip_path"]
@@ -268,10 +324,10 @@ async def test_export_uses_metadata_only_source_policy_when_downloading_attachme
 
     monkeypatch.setattr("src.jira.exporter.prepare_jira_issue_source", fake_prepare)
 
-    await export_issues_to_markdown(input=["MMGFX-1"], output_directory=str(out), download_attachments=True)
+    await jira_export_issues_to_markdown(input=["MMGFX-1"], output_directory=str(out), download_attachments=True)
     assert captured["MMGFX-1"]["attachment_body_policy"] == "metadata_only"
 
-    await export_issues_to_markdown(input=["MMGFX-1"], download_attachments=False)
+    await jira_export_issues_to_markdown(input=["MMGFX-1"], download_attachments=False)
     assert captured["MMGFX-1"]["attachment_body_policy"] == "source_complete"
 
 
@@ -306,6 +362,83 @@ async def test_download_attachments_uses_source_channel_auth_header(tmp_path, mo
         source_channel=source_channel,
     )
     assert seen["auth_header"] == {"Authorization": "Basic source"}
+
+
+@pytest.mark.asyncio
+async def test_attachment_export_uses_jira_filename_not_download_result_filename(tmp_path, monkeypatch):
+    source_file = tmp_path / "stored.bin"
+    source_file.write_text("x", encoding="utf-8")
+
+    async def fake_download_and_process_attachment(url, session_id=None, options=None, auth_header=None):
+        return SimpleNamespace(
+            file_id="fid",
+            filename="file_deadbeef",
+            metadata={"size": 1},
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            content_format="text",
+            content="x",
+        )
+
+    monkeypatch.setattr("src.jira.exporter.download_and_process_attachment", fake_download_and_process_attachment)
+    monkeypatch.setattr("src.jira.exporter.get_file_path", lambda file_id: source_file)
+
+    output_dir = tmp_path / "out"
+    result = await _download_issue_attachments(
+        "MMGFX-1",
+        [{"filename": "My Report (Final) v2.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "size": 1, "content": "http://x"}],
+        output_dir=output_dir,
+        attachments_dir="attachments",
+        concurrency=1,
+        attachments_max_size=1024,
+        attachments_inline_text_threshold=100,
+        attachments_retries=1,
+        attachments_backoff=[0],
+        attachments_preserve_binary=True,
+        source_channel=SimpleNamespace(is_configured=lambda: True, _auth_header={}),
+    )
+
+    assert result[0]["status"] == "saved"
+    assert result[0]["path"].endswith("attachments/MMGFX-1/My_Report_Final_v2.xlsx")
+    assert Path(result[0]["absolute_path"]).name == "My_Report_Final_v2.xlsx"
+    assert "file_" not in Path(result[0]["absolute_path"]).name
+
+
+@pytest.mark.asyncio
+async def test_attachment_export_preserves_unicode_and_extension(tmp_path, monkeypatch):
+    source_file = tmp_path / "stored.bin"
+    source_file.write_text("x", encoding="utf-8")
+
+    async def fake_download_and_process_attachment(url, session_id=None, options=None, auth_header=None):
+        return SimpleNamespace(
+            file_id="fid",
+            filename="file_deadbeef",
+            metadata={"size": 1},
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            content_format="text",
+            content="x",
+        )
+
+    monkeypatch.setattr("src.jira.exporter.download_and_process_attachment", fake_download_and_process_attachment)
+    monkeypatch.setattr("src.jira.exporter.get_file_path", lambda file_id: source_file)
+
+    output_dir = tmp_path / "out"
+    result = await _download_issue_attachments(
+        "MMGFX-1",
+        [{"filename": "需求说明（最终版）.docx", "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "size": 1, "content": "http://x"}],
+        output_dir=output_dir,
+        attachments_dir="attachments",
+        concurrency=1,
+        attachments_max_size=1024,
+        attachments_inline_text_threshold=100,
+        attachments_retries=1,
+        attachments_backoff=[0],
+        attachments_preserve_binary=True,
+        source_channel=SimpleNamespace(is_configured=lambda: True, _auth_header={}),
+    )
+
+    assert result[0]["status"] == "saved"
+    assert Path(result[0]["absolute_path"]).name == "需求说明_最终版.docx"
+    assert result[0]["path"].endswith("attachments/MMGFX-1/需求说明_最终版.docx")
 
 
 def _fake_source_result(issue_key: str, attachment=True):
@@ -396,7 +529,7 @@ async def test_zip_does_not_include_preexisting_files(tmp_path, monkeypatch):
     monkeypatch.setattr("src.jira.exporter.prepare_jira_issue_source", fake_prepare)
     monkeypatch.setattr("src.jira.exporter._download_issue_attachments", fake_download)
 
-    result = await export_issues_to_markdown(input=["MMGFX-1"], output_mode="zip", output_directory=str(output_dir))
+    result = await jira_export_issues_to_markdown(input=["MMGFX-1"], output_mode="zip", output_directory=str(output_dir))
     with zipfile.ZipFile(result["artifacts"]["zip_path"]) as zf:
         names = set(zf.namelist())
         assert "manifest.json" in names
@@ -420,7 +553,7 @@ async def test_attachment_failure_marks_export_partial(tmp_path, monkeypatch):
     monkeypatch.setattr("src.jira.exporter.prepare_jira_issue_source", fake_prepare)
     monkeypatch.setattr("src.jira.exporter._download_issue_attachments", fake_download)
 
-    result = await export_issues_to_markdown(input=["MMGFX-1"], output_directory=str(output_dir))
+    result = await jira_export_issues_to_markdown(input=["MMGFX-1"], output_directory=str(output_dir))
     assert result["status"] == "partial"
     assert result["success"] is True
     assert result["warnings"]
@@ -452,7 +585,7 @@ async def test_metadata_only_source_partial_does_not_force_export_partial(tmp_pa
     monkeypatch.setattr("src.jira.exporter.prepare_jira_issue_source", fake_prepare)
     monkeypatch.setattr("src.jira.exporter._download_issue_attachments", fake_download)
 
-    result = await export_issues_to_markdown(input=["MMGFX-1"], output_directory=str(output_dir), download_attachments=True)
+    result = await jira_export_issues_to_markdown(input=["MMGFX-1"], output_directory=str(output_dir), download_attachments=True)
     assert result["status"] == "success"
     issue = result["issues"][0]
     assert "text_attachment_body_metadata_only:a.txt" in issue["source_partial_reasons"]
@@ -480,7 +613,7 @@ async def test_attachment_markdown_paths_are_posix_relative(tmp_path, monkeypatc
     monkeypatch.setattr("src.jira.exporter.prepare_jira_issue_source", fake_prepare)
     monkeypatch.setattr("src.jira.exporter._download_issue_attachments", fake_download)
 
-    result = await export_issues_to_markdown(input=["MMGFX-1"], output_directory=str(output_dir))
+    result = await jira_export_issues_to_markdown(input=["MMGFX-1"], output_directory=str(output_dir))
     md = Path(result["issues"][0]["markdown_path"]).read_text(encoding="utf-8")
     assert "attachments/MMGFX-1/a.txt" in md
     assert "\\" not in md

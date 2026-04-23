@@ -111,7 +111,7 @@ async def execute_jira_workflow_action(action_name: str, kwargs: Dict[str, Any])
             }
         raw = await jira_module.jira_add_comment(issue_key=issue_key, comment=comment)
     elif action == "export_issues_to_markdown":
-        raw = await jira_module.export_issues_to_markdown(**payload)
+        raw = await jira_module.jira_export_issues_to_markdown(**payload)
     else:
         return {"success": False, "error": f"Unsupported jira action: {action}", "system": "jira", "action_name": action}
 

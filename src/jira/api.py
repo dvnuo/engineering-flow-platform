@@ -1333,18 +1333,22 @@ def get_tools_schemas() -> list:
         {
             "type": "function",
             "function": {
-                "name": "export_issues_to_markdown",
-                "description": "Export Jira tickets/issues to Markdown files. Use this when the user asks to convert Jira tickets to markdown, save to a folder, or download Jira attachments. Supports newline-separated issue keys and natural language text containing issue keys.",
+                "name": "jira_export_issues_to_markdown",
+                "description": (
+                    "Export Jira tickets/issues to Markdown files. Use this when the user asks to convert Jira tickets to markdown, "
+                    "save Jira tickets to a folder, or download Jira ticket attachments. Supports natural language text containing Jira issue keys."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "input": {
-                            "anyOf": [
-                                {"type": "string"},
-                                {"type": "array", "items": {"type": "string"}},
-                                {"type": "object"}
-                            ],
-                            "description": "Can be a single issue key, newline-separated keys, comma-separated keys, a JSON list, a dict with jql, or the original user text containing issue keys."
+                            "type": "string",
+                            "description": (
+                                "Original user text or Jira issue keys. Use this for natural-language requests "
+                                "such as 'convert these Jira tickets to markdown and save to folder: ...'. "
+                                "It may contain newline-separated, comma-separated, or space-separated issue keys. "
+                                "For structured calls, use issue_keys or jql fields instead."
+                            ),
                         },
                         "issue_keys": {"type": "array", "items": {"type": "string"}},
                         "jql": {"type": "string"},
