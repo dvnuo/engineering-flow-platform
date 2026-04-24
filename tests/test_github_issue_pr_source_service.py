@@ -120,6 +120,8 @@ async def test_issue_and_pr_sources_materialize_assets_and_session_scope(monkeyp
     assert all(ref.get("context_ref") == "ctx://bundle/s1" for ref in issue_with_session["bundle"]["artifact_refs"])
     assert all(ref.get("digest_ref") == "ctx://digest/s1" for ref in issue_with_session["bundle"]["artifact_refs"])
     assert issue_with_session["bundle"]["completeness_ledger"]["asset_entries_created"] >= 1
+    assert "non_projectable_assets_total" in issue_with_session["bundle"]["completeness_ledger"]
+    assert "source_complete_definition" in issue_with_session["bundle"]["completeness_ledger"]
     assert issue_with_session["bundle"]["asset_entries"][0]["artifact_ref"]["context_ref"] == "ctx://bundle/s1"
 
     issue_no_session = await source_service.prepare_github_issue_source("acme", "repo", 123, session_id=None)
@@ -132,6 +134,8 @@ async def test_issue_and_pr_sources_materialize_assets_and_session_scope(monkeyp
     assert all(ref.get("context_ref") == "ctx://bundle/s1" for ref in pr_with_session["bundle"]["artifact_refs"])
     assert all(ref.get("digest_ref") == "ctx://digest/s1" for ref in pr_with_session["bundle"]["artifact_refs"])
     assert pr_with_session["bundle"]["completeness_ledger"]["review_comments_loaded"] is True
+    assert "non_projectable_assets_total" in pr_with_session["bundle"]["completeness_ledger"]
+    assert "source_complete_definition" in pr_with_session["bundle"]["completeness_ledger"]
 
     assert bind_calls, "expected source-bundle bindings to be written"
     issue_bind_scopes = [scope for _, scope, _ in bind_calls if "#issue:123" in scope]

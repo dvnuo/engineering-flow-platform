@@ -64,32 +64,53 @@ async def _materialize_asset(
     }
 
 
-def _build_asset_ledger(*, source_kind: str, body_loaded: bool, comments_loaded: bool, review_comments_loaded: bool, asset_entries: list[dict], partial_reasons: list[str]) -> dict:
+def _build_asset_ledger(
+    *,
+    source_kind: str,
+    body_loaded: bool,
+    body_nonempty: bool,
+    comments_loaded: bool,
+    review_comments_loaded: bool,
+    asset_entries: list[dict],
+    partial_reasons: list[str],
+) -> dict:
     projectable_assets_total = sum(1 for e in asset_entries if can_project_to_text(e.get("content_type"), e.get("filename")))
+    non_projectable_assets_total = max(0, len(asset_entries) - projectable_assets_total)
     text_assets_loaded = sum(1 for e in asset_entries if e.get("parse_status") == "completed" and e.get("projected_to_text"))
     text_assets_with_full_ref = sum(1 for e in asset_entries if e.get("text_ref"))
+    binary_asset_bodies_available = non_projectable_assets_total == 0
 
     source_complete_for_generation = body_loaded and comments_loaded and (review_comments_loaded if source_kind == "pull_request" else True)
     if projectable_assets_total > 0:
         source_complete_for_generation = source_complete_for_generation and (text_assets_loaded >= projectable_assets_total)
 
-    source_complete_including_binary_bodies = source_complete_for_generation and (len(asset_entries) == 0 or len(asset_entries) >= projectable_assets_total)
+    source_complete_including_binary_bodies = source_complete_for_generation and (
+        non_projectable_assets_total == 0 or binary_asset_bodies_available
+    )
     source_complete = source_complete_for_generation
 
     return {
         "source_kind": source_kind,
         "body_loaded": body_loaded,
+        "body_nonempty": body_nonempty,
         "comments_loaded": comments_loaded,
         "review_comments_loaded": review_comments_loaded,
         "asset_urls_total": len(asset_entries),
         "asset_entries_created": len(asset_entries),
         "projectable_assets_total": projectable_assets_total,
+        "non_projectable_assets_total": non_projectable_assets_total,
         "text_assets_loaded": text_assets_loaded,
         "text_assets_with_full_ref": text_assets_with_full_ref,
+        "binary_asset_bodies_available": binary_asset_bodies_available,
         "partial_reasons": partial_reasons,
         "source_complete": source_complete,
         "source_complete_for_generation": source_complete_for_generation,
         "source_complete_including_binary_bodies": source_complete_including_binary_bodies,
+        "source_complete_definition": (
+            "source_complete_for_generation requires fetched body/comments and full text projection of all projectable assets. "
+            "Non-projectable/binary assets are metadata+artifact only in GitHub V1; source_complete_including_binary_bodies "
+            "is false when non_projectable_assets_total > 0."
+        ),
     }
 
 
@@ -320,11 +341,12 @@ async def prepare_github_issue_source(
                     partial_reasons.append(f"asset_parse_failed:{locator}")
 
     artifact_refs = [e["artifact_ref"] for e in asset_entries if e.get("artifact_ref")]
-    body_loaded = bool(str(issue.get("body") or "").strip())
+    body_nonempty = bool(str(issue.get("body") or "").strip())
     comments_loaded = (not include_comments) or isinstance(comments, list)
     ledger = _build_asset_ledger(
         source_kind="issue",
-        body_loaded=body_loaded,
+        body_loaded=isinstance(issue, dict),
+        body_nonempty=body_nonempty,
         comments_loaded=comments_loaded,
         review_comments_loaded=True,
         asset_entries=asset_entries,
@@ -452,7 +474,8 @@ async def prepare_github_pr_source(
     artifact_refs = [e["artifact_ref"] for e in asset_entries if e.get("artifact_ref")]
     ledger = _build_asset_ledger(
         source_kind="pull_request",
-        body_loaded=bool(str(pr.get("body") or "").strip()),
+        body_loaded=isinstance(pr, dict),
+        body_nonempty=bool(str(pr.get("body") or "").strip()),
         comments_loaded=(not include_issue_comments) or isinstance(issue_comments, list),
         review_comments_loaded=(not include_review_comments) or isinstance(review_comments, list),
         asset_entries=asset_entries,
