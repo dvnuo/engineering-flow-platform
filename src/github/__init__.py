@@ -42,6 +42,8 @@ __all__ = [
     "github_get_default_branch",
     "github_create_branch",
     "github_get_file_content",
+    "github_prepare_issue_context",
+    "github_prepare_pr_context",
     "github_create_pull_request",
     "github_create_or_update_file",
     "get_tools_schemas",
@@ -288,6 +290,55 @@ async def github_get_file_content(
         )
     except Exception as e:
         return f"Error getting file: {e}"
+
+
+async def github_prepare_issue_context(
+    owner: str,
+    repo: str,
+    issue_number: int,
+    *,
+    _session_id: str | None = None,
+) -> str:
+    try:
+        from .source_manifest import format_github_source_manifest
+        from .source_service import prepare_github_issue_source
+
+        prepared = await prepare_github_issue_source(
+            owner=owner,
+            repo=repo,
+            issue_number=issue_number,
+            session_id=_session_id,
+            include_comments=True,
+            include_assets=True,
+        )
+        return format_github_source_manifest(prepared["bundle"], include_preview=True)
+    except Exception as e:
+        return f"Error preparing issue context: {e}"
+
+
+async def github_prepare_pr_context(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    *,
+    _session_id: str | None = None,
+) -> str:
+    try:
+        from .source_manifest import format_github_source_manifest
+        from .source_service import prepare_github_pr_source
+
+        prepared = await prepare_github_pr_source(
+            owner=owner,
+            repo=repo,
+            pull_number=pull_number,
+            session_id=_session_id,
+            include_issue_comments=True,
+            include_review_comments=True,
+            include_assets=True,
+        )
+        return format_github_source_manifest(prepared["bundle"], include_preview=True)
+    except Exception as e:
+        return f"Error preparing PR context: {e}"
 
 
 async def github_create_pull_request(
@@ -563,6 +614,38 @@ def get_tools_schemas() -> list:
                         "branch": {"type": "string", "description": "Branch name (optional)"}
                     },
                     "required": ["owner", "repo", "path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "github_prepare_issue_context",
+                "description": "Prepare a source-bundle style context manifest for a GitHub issue including upload assets",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "owner": {"type": "string", "description": "Repository owner"},
+                        "repo": {"type": "string", "description": "Repository name"},
+                        "issue_number": {"type": "integer", "description": "Issue number"}
+                    },
+                    "required": ["owner", "repo", "issue_number"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "github_prepare_pr_context",
+                "description": "Prepare a source-bundle style context manifest for a GitHub pull request including upload assets",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "owner": {"type": "string", "description": "Repository owner"},
+                        "repo": {"type": "string", "description": "Repository name"},
+                        "pull_number": {"type": "integer", "description": "Pull request number"}
+                    },
+                    "required": ["owner", "repo", "pull_number"]
                 }
             }
         },

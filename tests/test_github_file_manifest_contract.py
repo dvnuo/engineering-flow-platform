@@ -58,3 +58,40 @@ def test_non_projectable_manifest_uses_high_level_projection_message():
     manifest = format_manifest(bundle)
     assert "materialized_as_artifact_only" in manifest
     assert "utf-8 decode failed" not in manifest
+
+
+def test_issue_manifest_includes_issue_identity_and_refs():
+    format_manifest = _load_manifest_formatter()
+    bundle = {
+        "metadata": {"source_kind": "issue", "repo_full_name": "acme/platform", "issue_number": 12},
+        "artifact_refs": [{"artifact_id": "att-1"}],
+        "context_ref": "ctx://s1/issue",
+        "digest_ref": "ctx://s1/issue/digest",
+        "body_markdown": "Issue body",
+        "completeness_ledger": {"source_complete": True, "partial_reasons": []},
+    }
+    manifest = format_manifest(bundle)
+    assert "source_kind: issue" in manifest
+    assert "issue: acme/platform#12" in manifest
+    assert "artifact_refs: ['att-1']" in manifest
+    assert "context_ref: ctx://s1/issue" in manifest
+    assert "digest_ref: ctx://s1/issue/digest" in manifest
+
+
+def test_pr_manifest_includes_pr_identity_and_refs():
+    format_manifest = _load_manifest_formatter()
+    bundle = {
+        "metadata": {"source_kind": "pull_request", "repo_full_name": "acme/platform", "pull_number": 34},
+        "artifact_refs": [{"artifact_id": "att-2"}],
+        "context_ref": "ctx://s1/pr",
+        "digest_ref": "ctx://s1/pr/digest",
+        "body_markdown": "PR body",
+        "completeness_ledger": {"source_complete": False, "partial_reasons": ["x"]},
+    }
+    manifest = format_manifest(bundle)
+    assert "source_kind: pull_request" in manifest
+    assert "pull_request: acme/platform#34" in manifest
+    assert "artifact_refs: ['att-2']" in manifest
+    assert "context_ref: ctx://s1/pr" in manifest
+    assert "digest_ref: ctx://s1/pr/digest" in manifest
+    assert "[preview]" in manifest

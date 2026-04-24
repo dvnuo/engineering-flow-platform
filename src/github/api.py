@@ -1076,6 +1076,55 @@ async def github_get_file_content(
         return f"Error getting file: {e}"
 
 
+async def github_prepare_issue_context(
+    owner: str,
+    repo: str,
+    issue_number: int,
+    *,
+    _session_id: str | None = None,
+) -> str:
+    try:
+        from src.github.source_manifest import format_github_source_manifest
+        from src.github.source_service import prepare_github_issue_source
+
+        prepared = await prepare_github_issue_source(
+            owner=owner,
+            repo=repo,
+            issue_number=issue_number,
+            session_id=_session_id,
+            include_comments=True,
+            include_assets=True,
+        )
+        return format_github_source_manifest(prepared["bundle"], include_preview=True)
+    except Exception as e:
+        return f"Error preparing issue context: {e}"
+
+
+async def github_prepare_pr_context(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    *,
+    _session_id: str | None = None,
+) -> str:
+    try:
+        from src.github.source_manifest import format_github_source_manifest
+        from src.github.source_service import prepare_github_pr_source
+
+        prepared = await prepare_github_pr_source(
+            owner=owner,
+            repo=repo,
+            pull_number=pull_number,
+            session_id=_session_id,
+            include_issue_comments=True,
+            include_review_comments=True,
+            include_assets=True,
+        )
+        return format_github_source_manifest(prepared["bundle"], include_preview=True)
+    except Exception as e:
+        return f"Error preparing PR context: {e}"
+
+
 async def github_create_pull_request(
     owner: str,
     repo: str,
