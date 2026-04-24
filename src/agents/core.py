@@ -3214,6 +3214,14 @@ You have access to the following tools. When a user asks you to do something tha
         )
         return attach_runtime_events(result)
 
+    # Legacy explicit skill-mode session entrypoint.
+    # IMPORTANT: this is not the default matched-skill live path in Agent.process.
+    # If you need to tune normal skill response behavior, prioritize:
+    #   - src/runtime/response_flow_policy.py
+    #   - src/runtime/output_controller.py
+    #   - _should_continue_existing_active_skill(...)
+    #   - src/skills/runtime.py
+    # and avoid changing this helper unless a legacy compatibility path explicitly requires it.
     async def _start_skill_mode(
         self,
         message: str,
@@ -3224,7 +3232,7 @@ You have access to the following tools. When a user asks you to do something tha
         stream_callback: Optional[Callable[[str], None]] = None,
         request_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Start a new lightweight skill-mode session."""
+        """Start a legacy lightweight skill-mode session (explicit compatibility path)."""
         from src.skills import get_tracer
         tracer = get_tracer()
         

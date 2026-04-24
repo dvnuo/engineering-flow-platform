@@ -1,7 +1,11 @@
 """Legacy skill-mode session helpers.
 
-This module is kept for backward compatibility and tests only.
-Active runtime skill handling now lives in unified agent loop + src/skills/runtime.py.
+NOTE FOR MAINTAINERS:
+- This module is a legacy compatibility surface, not the default matched-skill live path.
+- Normal matched skill / active skill runtime now flows through Agent.process + active-skill
+  contract continuation + runtime prompt assembly (src/skills/runtime.py).
+- Keep this file for explicit legacy paths and compatibility tests; do not treat it as the
+  primary place to tune modern response-flow behavior.
 """
 
 from __future__ import annotations
