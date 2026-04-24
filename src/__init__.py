@@ -484,7 +484,16 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         repo = kwargs.get("repo", "")
         path = kwargs.get("path", "")
         branch = kwargs.get("branch")
-        result = await github_module.github_get_file_content(owner, repo, path, branch)
+        session_id = kwargs.get("_session_id")
+        preview = kwargs.get("preview", True)
+        result = await github_module.github_get_file_content(
+            owner,
+            repo,
+            path,
+            branch,
+            _session_id=session_id,
+            preview=preview,
+        )
         return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     elif name == "github_create_pull_request":

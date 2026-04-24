@@ -13,11 +13,10 @@ from src.file_artifacts.service import (
     update_projection_from_parse_result,
 )
 from src.file_artifacts.storage import storage as artifact_storage
-from src.github import github_channel
+from src.github.api import github_channel
 from src.github.doc_refs import parse_github_doc_ref
 from src.source_context import persist_github_source_bundle_and_digest
 from src.utils.file_parser import parse_file, save_uploaded_file
-
 
 async def prepare_github_file_source(raw: str, default_ref, *, session_id: str | None = None) -> dict:
     doc_ref = parse_github_doc_ref(raw, default_ref)

@@ -1051,18 +1051,27 @@ async def github_create_branch(owner: str, repo: str, branch_name: str, from_bra
         return f"Error creating branch: {e}"
 
 
-async def github_get_file_content(owner: str, repo: str, path: str, branch: Optional[str] = None) -> str:
-    """Get file content from a repository."""
+async def github_get_file_content(
+    owner: str,
+    repo: str,
+    path: str,
+    branch: Optional[str] = None,
+    *,
+    _session_id: str | None = None,
+    preview: bool = True,
+) -> str:
+    """Get file content from a repository using source-bundle materialization."""
     try:
-        result = await github_channel.get_file(owner, repo, path, branch)
-        content = result.get("content", "")
-        if content:
-            import base64
-            decoded = base64.b64decode(content).decode("utf-8")
-            if len(decoded) > 10000:
-                decoded = decoded[:10000] + "\n\n... (truncated)"
-            return f"**File:** {owner}/{repo}/{path}\n\n```\n{decoded}\n```"
-        return f"No content found for {path}"
+        from src.github.file_content_service import render_github_file_manifest
+
+        return await render_github_file_manifest(
+            owner=owner,
+            repo=repo,
+            path=path,
+            branch=branch,
+            session_id=_session_id,
+            preview=preview,
+        )
     except Exception as e:
         return f"Error getting file: {e}"
 
