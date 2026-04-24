@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, List, Optional, Set
 
+from src.config import config
+from src.runtime.response_flow_policy import resolve_skill_behavior_defaults
 from src.skills.registry import Skill
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,7 @@ class SkillRuntimeConfig:
     staging_mode: str = "auto"
     execution_style: str = "direct"
     ask_user_policy: str = "blocked_only"
+    active_skill_conflict_policy: str = "auto_switch_direct"
     prompt_blocks: SkillPromptBlocks = field(default_factory=SkillPromptBlocks)
     references: List[str] = field(default_factory=list)
 
@@ -373,11 +376,37 @@ def build_skill_prompt_blocks(
     else:
         allowed_tools_text = "all currently available tools"
     task_tools_text = ", ".join(effective_task_tools) if effective_task_tools else "none"
+    resolved_execution_style = str((runtime_config.execution_style if runtime_config else getattr(skill, "execution_style", "direct")) or "direct")
+    resolved_planning_mode = str((runtime_config.planning_mode if runtime_config else getattr(skill, "planning_mode", "auto")) or "auto")
+    resolved_staging_mode = str((runtime_config.staging_mode if runtime_config else getattr(skill, "staging_mode", "auto")) or "auto")
+    resolved_conflict_policy = str(
+        (
+            runtime_config.active_skill_conflict_policy
+            if runtime_config
+            else getattr(skill, "active_skill_conflict_policy", "auto_switch_direct")
+        )
+        or "auto_switch_direct"
+    )
+    direct_mode = resolved_execution_style == "direct" and resolved_planning_mode != "required" and resolved_staging_mode != "required"
+    if direct_mode and resolved_conflict_policy == "always_ask":
+        continuity_rule = (
+            "For direct skills with active_skill_conflict_policy=always_ask, do not auto-switch on a clear new request. "
+            "Keep this active skill context and ask the user to choose: continue current skill or switch to the new request. "
+            "Proceed only after the user clearly confirms continue/switch."
+        )
+    elif direct_mode:
+        continuity_rule = (
+            "For direct skills, if the user gives a clear new request, treat that as leaving this prior skill and handle the new request directly without asking for switch permission."
+        )
+    else:
+        continuity_rule = (
+            "For stepwise/required-plan/required-staging skills, continue the flow when the user clearly continues; only ask continue-vs-switch if the latest user turn is genuinely ambiguous."
+        )
     system_rules = (
         f"Active skill: {skill.name}.\n"
-        "You are operating under this active skill contract until the user explicitly clears or switches skill.\n"
-        "Stay within the skill's instructions, constraints, output contract, reference usage, and allowed tool policy.\n"
-        "If the user request conflicts with the active skill, ask whether to clear/switch the skill instead of silently ignoring it.\n"
+        "Stay within the skill's instructions, constraints, output contract, reference usage, and allowed tool policy while this skill is active.\n"
+        f"{continuity_rule}\n"
+        "If the user's latest request is clearly different, allow switching/leaving this skill instead of forcing confirmation.\n"
         "Do not invent tool results, references, or external facts that were not provided.\n"
         f"Runtime policy: only use allowed tools ({allowed_tools_text}).\n"
         f"Task-capable tools: {task_tools_text}."
@@ -387,11 +416,13 @@ def build_skill_prompt_blocks(
         or runtime_config.planning_mode != "auto"
         or runtime_config.staging_mode != "auto"
         or runtime_config.ask_user_policy != "blocked_only"
+        or runtime_config.active_skill_conflict_policy != "auto_switch_direct"
     ):
         system_rules += (
             f"\nSkill behavior: execution_style={runtime_config.execution_style}, "
             f"planning_mode={runtime_config.planning_mode}, staging_mode={runtime_config.staging_mode}, "
-            f"ask_user_policy={runtime_config.ask_user_policy}."
+            f"ask_user_policy={runtime_config.ask_user_policy}, "
+            f"active_skill_conflict_policy={runtime_config.active_skill_conflict_policy}."
         )
 
     strategy = "\n".join(f"- {item}" for item in (skill.strategy or []))
@@ -463,6 +494,14 @@ def build_skill_runtime_config(
     skill: Skill,
     globally_allowed_tool_names: Optional[Iterable[str]] = None,
 ) -> SkillRuntimeConfig:
+    llm_cfg = config.llm if isinstance(config.llm, dict) else {}
+    response_flow_cfg = llm_cfg.get("response_flow") if isinstance(llm_cfg.get("response_flow"), dict) else {}
+    resolved_execution_style, resolved_ask_user_policy, resolved_conflict_policy = resolve_skill_behavior_defaults(
+        response_flow_cfg,
+        execution_style=str(getattr(skill, "execution_style", "") or ""),
+        ask_user_policy=str(getattr(skill, "ask_user_policy", "") or ""),
+        active_skill_conflict_policy=str(getattr(skill, "active_skill_conflict_policy", "") or ""),
+    )
     references = summarize_skill_references(skill)
     raw_skill_tools = list(skill.tools or [])
     raw_task_tools = list(skill.task_tools or [])
@@ -497,8 +536,9 @@ def build_skill_runtime_config(
         workdir=skill.path or "",
         planning_mode=str(getattr(skill, "planning_mode", "auto") or "auto"),
         staging_mode=str(getattr(skill, "staging_mode", "auto") or "auto"),
-        execution_style=str(getattr(skill, "execution_style", "direct") or "direct"),
-        ask_user_policy=str(getattr(skill, "ask_user_policy", "blocked_only") or "blocked_only"),
+        execution_style=resolved_execution_style,
+        ask_user_policy=resolved_ask_user_policy,
+        active_skill_conflict_policy=resolved_conflict_policy,
         references=references,
     )
     prompt_blocks = build_skill_prompt_blocks(

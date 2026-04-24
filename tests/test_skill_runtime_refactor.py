@@ -586,6 +586,70 @@ def test_build_skill_runtime_config_task_tools_trimmed_by_global_allowlist():
     assert runtime_config.task_tools == []
 
 
+def test_build_skill_runtime_config_skill_omission_uses_response_flow_defaults(monkeypatch):
+    from src.config import config
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {
+            "response_flow": {
+                "default_skill_execution_style": "stepwise",
+                "ask_user_policy": "permissive",
+            }
+        },
+    )
+    skill = SimpleNamespace(
+        name="demo",
+        description="demo",
+        tools=[],
+        task_tools=[],
+        strategy=[],
+        body="",
+        references=[],
+        model="",
+        hooks=[],
+        path="",
+        execution_style="",
+        ask_user_policy="",
+    )
+    runtime_config = build_skill_runtime_config(skill)
+    assert runtime_config.execution_style == "stepwise"
+    assert runtime_config.ask_user_policy == "permissive"
+
+
+def test_build_skill_runtime_config_skill_explicit_values_override_response_flow_defaults(monkeypatch):
+    from src.config import config
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {
+            "response_flow": {
+                "default_skill_execution_style": "stepwise",
+                "ask_user_policy": "permissive",
+            }
+        },
+    )
+    skill = SimpleNamespace(
+        name="demo",
+        description="demo",
+        tools=[],
+        task_tools=[],
+        strategy=[],
+        body="",
+        references=[],
+        model="",
+        hooks=[],
+        path="",
+        execution_style="direct",
+        ask_user_policy="blocked_only",
+    )
+    runtime_config = build_skill_runtime_config(skill)
+    assert runtime_config.execution_style == "direct"
+    assert runtime_config.ask_user_policy == "blocked_only"
+
+
 def test_build_skill_tool_denied_result_contains_policy():
     runtime_config = build_skill_runtime_config(
         SimpleNamespace(
@@ -715,7 +779,7 @@ async def test_active_skill_contract_continues_without_rematch(monkeypatch, base
 
 
 @pytest.mark.asyncio
-async def test_active_skill_contract_does_not_soft_switch_on_ordinary_match(monkeypatch, base_agent):
+async def test_active_skill_contract_auto_switches_direct_skill_on_ordinary_new_request(monkeypatch, base_agent):
     agent, sess = base_agent
     review_skill = SimpleNamespace(
         name="review-pull-request",
@@ -780,8 +844,82 @@ async def test_active_skill_contract_does_not_soft_switch_on_ordinary_match(monk
     result = await agent.process("ordinary message that matches create", session_id="s1")
     assert result["response"] == "done"
     assert captured_prompts
+    assert "Active skill: create-pull-request" in captured_prompts[0]
+    assert "Active skill: review-pull-request" not in captured_prompts[0]
+    assert sess.active_skill_session["skill_name"] == "create-pull-request"
+    assert sess.active_skill_session["activation_reason"] == "matched"
+
+
+@pytest.mark.asyncio
+async def test_active_skill_contract_always_ask_keeps_direct_skill_context_on_ordinary_new_request(monkeypatch, base_agent):
+    agent, sess = base_agent
+    review_skill = SimpleNamespace(
+        name="review-pull-request",
+        description="review",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="Review instructions",
+        references=[],
+        model="",
+        hooks=[],
+        deprecated=False,
+    )
+    create_skill = SimpleNamespace(
+        name="create-pull-request",
+        description="create",
+        path="",
+        tools=["allowed_tool"],
+        task_tools=[],
+        strategy=[],
+        body="Create instructions",
+        references=[],
+        model="",
+        hooks=[],
+        deprecated=False,
+    )
+    sess.active_skill_session = {
+        "schema_version": "active_skill_contract.v1",
+        "skill_name": "review-pull-request",
+        "status": "active",
+        "turn_count": 1,
+        "execution_style": "direct",
+        "active_skill_conflict_policy": "always_ask",
+    }
+
+    class _Registry:
+        _initialized = True
+
+        def match_skill(self, message):
+            if "ordinary message that matches create" in message:
+                return [create_skill]
+            return []
+
+        def get_skill(self, name):
+            if name == review_skill.name:
+                return review_skill
+            if name == create_skill.name:
+                return create_skill
+            return None
+
+        def get_skill_runtime_config(self, skill, globally_allowed_tool_names=None):
+            return build_skill_runtime_config(skill, globally_allowed_tool_names=globally_allowed_tool_names)
+
+    monkeypatch.setattr("src.skills.skill_registry", _Registry())
+    captured_prompts = []
+
+    async def fake_responses(**kwargs):
+        captured_prompts.append(kwargs.get("system_prompt", ""))
+        return {"content": "done", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+
+    result = await agent.process("ordinary message that matches create", session_id="s1")
+    assert result["response"] == "done"
+    assert captured_prompts
     assert "Active skill: review-pull-request" in captured_prompts[0]
-    assert "Active skill: create-pull-request" not in captured_prompts[0]
+    assert "continue current skill or switch to the new request" in captured_prompts[0]
     assert sess.active_skill_session["skill_name"] == "review-pull-request"
     assert sess.active_skill_session["activation_reason"] == "continued"
 

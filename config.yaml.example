@@ -99,6 +99,10 @@ llm:
     staging_policy: "explicit_or_complex"
     default_skill_execution_style: "direct"
     ask_user_policy: "blocked_only"
+    # direct active skill conflict policy:
+    # - auto_switch_direct: clear new request leaves old direct skill automatically
+    # - always_ask: keep active direct skill context and ask continue-vs-switch
+    active_skill_conflict_policy: "auto_switch_direct"
     # Staging/planning activates only on explicit request or true budget pressure.
     complexity_prompt_budget_ratio: 0.85
     complexity_min_request_tokens: 24000

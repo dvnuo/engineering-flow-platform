@@ -154,6 +154,9 @@ def build_active_skill_contract(
         "staging_mode": str(getattr(runtime_config, "staging_mode", "auto") or "auto"),
         "execution_style": str(getattr(runtime_config, "execution_style", "direct") or "direct"),
         "ask_user_policy": str(getattr(runtime_config, "ask_user_policy", "blocked_only") or "blocked_only"),
+        "active_skill_conflict_policy": str(
+            getattr(runtime_config, "active_skill_conflict_policy", "auto_switch_direct") or "auto_switch_direct"
+        ),
         "references": list(runtime_config.references or []),
         "prompt_contract_summary": _shorten(runtime_config.prompt_blocks.developer_instructions, 2000),
         "created_at": created_at or now,

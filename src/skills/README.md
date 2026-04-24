@@ -118,6 +118,8 @@ ask_user_policy: blocked_only  # blocked_only|permissive
 - `execution_style`: `direct` completes in one turn when possible; `stepwise` keeps one-step progression.
 - `ask_user_policy`: `blocked_only` asks only for truly blocking inputs; `permissive` allows broader clarification.
 
+When `execution_style` or `ask_user_policy` is omitted from skill frontmatter, runtime falls back to `llm.response_flow.default_skill_execution_style` and `llm.response_flow.ask_user_policy` respectively. If the skill explicitly sets either field, the skill value takes precedence over global defaults.
+
 ## Development Guide
 
 1. Create a new directory in `skills/`
