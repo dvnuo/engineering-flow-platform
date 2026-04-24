@@ -8,6 +8,8 @@ from src.context_blob_store import put_text
 from src.config import config, resolve_model_limits, resolve_output_boundary
 from src.runtime.response_flow_policy import ResponseFlowDecision, decide_response_flow
 
+_GENERATION_CONTINUE_TOKENS = {"continue", "next", "go on", "继续", "继续生成"}
+
 
 def _safe_int(value: Any, default: int) -> int:
     try:
@@ -202,6 +204,40 @@ def initialize_completion_criteria(gen: Dict[str, Any], *, generation_mode: str)
     return normalized
 
 
+def _is_explicit_generation_continue_message(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    return bool(normalized and normalized in _GENERATION_CONTINUE_TOKENS)
+
+
+def _should_reuse_existing_staged_generation(context_state: Optional[Dict[str, Any]], latest_user_text: str) -> bool:
+    if not isinstance(context_state, dict):
+        return False
+    generation = context_state.get("generation")
+    if not isinstance(generation, dict):
+        return False
+    if str(generation.get("generation_mode") or "").strip().lower() != "staged":
+        return False
+    return _is_explicit_generation_continue_message(latest_user_text)
+
+
+def _reset_generation_flow_state(context_state: Optional[Dict[str, Any]]) -> None:
+    if not isinstance(context_state, dict):
+        return
+    context_state["generation"] = {}
+    budget = context_state.get("budget")
+    if not isinstance(budget, dict):
+        return
+    budget["generation_mode"] = "normal"
+    budget["current_generation_phase"] = ""
+    budget["large_generation_guard_applied"] = False
+    budget["output_size_guard_applied"] = False
+    budget["large_generation_guard_reason"] = ""
+    budget["output_controller_recovery_reason"] = ""
+    budget["max_output_recovery_applied"] = False
+    budget["max_output_recovery_attempts"] = 0
+    budget["max_output_partial_ref"] = ""
+
+
 def _refresh_generation_done(gen: Dict[str, Any]) -> bool:
     status = gen.get("completion_criteria_status")
     done = bool(isinstance(status, dict) and status and all(bool(v) for v in status.values()))
@@ -281,8 +317,7 @@ def advance_generation_phase(context_state: Optional[Dict[str, Any]], *, latest_
     gen = get_generation_state(context_state)
     if not gen:
         return gen
-    text = str(latest_user_text or "").strip().lower()
-    if text not in {"continue", "next", "go on", "继续", "继续生成"}:
+    if not _is_explicit_generation_continue_message(latest_user_text):
         return gen
     current = str(gen.get("current_generation_phase") or "manifest")
     mark_phase_complete(gen, current)
@@ -486,19 +521,40 @@ async def call_llm_with_output_control(
     if isinstance(budget, dict):
         budget["session_id"] = session_id
 
+    reuse_existing_staged = _should_reuse_existing_staged_generation(context_state, latest_user_text)
+    has_existing_staged = bool(
+        isinstance(context_state, dict)
+        and isinstance(context_state.get("generation"), dict)
+        and str(context_state.get("generation", {}).get("generation_mode") or "").strip().lower() == "staged"
+    )
+    if has_existing_staged and not reuse_existing_staged:
+        _reset_generation_flow_state(context_state)
+
     risk, flow_decision = classify_output_risk(
         user_text=latest_user_text,
         active_skill=active_skill,
         system_prompt=str(llm_kwargs.get("system_prompt") or ""),
         source_state=context_state,
     )
-    generation_mode = "staged" if flow_decision.staging_required else str((budget or {}).get("generation_mode") or "normal")
     gen_state = get_generation_state(context_state)
-    if generation_mode == "staged" or (isinstance(gen_state, dict) and gen_state.get("generation_mode") == "staged"):
+    start_new_staged = bool(flow_decision.staging_required)
+    if reuse_existing_staged or start_new_staged:
         generation_mode = "staged"
         gen_state = ensure_staged_generation(context_state, stage=stage, max_chat_output_chars=max_chat_output_chars)
         initialize_completion_criteria(gen_state, generation_mode="staged")
-        gen_state = advance_generation_phase(context_state, latest_user_text=latest_user_text)
+        if reuse_existing_staged:
+            gen_state = advance_generation_phase(context_state, latest_user_text=latest_user_text)
+        else:
+            gen_state["current_generation_phase"] = "manifest"
+            gen_state["next_phase"] = "phase_1"
+            gen_state["completed_phases"] = []
+            gen_state["generated_artifact_refs"] = []
+            gen_state["generated_artifact_ref_count"] = 0
+            gen_state["generated_artifacts_by_phase"] = {}
+            gen_state["source_digest_chunk_coverage"] = []
+            gen_state["source_digest_chunk_coverage_count"] = 0
+    else:
+        generation_mode = "normal"
     guard = build_output_guard(risk=risk, generation_mode=generation_mode, staging_required=flow_decision.staging_required)
     if guard:
         llm_kwargs = dict(llm_kwargs)
