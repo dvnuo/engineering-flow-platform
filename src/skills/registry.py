@@ -46,8 +46,8 @@ class Skill:
     risk_level: str = ""
     planning_mode: str = "auto"
     staging_mode: str = "auto"
-    execution_style: str = "direct"
-    ask_user_policy: str = "blocked_only"
+    execution_style: str = ""
+    ask_user_policy: str = ""
 
     # Compiled patterns for fast matching
     trigger_patterns: List[re.Pattern] = field(default_factory=list)
@@ -77,8 +77,8 @@ class Skill:
             risk_level=data.get("risk_level", "") or "",
             planning_mode=str(data.get("planning_mode", "auto") or "auto"),
             staging_mode=str(data.get("staging_mode", "auto") or "auto"),
-            execution_style=str(data.get("execution_style", "direct") or "direct"),
-            ask_user_policy=str(data.get("ask_user_policy", "blocked_only") or "blocked_only"),
+            execution_style=str(data.get("execution_style", "") or ""),
+            ask_user_policy=str(data.get("ask_user_policy", "") or ""),
             trigger_patterns=patterns,
         )
 

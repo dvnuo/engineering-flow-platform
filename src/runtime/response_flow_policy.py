@@ -10,6 +10,7 @@ DEFAULT_RESPONSE_FLOW_CONFIG: Dict[str, Any] = {
     "staging_policy": "explicit_or_complex",
     "default_skill_execution_style": "direct",
     "ask_user_policy": "blocked_only",
+    "active_skill_conflict_policy": "auto_switch_direct",
     "complexity_prompt_budget_ratio": 0.85,
     "complexity_min_request_tokens": 24000,
 }
@@ -99,6 +100,38 @@ def is_truly_complex_request(
     return bool(near_limit and meets_floor)
 
 
+def resolve_skill_behavior_defaults(
+    config_block: Optional[Dict[str, Any]] = None,
+    *,
+    execution_style: str = "",
+    ask_user_policy: str = "",
+    active_skill_conflict_policy: str = "",
+) -> tuple[str, str, str]:
+    cfg = resolve_response_flow_config(config_block)
+
+    resolved_execution_style = (
+        execution_style if execution_style in {"direct", "stepwise"} else str(cfg.get("default_skill_execution_style") or "direct")
+    )
+    if resolved_execution_style not in {"direct", "stepwise"}:
+        resolved_execution_style = "direct"
+
+    resolved_ask_policy = (
+        ask_user_policy if ask_user_policy in {"blocked_only", "permissive"} else str(cfg.get("ask_user_policy") or "blocked_only")
+    )
+    if resolved_ask_policy not in {"blocked_only", "permissive"}:
+        resolved_ask_policy = "blocked_only"
+
+    resolved_conflict_policy = (
+        active_skill_conflict_policy
+        if active_skill_conflict_policy in {"auto_switch_direct", "always_ask"}
+        else str(cfg.get("active_skill_conflict_policy") or "auto_switch_direct")
+    )
+    if resolved_conflict_policy not in {"auto_switch_direct", "always_ask"}:
+        resolved_conflict_policy = "auto_switch_direct"
+
+    return resolved_execution_style, resolved_ask_policy, resolved_conflict_policy
+
+
 def decide_response_flow(
     *,
     config_block: Optional[Dict[str, Any]] = None,
@@ -123,15 +156,13 @@ def decide_response_flow(
         complexity_min_request_tokens=int(cfg["complexity_min_request_tokens"]),
     )
 
-    resolved_execution_style = execution_style if execution_style in {"direct", "stepwise"} else str(
-        cfg.get("default_skill_execution_style") or "direct"
+    resolved_execution_style, resolved_ask_policy, _ = resolve_skill_behavior_defaults(
+        cfg,
+        execution_style=execution_style,
+        ask_user_policy=ask_user_policy,
     )
     if resolved_execution_style == "stepwise":
         reasons.append("skill_execution_stepwise")
-
-    resolved_ask_policy = ask_user_policy if ask_user_policy in {"blocked_only", "permissive"} else str(
-        cfg.get("ask_user_policy") or "blocked_only"
-    )
 
     plan_required = False
     plan_policy = str(cfg.get("plan_policy") or "explicit_or_complex")

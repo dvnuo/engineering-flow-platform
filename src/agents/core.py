@@ -79,7 +79,7 @@ from src.runtime.progressive_context import (
 from src.context_blob_store import build_section_map, put_text
 from src.agents.compaction import estimate_tokens
 from src.runtime.output_controller import call_llm_with_output_control, recover_max_output_tokens
-from src.runtime.response_flow_policy import decide_response_flow
+from src.runtime.response_flow_policy import decide_response_flow, resolve_skill_behavior_defaults
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +136,15 @@ def _should_continue_existing_active_skill(
         return False
 
     if _is_effectively_direct_skill_contract(existing_contract):
+        response_flow_cfg = (
+            config.llm.get("response_flow", {}) if isinstance(config.llm, dict) and isinstance(config.llm.get("response_flow"), dict) else {}
+        )
+        _, _, resolved_conflict_policy = resolve_skill_behavior_defaults(
+            response_flow_cfg,
+            active_skill_conflict_policy=str(existing_contract.get("active_skill_conflict_policy") or ""),
+        )
+        if resolved_conflict_policy == "always_ask":
+            return True
         return _is_explicit_skill_continuation_message(message)
 
     try:
@@ -1949,6 +1958,13 @@ You have access to the following tools. When a user asks you to do something tha
 
         if selected_skill:
             logger.info(f"[Skill] Active skill selected: {selected_skill.name} ({activation_reason})")
+            if activation_reason == "continued" and isinstance(existing_active_skill_contract, dict):
+                continued_conflict_policy = str(existing_active_skill_contract.get("active_skill_conflict_policy") or "").strip()
+                if continued_conflict_policy:
+                    try:
+                        setattr(selected_skill, "active_skill_conflict_policy", continued_conflict_policy)
+                    except Exception:
+                        pass
             
             # Set skill workdir for exec tool (async-safe via contextvars)
             set_skill_workdir(selected_skill.path or None)
@@ -3129,11 +3145,19 @@ You have access to the following tools. When a user asks you to do something tha
         send_skill_event("skill_mode_start", {"skill": skill.name, "message": safe_preview(message, 100)})
 
         initial_skill_session = SkillSession(skill_name=skill.name, original_user_request=message)
+        response_flow_cfg = (
+            config.llm.get("response_flow", {}) if isinstance(config.llm, dict) and isinstance(config.llm.get("response_flow"), dict) else {}
+        )
+        resolved_execution_style, resolved_ask_user_policy, _ = resolve_skill_behavior_defaults(
+            response_flow_cfg,
+            execution_style=str(getattr(skill, "execution_style", "") or ""),
+            ask_user_policy=str(getattr(skill, "ask_user_policy", "") or ""),
+        )
         initial_system_prompt = _build_skill_mode_system_prompt(
             skill,
             initial_skill_session,
-            execution_style=str(getattr(skill, "execution_style", "direct") or "direct"),
-            ask_user_policy=str(getattr(skill, "ask_user_policy", "blocked_only") or "blocked_only"),
+            execution_style=resolved_execution_style,
+            ask_user_policy=resolved_ask_user_policy,
         )
         initial_user_prompt = _build_skill_mode_user_prompt(message, initial_skill_session)
         initial_input_items = [{"role": "user", "content": [{"type": "input_text", "text": initial_user_prompt}]}]
