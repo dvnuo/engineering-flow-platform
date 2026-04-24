@@ -1,4 +1,11 @@
-"""Shared response-flow policy for planning, staging, and ASK_USER behavior."""
+"""Shared response-flow policy for planning, staging, and ASK_USER behavior.
+
+Maintenance notes:
+- `explicit_or_complex` means "only when the user explicitly asks, or the request is truly
+  budget-heavy/complex", not generic keyword triggers.
+- Complexity detection is budget-based (`request_estimated_tokens` vs prompt budget thresholds),
+  and intentionally does not rely on broad words like generate/test/spec/feature.
+"""
 
 from __future__ import annotations
 

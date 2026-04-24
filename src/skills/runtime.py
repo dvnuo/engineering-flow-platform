@@ -387,6 +387,10 @@ def build_skill_prompt_blocks(
         )
         or "auto_switch_direct"
     )
+    # Active-skill conflict handling intent:
+    # - direct + always_ask: explicit special case (keep context and ask continue/switch)
+    # - direct default: do not force ask; allow direct switch on clear new request
+    # - stepwise/required modes: continue only on clear continuation; avoid sticky swallowing
     direct_mode = resolved_execution_style == "direct" and resolved_planning_mode != "required" and resolved_staging_mode != "required"
     if direct_mode and resolved_conflict_policy == "always_ask":
         continuity_rule = (

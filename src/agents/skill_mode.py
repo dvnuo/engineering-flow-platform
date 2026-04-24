@@ -6,6 +6,9 @@ NOTE FOR MAINTAINERS:
   contract continuation + runtime prompt assembly (src/skills/runtime.py).
 - Keep this file for explicit legacy paths and compatibility tests; do not treat it as the
   primary place to tune modern response-flow behavior.
+- Stepwise/marker prompts here should not be read as "global default behavior". Direct-path
+  runtime remains "complete directly when information is sufficient" unless policy/metadata/
+  complexity explicitly requires staged or plan-first handling.
 """
 
 from __future__ import annotations

@@ -210,6 +210,8 @@ def _is_explicit_generation_continue_message(text: str) -> bool:
 
 
 def _should_reuse_existing_staged_generation(context_state: Optional[Dict[str, Any]], latest_user_text: str) -> bool:
+    # Staged generation state is ephemeral and should only be reused on explicit continuation.
+    # Any non-continue request must be treated as a fresh turn and handled by current policy.
     if not isinstance(context_state, dict):
         return False
     generation = context_state.get("generation")
@@ -221,6 +223,9 @@ def _should_reuse_existing_staged_generation(context_state: Optional[Dict[str, A
 
 
 def _reset_generation_flow_state(context_state: Optional[Dict[str, Any]]) -> None:
+    # Clear stale staged flow runtime state so unrelated new requests do not inherit prior phase/refs.
+    # This reset complements `_should_reuse_existing_staged_generation`: continue tokens may reuse,
+    # everything else should start clean and be re-decided by current turn policy.
     if not isinstance(context_state, dict):
         return
     context_state["generation"] = {}
