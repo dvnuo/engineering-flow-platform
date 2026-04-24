@@ -5,7 +5,7 @@ import json
 from typing import Optional
 
 from src.file_artifacts import can_project_to_text
-from src.file_artifacts.service import bind_artifact_to_source_bundle, build_artifact_ref_dict
+from src.file_artifacts.service import attach_source_refs_to_artifact, bind_artifact_to_source_bundle, build_artifact_ref_dict
 from src.utils.attachment import download_and_process_attachment
 
 from .api import (
@@ -441,6 +441,11 @@ async def confluence_prepare_page_context(
                         source_kind="page_attachment",
                         source_locator=f"{page_id}:{att.get('id')}",
                         provider_metadata={"page_id": page_id, "attachment_id": att.get("id")},
+                        persist_text_ref_session_id=_session_id or f"confluence-{page_id}",
+                        persist_text_ref_kind="confluence_attachment_text",
+                        persist_text_ref_source_id=f"{page_id}:{att.get('id')}",
+                        persist_text_ref_title=f"Confluence attachment text {filename}",
+                        persist_text_ref_metadata={"page_id": page_id, "filename": filename, "attachment_id": att.get("id")},
                     )
                     if getattr(result, "artifact_id", None):
                         from src.file_artifacts.storage import storage as artifact_storage
@@ -450,7 +455,7 @@ async def confluence_prepare_page_context(
                             artifact_ref = build_artifact_ref_dict(record)
                             artifact_refs.append(artifact_ref)
                             att["text_preview"] = (result.preview or result.content or "")[:1000]
-                            att["text_ref"] = None
+                            att["text_ref"] = getattr(result, "text_ref", None) or record.text_ref
                 except Exception as att_exc:
                     logger.warning(f"Failed attachment materialization for {filename}: {att_exc}")
 
@@ -547,6 +552,23 @@ async def confluence_prepare_page_context(
             page_id=page_id,
             bundle=bundle,
         )
+        from src.file_artifacts.storage import storage as artifact_storage
+        refreshed_artifact_refs = []
+        for ref in artifact_refs:
+            artifact_id = ref.get("artifact_id")
+            if not artifact_id:
+                continue
+            attach_source_refs_to_artifact(
+                artifact_id,
+                context_ref=persisted.get("context_ref"),
+                digest_ref=persisted.get("digest_ref"),
+            )
+            record = artifact_storage.get_artifact(artifact_id)
+            if record:
+                refreshed_artifact_refs.append(build_artifact_ref_dict(record))
+        if refreshed_artifact_refs:
+            bundle["artifact_refs"] = refreshed_artifact_refs
+            artifact_refs = refreshed_artifact_refs
         manifest = {
             "page_id": page_id,
             "context_ref": persisted["context_ref"],

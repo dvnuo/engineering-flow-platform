@@ -11,7 +11,9 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
 from src.file_artifacts import can_project_to_text
-from src.file_artifacts.service import register_existing_file_as_artifact, update_projection_from_parse_result
+from src.context_blob_store import put_text
+from src.file_artifacts.service import attach_text_ref_to_artifact, register_existing_file_as_artifact, update_projection_from_parse_result
+from src.file_artifacts.storage import storage as artifact_storage
 from .file_parser import (
     save_uploaded_file,
     parse_file,
@@ -34,6 +36,7 @@ class AttachmentResult:
     artifact_id: Optional[str] = None
     projection_kind: Optional[str] = None
     preview: Optional[str] = None
+    text_ref: Optional[str] = None
 
 
 async def download_and_process_attachment(
@@ -45,6 +48,11 @@ async def download_and_process_attachment(
     source_kind: str = "issue_attachment",
     source_locator: str | None = None,
     provider_metadata: dict | None = None,
+    persist_text_ref_session_id: Optional[str] = None,
+    persist_text_ref_kind: Optional[str] = None,
+    persist_text_ref_source_id: Optional[str] = None,
+    persist_text_ref_title: Optional[str] = None,
+    persist_text_ref_metadata: Optional[dict] = None,
 ) -> AttachmentResult:
     options = options or {}
     include_image = options.get("include_image_data", True)
@@ -74,6 +82,7 @@ async def download_and_process_attachment(
     file_path = str(get_file_path(metadata.file_id))
     projection_kind = None
     preview = None
+    text_ref = None
 
     should_parse_image = content_type.startswith("image/") and (prefer_text_for_images or vision_enabled)
     should_parse_non_image = not content_type.startswith("image/") and can_project_to_text(content_type, filename)
@@ -95,15 +104,40 @@ async def download_and_process_attachment(
                 updated = update_projection_from_parse_result(artifact.artifact_id, parsed, preview=full_text[:2000])
                 if updated:
                     artifact = updated
+                if (
+                    persist_text_ref_session_id
+                    and persist_text_ref_kind
+                    and persist_text_ref_source_id
+                    and persist_text_ref_title
+                    and full_text
+                ):
+                    text_ref = put_text(
+                        session_id=persist_text_ref_session_id,
+                        kind=persist_text_ref_kind,
+                        source_id=persist_text_ref_source_id,
+                        title=persist_text_ref_title,
+                        content=full_text,
+                        metadata=persist_text_ref_metadata or {},
+                    )
+                    updated_refs = attach_text_ref_to_artifact(artifact.artifact_id, text_ref, full_markdown_chars=len(full_text))
+                    if updated_refs:
+                        artifact = updated_refs
                 projection_kind = artifact.projection_kind
             else:
                 content = f"[{content_type}: {filename}]"
                 content_format = "text"
+                artifact_storage.update_artifact_status(
+                    artifact.artifact_id,
+                    parse_status="failed",
+                    parse_error=str(getattr(parsed, "error", "parse failed")),
+                )
         except Exception as e:
             logger.warning(f"Failed to parse attachment: {e}")
             content = f"[{content_type}: {filename}]"
             content_format = "text"
+            artifact_storage.update_artifact_status(artifact.artifact_id, parse_status="failed", parse_error=str(e))
     elif content_type.startswith("image/"):
+        artifact_storage.update_artifact_status(artifact.artifact_id, parse_status="skipped")
         if include_image:
             try:
                 content = compress_image_for_llm(file_path, max_dimension=max_image_size)
@@ -118,6 +152,7 @@ async def download_and_process_attachment(
     else:
         content = f"[{content_type}: {filename}]"
         content_format = "text"
+        artifact_storage.update_artifact_status(artifact.artifact_id, parse_status="skipped")
 
     return AttachmentResult(
         file_id=metadata.file_id,
@@ -132,6 +167,7 @@ async def download_and_process_attachment(
         artifact_id=artifact.artifact_id,
         projection_kind=projection_kind or artifact.projection_kind,
         preview=preview or artifact.preview,
+        text_ref=text_ref or artifact.text_ref,
     )
 
 

@@ -291,6 +291,9 @@ def persist_github_source_bundle_and_digest(*, session_id: str, source_id: str, 
         "metadata": bundle.get("metadata") or {},
         "coverage": bundle.get("completeness_ledger") or {},
         "artifact_refs": len(bundle.get("artifact_refs") or []),
+        "source_kind": (bundle.get("metadata") or {}).get("source_kind", "repo_file"),
+        "attachments_supported": bool((bundle.get("metadata") or {}).get("attachments_supported", False)),
+        "issue_pr_assets_supported": bool((bundle.get("metadata") or {}).get("issue_pr_assets_supported", False)),
     }, ensure_ascii=False, indent=2), 7000)
     digest_ref = put_text(
         session_id=session_id,

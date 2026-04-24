@@ -127,23 +127,41 @@ def parse_github_doc_ref(raw: str, default_ref: BundleRef) -> GitHubDocRef:
 
 
 async def read_github_doc_text(raw: str, default_ref: BundleRef) -> tuple[GitHubDocRef, str]:
+    doc_ref: GitHubDocRef | None = None
+    try:
+        prepared = await prepare_github_doc_source(raw, default_ref)
+        doc_ref = prepared["doc_ref"]
+        return prepared["doc_ref"], prepared["content_text"]
+    except RequirementBundleError as exc:
+        _log_bundle_asset_failure("read_github_doc_text", exc, raw=raw if doc_ref is None else None)
+        raise
+
+
+async def prepare_github_doc_source(raw: str, default_ref: BundleRef) -> dict:
     input_kind = "url" if "://" in str(raw or "") else "repo_relative_path"
-    logger.debug("Read GitHub doc start | input_kind=%s", input_kind)
+    logger.debug("Prepare GitHub doc source start | input_kind=%s", input_kind)
     doc_ref: GitHubDocRef | None = None
     try:
         prepared = await prepare_github_file_source(raw, default_ref)
         doc_ref = prepared["doc_ref"]
         bundle = prepared["bundle"]
-        text = str(bundle.get("content_markdown") or "").strip()
-        if not text:
+        content_text = str(bundle.get("content_markdown") or "").strip()
+        if not content_text:
             raise RequirementBundleError(
                 f"GitHub file is not projectable to text: {doc_ref.owner}/{doc_ref.repo}/{doc_ref.path}@{doc_ref.branch}"
             )
-        logger.info("Read GitHub doc success | owner=%s repo=%s branch=%s path=%s", doc_ref.owner, doc_ref.repo, doc_ref.branch, doc_ref.path)
-        return doc_ref, text
+        logger.info("Prepare GitHub doc source success | owner=%s repo=%s branch=%s path=%s", doc_ref.owner, doc_ref.repo, doc_ref.branch, doc_ref.path)
+        return {
+            "doc_ref": doc_ref,
+            "bundle": bundle,
+            "context_ref": bundle.get("context_ref"),
+            "digest_ref": bundle.get("digest_ref"),
+            "artifact_refs": bundle.get("artifact_refs") or [],
+            "content_text": content_text,
+        }
     except RequirementBundleError as exc:
         _log_bundle_asset_failure(
-            "read_github_doc_text", exc, raw=raw if doc_ref is None else None,
+            "prepare_github_doc_source", exc, raw=raw if doc_ref is None else None,
             extra={
                 "input_kind": input_kind,
                 "owner": doc_ref.owner if doc_ref else None,
@@ -155,7 +173,7 @@ async def read_github_doc_text(raw: str, default_ref: BundleRef) -> tuple[GitHub
         raise
     except Exception as exc:
         _log_bundle_asset_failure(
-            "read_github_doc_text", exc, raw=raw if doc_ref is None else None,
+            "prepare_github_doc_source", exc, raw=raw if doc_ref is None else None,
             extra={
                 "input_kind": input_kind,
                 "owner": doc_ref.owner if doc_ref else None,

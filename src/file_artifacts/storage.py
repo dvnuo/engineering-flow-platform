@@ -108,5 +108,31 @@ class FileArtifactStorage:
         self._save_artifacts(artifacts)
         return ArtifactRecord(**item)
 
+    def update_artifact_references(
+        self,
+        artifact_id: str,
+        *,
+        text_ref: Optional[str] = None,
+        context_ref: Optional[str] = None,
+        digest_ref: Optional[str] = None,
+        full_markdown_chars: Optional[int] = None,
+    ) -> Optional[ArtifactRecord]:
+        artifacts = self._load_artifacts()
+        item = artifacts.get(artifact_id)
+        if not item:
+            return None
+        if text_ref is not None:
+            item["text_ref"] = text_ref
+        if context_ref is not None:
+            item["context_ref"] = context_ref
+        if digest_ref is not None:
+            item["digest_ref"] = digest_ref
+        if full_markdown_chars is not None:
+            item["full_markdown_chars"] = int(full_markdown_chars or 0)
+        item["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        artifacts[artifact_id] = item
+        self._save_artifacts(artifacts)
+        return ArtifactRecord(**item)
+
 
 storage = FileArtifactStorage()

@@ -22,6 +22,10 @@ class ArtifactRecord(BaseModel):
     preview: Optional[str] = None
     chunk_count: int = 0
     total_chars: int = 0
+    text_ref: Optional[str] = None
+    context_ref: Optional[str] = None
+    digest_ref: Optional[str] = None
+    full_markdown_chars: int = 0
     provider_metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
     updated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")

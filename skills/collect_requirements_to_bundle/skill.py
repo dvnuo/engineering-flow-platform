@@ -14,7 +14,7 @@ from src.runtime.requirement_bundle_assets import (
     RequirementBundleError,
     load_bundle_manifest,
     parse_bundle_ref,
-    read_github_doc_text,
+    prepare_github_doc_source,
     resolve_bundle_links,
     resolve_target_bundle_ref,
     write_requirements_doc_for_ref,
@@ -61,22 +61,24 @@ async def _load_github_doc_sources(bundle_ref: Dict[str, Any], doc_paths: List[s
     parsed_ref = parse_bundle_ref(bundle_ref)
     items: List[Dict[str, Any]] = []
     for doc_path in doc_paths:
-        doc_ref, raw = await read_github_doc_text(doc_path, parsed_ref)
+        prepared = await prepare_github_doc_source(doc_path, parsed_ref)
+        doc_ref = prepared["doc_ref"]
         kind = "url" if "://" in doc_path else "repo_relative_path"
         items.append(
             {
                 "input": doc_path,
                 "kind": kind,
+                "source_kind": "repo_file",
                 "resolved": {
                     "owner": doc_ref.owner,
                     "repo": doc_ref.repo,
                     "branch": doc_ref.branch,
                     "path": doc_ref.path,
                 },
-                "content": raw,
-                "artifact_refs": [],
-                "context_ref": None,
-                "digest_ref": None,
+                "content": prepared["content_text"],
+                "artifact_refs": prepared["artifact_refs"],
+                "context_ref": prepared["context_ref"],
+                "digest_ref": prepared["digest_ref"],
             }
         )
     return items

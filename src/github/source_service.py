@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import base64
+import mimetypes
 from typing import Any
 
 from src.file_artifacts import can_project_to_text
-from src.file_artifacts.service import bind_artifact_to_source_bundle, build_artifact_ref_dict, register_existing_file_as_artifact, update_projection_from_parse_result
+from src.file_artifacts.service import (
+    attach_source_refs_to_artifact,
+    bind_artifact_to_source_bundle,
+    build_artifact_ref_dict,
+    register_existing_file_as_artifact,
+    update_projection_from_parse_result,
+)
+from src.file_artifacts.storage import storage as artifact_storage
 from src.github import github_channel
 from src.github.doc_refs import parse_github_doc_ref
 from src.source_context import persist_github_source_bundle_and_digest
@@ -19,7 +27,19 @@ async def prepare_github_file_source(raw: str, default_ref, *, session_id: str |
         raise ValueError(f"File not found or empty: {doc_ref.owner}/{doc_ref.repo}/{doc_ref.path}@{doc_ref.branch}")
 
     content_bytes = base64.b64decode(encoded)
-    file_meta = await save_uploaded_file(content_bytes, original_filename=doc_ref.path.split("/")[-1], session_id=session_id)
+    guessed_content_type = mimetypes.guess_type(doc_ref.path)[0]
+    if not guessed_content_type:
+        try:
+            content_bytes.decode("utf-8")
+            guessed_content_type = "text/plain"
+        except Exception:
+            guessed_content_type = None
+    file_meta = await save_uploaded_file(
+        content_bytes,
+        original_filename=doc_ref.path.split("/")[-1],
+        session_id=session_id,
+        content_type=guessed_content_type,
+    )
     artifact = register_existing_file_as_artifact(
         file_meta.file_id,
         source_type="github",
@@ -33,17 +53,31 @@ async def prepare_github_file_source(raw: str, default_ref, *, session_id: str |
     source_complete = False
     partial_reasons: list[str] = []
     if can_project_to_text(file_meta.content_type, file_meta.original_filename):
-        parsed = await parse_file(file_meta.file_id)
-        if getattr(parsed, "success", False):
-            content_markdown = parsed.markdown or ""
-            update_projection_from_parse_result(artifact.artifact_id, parsed, preview=content_markdown[:2000])
-            source_complete = True
-        else:
-            partial_reasons.append(f"parse_failed:{parsed.error}")
+        try:
+            parsed = await parse_file(file_meta.file_id)
+            if getattr(parsed, "success", False):
+                content_markdown = parsed.markdown or ""
+                update_projection_from_parse_result(artifact.artifact_id, parsed, preview=content_markdown[:2000])
+                source_complete = True
+            else:
+                parse_error = str(getattr(parsed, "error", "parse failed"))
+                artifact_storage.update_artifact_status(
+                    artifact.artifact_id,
+                    parse_status="failed",
+                    parse_error=parse_error,
+                )
+                partial_reasons.append(f"parse_failed:{parse_error}")
+        except Exception as exc:
+            artifact_storage.update_artifact_status(
+                artifact.artifact_id,
+                parse_status="failed",
+                parse_error=str(exc),
+            )
+            partial_reasons.append(f"parse_failed:{type(exc).__name__}")
     else:
+        artifact_storage.update_artifact_status(artifact.artifact_id, parse_status="skipped")
         partial_reasons.append("non_projectable_file")
 
-    from src.file_artifacts.storage import storage as artifact_storage
     record = artifact_storage.get_artifact(artifact.artifact_id) or artifact
     bundle_scope_id = f"github:{doc_ref.owner}/{doc_ref.repo}:{doc_ref.path}@{doc_ref.branch}"
     bind_artifact_to_source_bundle(record.artifact_id, bundle_scope_id)
@@ -56,6 +90,9 @@ async def prepare_github_file_source(raw: str, default_ref, *, session_id: str |
             "branch": doc_ref.branch,
             "path": doc_ref.path,
             "content_type": file_meta.content_type,
+            "source_kind": "repo_file",
+            "attachments_supported": False,
+            "issue_pr_assets_supported": False,
         },
         "content_markdown": content_markdown,
         "artifact_refs": artifact_refs,
@@ -63,6 +100,9 @@ async def prepare_github_file_source(raw: str, default_ref, *, session_id: str |
             "file_loaded": True,
             "file_projectable": can_project_to_text(file_meta.content_type, file_meta.original_filename),
             "source_complete": source_complete,
+            "source_kind": "repo_file",
+            "attachments_supported": False,
+            "issue_pr_assets_supported": False,
             "partial_reasons": partial_reasons,
         },
         "raw_snapshot": {
@@ -79,4 +119,12 @@ async def prepare_github_file_source(raw: str, default_ref, *, session_id: str |
     )
     bundle["context_ref"] = persisted["context_ref"]
     bundle["digest_ref"] = persisted["digest_ref"]
+    attach_source_refs_to_artifact(
+        artifact.artifact_id,
+        context_ref=bundle["context_ref"],
+        digest_ref=bundle["digest_ref"],
+    )
+    refreshed = artifact_storage.get_artifact(artifact.artifact_id)
+    if refreshed:
+        bundle["artifact_refs"] = [build_artifact_ref_dict(refreshed)]
     return {"doc_ref": doc_ref, "bundle": bundle, "persisted": persisted}
