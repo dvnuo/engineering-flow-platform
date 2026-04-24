@@ -77,6 +77,14 @@ def _get_excel_module():
     return _async_modules['excel']
 
 
+def _get_text_module():
+    """Lazy load generic text parser module."""
+    if 'text' not in _async_modules:
+        from . import text as _text
+        _async_modules['text'] = _text
+    return _async_modules['text']
+
+
 async def upload_file(
     content: bytes,
     filename: str,
@@ -162,6 +170,25 @@ async def parse_file(file_id: str, options: dict = None) -> ParseResult:
         result.file_id = file_id
         result.filename = metadata.original_filename
         return result
+
+    text_types = {
+        "application/json",
+        "application/xml",
+        "text/xml",
+        "application/yaml",
+        "text/yaml",
+        "application/x-yaml",
+        "text/x-yaml",
+        "text/plain",
+    }
+    if content_type.startswith("text/") or content_type in text_types:
+        text_mod = _get_text_module()
+        return await text_mod.parse_text_file(
+            str(path),
+            file_id=file_id,
+            filename=metadata.original_filename,
+            content_type=content_type,
+        )
     
     # Unsupported file type
     return ParseResult(

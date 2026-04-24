@@ -40,6 +40,7 @@ def build_jira_source_bundle_text(bundle: Dict[str, Any]) -> str:
         _heading_block("validation_rules", bundle.get("validation_rules") or ""),
         _heading_block("comments", "\n\n".join(comments_lines)),
         _heading_block("attachments", "\n".join(attachment_lines)),
+        _heading_block("artifact_refs", json.dumps(bundle.get("artifact_refs") or [], ensure_ascii=False, indent=2)),
         _heading_block("coverage_ledger", json.dumps(ledger, ensure_ascii=False, indent=2)),
         _heading_block("raw_snapshot", json.dumps(bundle.get("raw_snapshot") or {}, ensure_ascii=False, indent=2)),
     ]
@@ -93,6 +94,7 @@ def build_jira_source_digest(bundle: Dict[str, Any], *, max_chars: int = 7000) -
         "comment_indexes": comment_index_text,
         "attachments_metadata": f"{ledger.get('attachments_metadata_loaded', len(attachments))}/{ledger.get('attachments_total', len(attachments))} covered",
         "text_attachments": f"{ledger.get('text_attachments_loaded', 0)}/{ledger.get('text_attachments_total', 0)} covered",
+        "artifact_refs": len(bundle.get("artifact_refs") or []),
     }
 
     digest_text = "\n".join(
@@ -218,6 +220,7 @@ def persist_confluence_source_bundle_and_digest(
             _heading_block("content", str(bundle.get("content_markdown") or "")),
             _heading_block("comments", json.dumps(bundle.get("comments") or [], ensure_ascii=False, indent=2)),
             _heading_block("attachments", json.dumps(bundle.get("attachments") or [], ensure_ascii=False, indent=2)),
+            _heading_block("artifact_refs", json.dumps(bundle.get("artifact_refs") or [], ensure_ascii=False, indent=2)),
             _heading_block("children", json.dumps(bundle.get("children") or [], ensure_ascii=False, indent=2)),
             _heading_block("descendants", json.dumps(bundle.get("descendants") or [], ensure_ascii=False, indent=2)),
             _heading_block("coverage_ledger", json.dumps(bundle.get("completeness_ledger") or {}, ensure_ascii=False, indent=2)),
@@ -239,6 +242,7 @@ def persist_confluence_source_bundle_and_digest(
                 "metadata": bundle.get("metadata") or {},
                 "coverage": bundle.get("completeness_ledger") or {},
                 "open_questions": bundle.get("open_questions") or [],
+                "artifact_refs": len(bundle.get("artifact_refs") or []),
             },
             ensure_ascii=False,
             indent=2,
@@ -258,3 +262,45 @@ def persist_confluence_source_bundle_and_digest(
         "digest_ref": digest_ref,
         "source_complete": bool((bundle.get("completeness_ledger") or {}).get("source_complete")),
     }
+
+
+
+def build_github_source_bundle_text(bundle: Dict[str, Any]) -> str:
+    return "\n".join([
+        "# GitHub Source Bundle",
+        _heading_block("metadata", json.dumps(bundle.get("metadata") or {}, ensure_ascii=False, indent=2)),
+        _heading_block("content", str(bundle.get("content_markdown") or "")),
+        _heading_block("artifact_refs", json.dumps(bundle.get("artifact_refs") or [], ensure_ascii=False, indent=2)),
+        _heading_block("coverage_ledger", json.dumps(bundle.get("completeness_ledger") or {}, ensure_ascii=False, indent=2)),
+        _heading_block("raw_snapshot", json.dumps(bundle.get("raw_snapshot") or {}, ensure_ascii=False, indent=2)),
+    ])
+
+
+def persist_github_source_bundle_and_digest(*, session_id: str, source_id: str, bundle: Dict[str, Any]) -> Dict[str, Any]:
+    bundle_text = build_github_source_bundle_text(bundle)
+    context_ref = put_text(
+        session_id=session_id,
+        kind="github_source_bundle",
+        source_id=source_id,
+        title=f"GitHub source bundle {source_id}",
+        content=bundle_text,
+        metadata={"source_id": source_id, "source_complete": bundle.get("completeness_ledger", {}).get("source_complete")},
+    )
+    digest_text = truncate(json.dumps({
+        "source_ref": context_ref,
+        "metadata": bundle.get("metadata") or {},
+        "coverage": bundle.get("completeness_ledger") or {},
+        "artifact_refs": len(bundle.get("artifact_refs") or []),
+        "source_kind": (bundle.get("metadata") or {}).get("source_kind", "repo_file"),
+        "attachments_supported": bool((bundle.get("metadata") or {}).get("attachments_supported", False)),
+        "issue_pr_assets_supported": bool((bundle.get("metadata") or {}).get("issue_pr_assets_supported", False)),
+    }, ensure_ascii=False, indent=2), 7000)
+    digest_ref = put_text(
+        session_id=session_id,
+        kind="github_source_digest",
+        source_id=source_id,
+        title=f"GitHub source digest {source_id}",
+        content=digest_text,
+        metadata={"source_id": source_id, "source_ref": context_ref},
+    )
+    return {"context_ref": context_ref, "digest_ref": digest_ref, "source_complete": bool((bundle.get("completeness_ledger") or {}).get("source_complete"))}
