@@ -93,6 +93,47 @@ def _build_asset_ledger(*, source_kind: str, body_loaded: bool, comments_loaded:
     }
 
 
+def _finalize_bundle_artifacts(
+    *,
+    asset_entries: list[dict],
+    bundle_scope_id: str,
+    context_ref: str | None,
+    digest_ref: str | None,
+) -> tuple[list[dict], list[dict]]:
+    refreshed_asset_entries: list[dict] = []
+    refreshed_bundle_artifact_refs: list[dict] = []
+    seen_artifact_ids: set[str] = set()
+
+    for entry in asset_entries:
+        refreshed_entry = dict(entry or {})
+        artifact_id = str(refreshed_entry.get("artifact_id") or "").strip()
+        if not artifact_id:
+            refreshed_asset_entries.append(refreshed_entry)
+            continue
+
+        bind_artifact_to_source_bundle(artifact_id, bundle_scope_id)
+        if context_ref and digest_ref:
+            attach_source_refs_to_artifact(
+                artifact_id,
+                context_ref=context_ref,
+                digest_ref=digest_ref,
+            )
+
+        record = artifact_storage.get_artifact(artifact_id)
+        if record:
+            refreshed_ref = build_artifact_ref_dict(record)
+            refreshed_entry["artifact_ref"] = refreshed_ref
+            if not refreshed_entry.get("text_ref") and record.text_ref:
+                refreshed_entry["text_ref"] = record.text_ref
+            if artifact_id not in seen_artifact_ids:
+                refreshed_bundle_artifact_refs.append(refreshed_ref)
+                seen_artifact_ids.add(artifact_id)
+
+        refreshed_asset_entries.append(refreshed_entry)
+
+    return refreshed_asset_entries, refreshed_bundle_artifact_refs
+
+
 async def prepare_github_file_source(raw: str, default_ref, *, session_id: str | None = None) -> dict:
     doc_ref = parse_github_doc_ref(raw, default_ref)
     file_data = await github_channel.get_file(doc_ref.owner, doc_ref.repo, doc_ref.path, doc_ref.branch)
@@ -324,6 +365,15 @@ async def prepare_github_issue_source(
         bundle["digest_ref"] = None
         ledger.setdefault("partial_reasons", []).append("session_scope_missing")
 
+    refreshed_asset_entries, refreshed_artifact_refs = _finalize_bundle_artifacts(
+        asset_entries=asset_entries,
+        bundle_scope_id=f"github:{repo_full_name}#issue:{issue_number}",
+        context_ref=bundle.get("context_ref"),
+        digest_ref=bundle.get("digest_ref"),
+    )
+    bundle["asset_entries"] = refreshed_asset_entries
+    bundle["artifact_refs"] = refreshed_artifact_refs
+
     return {"bundle": bundle, "persisted": persisted}
 
 
@@ -443,5 +493,14 @@ async def prepare_github_pr_source(
         bundle["context_ref"] = None
         bundle["digest_ref"] = None
         ledger.setdefault("partial_reasons", []).append("session_scope_missing")
+
+    refreshed_asset_entries, refreshed_artifact_refs = _finalize_bundle_artifacts(
+        asset_entries=asset_entries,
+        bundle_scope_id=f"github:{repo_full_name}#pull_request:{pull_number}",
+        context_ref=bundle.get("context_ref"),
+        digest_ref=bundle.get("digest_ref"),
+    )
+    bundle["asset_entries"] = refreshed_asset_entries
+    bundle["artifact_refs"] = refreshed_artifact_refs
 
     return {"bundle": bundle, "persisted": persisted}
