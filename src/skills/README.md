@@ -119,6 +119,7 @@ active_skill_conflict_policy: auto_switch_direct  # auto_switch_direct|always_as
 - `execution_style`: `direct` completes in one turn when possible; `stepwise` keeps one-step progression.
 - `ask_user_policy`: `blocked_only` asks only for truly blocking inputs; `permissive` allows broader clarification.
 - `active_skill_conflict_policy`: `auto_switch_direct` lets direct active skills leave/switch immediately on a clear new request; `always_ask` keeps direct skill context and asks whether to continue current skill or switch.
+- `active_skill_conflict_policy` applies only to **direct** active skills; non-direct/stepwise flows still continue in-flow replies, but should not keep binding clearly independent new requests by default.
 
 When `execution_style`, `ask_user_policy`, or `active_skill_conflict_policy` is omitted from skill frontmatter, runtime falls back to `llm.response_flow.default_skill_execution_style`, `llm.response_flow.ask_user_policy`, and `llm.response_flow.active_skill_conflict_policy` respectively. If the skill explicitly sets any of these fields, the skill value takes precedence over global defaults.
 

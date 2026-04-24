@@ -64,6 +64,34 @@ def test_stepwise_active_skill_contract_clear_continuation_keeps_skill():
     assert core._should_continue_existing_active_skill(contract, "next", registry) is True
 
 
+def test_stepwise_active_skill_contract_clear_new_request_does_not_continue():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "active",
+        "execution_style": "stepwise",
+        "planning_mode": "required",
+        "staging_mode": "required",
+    }
+    registry = type("Registry", (), {"match_skill": lambda self, message: []})()
+    assert core._should_continue_existing_active_skill(contract, "write a release note", registry) is False
+
+
+def test_stepwise_active_skill_contract_short_parameter_reply_still_continues():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "active",
+        "execution_style": "stepwise",
+        "planning_mode": "required",
+        "staging_mode": "required",
+    }
+    registry = type("Registry", (), {"match_skill": lambda self, message: []})()
+    assert core._should_continue_existing_active_skill(contract, "Android 14", registry) is True
+
+
 def test_stepwise_active_skill_contract_yields_when_new_skill_matches():
     from src.agents import core
 

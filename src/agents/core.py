@@ -114,6 +114,34 @@ def _is_explicit_skill_continuation_message(message: str) -> bool:
     return normalized in _EXPLICIT_SKILL_CONTINUATION_MESSAGES
 
 
+def _looks_like_clear_new_request_for_non_direct_skill(message: str) -> bool:
+    text = str(message or "").strip()
+    if not text:
+        return False
+
+    normalized = text.lower()
+    if normalized.startswith("/skill "):
+        return False
+    if _is_explicit_skill_continuation_message(normalized):
+        return False
+
+    starts_with_request_phrase = (
+        normalized.startswith(("write ", "summarize ", "create ", "generate ", "draft ", "please ", "help me "))
+        or text.startswith(("请", "帮我", "麻烦", "生成", "写", "总结", "整理", "给我"))
+    )
+    if starts_with_request_phrase:
+        return True
+
+    token_count = len([token for token in re.split(r"\s+", text) if token.strip()])
+    if len(text) <= 24 and token_count <= 4:
+        return False
+
+    if len(text) >= 40 or token_count >= 7:
+        return True
+
+    return False
+
+
 def _is_effectively_direct_skill_contract(existing_contract: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(existing_contract, dict):
         return True
@@ -155,6 +183,10 @@ def _should_continue_existing_active_skill(
         top_match_name = str(getattr(matched_skills[0], "name", "") or "").strip()
         if top_match_name and top_match_name != existing_skill_name:
             return False
+    if _is_explicit_skill_continuation_message(message):
+        return True
+    if _looks_like_clear_new_request_for_non_direct_skill(message):
+        return False
     return True
 
 
