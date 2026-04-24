@@ -209,6 +209,7 @@ async def _download_issue_attachments(
     attachments_backoff: Optional[List[int]],
     attachments_preserve_binary: bool,
     source_channel: Any = None,
+    session_id: Optional[str] = None,
 ) -> list[dict]:
     channel = source_channel or jira_channel
     auth_header = channel._auth_header if channel and channel.is_configured() else None
@@ -246,7 +247,7 @@ async def _download_issue_attachments(
                 async with sem:
                     result = await download_and_process_attachment(
                         url=url,
-                        session_id=f"jira-export-{issue_key}",
+                        session_id=session_id,
                         options={"include_image_data": True},
                         auth_header=auth_header,
                     )
@@ -415,7 +416,7 @@ async def jira_export_issues_to_markdown(
                 include_all_comments=True,
                 include_attachments=True,
                 include_raw_snapshot=include_raw_snapshot,
-                session_id=_session_id or "unknown_session",
+                session_id=_session_id,
                 attachment_body_policy="metadata_only" if download_attachments else "source_complete",
             )
             issue_result["context_ref"] = source.manifest.get("context_ref")
@@ -438,6 +439,7 @@ async def jira_export_issues_to_markdown(
                     attachments_backoff=attachments_backoff,
                     attachments_preserve_binary=attachments_preserve_binary,
                     source_channel=source.channel,
+                    session_id=_session_id,
                 )
 
             export_partial_reasons = []

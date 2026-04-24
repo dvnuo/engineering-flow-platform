@@ -101,6 +101,9 @@ async def prepare_jira_issue_source(
             "text_preview": None,
             "text_ref": None,
             "attachment_text_preview_only": False,
+            "parse_status": None,
+            "parse_error": None,
+            "projected_to_text": False,
         }
 
         should_load_text_body = (
@@ -128,7 +131,10 @@ async def prepare_jira_issue_source(
                     persist_text_ref_title=f"Jira attachment text {filename}",
                     persist_text_ref_metadata={"issue_key": issue_key, "filename": filename, "attachment_id": att.get("id")},
                 )
-                if getattr(result, "content_format", "") == "text":
+                item["parse_status"] = getattr(result, "parse_status", None)
+                item["parse_error"] = getattr(result, "parse_error", None)
+                item["projected_to_text"] = bool(getattr(result, "projected_to_text", False))
+                if getattr(result, "parse_status", None) == "completed" and bool(getattr(result, "projected_to_text", False)):
                     text_content = str(getattr(result, "content", "") or "")
                     if len(text_content) <= 4000:
                         item["text_preview"] = text_content
@@ -142,6 +148,12 @@ async def prepare_jira_issue_source(
                     if item["text_ref"]:
                         text_attachments_with_full_ref += 1
                     text_attachments_loaded += 1
+                else:
+                    parse_reason = f"attachment_text_processing_failed:{filename}:parse_failed"
+                    partial_reasons.append(parse_reason)
+                    attachment_body_partial_reasons.append(
+                        f"{parse_reason}:{item['parse_error']}" if item["parse_error"] else parse_reason
+                    )
                 if getattr(result, "artifact_id", None):
                     from src.file_artifacts.storage import storage as artifact_storage
                     record = artifact_storage.get_artifact(result.artifact_id)
@@ -203,7 +215,10 @@ async def prepare_jira_issue_source(
             "projectable_attachments_total": projectable_attachments_total,
             "artifact_refs_created": len(artifact_refs),
             "text_attachments_complete": text_attachments_loaded >= text_attachments_total,
-            "text_attachment_bodies_complete": text_attachments_loaded >= text_attachments_total and text_attachments_with_full_ref >= text_attachments_preview_only,
+            "text_attachment_bodies_complete": (
+                text_attachments_loaded >= text_attachments_total
+                and text_attachments_with_full_ref >= text_attachments_preview_only
+            ),
             "text_attachments_full_loaded": text_attachments_full_loaded,
             "text_attachments_preview_only": text_attachments_preview_only,
             "text_attachments_with_full_ref": text_attachments_with_full_ref,

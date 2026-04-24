@@ -746,7 +746,7 @@ service_reload_manager.register('jira', jira_channel.reinit)
 # ========== Tool Functions for Agent ==========
 
 
-async def _process_issue_attachments(issue_key: str, fields: dict) -> str:
+async def _process_issue_attachments(issue_key: str, fields: dict, *, session_id: Optional[str] = None) -> str:
     """Process issue attachments and return them for LLM."""
     attachments = fields.get("attachment", [])
     if not attachments:
@@ -769,7 +769,7 @@ async def _process_issue_attachments(issue_key: str, fields: dict) -> str:
                 
                 result = await download_and_process_attachment(
                     url=content_url,
-                    session_id=f"jira-{issue_key}",
+                    session_id=session_id,
                     options={"include_image_data": True},
                     auth_header=auth_header
                 )

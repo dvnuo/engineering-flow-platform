@@ -44,6 +44,9 @@ async def test_jira_attachment_always_persists_text_ref(monkeypatch):
         artifact_id = "art-1"
         preview = "abc"
         text_ref = "text-1"
+        parse_status = "completed"
+        parse_error = None
+        projected_to_text = True
 
     monkeypatch.setattr("src.jira.jira_channel", _Channel())
     monkeypatch.setattr("src.jira.source_service.JiraFormatAdapter", _Adapter)

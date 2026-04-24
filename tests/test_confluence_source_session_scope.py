@@ -38,6 +38,9 @@ async def test_prepare_confluence_page_source_respects_session_scope(monkeypatch
         preview = "doc"
         content = "doc"
         text_ref = None
+        parse_status = "completed"
+        parse_error = None
+        projected_to_text = True
 
     async def _fake_download(**kwargs):
         return _Result()

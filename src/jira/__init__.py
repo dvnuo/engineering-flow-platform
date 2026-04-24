@@ -64,7 +64,7 @@ def _get_adapter() -> JiraFormatAdapter:
 
 
 
-async def _process_issue_attachments(issue_key: str, fields: dict) -> str:
+async def _process_issue_attachments(issue_key: str, fields: dict, *, session_id: Optional[str] = None) -> str:
     """Process issue attachments and return them for LLM."""
     attachments = fields.get("attachment", [])
     if not attachments:
@@ -87,7 +87,7 @@ async def _process_issue_attachments(issue_key: str, fields: dict) -> str:
                 
                 result = await download_and_process_attachment(
                     url=content_url,
-                    session_id=f"jira-{issue_key}",
+                    session_id=session_id,
                     options={"include_image_data": True},
                     auth_header=auth_header
                 )
@@ -162,12 +162,12 @@ async def jira_get_issue(
         try:
             if format == "raw":
                 fields = result.get("fields", {}) if isinstance(result, dict) else {}
-                attachment_info = await _process_issue_attachments(issue_key, fields)
+                attachment_info = await _process_issue_attachments(issue_key, fields, session_id=_session_id)
             else:
                 # For markdown/wiki, fetch attachment metadata separately
                 issue_data = await jira_channel.get_issue(issue_key)
                 fields = issue_data.get("fields", {}) if isinstance(issue_data, dict) else {}
-                attachment_info = await _process_issue_attachments(issue_key, fields)
+                attachment_info = await _process_issue_attachments(issue_key, fields, session_id=_session_id)
         except Exception as e:
             logger.warning(f"Failed to process attachments: {e}")
         
@@ -248,7 +248,7 @@ async def jira_get_issue_by_url(
         if isinstance(result, dict):
             try:
                 fields = result.get("fields", {})
-                attachment_info = await _process_issue_attachments(issue_key, fields)
+                attachment_info = await _process_issue_attachments(issue_key, fields, session_id=_session_id)
                 if attachment_info:
                     # Convert dict to markdown if needed
                     result = str(result) + "\n" + attachment_info

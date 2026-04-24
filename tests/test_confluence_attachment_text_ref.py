@@ -44,6 +44,9 @@ async def test_confluence_attachment_builds_text_ref_and_artifact_ref(monkeypatc
         preview = "doc"
         content = "doc"
         text_ref = "txt-ref"
+        parse_status = "completed"
+        parse_error = None
+        projected_to_text = True
 
     monkeypatch.setattr(confluence, "confluence_channel", _Channel())
     monkeypatch.setattr(confluence, "ConfluenceFormatAdapter", _Adapter)

@@ -36,6 +36,9 @@ class AttachmentResult:
     projection_kind: Optional[str] = None
     preview: Optional[str] = None
     text_ref: Optional[str] = None
+    parse_status: Optional[str] = None
+    parse_error: Optional[str] = None
+    projected_to_text: bool = False
 
 
 async def download_and_process_attachment(
@@ -82,6 +85,9 @@ async def download_and_process_attachment(
     projection_kind = None
     preview = None
     text_ref = None
+    parse_status = None
+    parse_error = None
+    projected_to_text = False
 
     should_parse_image = content_type.startswith("image/") and (prefer_text_for_images or vision_enabled)
     should_parse_non_image = not content_type.startswith("image/") and can_project_to_text(content_type, filename)
@@ -114,21 +120,33 @@ async def download_and_process_attachment(
                     artifact = updated
                 text_ref = artifact.text_ref
                 projection_kind = artifact.projection_kind
+                parse_status = "completed"
+                parse_error = None
+                projected_to_text = True
             else:
                 content = f"[{content_type}: {filename}]"
-                content_format = "text"
+                content_format = "metadata"
+                parse_status = "failed"
+                parse_error = str(getattr(parsed, "error", "parse failed"))
+                projected_to_text = False
                 artifact_storage.update_artifact_status(
                     artifact.artifact_id,
                     parse_status="failed",
-                    parse_error=str(getattr(parsed, "error", "parse failed")),
+                    parse_error=parse_error,
                 )
         except Exception as e:
             logger.warning(f"Failed to parse attachment: {e}")
             content = f"[{content_type}: {filename}]"
-            content_format = "text"
-            artifact_storage.update_artifact_status(artifact.artifact_id, parse_status="failed", parse_error=str(e))
+            content_format = "metadata"
+            parse_status = "failed"
+            parse_error = str(e)
+            projected_to_text = False
+            artifact_storage.update_artifact_status(artifact.artifact_id, parse_status="failed", parse_error=parse_error)
     elif content_type.startswith("image/"):
         artifact_storage.update_artifact_status(artifact.artifact_id, parse_status="skipped")
+        parse_status = "skipped"
+        parse_error = None
+        projected_to_text = False
         if include_image:
             try:
                 content = compress_image_for_llm(file_path, max_dimension=max_image_size)
@@ -136,13 +154,16 @@ async def download_and_process_attachment(
             except Exception as e:
                 logger.warning(f"Failed to compress image: {e}")
                 content = f"[Image: {filename}]"
-                content_format = "text"
+                content_format = "metadata"
         else:
             content = f"[Image: {filename}]"
-            content_format = "text"
+            content_format = "metadata"
     else:
         content = f"[{content_type}: {filename}]"
-        content_format = "text"
+        content_format = "metadata"
+        parse_status = "skipped"
+        parse_error = None
+        projected_to_text = False
         artifact_storage.update_artifact_status(artifact.artifact_id, parse_status="skipped")
 
     return AttachmentResult(
@@ -159,6 +180,9 @@ async def download_and_process_attachment(
         projection_kind=projection_kind or artifact.projection_kind,
         preview=preview or artifact.preview,
         text_ref=text_ref or artifact.text_ref,
+        parse_status=parse_status or artifact.parse_status,
+        parse_error=parse_error if parse_error is not None else artifact.parse_error,
+        projected_to_text=projected_to_text,
     )
 
 

@@ -126,6 +126,12 @@ async def prepare_confluence_page_source(
         "attachments_complete": bool(attachments_ledger.get("complete", False)),
         "artifact_refs_created": 0,
         "projectable_attachments_total": 0,
+        "text_attachments_total": 0,
+        "text_attachments_loaded": 0,
+        "text_attachments_with_full_ref": 0,
+        "text_attachments_preview_only": 0,
+        "text_attachment_bodies_complete": False,
+        "attachment_body_partial_reasons": [],
         "children_loaded": int(children_ledger.get("loaded", len(children))),
         "children_total": int(children_ledger.get("total", len(children))),
         "children_complete": bool(children_ledger.get("complete", False)),
@@ -151,6 +157,7 @@ async def prepare_confluence_page_source(
         ledger["source_metadata_complete"]
         and ledger["source_text_complete"]
         and ledger["attachments_complete"]
+        and ledger["text_attachment_bodies_complete"]
         and ledger["children_complete"]
     )
     ledger["source_complete_including_binary_bodies"] = ledger["source_complete_for_generation"]
@@ -175,10 +182,15 @@ async def prepare_confluence_page_source(
             is_image = media_type.startswith("image/")
             if is_image or not can_project_to_text(media_type, filename):
                 continue
+            ledger["text_attachments_total"] += 1
             link = (att.get("_links") or {}).get("download")
             if not link:
+                ledger["attachment_body_partial_reasons"].append(f"attachment_text_processing_failed:{filename}:missing_download_link")
+                ledger["partial_reasons"].append(f"attachment_text_processing_failed:{filename}:missing_download_link")
                 continue
             if attachment_body_policy != "source_complete":
+                ledger["attachment_body_partial_reasons"].append(f"text_attachment_body_metadata_only:{filename}")
+                ledger["partial_reasons"].append(f"text_attachment_body_metadata_only:{filename}")
                 continue
             try:
                 result = await downloader(
@@ -196,6 +208,27 @@ async def prepare_confluence_page_source(
                     persist_text_ref_title=f"Confluence attachment text {filename}",
                     persist_text_ref_metadata={"page_id": page_id, "filename": filename, "attachment_id": att.get("id")},
                 )
+                projected = bool(getattr(result, "projected_to_text", False))
+                parse_status = getattr(result, "parse_status", None)
+                parse_error = getattr(result, "parse_error", None)
+                att["parse_status"] = parse_status
+                att["parse_error"] = parse_error
+                att["projected_to_text"] = projected
+                if parse_status == "completed" and projected:
+                    att["text_preview"] = (result.preview or result.content or "")[:1000]
+                    att["text_ref"] = getattr(result, "text_ref", None)
+                    ledger["text_attachments_loaded"] += 1
+                    if att.get("text_ref"):
+                        ledger["text_attachments_with_full_ref"] += 1
+                    else:
+                        ledger["text_attachments_preview_only"] += 1
+                        ledger["attachment_body_partial_reasons"].append(f"text_attachment_preview_only:{filename}")
+                else:
+                    failure_reason = f"attachment_text_processing_failed:{filename}:parse_failed"
+                    ledger["partial_reasons"].append(failure_reason)
+                    ledger["attachment_body_partial_reasons"].append(
+                        f"{failure_reason}:{parse_error}" if parse_error else failure_reason
+                    )
                 if getattr(result, "artifact_id", None):
                     from src.file_artifacts.storage import storage as artifact_storage
 
@@ -203,10 +236,16 @@ async def prepare_confluence_page_source(
                     if record:
                         bind_artifact_to_source_bundle(record.artifact_id, f"confluence:{page_id}")
                         artifact_refs.append(build_artifact_ref_dict(record))
-                        att["text_preview"] = (result.preview or result.content or "")[:1000]
-                        att["text_ref"] = getattr(result, "text_ref", None) or record.text_ref
+                        if not att.get("text_ref") and parse_status == "completed" and projected:
+                            att["text_ref"] = record.text_ref
+                            if att["text_ref"]:
+                                ledger["text_attachments_with_full_ref"] += 1
+                                ledger["text_attachments_preview_only"] = max(0, ledger["text_attachments_preview_only"] - 1)
             except Exception as att_exc:
                 logger.warning("Failed attachment materialization for %s: %s", filename, att_exc)
+                failure_reason = f"attachment_text_processing_failed:{filename}:parse_exception"
+                ledger["partial_reasons"].append(failure_reason)
+                ledger["attachment_body_partial_reasons"].append(failure_reason)
 
     bundle = {
         "metadata": {
@@ -281,6 +320,10 @@ async def prepare_confluence_page_source(
             and not _is_image_attachment(a, str(a.get("title") or ""))
         ]
     )
+    ledger["text_attachment_bodies_complete"] = bool(
+        ledger["text_attachments_loaded"] >= ledger["text_attachments_total"]
+        and ledger["text_attachments_with_full_ref"] >= ledger["text_attachments_preview_only"]
+    )
     ledger["descendants_pages_complete"] = descendants_pages_complete
     ledger["descendants_comments_complete"] = descendants_comments_complete
     ledger["descendants_attachments_complete"] = descendants_attachments_complete
@@ -295,6 +338,7 @@ async def prepare_confluence_page_source(
         ledger["source_metadata_complete"]
         and ledger["source_text_complete"]
         and ledger["attachments_complete"]
+        and ledger["text_attachment_bodies_complete"]
         and ledger["source_tree_complete"]
     )
     ledger["source_complete"] = bool(
