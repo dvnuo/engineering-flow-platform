@@ -266,14 +266,20 @@ def persist_confluence_source_bundle_and_digest(
 
 
 def build_github_source_bundle_text(bundle: Dict[str, Any]) -> str:
-    return "\n".join([
+    sections = [
         "# GitHub Source Bundle",
         _heading_block("metadata", json.dumps(bundle.get("metadata") or {}, ensure_ascii=False, indent=2)),
         _heading_block("content", str(bundle.get("content_markdown") or "")),
+        _heading_block("body_markdown", str(bundle.get("body_markdown") or "")),
+        _heading_block("comments", json.dumps(bundle.get("comments") or [], ensure_ascii=False, indent=2)),
+        _heading_block("issue_comments", json.dumps(bundle.get("issue_comments") or [], ensure_ascii=False, indent=2)),
+        _heading_block("review_comments", json.dumps(bundle.get("review_comments") or [], ensure_ascii=False, indent=2)),
+        _heading_block("asset_entries", json.dumps(bundle.get("asset_entries") or [], ensure_ascii=False, indent=2)),
         _heading_block("artifact_refs", json.dumps(bundle.get("artifact_refs") or [], ensure_ascii=False, indent=2)),
         _heading_block("coverage_ledger", json.dumps(bundle.get("completeness_ledger") or {}, ensure_ascii=False, indent=2)),
         _heading_block("raw_snapshot", json.dumps(bundle.get("raw_snapshot") or {}, ensure_ascii=False, indent=2)),
-    ])
+    ]
+    return "\n".join(sections)
 
 
 def persist_github_source_bundle_and_digest(*, session_id: str, source_id: str, bundle: Dict[str, Any]) -> Dict[str, Any]:
@@ -291,9 +297,13 @@ def persist_github_source_bundle_and_digest(*, session_id: str, source_id: str, 
         "metadata": bundle.get("metadata") or {},
         "coverage": bundle.get("completeness_ledger") or {},
         "artifact_refs": len(bundle.get("artifact_refs") or []),
+        "asset_entries_created": len(bundle.get("asset_entries") or []),
         "source_kind": (bundle.get("metadata") or {}).get("source_kind", "repo_file"),
         "attachments_supported": bool((bundle.get("metadata") or {}).get("attachments_supported", False)),
         "issue_pr_assets_supported": bool((bundle.get("metadata") or {}).get("issue_pr_assets_supported", False)),
+        "source_complete": bool((bundle.get("completeness_ledger") or {}).get("source_complete", False)),
+        "source_complete_for_generation": bool((bundle.get("completeness_ledger") or {}).get("source_complete_for_generation", False)),
+        "source_complete_including_binary_bodies": bool((bundle.get("completeness_ledger") or {}).get("source_complete_including_binary_bodies", False)),
     }, ensure_ascii=False, indent=2), 7000)
     digest_ref = put_text(
         session_id=session_id,

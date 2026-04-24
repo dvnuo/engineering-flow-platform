@@ -32,7 +32,7 @@ async def prepare_jira_issue_source(
     include_all_comments: bool = True,
     include_attachments: bool = True,
     include_raw_snapshot: bool = True,
-    session_id: str = "unknown_session",
+    session_id: str | None = None,
     attachment_body_policy: str = "source_complete",
 ) -> JiraIssueSourceResult:
     from src import jira as jira_module
@@ -101,6 +101,9 @@ async def prepare_jira_issue_source(
             "text_preview": None,
             "text_ref": None,
             "attachment_text_preview_only": False,
+            "parse_status": None,
+            "parse_error": None,
+            "projected_to_text": False,
         }
 
         should_load_text_body = (
@@ -115,7 +118,7 @@ async def prepare_jira_issue_source(
                 auth_header = instance_channel._auth_header if instance_channel.is_configured() else None
                 result = await downloader(
                     url=att.get("content"),
-                    session_id=f"jira-source-{issue_key}",
+                    session_id=session_id,
                     options={"include_image_data": False},
                     auth_header=auth_header,
                     source_type="jira",
@@ -128,7 +131,10 @@ async def prepare_jira_issue_source(
                     persist_text_ref_title=f"Jira attachment text {filename}",
                     persist_text_ref_metadata={"issue_key": issue_key, "filename": filename, "attachment_id": att.get("id")},
                 )
-                if getattr(result, "content_format", "") == "text":
+                item["parse_status"] = getattr(result, "parse_status", None)
+                item["parse_error"] = getattr(result, "parse_error", None)
+                item["projected_to_text"] = bool(getattr(result, "projected_to_text", False))
+                if getattr(result, "parse_status", None) == "completed" and bool(getattr(result, "projected_to_text", False)):
                     text_content = str(getattr(result, "content", "") or "")
                     if len(text_content) <= 4000:
                         item["text_preview"] = text_content
@@ -142,6 +148,12 @@ async def prepare_jira_issue_source(
                     if item["text_ref"]:
                         text_attachments_with_full_ref += 1
                     text_attachments_loaded += 1
+                else:
+                    parse_reason = f"attachment_text_processing_failed:{filename}:parse_failed"
+                    partial_reasons.append(parse_reason)
+                    attachment_body_partial_reasons.append(
+                        f"{parse_reason}:{item['parse_error']}" if item["parse_error"] else parse_reason
+                    )
                 if getattr(result, "artifact_id", None):
                     from src.file_artifacts.storage import storage as artifact_storage
                     record = artifact_storage.get_artifact(result.artifact_id)
@@ -203,7 +215,10 @@ async def prepare_jira_issue_source(
             "projectable_attachments_total": projectable_attachments_total,
             "artifact_refs_created": len(artifact_refs),
             "text_attachments_complete": text_attachments_loaded >= text_attachments_total,
-            "text_attachment_bodies_complete": text_attachments_loaded >= text_attachments_total and text_attachments_with_full_ref >= text_attachments_preview_only,
+            "text_attachment_bodies_complete": (
+                text_attachments_loaded >= text_attachments_total
+                and text_attachments_with_full_ref >= text_attachments_preview_only
+            ),
             "text_attachments_full_loaded": text_attachments_full_loaded,
             "text_attachments_preview_only": text_attachments_preview_only,
             "text_attachments_with_full_ref": text_attachments_with_full_ref,
@@ -215,7 +230,7 @@ async def prepare_jira_issue_source(
             "attachment_body_partial_reasons": attachment_body_partial_reasons + [
                 f"binary_attachment_body_skipped:{att.get('filename', 'unknown')}"
                 for att in attachment_list
-                if not (str(att.get("mimeType") or "").startswith("text/") or str(att.get("filename") or "").lower().endswith((".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".xml", ".log")))
+                if not can_project_to_text(str(att.get("mimeType") or ""), str(att.get("filename") or ""))
             ],
             "raw_fields_loaded": bool(fields),
             "rendered_fields_loaded": bool(rendered_fields),
@@ -255,18 +270,30 @@ async def prepare_jira_issue_source(
         "Binary attachments are metadata-only by policy; source_complete_including_binary_bodies is false when binary bodies are unavailable."
     )
 
-    persisted = persist_jira_source_bundle_and_digest(session_id=session_id, issue_key=issue_key, bundle=bundle)
+    if session_id:
+        persisted = persist_jira_source_bundle_and_digest(session_id=session_id, issue_key=issue_key, bundle=bundle)
+    else:
+        persisted = {
+            "context_ref": None,
+            "digest_ref": None,
+            "source_complete": ledger["source_complete"],
+            "partial_reasons": list(ledger.get("partial_reasons") or []),
+            "source_digest_chunk_count": 0,
+        }
+        if "session_scope_missing" not in ledger["partial_reasons"]:
+            ledger["partial_reasons"].append("session_scope_missing")
     from src.file_artifacts.storage import storage as artifact_storage
     refreshed_artifact_refs: list[dict] = []
     for ref in artifact_refs:
         artifact_id = ref.get("artifact_id")
         if not artifact_id:
             continue
-        attach_source_refs_to_artifact(
-            artifact_id,
-            context_ref=persisted.get("context_ref"),
-            digest_ref=persisted.get("digest_ref"),
-        )
+        if persisted.get("context_ref") and persisted.get("digest_ref"):
+            attach_source_refs_to_artifact(
+                artifact_id,
+                context_ref=persisted.get("context_ref"),
+                digest_ref=persisted.get("digest_ref"),
+            )
         record = artifact_storage.get_artifact(artifact_id)
         if record:
             refreshed_artifact_refs.append(build_artifact_ref_dict(record))
@@ -276,8 +303,8 @@ async def prepare_jira_issue_source(
     manifest = {
         "issue_key": issue_key,
         "title": (fields.get("summary") if isinstance(fields, dict) else "") or "",
-        "context_ref": persisted["context_ref"],
-        "digest_ref": persisted["digest_ref"],
+        "context_ref": persisted.get("context_ref"),
+        "digest_ref": persisted.get("digest_ref"),
         "source_complete": ledger["source_complete"],
         "source_complete_for_generation": ledger["source_complete_for_generation"],
         "source_complete_including_binary_bodies": ledger["source_complete_including_binary_bodies"],
@@ -318,7 +345,10 @@ def format_jira_source_manifest(result: JiraIssueSourceResult) -> str:
         rendered = json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v
         lines.append(f"{k}: {rendered}")
     lines.append("")
-    lines.append(
-        f'Use context_read_ref(ref="{result.persisted["context_ref"]}", section="...") to inspect source sections.'
-    )
+    if result.persisted.get("context_ref"):
+        lines.append(
+            f'Use context_read_ref(ref="{result.persisted["context_ref"]}", section="...") to inspect source sections.'
+        )
+    else:
+        lines.append("Use context_read_ref is unavailable because context_ref is None.")
     return "\n".join(lines)

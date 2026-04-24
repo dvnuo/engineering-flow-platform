@@ -484,7 +484,42 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         repo = kwargs.get("repo", "")
         path = kwargs.get("path", "")
         branch = kwargs.get("branch")
-        result = await github_module.github_get_file_content(owner, repo, path, branch)
+        session_id = kwargs.get("_session_id")
+        preview = kwargs.get("preview", True)
+        result = await github_module.github_get_file_content(
+            owner,
+            repo,
+            path,
+            branch,
+            _session_id=session_id,
+            preview=preview,
+        )
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
+    
+    elif name == "github_prepare_issue_context":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        issue_number = kwargs.get("issue_number", 0)
+        session_id = kwargs.get("_session_id")
+        result = await github_module.github_prepare_issue_context(
+            owner,
+            repo,
+            issue_number,
+            _session_id=session_id,
+        )
+        return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
+
+    elif name == "github_prepare_pr_context":
+        owner = kwargs.get("owner", "")
+        repo = kwargs.get("repo", "")
+        pull_number = kwargs.get("pull_number", 0)
+        session_id = kwargs.get("_session_id")
+        result = await github_module.github_prepare_pr_context(
+            owner,
+            repo,
+            pull_number,
+            _session_id=session_id,
+        )
         return ToolResult(success=not result.lstrip().startswith("Error"), content=result)
     
     elif name == "github_create_pull_request":

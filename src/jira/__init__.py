@@ -27,6 +27,7 @@ from .exporter import jira_export_issues_to_markdown
 from src.source_context import persist_jira_source_bundle_and_digest
 from src.context_blob_store import put_text
 from .source_service import prepare_jira_issue_source, format_jira_source_manifest
+from .attachment_preview import render_issue_attachment_previews
 
 __all__ = [
     "JiraChannel", 
@@ -64,52 +65,13 @@ def _get_adapter() -> JiraFormatAdapter:
 
 
 
-async def _process_issue_attachments(issue_key: str, fields: dict) -> str:
+async def _process_issue_attachments(issue_key: str, fields: dict, *, session_id: Optional[str] = None) -> str:
     """Process issue attachments and return them for LLM."""
-    attachments = fields.get("attachment", [])
-    if not attachments:
-        return ""
-    
-    logger.info(f"Processing {len(attachments)} attachments for {issue_key}")
-    
-    results = []
-    for i, att in enumerate(attachments[:5]):  # Max 5 attachments
-        filename = att.get("filename", "unknown")
-        mime_type = att.get("mimeType", "application/octet-stream")
-        size = att.get("size", 0)
-        
-        content_url = att.get("content", "")
-        
-        if content_url:
-            try:
-                # Get auth header from Jira channel
-                auth_header = jira_channel._auth_header if jira_channel.is_configured() else None
-                
-                result = await download_and_process_attachment(
-                    url=content_url,
-                    session_id=f"jira-{issue_key}",
-                    options={"include_image_data": True},
-                    auth_header=auth_header
-                )
-                
-                if result.content_format == "base64":
-                    results.append(f"- **{filename}** (image, {size} bytes)")
-                    results.append(f"  {result.content}")
-                elif result.content_format == "text" and result.content:
-                    preview = result.content[:500]
-                    results.append(f"- **{filename}** (text, {size} bytes)")
-                    results.append(f"  {preview}")
-                else:
-                    results.append(f"- **{filename}** ({mime_type}, {size} bytes)")
-            except Exception as e:
-                logger.warning(f"Failed to process attachment {filename}: {e}")
-                results.append(f"- **{filename}** ({mime_type}, {size} bytes) - [processing failed]")
-        else:
-            results.append(f"- **{filename}** ({mime_type}, {size} bytes)")
-    
-    if results:
-        return "**Attachments:**\n" + "\n".join(results) + "\n"
-    return ""
+    return await render_issue_attachment_previews(
+        issue_key,
+        fields.get("attachment", []),
+        session_id=session_id,
+    )
 
 async def jira_get_issue(
     issue_key: str,
@@ -162,12 +124,12 @@ async def jira_get_issue(
         try:
             if format == "raw":
                 fields = result.get("fields", {}) if isinstance(result, dict) else {}
-                attachment_info = await _process_issue_attachments(issue_key, fields)
+                attachment_info = await _process_issue_attachments(issue_key, fields, session_id=_session_id)
             else:
                 # For markdown/wiki, fetch attachment metadata separately
                 issue_data = await jira_channel.get_issue(issue_key)
                 fields = issue_data.get("fields", {}) if isinstance(issue_data, dict) else {}
-                attachment_info = await _process_issue_attachments(issue_key, fields)
+                attachment_info = await _process_issue_attachments(issue_key, fields, session_id=_session_id)
         except Exception as e:
             logger.warning(f"Failed to process attachments: {e}")
         
@@ -248,7 +210,7 @@ async def jira_get_issue_by_url(
         if isinstance(result, dict):
             try:
                 fields = result.get("fields", {})
-                attachment_info = await _process_issue_attachments(issue_key, fields)
+                attachment_info = await _process_issue_attachments(issue_key, fields, session_id=_session_id)
                 if attachment_info:
                     # Convert dict to markdown if needed
                     result = str(result) + "\n" + attachment_info
@@ -284,7 +246,7 @@ async def jira_prepare_issue_context(
             include_all_comments=include_all_comments,
             include_attachments=include_attachments,
             include_raw_snapshot=include_raw_snapshot,
-            session_id=_session_id or "unknown_session",
+            session_id=_session_id,
             attachment_body_policy="source_complete",
         )
         return format_jira_source_manifest(result)
@@ -310,21 +272,26 @@ async def jira_get_comments(issue_key: str, _session_id: Optional[str] = None) -
     comments_total = int((comment_field or {}).get("total") or len(comments)) if isinstance(comment_field, dict) else len(comments)
     comments_loaded = len(comments)
     comments_complete = comments_loaded >= comments_total
-    context_ref = put_text(
-        session_id=_session_id or "unknown_session",
-        kind="jira_comments_bundle",
-        source_id=issue_key,
-        title=f"Jira comments {issue_key}",
-        content=json.dumps({"issue_key": issue_key, "comments": comments}, ensure_ascii=False, indent=2),
-        metadata={"issue_key": issue_key, "comments_complete": comments_complete},
-    )
-    return (
-        "[jira comments bundle prepared]\n"
-        f"issue_key: {issue_key}\n"
-        f"context_ref: {context_ref}\n"
-        f"comments_loaded: {comments_loaded}/{comments_total}\n"
-        f"comments_complete: {comments_complete}"
-    )
+    context_ref = None
+    if _session_id:
+        context_ref = put_text(
+            session_id=_session_id,
+            kind="jira_comments_bundle",
+            source_id=issue_key,
+            title=f"Jira comments {issue_key}",
+            content=json.dumps({"issue_key": issue_key, "comments": comments}, ensure_ascii=False, indent=2),
+            metadata={"issue_key": issue_key, "comments_complete": comments_complete},
+        )
+    lines = [
+        "[jira comments bundle prepared]",
+        f"issue_key: {issue_key}",
+        f"context_ref: {context_ref}",
+        f"comments_loaded: {comments_loaded}/{comments_total}",
+        f"comments_complete: {comments_complete}",
+    ]
+    if not _session_id:
+        lines.append("session_scope_missing: true")
+    return "\n".join(lines)
 
 
 async def jira_add_comment(

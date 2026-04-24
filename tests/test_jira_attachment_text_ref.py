@@ -44,6 +44,9 @@ async def test_jira_attachment_always_persists_text_ref(monkeypatch):
         artifact_id = "art-1"
         preview = "abc"
         text_ref = "text-1"
+        parse_status = "completed"
+        parse_error = None
+        projected_to_text = True
 
     monkeypatch.setattr("src.jira.jira_channel", _Channel())
     monkeypatch.setattr("src.jira.source_service.JiraFormatAdapter", _Adapter)
@@ -71,6 +74,6 @@ async def test_jira_attachment_always_persists_text_ref(monkeypatch):
 
     monkeypatch.setattr(artifact_storage, "get_artifact", _fake_get_artifact)
 
-    result = await prepare_jira_issue_source("P-1")
+    result = await prepare_jira_issue_source("P-1", session_id="s1")
     assert result.bundle["attachments"][0]["text_ref"] == "text-1"
     assert captured["bundle"]["artifact_refs"][0]["text_ref"] == "text-1"

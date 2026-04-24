@@ -11,8 +11,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
 from src.file_artifacts import can_project_to_text
-from src.context_blob_store import put_text
-from src.file_artifacts.service import attach_text_ref_to_artifact, register_existing_file_as_artifact, update_projection_from_parse_result
+from src.file_artifacts.service import register_existing_file_as_artifact, update_projection_from_parse_result
 from src.file_artifacts.storage import storage as artifact_storage
 from .file_parser import (
     save_uploaded_file,
@@ -37,6 +36,9 @@ class AttachmentResult:
     projection_kind: Optional[str] = None
     preview: Optional[str] = None
     text_ref: Optional[str] = None
+    parse_status: Optional[str] = None
+    parse_error: Optional[str] = None
+    projected_to_text: bool = False
 
 
 async def download_and_process_attachment(
@@ -83,6 +85,9 @@ async def download_and_process_attachment(
     projection_kind = None
     preview = None
     text_ref = None
+    parse_status = None
+    parse_error = None
+    projected_to_text = False
 
     should_parse_image = content_type.startswith("image/") and (prefer_text_for_images or vision_enabled)
     should_parse_non_image = not content_type.startswith("image/") and can_project_to_text(content_type, filename)
@@ -101,43 +106,47 @@ async def download_and_process_attachment(
                 preview = full_text[:max_text_chars]
                 content = preview
                 content_format = "text"
-                updated = update_projection_from_parse_result(artifact.artifact_id, parsed, preview=full_text[:2000])
+                updated = update_projection_from_parse_result(
+                    artifact.artifact_id,
+                    parsed,
+                    preview=full_text[:2000],
+                    persist_text_ref_session_id=persist_text_ref_session_id,
+                    persist_text_ref_kind=persist_text_ref_kind,
+                    persist_text_ref_source_id=persist_text_ref_source_id,
+                    persist_text_ref_title=persist_text_ref_title,
+                    persist_text_ref_metadata=persist_text_ref_metadata,
+                )
                 if updated:
                     artifact = updated
-                if (
-                    persist_text_ref_session_id
-                    and persist_text_ref_kind
-                    and persist_text_ref_source_id
-                    and persist_text_ref_title
-                    and full_text
-                ):
-                    text_ref = put_text(
-                        session_id=persist_text_ref_session_id,
-                        kind=persist_text_ref_kind,
-                        source_id=persist_text_ref_source_id,
-                        title=persist_text_ref_title,
-                        content=full_text,
-                        metadata=persist_text_ref_metadata or {},
-                    )
-                    updated_refs = attach_text_ref_to_artifact(artifact.artifact_id, text_ref, full_markdown_chars=len(full_text))
-                    if updated_refs:
-                        artifact = updated_refs
+                text_ref = artifact.text_ref
                 projection_kind = artifact.projection_kind
+                parse_status = "completed"
+                parse_error = None
+                projected_to_text = True
             else:
                 content = f"[{content_type}: {filename}]"
-                content_format = "text"
+                content_format = "metadata"
+                parse_status = "failed"
+                parse_error = str(getattr(parsed, "error", "parse failed"))
+                projected_to_text = False
                 artifact_storage.update_artifact_status(
                     artifact.artifact_id,
                     parse_status="failed",
-                    parse_error=str(getattr(parsed, "error", "parse failed")),
+                    parse_error=parse_error,
                 )
         except Exception as e:
             logger.warning(f"Failed to parse attachment: {e}")
             content = f"[{content_type}: {filename}]"
-            content_format = "text"
-            artifact_storage.update_artifact_status(artifact.artifact_id, parse_status="failed", parse_error=str(e))
+            content_format = "metadata"
+            parse_status = "failed"
+            parse_error = str(e)
+            projected_to_text = False
+            artifact_storage.update_artifact_status(artifact.artifact_id, parse_status="failed", parse_error=parse_error)
     elif content_type.startswith("image/"):
         artifact_storage.update_artifact_status(artifact.artifact_id, parse_status="skipped")
+        parse_status = "skipped"
+        parse_error = None
+        projected_to_text = False
         if include_image:
             try:
                 content = compress_image_for_llm(file_path, max_dimension=max_image_size)
@@ -145,13 +154,16 @@ async def download_and_process_attachment(
             except Exception as e:
                 logger.warning(f"Failed to compress image: {e}")
                 content = f"[Image: {filename}]"
-                content_format = "text"
+                content_format = "metadata"
         else:
             content = f"[Image: {filename}]"
-            content_format = "text"
+            content_format = "metadata"
     else:
         content = f"[{content_type}: {filename}]"
-        content_format = "text"
+        content_format = "metadata"
+        parse_status = "skipped"
+        parse_error = None
+        projected_to_text = False
         artifact_storage.update_artifact_status(artifact.artifact_id, parse_status="skipped")
 
     return AttachmentResult(
@@ -168,6 +180,9 @@ async def download_and_process_attachment(
         projection_kind=projection_kind or artifact.projection_kind,
         preview=preview or artifact.preview,
         text_ref=text_ref or artifact.text_ref,
+        parse_status=parse_status or artifact.parse_status,
+        parse_error=parse_error if parse_error is not None else artifact.parse_error,
+        projected_to_text=projected_to_text,
     )
 
 

@@ -4,8 +4,6 @@ import logging
 import json
 from typing import Optional
 
-from src.file_artifacts import can_project_to_text
-from src.file_artifacts.service import attach_source_refs_to_artifact, bind_artifact_to_source_bundle, build_artifact_ref_dict
 from src.utils.attachment import download_and_process_attachment
 
 from .api import (
@@ -15,6 +13,7 @@ from .api import (
 from .adapter import ConfluenceFormatAdapter, _extract_page_id_from_url
 from src.source_context import persist_confluence_source_bundle_and_digest
 from src.context_blob_store import put_text
+from .source_service import format_confluence_source_manifest, prepare_confluence_page_source
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +100,7 @@ def _is_image_attachment(att: dict, filename: str) -> bool:
 async def _process_confluence_attachments(
     page_id: str,
     channel: Optional[ConfluenceChannel] = None,
+    session_id: Optional[str] = None,
 ) -> str:
     """Process page attachments and return for LLM."""
     channel = channel or confluence_channel
@@ -142,13 +142,22 @@ async def _process_confluence_attachments(
             try:
                 result = await download_and_process_attachment(
                     url=download_url,
-                    session_id=f"confluence-{page_id}",
+                    session_id=session_id,
                     options={
                         "include_image_data": True,
                         "prefer_text_for_images": True,
                         "vision_enabled": False,
                     },
                     auth_header=auth_header,
+                    source_type="confluence",
+                    source_kind="page_attachment",
+                    source_locator=f"{page_id}:{att.get('id')}",
+                    provider_metadata={"page_id": page_id, "attachment_id": att.get("id"), "filename": filename},
+                    persist_text_ref_session_id=session_id,
+                    persist_text_ref_kind="confluence_attachment_text",
+                    persist_text_ref_source_id=f"{page_id}:{att.get('id')}",
+                    persist_text_ref_title=f"Confluence attachment text {filename}",
+                    persist_text_ref_metadata={"page_id": page_id, "attachment_id": att.get("id"), "filename": filename},
                 )
 
                 if result.content_format == "text" and result.content:
@@ -170,6 +179,11 @@ async def _process_confluence_attachments(
                         results.append(f"- **{filename}** ({media_type}, {size} bytes)")
                     else:
                         results.append(f"- **{filename}** ({media_type})")
+                results.append(f"  artifact_id: {getattr(result, 'artifact_id', None)}")
+                results.append(f"  text_ref: {getattr(result, 'text_ref', None)}")
+                results.append(f"  parse_status: {getattr(result, 'parse_status', None)}")
+                if getattr(result, "parse_error", None):
+                    results.append(f"  parse_error: {getattr(result, 'parse_error')}")
             except Exception as e:
                 logger.warning(f"Failed to process {filename}: {e}")
                 if size:
@@ -197,11 +211,12 @@ async def _render_page_with_attachments(
     channel: ConfluenceChannel,
     format: str = "markdown",
     max_chars: Optional[int] = None,
+    session_id: Optional[str] = None,
 ) -> str:
     """Render page content plus processed attachments using a specific channel."""
     adapter = ConfluenceFormatAdapter(channel)
     page_content = await adapter.get_page(page_id, format=format, max_chars=max_chars)
-    attachment_info = await _process_confluence_attachments(page_id, channel=channel)
+    attachment_info = await _process_confluence_attachments(page_id, channel=channel, session_id=session_id)
     return page_content + ("\n" + attachment_info if attachment_info else "")
 
 async def confluence_get_page(
@@ -231,6 +246,7 @@ async def confluence_get_page(
             channel=confluence_channel,
             format=format,
             max_chars=max_chars,
+            session_id=_session_id,
         )
     except Exception as e:
         return f"Error getting page: {e}"
@@ -292,6 +308,7 @@ async def confluence_get_page_by_url(
             channel=instance_channel,
             format=format,
             max_chars=max_chars,
+            session_id=_session_id,
         )
     except Exception as e:
         return f"Error getting page: {e}"
@@ -317,285 +334,19 @@ async def confluence_prepare_page_context(
 ) -> str:
     """Prepare source-complete Confluence page context."""
     try:
-        if not confluence_channel.is_configured():
-            return "Confluence is not configured. Please check your settings."
-
-        target = str(page_id_or_url or "").strip()
-        page_id = target
-        instance_channel = confluence_channel
-        if target.startswith("http://") or target.startswith("https://"):
-            extracted = _extract_page_id_from_url(target)
-            if not extracted:
-                return f"Could not extract page ID from URL: {page_id_or_url}"
-            page_id = extracted
-            instance_channel = confluence_channel.get_instance_client(url=target) or confluence_channel
-
-        page = await instance_channel.get_page(page_id)
-        comments, comments_ledger = await instance_channel.get_all_comments_with_ledger(page_id) if include_comments else ([], {"loaded": 0, "total": 0, "complete": False})
-        attachments, attachments_ledger = await instance_channel.get_all_attachments_with_ledger(page_id) if include_attachments else ([], {"loaded": 0, "total": 0, "complete": False})
-        children, children_ledger = await instance_channel.get_all_page_children_with_ledger(page_id) if include_children else ([], {"loaded": 0, "total": 0, "complete": False})
-        descendants: list = []
-        descendants_ledger: dict = {"loaded": 0, "total": 0, "complete": False, "partial_reasons": []}
-        descendants_supported = bool(include_children)
-        if include_children:
-            try:
-                descendants, descendants_ledger = await instance_channel.get_all_descendants_with_ledger(page_id)
-            except Exception as desc_exc:
-                descendants_supported = False
-                descendants = []
-                descendants_ledger = {"loaded": 0, "total": 0, "complete": False, "partial_reasons": [f"descendants_fetch_failed:{type(desc_exc).__name__}"]}
-
-        partial_reasons = []
-        comments = comments or []
-        attachments = attachments or []
-        children = children or []
-        if include_comments and not isinstance(comments, list):
-            comments = []
-            partial_reasons.append("comments_unavailable")
-        if include_attachments and not isinstance(attachments, list):
-            attachments = []
-            partial_reasons.append("attachments_unavailable")
-        if include_children and not isinstance(children, list):
-            children = []
-            partial_reasons.append("children_unavailable")
-        if include_children and not isinstance(descendants, list):
-            descendants = []
-            partial_reasons.append("descendants_unavailable")
-        if not include_comments:
-            partial_reasons.append("comments_not_requested")
-        if not include_attachments:
-            partial_reasons.append("attachments_not_requested")
-        if not include_children:
-            partial_reasons.append("children_not_requested")
-
-        ledger = {
-            "page_body_complete": bool(page),
-            "comments_loaded": int(comments_ledger.get("loaded", len(comments))),
-            "comments_total": int(comments_ledger.get("total", len(comments))),
-            "comments_complete": bool(comments_ledger.get("complete", False)),
-            "attachments_loaded": int(attachments_ledger.get("loaded", len(attachments))),
-            "attachments_total": int(attachments_ledger.get("total", len(attachments))),
-            "attachments_complete": bool(attachments_ledger.get("complete", False)),
-            "artifact_refs_created": 0,
-            "projectable_attachments_total": 0,
-            "children_loaded": int(children_ledger.get("loaded", len(children))),
-            "children_total": int(children_ledger.get("total", len(children))),
-            "children_complete": bool(children_ledger.get("complete", False)),
-            "descendants_loaded": int((descendants_ledger or {}).get("loaded", len(descendants))),
-            "descendants_total": int((descendants_ledger or {}).get("total", len(descendants))),
-            "descendants_supported": descendants_supported,
-            "descendants_complete": bool((descendants_ledger or {}).get("complete", False)),
-            "partial_reasons": partial_reasons,
-        }
-        if isinstance((descendants_ledger or {}).get("partial_reasons"), list):
-            ledger["partial_reasons"].extend([str(r) for r in (descendants_ledger.get("partial_reasons") or []) if r])
-        if include_children and not descendants_supported:
-            ledger["partial_reasons"].append("descendants_not_supported")
-        ledger["source_complete_definition"] = (
-            "source_complete requires page_body_complete, comments_complete, attachments_complete, "
-            "children_complete, and descendants coverage support."
+        prepared = await prepare_confluence_page_source(
+            page_id_or_url=page_id_or_url,
+            include_comments=include_comments,
+            include_attachments=include_attachments,
+            include_children=include_children,
+            include_raw_snapshot=include_raw_snapshot,
+            attachment_body_policy="source_complete",
+            session_id=_session_id,
+            channel=confluence_channel,
+            downloader=download_and_process_attachment,
+            persist_fn=persist_confluence_source_bundle_and_digest,
         )
-        ledger["source_metadata_complete"] = bool(ledger["page_body_complete"])
-        ledger["source_text_complete"] = bool(ledger["page_body_complete"] and ledger["comments_complete"])
-        ledger["source_tree_complete"] = bool(ledger["children_complete"] and ledger["descendants_supported"] and ledger["descendants_complete"])
-        ledger["source_complete_for_generation"] = bool(
-            ledger["source_metadata_complete"]
-            and ledger["source_text_complete"]
-            and ledger["attachments_complete"]
-            and ledger["children_complete"]
-        )
-        ledger["source_complete_including_binary_bodies"] = ledger["source_complete_for_generation"]
-        ledger["source_complete"] = (
-            not partial_reasons
-            and ledger["page_body_complete"]
-            and ledger["comments_complete"]
-            and ledger["attachments_complete"]
-            and ledger["children_complete"]
-            and ledger["descendants_supported"]
-            and ledger["descendants_complete"]
-        )
-
-        adapter = ConfluenceFormatAdapter(instance_channel)
-        artifact_refs = []
-        if include_attachments and attachments:
-            base_url = instance_channel.base_url.rstrip("/")
-            auth_header = instance_channel._auth_header if instance_channel.is_configured() else None
-            for att in attachments:
-                filename = str(att.get("title") or "unknown")
-                media_type = _infer_attachment_media_type(att, filename)
-                is_image = media_type.startswith("image/")
-                if is_image:
-                    continue
-                if not can_project_to_text(media_type, filename):
-                    continue
-                link = (att.get("_links") or {}).get("download")
-                if not link:
-                    continue
-                try:
-                    result = await download_and_process_attachment(
-                        url=f"{base_url}{link}",
-                        session_id=f"confluence-{page_id}",
-                        options={"include_image_data": False, "prefer_text_for_images": False, "vision_enabled": False},
-                        auth_header=auth_header,
-                        source_type="confluence",
-                        source_kind="page_attachment",
-                        source_locator=f"{page_id}:{att.get('id')}",
-                        provider_metadata={"page_id": page_id, "attachment_id": att.get("id")},
-                        persist_text_ref_session_id=_session_id or f"confluence-{page_id}",
-                        persist_text_ref_kind="confluence_attachment_text",
-                        persist_text_ref_source_id=f"{page_id}:{att.get('id')}",
-                        persist_text_ref_title=f"Confluence attachment text {filename}",
-                        persist_text_ref_metadata={"page_id": page_id, "filename": filename, "attachment_id": att.get("id")},
-                    )
-                    if getattr(result, "artifact_id", None):
-                        from src.file_artifacts.storage import storage as artifact_storage
-                        record = artifact_storage.get_artifact(result.artifact_id)
-                        if record:
-                            bind_artifact_to_source_bundle(record.artifact_id, f"confluence:{page_id}")
-                            artifact_ref = build_artifact_ref_dict(record)
-                            artifact_refs.append(artifact_ref)
-                            att["text_preview"] = (result.preview or result.content or "")[:1000]
-                            att["text_ref"] = getattr(result, "text_ref", None) or record.text_ref
-                except Exception as att_exc:
-                    logger.warning(f"Failed attachment materialization for {filename}: {att_exc}")
-
-        bundle = {
-            "metadata": {
-                "page_id": page_id,
-                "title": (page or {}).get("title"),
-                "space": ((page or {}).get("space") or {}).get("key") if isinstance((page or {}).get("space"), dict) else None,
-            },
-            "content_markdown": await adapter._to_markdown(page if isinstance(page, dict) else {}),
-            "comments": comments,
-            "attachments": attachments,
-            "artifact_refs": artifact_refs,
-            "children": children,
-            "descendants": descendants,
-            "raw_snapshot": page if include_raw_snapshot else {},
-            "completeness_ledger": ledger,
-        }
-        descendants_pages_complete = True
-        descendants_comments_complete = True
-        descendants_attachments_complete = True
-        if descendants:
-            descendants_enriched = []
-            for entry in descendants:
-                desc_id = str((entry or {}).get("id") or "").strip()
-                if not desc_id:
-                    descendants_pages_complete = False
-                    continue
-                try:
-                    desc_page = await instance_channel.get_page(desc_id)
-                    desc_comments, desc_comments_ledger = await instance_channel.get_all_comments_with_ledger(desc_id)
-                    desc_attachments, desc_attachments_ledger = await instance_channel.get_all_attachments_with_ledger(desc_id)
-                    desc_markdown = await adapter._to_markdown(desc_page if isinstance(desc_page, dict) else {})
-                    desc_page_complete = bool(desc_page) and bool(str(desc_markdown or "").strip())
-                    desc_comments_complete = bool((desc_comments_ledger or {}).get("complete", False))
-                    desc_attachments_complete = bool((desc_attachments_ledger or {}).get("complete", False))
-                    descendants_pages_complete = descendants_pages_complete and desc_page_complete
-                    descendants_comments_complete = descendants_comments_complete and desc_comments_complete
-                    descendants_attachments_complete = descendants_attachments_complete and desc_attachments_complete
-                    descendants_enriched.append(
-                        {
-                            "id": desc_id,
-                            "title": (entry or {}).get("title"),
-                            "parent_id": (entry or {}).get("parent_id"),
-                            "depth": (entry or {}).get("depth"),
-                            "space": ((desc_page or {}).get("space") or {}).get("key") if isinstance((desc_page or {}).get("space"), dict) else None,
-                            "version": ((desc_page or {}).get("version") or {}).get("number") if isinstance((desc_page or {}).get("version"), dict) else None,
-                            "content_markdown": desc_markdown,
-                            "descendant_page_body_complete": desc_page_complete,
-                            "comments_loaded": int((desc_comments_ledger or {}).get("loaded", len(desc_comments or []))),
-                            "comments_total": int((desc_comments_ledger or {}).get("total", len(desc_comments or []))),
-                            "comments_complete": desc_comments_complete,
-                            "descendant_comments_complete": desc_comments_complete,
-                            "attachments_loaded": int((desc_attachments_ledger or {}).get("loaded", len(desc_attachments or []))),
-                            "attachments_total": int((desc_attachments_ledger or {}).get("total", len(desc_attachments or []))),
-                            "attachments_complete": desc_attachments_complete,
-                            "descendant_attachments_complete": desc_attachments_complete,
-                        }
-                    )
-                except Exception as desc_item_exc:
-                    descendants_pages_complete = False
-                    descendants_comments_complete = False
-                    descendants_attachments_complete = False
-                    ledger["partial_reasons"].append(f"descendant_enrich_failed:{desc_id}:{type(desc_item_exc).__name__}")
-            bundle["descendants"] = descendants_enriched
-        ledger["artifact_refs_created"] = len(artifact_refs)
-        ledger["projectable_attachments_total"] = len([a for a in attachments if can_project_to_text(_infer_attachment_media_type(a, str(a.get("title") or "")), str(a.get("title") or "")) and not _is_image_attachment(a, str(a.get("title") or ""))])
-        ledger["descendants_pages_complete"] = descendants_pages_complete
-        ledger["descendants_comments_complete"] = descendants_comments_complete
-        ledger["descendants_attachments_complete"] = descendants_attachments_complete
-        ledger["descendants_complete"] = bool(
-            ledger.get("descendants_complete", False)
-            and descendants_pages_complete
-            and descendants_comments_complete
-            and descendants_attachments_complete
-        )
-        ledger["source_tree_complete"] = bool(ledger["children_complete"] and ledger["descendants_complete"])
-        ledger["source_complete_for_generation"] = bool(
-            ledger["source_metadata_complete"]
-            and ledger["source_text_complete"]
-            and ledger["attachments_complete"]
-            and ledger["source_tree_complete"]
-        )
-        ledger["source_complete"] = bool(
-            not ledger["partial_reasons"]
-            and ledger["page_body_complete"]
-            and ledger["comments_complete"]
-            and ledger["attachments_complete"]
-            and ledger["source_tree_complete"]
-            and ledger["descendants_supported"]
-        )
-        persisted = persist_confluence_source_bundle_and_digest(
-            session_id=_session_id or "unknown_session",
-            page_id=page_id,
-            bundle=bundle,
-        )
-        from src.file_artifacts.storage import storage as artifact_storage
-        refreshed_artifact_refs = []
-        for ref in artifact_refs:
-            artifact_id = ref.get("artifact_id")
-            if not artifact_id:
-                continue
-            attach_source_refs_to_artifact(
-                artifact_id,
-                context_ref=persisted.get("context_ref"),
-                digest_ref=persisted.get("digest_ref"),
-            )
-            record = artifact_storage.get_artifact(artifact_id)
-            if record:
-                refreshed_artifact_refs.append(build_artifact_ref_dict(record))
-        if refreshed_artifact_refs:
-            bundle["artifact_refs"] = refreshed_artifact_refs
-            artifact_refs = refreshed_artifact_refs
-        manifest = {
-            "page_id": page_id,
-            "context_ref": persisted["context_ref"],
-            "digest_ref": persisted["digest_ref"],
-            "source_complete": ledger["source_complete"],
-            "source_complete_for_generation": ledger["source_complete_for_generation"],
-            "source_complete_including_binary_bodies": ledger["source_complete_including_binary_bodies"],
-            "source_metadata_complete": ledger["source_metadata_complete"],
-            "source_text_complete": ledger["source_text_complete"],
-            "source_tree_complete": ledger["source_tree_complete"],
-            "comments_loaded": f"{ledger['comments_loaded']}/{ledger['comments_total']}",
-            "attachments_loaded": f"{ledger['attachments_loaded']}/{ledger['attachments_total']}",
-            "children_loaded": f"{ledger['children_loaded']}/{ledger['children_total']}",
-            "descendants_loaded": ledger.get("descendants_loaded", 0),
-            "descendants_total": ledger.get("descendants_total", 0),
-            "descendants_supported": ledger.get("descendants_supported", False),
-            "descendants_complete": ledger.get("descendants_complete", False),
-            "source_complete_definition": ledger.get("source_complete_definition", ""),
-            "descendants_pages_complete": ledger.get("descendants_pages_complete", False),
-            "descendants_comments_complete": ledger.get("descendants_comments_complete", False),
-            "descendants_attachments_complete": ledger.get("descendants_attachments_complete", False),
-            "partial_reasons": ledger["partial_reasons"],
-            "sections": ["metadata", "content", "comments", "attachments", "children", "descendants", "raw_snapshot"],
-        }
-        return "[confluence source bundle prepared]\n" + "\n".join(
-            f"{k}: {json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v}" for k, v in manifest.items()
-        )
+        return format_confluence_source_manifest(prepared)
     except Exception as e:
         return f"Error preparing confluence source context: {e}"
 
@@ -658,22 +409,27 @@ async def confluence_get_comments(page_id: str, _session_id: Optional[str] = Non
         comments, ledger = await confluence_channel.get_all_comments_with_ledger(page_id)
         comments = comments or []
         ledger = ledger or {}
-        context_ref = put_text(
-            session_id=_session_id or "unknown_session",
-            kind="confluence_comments_bundle",
-            source_id=page_id,
-            title=f"Confluence comments {page_id}",
-            content=json.dumps({"page_id": page_id, "comments": comments}, ensure_ascii=False, indent=2),
-            metadata={"page_id": page_id, "comments_complete": bool(ledger.get("complete", False))},
-        )
-        return (
-            "[confluence comments prepared]\n"
-            f"page_id: {page_id}\n"
-            f"context_ref: {context_ref}\n"
-            f"comments_loaded: {int(ledger.get('loaded', len(comments)))}/{int(ledger.get('total', len(comments)))}\n"
-            f"comments_complete: {bool(ledger.get('complete', False))}\n"
-            "comments_preview: omitted (use context_read_ref for full comments)"
-        )
+        context_ref = None
+        if _session_id:
+            context_ref = put_text(
+                session_id=_session_id,
+                kind="confluence_comments_bundle",
+                source_id=page_id,
+                title=f"Confluence comments {page_id}",
+                content=json.dumps({"page_id": page_id, "comments": comments}, ensure_ascii=False, indent=2),
+                metadata={"page_id": page_id, "comments_complete": bool(ledger.get("complete", False))},
+            )
+        lines = [
+            "[confluence comments prepared]",
+            f"page_id: {page_id}",
+            f"context_ref: {context_ref}",
+            f"comments_loaded: {int(ledger.get('loaded', len(comments)))}/{int(ledger.get('total', len(comments)))}",
+            f"comments_complete: {bool(ledger.get('complete', False))}",
+            "comments_preview: omitted (use context_read_ref for full comments)",
+        ]
+        if not _session_id:
+            lines.append("session_scope_missing: true")
+        return "\n".join(lines)
     except Exception as e:
         return f"Error getting comments: {e}"
 
@@ -759,18 +515,22 @@ async def confluence_get_page_children(page_id: str, limit: int = 10, _session_i
         children, ledger = await confluence_channel.get_all_page_children_with_ledger(page_id, limit=max(limit, 100))
         children = children or []
         ledger = ledger or {}
-        context_ref = put_text(
-            session_id=_session_id or f"confluence-children-{page_id}",
-            kind="confluence_children_bundle",
-            source_id=page_id,
-            title=f"Confluence children {page_id}",
-            content=json.dumps({"page_id": page_id, "children": children}, ensure_ascii=False, indent=2),
-            metadata={"page_id": page_id, "children_complete": bool(ledger.get("complete", False))},
-        )
+        context_ref = None
+        if _session_id:
+            context_ref = put_text(
+                session_id=_session_id,
+                kind="confluence_children_bundle",
+                source_id=page_id,
+                title=f"Confluence children {page_id}",
+                content=json.dumps({"page_id": page_id, "children": children}, ensure_ascii=False, indent=2),
+                metadata={"page_id": page_id, "children_complete": bool(ledger.get("complete", False))},
+            )
         lines = [f"[confluence children prepared]\npage_id: {page_id}\ncontext_ref: {context_ref}"]
         lines.append(f"children_loaded: {int(ledger.get('loaded', len(children)))}/{int(ledger.get('total', len(children)))}")
         lines.append(f"children_complete: {bool(ledger.get('complete', False))}")
         lines.append("children_preview: omitted (use context_read_ref for full child list)")
+        if not _session_id:
+            lines.append("session_scope_missing: true")
         return "\n".join(lines)
     except Exception as e:
         return f"Error getting page children: {e}"

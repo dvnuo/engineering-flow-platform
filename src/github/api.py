@@ -1051,20 +1051,78 @@ async def github_create_branch(owner: str, repo: str, branch_name: str, from_bra
         return f"Error creating branch: {e}"
 
 
-async def github_get_file_content(owner: str, repo: str, path: str, branch: Optional[str] = None) -> str:
-    """Get file content from a repository."""
+async def github_get_file_content(
+    owner: str,
+    repo: str,
+    path: str,
+    branch: Optional[str] = None,
+    *,
+    _session_id: str | None = None,
+    preview: bool = True,
+) -> str:
+    """Get file content from a repository using source-bundle materialization."""
     try:
-        result = await github_channel.get_file(owner, repo, path, branch)
-        content = result.get("content", "")
-        if content:
-            import base64
-            decoded = base64.b64decode(content).decode("utf-8")
-            if len(decoded) > 10000:
-                decoded = decoded[:10000] + "\n\n... (truncated)"
-            return f"**File:** {owner}/{repo}/{path}\n\n```\n{decoded}\n```"
-        return f"No content found for {path}"
+        from src.github.file_content_service import render_github_file_manifest
+
+        return await render_github_file_manifest(
+            owner=owner,
+            repo=repo,
+            path=path,
+            branch=branch,
+            session_id=_session_id,
+            preview=preview,
+        )
     except Exception as e:
         return f"Error getting file: {e}"
+
+
+async def github_prepare_issue_context(
+    owner: str,
+    repo: str,
+    issue_number: int,
+    *,
+    _session_id: str | None = None,
+) -> str:
+    try:
+        from src.github.source_manifest import format_github_source_manifest
+        from src.github.source_service import prepare_github_issue_source
+
+        prepared = await prepare_github_issue_source(
+            owner=owner,
+            repo=repo,
+            issue_number=issue_number,
+            session_id=_session_id,
+            include_comments=True,
+            include_assets=True,
+        )
+        return format_github_source_manifest(prepared["bundle"], include_preview=True)
+    except Exception as e:
+        return f"Error preparing issue context: {e}"
+
+
+async def github_prepare_pr_context(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    *,
+    _session_id: str | None = None,
+) -> str:
+    try:
+        from src.github.source_manifest import format_github_source_manifest
+        from src.github.source_service import prepare_github_pr_source
+
+        prepared = await prepare_github_pr_source(
+            owner=owner,
+            repo=repo,
+            pull_number=pull_number,
+            session_id=_session_id,
+            include_issue_comments=True,
+            include_review_comments=True,
+            include_assets=True,
+        )
+        return format_github_source_manifest(prepared["bundle"], include_preview=True)
+    except Exception as e:
+        return f"Error preparing PR context: {e}"
 
 
 async def github_create_pull_request(
