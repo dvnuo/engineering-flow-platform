@@ -284,7 +284,7 @@ async def jira_prepare_issue_context(
             include_all_comments=include_all_comments,
             include_attachments=include_attachments,
             include_raw_snapshot=include_raw_snapshot,
-            session_id=_session_id or "unknown_session",
+            session_id=_session_id,
             attachment_body_policy="source_complete",
         )
         return format_jira_source_manifest(result)
@@ -310,21 +310,26 @@ async def jira_get_comments(issue_key: str, _session_id: Optional[str] = None) -
     comments_total = int((comment_field or {}).get("total") or len(comments)) if isinstance(comment_field, dict) else len(comments)
     comments_loaded = len(comments)
     comments_complete = comments_loaded >= comments_total
-    context_ref = put_text(
-        session_id=_session_id or "unknown_session",
-        kind="jira_comments_bundle",
-        source_id=issue_key,
-        title=f"Jira comments {issue_key}",
-        content=json.dumps({"issue_key": issue_key, "comments": comments}, ensure_ascii=False, indent=2),
-        metadata={"issue_key": issue_key, "comments_complete": comments_complete},
-    )
-    return (
-        "[jira comments bundle prepared]\n"
-        f"issue_key: {issue_key}\n"
-        f"context_ref: {context_ref}\n"
-        f"comments_loaded: {comments_loaded}/{comments_total}\n"
-        f"comments_complete: {comments_complete}"
-    )
+    context_ref = None
+    if _session_id:
+        context_ref = put_text(
+            session_id=_session_id,
+            kind="jira_comments_bundle",
+            source_id=issue_key,
+            title=f"Jira comments {issue_key}",
+            content=json.dumps({"issue_key": issue_key, "comments": comments}, ensure_ascii=False, indent=2),
+            metadata={"issue_key": issue_key, "comments_complete": comments_complete},
+        )
+    lines = [
+        "[jira comments bundle prepared]",
+        f"issue_key: {issue_key}",
+        f"context_ref: {context_ref}",
+        f"comments_loaded: {comments_loaded}/{comments_total}",
+        f"comments_complete: {comments_complete}",
+    ]
+    if not _session_id:
+        lines.append("session_scope_missing: true")
+    return "\n".join(lines)
 
 
 async def jira_add_comment(

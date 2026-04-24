@@ -7,9 +7,9 @@ from typing import Any, Dict, List
 
 from src.agents.executor import SkillResult, skill
 from src.agents.llm import LLMClient
+from src.confluence.source_service import format_confluence_source_manifest, prepare_confluence_page_source
 from src.github import github_channel
-from src.jira import jira_get_issue, jira_get_issue_by_url
-from src.confluence import confluence_get_page, confluence_get_page_by_url
+from src.jira.source_service import format_jira_source_manifest, prepare_jira_issue_source
 from src.runtime.requirement_bundle_assets import (
     RequirementBundleError,
     load_bundle_manifest,
@@ -43,12 +43,19 @@ async def _load_jira_sources(issue_keys: List[str], *, session_id: str | None = 
     items: List[Dict[str, Any]] = []
     for source in issue_keys:
         is_url = "://" in source and "/browse/" in source.lower()
-        rendered = await (
-            jira_get_issue_by_url(source, _session_id=session_id)
-            if is_url
-            else jira_get_issue(source, _session_id=session_id)
+        prepared = await prepare_jira_issue_source(source, session_id=session_id)
+        items.append(
+            {
+                "input": source,
+                "kind": "url" if is_url else "issue_key",
+                "source_kind": "jira_issue",
+                "resolved": {"issue_key": prepared.issue_key},
+                "content": format_jira_source_manifest(prepared),
+                "artifact_refs": prepared.bundle.get("artifact_refs") or [],
+                "context_ref": prepared.manifest.get("context_ref"),
+                "digest_ref": prepared.manifest.get("digest_ref"),
+            }
         )
-        items.append({"input": source, "kind": "url" if is_url else "issue_key", "content": str(rendered or "")})
     return items
 
 
@@ -56,12 +63,20 @@ async def _load_confluence_sources(page_ids: List[str], *, session_id: str | Non
     items: List[Dict[str, Any]] = []
     for source in page_ids:
         is_url = "://" in source
-        rendered = await (
-            confluence_get_page_by_url(source, _session_id=session_id)
-            if is_url
-            else confluence_get_page(source, _session_id=session_id)
+        prepared = await prepare_confluence_page_source(source, session_id=session_id)
+        manifest = prepared.get("manifest") or {}
+        items.append(
+            {
+                "input": source,
+                "kind": "url" if is_url else "page_id",
+                "source_kind": "confluence_page",
+                "resolved": {"page_id": prepared.get("page_id")},
+                "content": format_confluence_source_manifest(prepared),
+                "artifact_refs": prepared.get("artifact_refs") or [],
+                "context_ref": manifest.get("context_ref"),
+                "digest_ref": manifest.get("digest_ref"),
+            }
         )
-        items.append({"input": source, "kind": "url" if is_url else "page_id", "content": str(rendered or "")})
     return items
 
 
