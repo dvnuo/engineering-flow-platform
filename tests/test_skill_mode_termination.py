@@ -51,6 +51,29 @@ def test_direct_skill_prompt_no_clear_switch_confirmation_bias():
     blocks = build_skill_prompt_blocks(skill)
     assert "ask whether to clear/switch" not in blocks.system_rules.lower()
     assert "without asking for switch permission" in blocks.system_rules
+    assert "continue current skill or switch to the new request" not in blocks.system_rules
+
+
+def test_direct_skill_prompt_always_ask_conflict_policy_has_no_switching_contradiction():
+    from src.skills.runtime import build_skill_prompt_blocks
+
+    skill = SimpleNamespace(
+        name="direct-skill",
+        description="Direct skill",
+        path="",
+        tools=[],
+        task_tools=[],
+        strategy=[],
+        body="Do the thing",
+        execution_style="direct",
+        planning_mode="auto",
+        staging_mode="auto",
+        active_skill_conflict_policy="always_ask",
+    )
+    blocks = build_skill_prompt_blocks(skill)
+    assert "continue current skill or switch to the new request" in blocks.system_rules
+    assert "without asking for switch permission" not in blocks.system_rules
+    assert "allow switching/leaving this skill instead of forcing confirmation" not in blocks.system_rules
 
 
 @pytest.mark.asyncio

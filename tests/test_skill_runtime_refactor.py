@@ -123,6 +123,25 @@ Use compact instructions.
     assert skill.task_tools == []
 
 
+def test_skill_registry_parses_frontmatter_active_skill_conflict_policy(tmp_path):
+    skill_file = tmp_path / "skill.md"
+    skill_file.write_text(
+        """---
+name: runtime-test
+description: runtime test skill
+active_skill_conflict_policy: always_ask
+---
+# Body Title
+Use compact instructions.
+""",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir=str(tmp_path / "none"))
+    skill = registry._load_skill_file(skill_file)
+    assert skill is not None
+    assert skill.active_skill_conflict_policy == "always_ask"
+
+
 def test_parse_markdown_frontmatter_with_body_horizontal_rules(tmp_path):
     registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir=str(tmp_path / "none"))
     frontmatter, body = registry._parse_markdown_frontmatter(
@@ -596,6 +615,7 @@ def test_build_skill_runtime_config_skill_omission_uses_response_flow_defaults(m
             "response_flow": {
                 "default_skill_execution_style": "stepwise",
                 "ask_user_policy": "permissive",
+                "active_skill_conflict_policy": "always_ask",
             }
         },
     )
@@ -612,10 +632,12 @@ def test_build_skill_runtime_config_skill_omission_uses_response_flow_defaults(m
         path="",
         execution_style="",
         ask_user_policy="",
+        active_skill_conflict_policy="",
     )
     runtime_config = build_skill_runtime_config(skill)
     assert runtime_config.execution_style == "stepwise"
     assert runtime_config.ask_user_policy == "permissive"
+    assert runtime_config.active_skill_conflict_policy == "always_ask"
 
 
 def test_build_skill_runtime_config_skill_explicit_values_override_response_flow_defaults(monkeypatch):
@@ -628,6 +650,7 @@ def test_build_skill_runtime_config_skill_explicit_values_override_response_flow
             "response_flow": {
                 "default_skill_execution_style": "stepwise",
                 "ask_user_policy": "permissive",
+                "active_skill_conflict_policy": "auto_switch_direct",
             }
         },
     )
@@ -644,10 +667,12 @@ def test_build_skill_runtime_config_skill_explicit_values_override_response_flow
         path="",
         execution_style="direct",
         ask_user_policy="blocked_only",
+        active_skill_conflict_policy="always_ask",
     )
     runtime_config = build_skill_runtime_config(skill)
     assert runtime_config.execution_style == "direct"
     assert runtime_config.ask_user_policy == "blocked_only"
+    assert runtime_config.active_skill_conflict_policy == "always_ask"
 
 
 def test_build_skill_tool_denied_result_contains_policy():

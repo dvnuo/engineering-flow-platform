@@ -108,6 +108,7 @@ planning_mode: auto   # auto|required|off
 staging_mode: auto    # auto|required|off
 execution_style: direct  # direct|stepwise
 ask_user_policy: blocked_only  # blocked_only|permissive
+active_skill_conflict_policy: auto_switch_direct  # auto_switch_direct|always_ask
 ---
 ```
 
@@ -117,8 +118,9 @@ ask_user_policy: blocked_only  # blocked_only|permissive
 - `staging_mode`: `required` forces staged/phase output; `off` disables staged output; `auto` follows runtime policy.
 - `execution_style`: `direct` completes in one turn when possible; `stepwise` keeps one-step progression.
 - `ask_user_policy`: `blocked_only` asks only for truly blocking inputs; `permissive` allows broader clarification.
+- `active_skill_conflict_policy`: `auto_switch_direct` lets direct active skills leave/switch immediately on a clear new request; `always_ask` keeps direct skill context and asks whether to continue current skill or switch.
 
-When `execution_style` or `ask_user_policy` is omitted from skill frontmatter, runtime falls back to `llm.response_flow.default_skill_execution_style` and `llm.response_flow.ask_user_policy` respectively. If the skill explicitly sets either field, the skill value takes precedence over global defaults.
+When `execution_style`, `ask_user_policy`, or `active_skill_conflict_policy` is omitted from skill frontmatter, runtime falls back to `llm.response_flow.default_skill_execution_style`, `llm.response_flow.ask_user_policy`, and `llm.response_flow.active_skill_conflict_policy` respectively. If the skill explicitly sets any of these fields, the skill value takes precedence over global defaults.
 
 ## Development Guide
 

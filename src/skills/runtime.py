@@ -390,23 +390,33 @@ def build_skill_prompt_blocks(
     direct_mode = resolved_execution_style == "direct" and resolved_planning_mode != "required" and resolved_staging_mode != "required"
     if direct_mode and resolved_conflict_policy == "always_ask":
         continuity_rule = (
+            "For direct skills, continue this active skill when the user clearly continues the same request."
+        )
+        switching_rule = (
             "For direct skills with active_skill_conflict_policy=always_ask, do not auto-switch on a clear new request. "
             "Keep this active skill context and ask the user to choose: continue current skill or switch to the new request. "
             "Proceed only after the user clearly confirms continue/switch."
         )
     elif direct_mode:
         continuity_rule = (
+            "For direct skills, continue this active skill when the user clearly continues the same request."
+        )
+        switching_rule = (
             "For direct skills, if the user gives a clear new request, treat that as leaving this prior skill and handle the new request directly without asking for switch permission."
         )
     else:
         continuity_rule = (
-            "For stepwise/required-plan/required-staging skills, continue the flow when the user clearly continues; only ask continue-vs-switch if the latest user turn is genuinely ambiguous."
+            "For stepwise/required-plan/required-staging skills, continue the flow when the user clearly continues."
+        )
+        switching_rule = (
+            "For stepwise/required-plan/required-staging skills, allow switching/leaving when the latest request is clearly different; "
+            "only ask continue-vs-switch if the latest user turn is genuinely ambiguous."
         )
     system_rules = (
         f"Active skill: {skill.name}.\n"
         "Stay within the skill's instructions, constraints, output contract, reference usage, and allowed tool policy while this skill is active.\n"
         f"{continuity_rule}\n"
-        "If the user's latest request is clearly different, allow switching/leaving this skill instead of forcing confirmation.\n"
+        f"{switching_rule}\n"
         "Do not invent tool results, references, or external facts that were not provided.\n"
         f"Runtime policy: only use allowed tools ({allowed_tools_text}).\n"
         f"Task-capable tools: {task_tools_text}."
