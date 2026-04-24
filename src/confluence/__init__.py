@@ -100,6 +100,7 @@ def _is_image_attachment(att: dict, filename: str) -> bool:
 async def _process_confluence_attachments(
     page_id: str,
     channel: Optional[ConfluenceChannel] = None,
+    session_id: Optional[str] = None,
 ) -> str:
     """Process page attachments and return for LLM."""
     channel = channel or confluence_channel
@@ -141,13 +142,22 @@ async def _process_confluence_attachments(
             try:
                 result = await download_and_process_attachment(
                     url=download_url,
-                    session_id=None,
+                    session_id=session_id,
                     options={
                         "include_image_data": True,
                         "prefer_text_for_images": True,
                         "vision_enabled": False,
                     },
                     auth_header=auth_header,
+                    source_type="confluence",
+                    source_kind="page_attachment",
+                    source_locator=f"{page_id}:{att.get('id')}",
+                    provider_metadata={"page_id": page_id, "attachment_id": att.get("id"), "filename": filename},
+                    persist_text_ref_session_id=session_id,
+                    persist_text_ref_kind="confluence_attachment_text",
+                    persist_text_ref_source_id=f"{page_id}:{att.get('id')}",
+                    persist_text_ref_title=f"Confluence attachment text {filename}",
+                    persist_text_ref_metadata={"page_id": page_id, "attachment_id": att.get("id"), "filename": filename},
                 )
 
                 if result.content_format == "text" and result.content:
@@ -169,6 +179,11 @@ async def _process_confluence_attachments(
                         results.append(f"- **{filename}** ({media_type}, {size} bytes)")
                     else:
                         results.append(f"- **{filename}** ({media_type})")
+                results.append(f"  artifact_id: {getattr(result, 'artifact_id', None)}")
+                results.append(f"  text_ref: {getattr(result, 'text_ref', None)}")
+                results.append(f"  parse_status: {getattr(result, 'parse_status', None)}")
+                if getattr(result, "parse_error", None):
+                    results.append(f"  parse_error: {getattr(result, 'parse_error')}")
             except Exception as e:
                 logger.warning(f"Failed to process {filename}: {e}")
                 if size:
@@ -196,11 +211,12 @@ async def _render_page_with_attachments(
     channel: ConfluenceChannel,
     format: str = "markdown",
     max_chars: Optional[int] = None,
+    session_id: Optional[str] = None,
 ) -> str:
     """Render page content plus processed attachments using a specific channel."""
     adapter = ConfluenceFormatAdapter(channel)
     page_content = await adapter.get_page(page_id, format=format, max_chars=max_chars)
-    attachment_info = await _process_confluence_attachments(page_id, channel=channel)
+    attachment_info = await _process_confluence_attachments(page_id, channel=channel, session_id=session_id)
     return page_content + ("\n" + attachment_info if attachment_info else "")
 
 async def confluence_get_page(
@@ -230,6 +246,7 @@ async def confluence_get_page(
             channel=confluence_channel,
             format=format,
             max_chars=max_chars,
+            session_id=_session_id,
         )
     except Exception as e:
         return f"Error getting page: {e}"
@@ -291,6 +308,7 @@ async def confluence_get_page_by_url(
             channel=instance_channel,
             format=format,
             max_chars=max_chars,
+            session_id=_session_id,
         )
     except Exception as e:
         return f"Error getting page: {e}"

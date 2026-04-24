@@ -27,6 +27,7 @@ from .exporter import jira_export_issues_to_markdown
 from src.source_context import persist_jira_source_bundle_and_digest
 from src.context_blob_store import put_text
 from .source_service import prepare_jira_issue_source, format_jira_source_manifest
+from .attachment_preview import render_issue_attachment_previews
 
 __all__ = [
     "JiraChannel", 
@@ -66,50 +67,11 @@ def _get_adapter() -> JiraFormatAdapter:
 
 async def _process_issue_attachments(issue_key: str, fields: dict, *, session_id: Optional[str] = None) -> str:
     """Process issue attachments and return them for LLM."""
-    attachments = fields.get("attachment", [])
-    if not attachments:
-        return ""
-    
-    logger.info(f"Processing {len(attachments)} attachments for {issue_key}")
-    
-    results = []
-    for i, att in enumerate(attachments[:5]):  # Max 5 attachments
-        filename = att.get("filename", "unknown")
-        mime_type = att.get("mimeType", "application/octet-stream")
-        size = att.get("size", 0)
-        
-        content_url = att.get("content", "")
-        
-        if content_url:
-            try:
-                # Get auth header from Jira channel
-                auth_header = jira_channel._auth_header if jira_channel.is_configured() else None
-                
-                result = await download_and_process_attachment(
-                    url=content_url,
-                    session_id=session_id,
-                    options={"include_image_data": True},
-                    auth_header=auth_header
-                )
-                
-                if result.content_format == "base64":
-                    results.append(f"- **{filename}** (image, {size} bytes)")
-                    results.append(f"  {result.content}")
-                elif result.content_format == "text" and result.content:
-                    preview = result.content[:500]
-                    results.append(f"- **{filename}** (text, {size} bytes)")
-                    results.append(f"  {preview}")
-                else:
-                    results.append(f"- **{filename}** ({mime_type}, {size} bytes)")
-            except Exception as e:
-                logger.warning(f"Failed to process attachment {filename}: {e}")
-                results.append(f"- **{filename}** ({mime_type}, {size} bytes) - [processing failed]")
-        else:
-            results.append(f"- **{filename}** ({mime_type}, {size} bytes)")
-    
-    if results:
-        return "**Attachments:**\n" + "\n".join(results) + "\n"
-    return ""
+    return await render_issue_attachment_previews(
+        issue_key,
+        fields.get("attachment", []),
+        session_id=session_id,
+    )
 
 async def jira_get_issue(
     issue_key: str,
