@@ -126,10 +126,14 @@ def parse_github_doc_ref(raw: str, default_ref: BundleRef) -> GitHubDocRef:
 
 
 
-async def read_github_doc_text(raw: str, default_ref: BundleRef) -> tuple[GitHubDocRef, str]:
+async def read_github_doc_text(
+    raw: str,
+    default_ref: BundleRef,
+    session_id: str | None = None,
+) -> tuple[GitHubDocRef, str]:
     doc_ref: GitHubDocRef | None = None
     try:
-        prepared = await prepare_github_doc_source(raw, default_ref)
+        prepared = await prepare_github_doc_source(raw, default_ref, session_id=session_id)
         doc_ref = prepared["doc_ref"]
         return prepared["doc_ref"], prepared["content_text"]
     except RequirementBundleError as exc:
@@ -137,12 +141,16 @@ async def read_github_doc_text(raw: str, default_ref: BundleRef) -> tuple[GitHub
         raise
 
 
-async def prepare_github_doc_source(raw: str, default_ref: BundleRef) -> dict:
+async def prepare_github_doc_source(
+    raw: str,
+    default_ref: BundleRef,
+    session_id: str | None = None,
+) -> dict:
     input_kind = "url" if "://" in str(raw or "") else "repo_relative_path"
     logger.debug("Prepare GitHub doc source start | input_kind=%s", input_kind)
     doc_ref: GitHubDocRef | None = None
     try:
-        prepared = await prepare_github_file_source(raw, default_ref)
+        prepared = await prepare_github_file_source(raw, default_ref, session_id=session_id)
         doc_ref = prepared["doc_ref"]
         bundle = prepared["bundle"]
         content_text = str(bundle.get("content_markdown") or "").strip()

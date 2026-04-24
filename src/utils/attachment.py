@@ -11,8 +11,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
 from src.file_artifacts import can_project_to_text
-from src.context_blob_store import put_text
-from src.file_artifacts.service import attach_text_ref_to_artifact, register_existing_file_as_artifact, update_projection_from_parse_result
+from src.file_artifacts.service import register_existing_file_as_artifact, update_projection_from_parse_result
 from src.file_artifacts.storage import storage as artifact_storage
 from .file_parser import (
     save_uploaded_file,
@@ -101,27 +100,19 @@ async def download_and_process_attachment(
                 preview = full_text[:max_text_chars]
                 content = preview
                 content_format = "text"
-                updated = update_projection_from_parse_result(artifact.artifact_id, parsed, preview=full_text[:2000])
+                updated = update_projection_from_parse_result(
+                    artifact.artifact_id,
+                    parsed,
+                    preview=full_text[:2000],
+                    persist_text_ref_session_id=persist_text_ref_session_id,
+                    persist_text_ref_kind=persist_text_ref_kind,
+                    persist_text_ref_source_id=persist_text_ref_source_id,
+                    persist_text_ref_title=persist_text_ref_title,
+                    persist_text_ref_metadata=persist_text_ref_metadata,
+                )
                 if updated:
                     artifact = updated
-                if (
-                    persist_text_ref_session_id
-                    and persist_text_ref_kind
-                    and persist_text_ref_source_id
-                    and persist_text_ref_title
-                    and full_text
-                ):
-                    text_ref = put_text(
-                        session_id=persist_text_ref_session_id,
-                        kind=persist_text_ref_kind,
-                        source_id=persist_text_ref_source_id,
-                        title=persist_text_ref_title,
-                        content=full_text,
-                        metadata=persist_text_ref_metadata or {},
-                    )
-                    updated_refs = attach_text_ref_to_artifact(artifact.artifact_id, text_ref, full_markdown_chars=len(full_text))
-                    if updated_refs:
-                        artifact = updated_refs
+                text_ref = artifact.text_ref
                 projection_kind = artifact.projection_kind
             else:
                 content = f"[{content_type}: {filename}]"

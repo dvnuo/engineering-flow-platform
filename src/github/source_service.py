@@ -57,7 +57,22 @@ async def prepare_github_file_source(raw: str, default_ref, *, session_id: str |
             parsed = await parse_file(file_meta.file_id)
             if getattr(parsed, "success", False):
                 content_markdown = parsed.markdown or ""
-                update_projection_from_parse_result(artifact.artifact_id, parsed, preview=content_markdown[:2000])
+                update_projection_from_parse_result(
+                    artifact.artifact_id,
+                    parsed,
+                    preview=content_markdown[:2000],
+                    persist_text_ref_session_id=session_id,
+                    persist_text_ref_kind="github_file_text",
+                    persist_text_ref_source_id=f"{doc_ref.owner}/{doc_ref.repo}:{doc_ref.path}@{doc_ref.branch}",
+                    persist_text_ref_title=f"GitHub file {doc_ref.path}",
+                    persist_text_ref_metadata={
+                        "owner": doc_ref.owner,
+                        "repo": doc_ref.repo,
+                        "branch": doc_ref.branch,
+                        "path": doc_ref.path,
+                        "sha": file_data.get("sha"),
+                    },
+                )
                 source_complete = True
             else:
                 parse_error = str(getattr(parsed, "error", "parse failed"))
@@ -112,18 +127,25 @@ async def prepare_github_file_source(raw: str, default_ref, *, session_id: str |
             "branch": doc_ref.branch,
         },
     }
-    persisted = persist_github_source_bundle_and_digest(
-        session_id=session_id or "unknown_session",
-        source_id=f"{doc_ref.owner}/{doc_ref.repo}:{doc_ref.path}@{doc_ref.branch}",
-        bundle=bundle,
-    )
-    bundle["context_ref"] = persisted["context_ref"]
-    bundle["digest_ref"] = persisted["digest_ref"]
-    attach_source_refs_to_artifact(
-        artifact.artifact_id,
-        context_ref=bundle["context_ref"],
-        digest_ref=bundle["digest_ref"],
-    )
+    persisted: dict[str, Any] = {}
+    if session_id:
+        persisted = persist_github_source_bundle_and_digest(
+            session_id=session_id,
+            source_id=f"{doc_ref.owner}/{doc_ref.repo}:{doc_ref.path}@{doc_ref.branch}",
+            bundle=bundle,
+        )
+        bundle["context_ref"] = persisted["context_ref"]
+        bundle["digest_ref"] = persisted["digest_ref"]
+        attach_source_refs_to_artifact(
+            artifact.artifact_id,
+            context_ref=bundle["context_ref"],
+            digest_ref=bundle["digest_ref"],
+        )
+    else:
+        bundle["context_ref"] = None
+        bundle["digest_ref"] = None
+        if "session_scope_missing" not in partial_reasons:
+            partial_reasons.append("session_scope_missing")
     refreshed = artifact_storage.get_artifact(artifact.artifact_id)
     if refreshed:
         bundle["artifact_refs"] = [build_artifact_ref_dict(refreshed)]

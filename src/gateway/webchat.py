@@ -2948,7 +2948,20 @@ async def api_files_parse(request: web.Request) -> web.Response:
             saved_chunks += 1
 
         preview = (result.markdown or '')[:2000]
-        update_projection_from_parse_result(file_id, result, preview=preview)
+        update_projection_from_parse_result(
+            file_id,
+            result,
+            preview=preview,
+            persist_text_ref_session_id=session_id,
+            persist_text_ref_kind="chat_uploaded_file_text",
+            persist_text_ref_source_id=file_id,
+            persist_text_ref_title=f"Chat uploaded file {metadata.original_filename}",
+            persist_text_ref_metadata={
+                "file_id": file_id,
+                "filename": metadata.original_filename,
+                "content_type": metadata.content_type,
+            },
+        )
 
         if session_id:
             file_context_storage.update_file_status(

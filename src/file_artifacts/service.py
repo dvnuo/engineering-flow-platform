@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from src.context_blob_store import put_text
 from src.utils.file_parser import get_metadata
 
 from .capabilities import infer_projection_kind
@@ -53,7 +54,44 @@ def bind_artifact_to_source_bundle(artifact_id: str, bundle_scope_id: str, role:
     return storage.bind_artifact(ArtifactBinding(artifact_id=artifact_id, scope_type="source_bundle", scope_id=bundle_scope_id, role=role))
 
 
-def update_projection_from_parse_result(artifact_id: str, parse_result, preview: Optional[str] = None) -> Optional[ArtifactRecord]:
+def persist_artifact_text_ref(
+    *,
+    artifact_id: str,
+    markdown: str,
+    session_id: str | None,
+    kind: str | None,
+    source_id: str | None,
+    title: str | None,
+    metadata: dict | None,
+) -> Optional[ArtifactRecord]:
+    if not (session_id and kind and source_id and title and markdown):
+        return None
+    text_ref = put_text(
+        session_id=session_id,
+        kind=kind,
+        source_id=source_id,
+        title=title,
+        content=markdown,
+        metadata=metadata or {},
+    )
+    return storage.update_artifact_references(
+        artifact_id,
+        text_ref=text_ref,
+        full_markdown_chars=len(markdown),
+    )
+
+
+def update_projection_from_parse_result(
+    artifact_id: str,
+    parse_result,
+    preview: Optional[str] = None,
+    *,
+    persist_text_ref_session_id: str | None = None,
+    persist_text_ref_kind: str | None = None,
+    persist_text_ref_source_id: str | None = None,
+    persist_text_ref_title: str | None = None,
+    persist_text_ref_metadata: dict | None = None,
+) -> Optional[ArtifactRecord]:
     markdown = getattr(parse_result, "markdown", "") or ""
     block_count = len(getattr(parse_result, "blocks", []) or [])
     projection_kind = infer_projection_kind(
@@ -71,6 +109,15 @@ def update_projection_from_parse_result(artifact_id: str, parse_result, preview:
     storage.update_artifact_references(
         artifact_id,
         full_markdown_chars=len(markdown),
+    )
+    persist_artifact_text_ref(
+        artifact_id=artifact_id,
+        markdown=markdown,
+        session_id=persist_text_ref_session_id,
+        kind=persist_text_ref_kind,
+        source_id=persist_text_ref_source_id,
+        title=persist_text_ref_title,
+        metadata=persist_text_ref_metadata,
     )
     return storage.update_artifact_status(artifact_id, parse_status="completed")
 

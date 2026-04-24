@@ -11,7 +11,7 @@ async def test_load_github_doc_sources_returns_real_refs(monkeypatch):
         branch = "main"
         path = "docs/spec.md"
 
-    async def _fake_prepare(raw, default_ref):
+    async def _fake_prepare(raw, default_ref, session_id=None):
         return {
             "doc_ref": _DocRef(),
             "bundle": {},
@@ -26,6 +26,7 @@ async def test_load_github_doc_sources_returns_real_refs(monkeypatch):
     out = await _load_github_doc_sources(
         {"repo": "acme/repo", "path": "bundles/a", "branch": "main"},
         ["docs/spec.md"],
+        session_id="s1",
     )
 
     assert out[0]["content"] == "hello"

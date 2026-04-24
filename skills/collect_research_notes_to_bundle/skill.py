@@ -34,6 +34,7 @@ async def collect_research_notes_to_bundle(
     bundle_ref: Dict[str, Any],
     sources: Dict[str, Any] | None = None,
     manifest_ref: Dict[str, Any] | None = None,
+    _session_id: str | None = None,
 ) -> SkillResult:
     try:
         if not github_channel.is_configured():
@@ -59,8 +60,8 @@ async def collect_research_notes_to_bundle(
                 error = f"{error}; figma is ignored in MVP"
             return SkillResult(success=False, error=error)
 
-        jira_payload = await _load_jira_sources(jira_ids) if jira_ids else []
-        confluence_payload = await _load_confluence_sources(confluence_ids) if confluence_ids else []
+        jira_payload = await _load_jira_sources(jira_ids, session_id=_session_id) if jira_ids else []
+        confluence_payload = await _load_confluence_sources(confluence_ids, session_id=_session_id) if confluence_ids else []
         github_payload = (
             await _load_github_doc_sources(
                 {
@@ -69,6 +70,7 @@ async def collect_research_notes_to_bundle(
                     "branch": target_ref.branch,
                 },
                 github_docs,
+                session_id=_session_id,
             )
             if github_docs
             else []
