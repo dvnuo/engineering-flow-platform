@@ -64,6 +64,81 @@ def test_stepwise_active_skill_contract_clear_continuation_keeps_skill():
     assert core._should_continue_existing_active_skill(contract, "next", registry) is True
 
 
+def test_stepwise_active_skill_contract_clear_new_request_does_not_continue():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "active",
+        "execution_style": "stepwise",
+        "planning_mode": "required",
+        "staging_mode": "required",
+    }
+    registry = type("Registry", (), {"match_skill": lambda self, message: []})()
+    assert core._should_continue_existing_active_skill(contract, "write a release note", registry) is False
+
+
+def test_stepwise_active_skill_short_independent_request_does_not_continue():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "active",
+        "execution_style": "stepwise",
+        "planning_mode": "required",
+        "staging_mode": "required",
+    }
+    registry = type("Registry", (), {"match_skill": lambda self, message: []})()
+    assert core._should_continue_existing_active_skill(contract, "review this PR", registry) is False
+
+
+def test_stepwise_active_skill_short_independent_request_in_chinese_does_not_continue():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "active",
+        "execution_style": "stepwise",
+        "planning_mode": "required",
+        "staging_mode": "required",
+    }
+    registry = type("Registry", (), {"match_skill": lambda self, message: []})()
+    assert core._should_continue_existing_active_skill(contract, "写周报", registry) is False
+
+
+def test_stepwise_active_skill_same_skill_rematch_continues_without_explicit_continue():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "active",
+        "execution_style": "stepwise",
+        "planning_mode": "required",
+        "staging_mode": "required",
+    }
+    matched = [type("Skill", (), {"name": "alpha"})()]
+    registry = type("Registry", (), {"match_skill": lambda self, message: matched})()
+    assert core._should_continue_existing_active_skill(contract, "collect more details", registry) is True
+
+
+def test_stepwise_waiting_user_answer_fragment_continues_but_standalone_request_does_not():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "waiting_user",
+        "execution_mode": "waiting_user",
+        "transition": "ask_user",
+        "pending_question": "Which platform?",
+        "execution_style": "stepwise",
+        "planning_mode": "required",
+        "staging_mode": "required",
+    }
+    registry = type("Registry", (), {"match_skill": lambda self, message: []})()
+    assert core._should_continue_existing_active_skill(contract, "Android 14", registry) is True
+    assert core._should_continue_existing_active_skill(contract, "fix login bug", registry) is False
+
+
 def test_stepwise_active_skill_contract_yields_when_new_skill_matches():
     from src.agents import core
 
@@ -895,6 +970,105 @@ async def test_output_controller_generation_done_requires_completion_criteria():
         latest_user_text="continue",
     )
     assert diag2.get("generation_done") is True
+
+
+@pytest.mark.asyncio
+async def test_output_controller_clears_stale_staged_generation_on_independent_new_request():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "ok", "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {"budget": {}}
+    _, first_diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "stage", "tools": []},
+        session_id="s-stale-staged",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="one file at a time",
+    )
+    assert first_diag.get("generation_mode") == "staged"
+
+    _, second_diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "normal", "tools": []},
+        session_id="s-stale-staged",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="what is 2+2?",
+    )
+    assert second_diag.get("generation_mode") != "staged"
+    assert second_diag.get("guard_applied") is False
+    assert second_diag.get("generation", {}).get("generation_mode") != "staged"
+    assert state.get("budget", {}).get("generation_mode") != "staged"
+
+
+@pytest.mark.asyncio
+async def test_output_controller_completed_staged_generation_does_not_bind_future_new_request():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "done", "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {
+        "budget": {"generation_mode": "staged", "current_generation_phase": "complete"},
+        "generation": {
+            "generation_mode": "staged",
+            "current_generation_phase": "complete",
+            "generation_done": True,
+            "generated_artifact_refs": ["ctx://old"],
+        },
+    }
+
+    _, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "normal", "tools": []},
+        session_id="s-complete-staged",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="write a short summary",
+    )
+    assert diag.get("generation_mode") != "staged"
+    assert state.get("generation", {}).get("generation_mode") != "staged"
+    assert state.get("budget", {}).get("generation_mode") != "staged"
+
+
+@pytest.mark.asyncio
+async def test_output_controller_new_staged_request_starts_fresh_manifest_after_old_staged_flow():
+    from src.runtime.output_controller import call_llm_with_output_control
+
+    class _Client:
+        async def responses(self, **kwargs):
+            return {"content": "manifest output", "tool_calls": [], "function_calls": [], "usage": {}}
+
+    state = {
+        "budget": {"generation_mode": "staged", "current_generation_phase": "phase_3"},
+        "generation": {
+            "generation_mode": "staged",
+            "current_generation_phase": "phase_3",
+            "next_phase": "phase_4",
+            "generated_artifact_refs": ["ctx://old-ref"],
+            "generated_artifact_ref_count": 1,
+            "generated_artifacts_by_phase": {"phase_3": ["ctx://old-ref"]},
+        },
+    }
+
+    _, diag = await call_llm_with_output_control(
+        llm_client=_Client(),
+        llm_kwargs={"input_items": [], "system_prompt": "staged again", "tools": []},
+        session_id="s-new-staged",
+        stage="tool_loop",
+        context_state=state,
+        latest_user_text="phase by phase",
+    )
+    generation = diag.get("generation", {})
+    assert diag.get("generation_mode") == "staged"
+    assert generation.get("current_generation_phase") == "manifest"
+    assert generation.get("generated_artifact_refs") == []
+    assert generation.get("generated_artifacts_by_phase") == {}
 
 
 @pytest.mark.asyncio

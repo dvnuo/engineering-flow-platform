@@ -48,6 +48,7 @@ class Skill:
     staging_mode: str = "auto"
     execution_style: str = ""
     ask_user_policy: str = ""
+    active_skill_conflict_policy: str = ""
 
     # Compiled patterns for fast matching
     trigger_patterns: List[re.Pattern] = field(default_factory=list)
@@ -79,6 +80,7 @@ class Skill:
             staging_mode=str(data.get("staging_mode", "auto") or "auto"),
             execution_style=str(data.get("execution_style", "") or ""),
             ask_user_policy=str(data.get("ask_user_policy", "") or ""),
+            active_skill_conflict_policy=str(data.get("active_skill_conflict_policy", "") or ""),
             trigger_patterns=patterns,
         )
 

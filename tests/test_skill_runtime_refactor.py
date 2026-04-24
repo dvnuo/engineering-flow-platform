@@ -123,6 +123,25 @@ Use compact instructions.
     assert skill.task_tools == []
 
 
+def test_skill_registry_parses_frontmatter_active_skill_conflict_policy(tmp_path):
+    skill_file = tmp_path / "skill.md"
+    skill_file.write_text(
+        """---
+name: runtime-test
+description: runtime test skill
+active_skill_conflict_policy: always_ask
+---
+# Body Title
+Use compact instructions.
+""",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir=str(tmp_path / "none"))
+    skill = registry._load_skill_file(skill_file)
+    assert skill is not None
+    assert skill.active_skill_conflict_policy == "always_ask"
+
+
 def test_parse_markdown_frontmatter_with_body_horizontal_rules(tmp_path):
     registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir=str(tmp_path / "none"))
     frontmatter, body = registry._parse_markdown_frontmatter(
@@ -596,6 +615,7 @@ def test_build_skill_runtime_config_skill_omission_uses_response_flow_defaults(m
             "response_flow": {
                 "default_skill_execution_style": "stepwise",
                 "ask_user_policy": "permissive",
+                "active_skill_conflict_policy": "always_ask",
             }
         },
     )
@@ -612,10 +632,12 @@ def test_build_skill_runtime_config_skill_omission_uses_response_flow_defaults(m
         path="",
         execution_style="",
         ask_user_policy="",
+        active_skill_conflict_policy="",
     )
     runtime_config = build_skill_runtime_config(skill)
     assert runtime_config.execution_style == "stepwise"
     assert runtime_config.ask_user_policy == "permissive"
+    assert runtime_config.active_skill_conflict_policy == "always_ask"
 
 
 def test_build_skill_runtime_config_skill_explicit_values_override_response_flow_defaults(monkeypatch):
@@ -628,6 +650,7 @@ def test_build_skill_runtime_config_skill_explicit_values_override_response_flow
             "response_flow": {
                 "default_skill_execution_style": "stepwise",
                 "ask_user_policy": "permissive",
+                "active_skill_conflict_policy": "auto_switch_direct",
             }
         },
     )
@@ -644,10 +667,12 @@ def test_build_skill_runtime_config_skill_explicit_values_override_response_flow
         path="",
         execution_style="direct",
         ask_user_policy="blocked_only",
+        active_skill_conflict_policy="always_ask",
     )
     runtime_config = build_skill_runtime_config(skill)
     assert runtime_config.execution_style == "direct"
     assert runtime_config.ask_user_policy == "blocked_only"
+    assert runtime_config.active_skill_conflict_policy == "always_ask"
 
 
 def test_build_skill_tool_denied_result_contains_policy():
@@ -691,7 +716,10 @@ async def test_matched_skill_does_not_route_to_legacy_skill_mode(monkeypatch, ba
         SimpleNamespace(_initialized=True, match_skill=lambda *_: [matched_skill], get_skill_runtime_config=lambda s, globally_allowed_tool_names=None: build_skill_runtime_config(s, globally_allowed_tool_names=globally_allowed_tool_names)),
     )
 
+    captured_system_prompts = []
+
     async def fake_responses(**kwargs):
+        captured_system_prompts.append(kwargs.get("system_prompt", ""))
         return {"content": "done", "function_calls": [], "usage": {}}
 
     monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
@@ -707,6 +735,53 @@ async def test_matched_skill_does_not_route_to_legacy_skill_mode(monkeypatch, ba
 
     result = await agent.process("runtime test", session_id="s1")
     assert result["response"] == "done"
+    assert captured_system_prompts
+    assert "Active skill: runtime-skill" in captured_system_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_agent_process_resets_staged_flow_for_independent_followup_request(monkeypatch, base_agent):
+    from src.agents import core as core_mod
+    from src.runtime.output_controller import call_llm_with_output_control as real_output_controller
+
+    agent, _ = base_agent
+    monkeypatch.setattr(
+        "src.skills.skill_registry",
+        SimpleNamespace(_initialized=True, match_skill=lambda *_: [], get_skill_runtime_config=lambda *_args, **_kwargs: None),
+    )
+
+    captured_output_diag = []
+
+    async def wrapped_output_controller(**kwargs):
+        result, diag = await real_output_controller(**kwargs)
+        state = kwargs.get("context_state") if isinstance(kwargs.get("context_state"), dict) else {}
+        captured_output_diag.append(
+            {
+                "latest_user_text": kwargs.get("latest_user_text", ""),
+                "diag": dict(diag or {}),
+                "generation_state": dict((state.get("generation") or {})) if isinstance(state, dict) else {},
+                "budget_state": dict((state.get("budget") or {})) if isinstance(state, dict) else {},
+            }
+        )
+        return result, diag
+
+    monkeypatch.setattr(core_mod, "call_llm_with_output_control", wrapped_output_controller)
+
+    async def fake_responses(**kwargs):
+        return {"content": "done", "function_calls": [], "usage": {}}
+
+    monkeypatch.setattr("src.agents.core.llm_client", SimpleNamespace(responses=fake_responses, default_provider="openai"))
+
+    first = await agent.process("one file at a time", session_id="s1")
+    second = await agent.process("what is 2+2?", session_id="s1")
+
+    assert first["response"] == "done"
+    assert second["response"] == "done"
+    assert len(captured_output_diag) >= 2
+    assert captured_output_diag[0]["diag"].get("generation_mode") == "staged"
+    assert captured_output_diag[1]["diag"].get("generation_mode") != "staged"
+    assert captured_output_diag[1]["generation_state"].get("generation_mode") != "staged"
+    assert captured_output_diag[1]["budget_state"].get("generation_mode") != "staged"
 
 
 @pytest.mark.asyncio
