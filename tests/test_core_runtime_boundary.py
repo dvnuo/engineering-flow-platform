@@ -34,6 +34,21 @@ def test_direct_active_skill_contract_explicit_continue_message_continues():
     assert core._should_continue_existing_active_skill(contract, "continue", registry) is True
 
 
+def test_direct_active_skill_contract_always_ask_keeps_active_on_ordinary_new_request():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "active",
+        "execution_style": "direct",
+        "planning_mode": "auto",
+        "staging_mode": "auto",
+        "active_skill_conflict_policy": "always_ask",
+    }
+    registry = type("Registry", (), {"match_skill": lambda self, message: [type("Skill", (), {"name": "beta"})()]})()
+    assert core._should_continue_existing_active_skill(contract, "write a release note", registry) is True
+
+
 def test_stepwise_active_skill_contract_clear_continuation_keeps_skill():
     from src.agents import core
 
