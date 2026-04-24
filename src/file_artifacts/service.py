@@ -36,6 +36,10 @@ def register_existing_file_as_artifact(
         preview=existing.preview if existing else None,
         chunk_count=existing.chunk_count if existing else 0,
         total_chars=existing.total_chars if existing else 0,
+        text_ref=existing.text_ref if existing else None,
+        context_ref=existing.context_ref if existing else None,
+        digest_ref=existing.digest_ref if existing else None,
+        full_markdown_chars=existing.full_markdown_chars if existing else 0,
         provider_metadata={**(existing.provider_metadata if existing else {}), **(provider_metadata or {})},
     )
     return storage.upsert_artifact(record)
@@ -64,10 +68,36 @@ def update_projection_from_parse_result(artifact_id: str, parse_result, preview:
         chunk_count=block_count,
         total_chars=len(markdown),
     )
+    storage.update_artifact_references(
+        artifact_id,
+        full_markdown_chars=len(markdown),
+    )
     return storage.update_artifact_status(artifact_id, parse_status="completed")
 
 
+def attach_text_ref_to_artifact(artifact_id: str, text_ref: str, *, full_markdown_chars: Optional[int] = None) -> Optional[ArtifactRecord]:
+    return storage.update_artifact_references(
+        artifact_id,
+        text_ref=text_ref,
+        full_markdown_chars=full_markdown_chars,
+    )
+
+
+def attach_source_refs_to_artifact(
+    artifact_id: str,
+    *,
+    context_ref: Optional[str] = None,
+    digest_ref: Optional[str] = None,
+) -> Optional[ArtifactRecord]:
+    return storage.update_artifact_references(
+        artifact_id,
+        context_ref=context_ref,
+        digest_ref=digest_ref,
+    )
+
+
 def build_artifact_ref_dict(record: ArtifactRecord, *, text_ref: str | None = None) -> dict:
+    effective_text_ref = text_ref if text_ref is not None else record.text_ref
     return {
         "artifact_id": record.artifact_id,
         "file_id": record.file_id,
@@ -78,5 +108,7 @@ def build_artifact_ref_dict(record: ArtifactRecord, *, text_ref: str | None = No
         "source_locator": record.source_locator,
         "projection_kind": record.projection_kind,
         "preview": record.preview,
-        "text_ref": text_ref,
+        "text_ref": effective_text_ref,
+        "context_ref": record.context_ref,
+        "digest_ref": record.digest_ref,
     }

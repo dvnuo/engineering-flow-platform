@@ -53,3 +53,38 @@ async def test_upload_and_parse_binds_session_and_rebuilds(monkeypatch):
     assert meta2.parse_status == "completed"
     assert storage.get_file_chunks(fid)
     assert called["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_parse_exception_marks_file_and_artifact_failed(monkeypatch):
+    req = make_mocked_request("POST", "/api/files/upload?session_id=s-bind-err", headers=CIMultiDict())
+
+    async def _multipart():
+        return _Multipart(_Field())
+
+    req.multipart = _multipart
+    upload_resp = await webchat.api_files_upload(req)
+    file_id = json.loads(upload_resp.text)["file_id"]
+
+    async def _raise_parse(file_id, options=None):
+        raise RuntimeError("parse crash")
+
+    monkeypatch.setattr(webchat, "parse_file", _raise_parse)
+
+    parse_req = make_mocked_request("POST", "/api/files/parse?session_id=s-bind-err", headers=CIMultiDict())
+
+    async def _json():
+        return {"file_id": file_id}
+
+    parse_req.json = _json
+    parse_resp = await webchat.api_files_parse(parse_req)
+    assert parse_resp.status == 500
+
+    meta = storage.get_file_meta("s-bind-err", file_id)
+    assert meta is not None
+    assert meta.parse_status == "failed"
+
+    from src.file_artifacts.storage import storage as artifact_storage
+    artifact = artifact_storage.get_artifact(file_id)
+    assert artifact is not None
+    assert artifact.parse_status == "failed"

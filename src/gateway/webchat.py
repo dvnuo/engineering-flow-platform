@@ -2866,6 +2866,8 @@ async def api_files_parse(request: web.Request) -> web.Response:
         200: {"success": true, "markdown": "...", "blocks": [...], ...}
         400: {"success": false, "error": "..."}
     """
+    session_id = None
+    file_id = None
     try:
         from src.hooks.file_context.models import Chunk, SessionFileMeta
         from src.hooks.file_context.retrieval import retrieval_engine
@@ -2972,6 +2974,18 @@ async def api_files_parse(request: web.Request) -> web.Response:
     except StoredFileNotFoundError as e:
         return web.json_response({'success': False, 'error': str(e)}, status=404)
     except Exception as e:
+        try:
+            if session_id and file_id:
+                from src.hooks.file_context.storage import storage as file_context_storage
+                file_context_storage.update_file_status(session_id, file_id, status="failed", error=str(e))
+        except Exception:
+            logger.exception("Failed to persist file_context failure state for %s/%s", session_id, file_id)
+        try:
+            if file_id:
+                from src.file_artifacts.storage import storage as artifact_storage
+                artifact_storage.update_artifact_status(file_id, parse_status="failed", parse_error=str(e))
+        except Exception:
+            logger.exception("Failed to persist artifact failure state for %s", file_id)
         logger.error(f"File parse error: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
