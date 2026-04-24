@@ -78,7 +78,7 @@ def test_stepwise_active_skill_contract_clear_new_request_does_not_continue():
     assert core._should_continue_existing_active_skill(contract, "write a release note", registry) is False
 
 
-def test_stepwise_active_skill_contract_short_parameter_reply_still_continues():
+def test_stepwise_active_skill_short_independent_request_does_not_continue():
     from src.agents import core
 
     contract = {
@@ -89,7 +89,54 @@ def test_stepwise_active_skill_contract_short_parameter_reply_still_continues():
         "staging_mode": "required",
     }
     registry = type("Registry", (), {"match_skill": lambda self, message: []})()
+    assert core._should_continue_existing_active_skill(contract, "review this PR", registry) is False
+
+
+def test_stepwise_active_skill_short_independent_request_in_chinese_does_not_continue():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "active",
+        "execution_style": "stepwise",
+        "planning_mode": "required",
+        "staging_mode": "required",
+    }
+    registry = type("Registry", (), {"match_skill": lambda self, message: []})()
+    assert core._should_continue_existing_active_skill(contract, "写周报", registry) is False
+
+
+def test_stepwise_active_skill_same_skill_rematch_continues_without_explicit_continue():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "active",
+        "execution_style": "stepwise",
+        "planning_mode": "required",
+        "staging_mode": "required",
+    }
+    matched = [type("Skill", (), {"name": "alpha"})()]
+    registry = type("Registry", (), {"match_skill": lambda self, message: matched})()
+    assert core._should_continue_existing_active_skill(contract, "collect more details", registry) is True
+
+
+def test_stepwise_waiting_user_answer_fragment_continues_but_standalone_request_does_not():
+    from src.agents import core
+
+    contract = {
+        "skill_name": "alpha",
+        "status": "waiting_user",
+        "execution_mode": "waiting_user",
+        "transition": "ask_user",
+        "pending_question": "Which platform?",
+        "execution_style": "stepwise",
+        "planning_mode": "required",
+        "staging_mode": "required",
+    }
+    registry = type("Registry", (), {"match_skill": lambda self, message: []})()
     assert core._should_continue_existing_active_skill(contract, "Android 14", registry) is True
+    assert core._should_continue_existing_active_skill(contract, "fix login bug", registry) is False
 
 
 def test_stepwise_active_skill_contract_yields_when_new_skill_matches():

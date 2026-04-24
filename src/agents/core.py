@@ -114,7 +114,21 @@ def _is_explicit_skill_continuation_message(message: str) -> bool:
     return normalized in _EXPLICIT_SKILL_CONTINUATION_MESSAGES
 
 
-def _looks_like_clear_new_request_for_non_direct_skill(message: str) -> bool:
+def _active_skill_is_waiting_for_blocking_reply(existing_contract: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(existing_contract, dict):
+        return False
+    if str(existing_contract.get("pending_question") or "").strip():
+        return True
+    if str(existing_contract.get("status") or "").strip().lower() == "waiting_user":
+        return True
+    if str(existing_contract.get("execution_mode") or "").strip().lower() == "waiting_user":
+        return True
+    if str(existing_contract.get("transition") or "").strip().lower() == "ask_user":
+        return True
+    return False
+
+
+def _looks_like_standalone_user_request(message: str) -> bool:
     text = str(message or "").strip()
     if not text:
         return False
@@ -125,21 +139,97 @@ def _looks_like_clear_new_request_for_non_direct_skill(message: str) -> bool:
     if _is_explicit_skill_continuation_message(normalized):
         return False
 
-    starts_with_request_phrase = (
-        normalized.startswith(("write ", "summarize ", "create ", "generate ", "draft ", "please ", "help me "))
-        or text.startswith(("请", "帮我", "麻烦", "生成", "写", "总结", "整理", "给我"))
+    starts_with_request_phrase = normalized.startswith(
+        (
+            "write ",
+            "summarize ",
+            "create ",
+            "generate ",
+            "draft ",
+            "review ",
+            "fix ",
+            "translate ",
+            "implement ",
+            "refactor ",
+            "please ",
+            "help me ",
+        )
+    ) or text.startswith(
+        (
+            "请",
+            "帮我",
+            "麻烦",
+            "生成",
+            "写",
+            "总结",
+            "整理",
+            "给我",
+            "修复",
+            "翻译",
+            "实现",
+            "重构",
+        )
     )
     if starts_with_request_phrase:
         return True
 
     token_count = len([token for token in re.split(r"\s+", text) if token.strip()])
-    if len(text) <= 24 and token_count <= 4:
-        return False
-
     if len(text) >= 40 or token_count >= 7:
         return True
 
     return False
+
+
+def _looks_like_answer_fragment_for_active_skill(message: str) -> bool:
+    text = str(message or "").strip()
+    if not text:
+        return False
+    if _is_explicit_skill_continuation_message(text):
+        return False
+    if _looks_like_standalone_user_request(text):
+        return False
+    normalized = text.lower()
+    if normalized.startswith("/skill "):
+        return False
+
+    token_count = len([token for token in re.split(r"\s+", text) if token.strip()])
+    if token_count > 6 or len(text) > 48:
+        return False
+
+    yes_no_tokens = {
+        "yes",
+        "no",
+        "ok",
+        "okay",
+        "sure",
+        "y",
+        "n",
+        "是",
+        "是的",
+        "不是",
+        "否",
+        "好",
+        "好的",
+    }
+    if normalized in yes_no_tokens:
+        return True
+
+    if "http://" in normalized or "https://" in normalized:
+        return True
+
+    if "," in text or "，" in text:
+        return True
+
+    if re.match(r"^[A-Za-z][A-Za-z0-9_.-]*(\s+[0-9A-Za-z_.-]+){0,3}$", text):
+        return True
+    if re.match(r"^[A-Za-z]{2,10}-\d{1,6}$", text):
+        return True
+    if re.match(r"^\d+(\.\d+){0,2}$", text):
+        return True
+    if re.match(r"^[\u4e00-\u9fffA-Za-z0-9_.-]{1,24}$", text):
+        return True
+
+    return token_count <= 3 and len(text) <= 24
 
 
 def _is_effectively_direct_skill_contract(existing_contract: Optional[Dict[str, Any]]) -> bool:
@@ -183,11 +273,17 @@ def _should_continue_existing_active_skill(
         top_match_name = str(getattr(matched_skills[0], "name", "") or "").strip()
         if top_match_name and top_match_name != existing_skill_name:
             return False
+    else:
+        top_match_name = ""
     if _is_explicit_skill_continuation_message(message):
         return True
-    if _looks_like_clear_new_request_for_non_direct_skill(message):
+    if top_match_name and top_match_name == existing_skill_name:
+        return True
+    if _active_skill_is_waiting_for_blocking_reply(existing_contract) and _looks_like_answer_fragment_for_active_skill(message):
+        return True
+    if _looks_like_standalone_user_request(message):
         return False
-    return True
+    return False
 
 
 
