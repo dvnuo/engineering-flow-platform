@@ -49,14 +49,62 @@ async def test_issue_and_pr_sources_materialize_assets_and_session_scope(monkeyp
 
     monkeypatch.setattr(source_service, "download_and_process_attachment", _fake_download_and_process_attachment)
 
-    monkeypatch.setattr(source_service, "build_artifact_ref_dict", lambda record: {"artifact_id": record.artifact_id, "text_ref": record.text_ref})
-
     class _Rec:
-        def __init__(self, artifact_id):
+        def __init__(self, artifact_id, *, text_ref=None, context_ref=None, digest_ref=None):
             self.artifact_id = artifact_id
-            self.text_ref = f"ctx://artifact/{artifact_id}"
+            self.file_id = artifact_id
+            self.filename = f"{artifact_id}.txt"
+            self.content_type = "text/plain"
+            self.source_type = "github"
+            self.source_kind = "issue_asset"
+            self.source_locator = f"locator:{artifact_id}"
+            self.projection_kind = "markdown"
+            self.preview = "preview"
+            self.text_ref = text_ref or f"ctx://artifact/{artifact_id}"
+            self.context_ref = context_ref
+            self.digest_ref = digest_ref
 
-    monkeypatch.setattr(source_service.artifact_storage, "get_artifact", lambda artifact_id: _Rec(artifact_id))
+    artifact_state = {}
+
+    def _fake_get_artifact(artifact_id):
+        state = artifact_state.get(artifact_id) or {}
+        return _Rec(
+            artifact_id,
+            text_ref=state.get("text_ref"),
+            context_ref=state.get("context_ref"),
+            digest_ref=state.get("digest_ref"),
+        )
+
+    monkeypatch.setattr(source_service.artifact_storage, "get_artifact", _fake_get_artifact)
+
+    monkeypatch.setattr(
+        source_service,
+        "build_artifact_ref_dict",
+        lambda record: {
+            "artifact_id": record.artifact_id,
+            "text_ref": record.text_ref,
+            "context_ref": record.context_ref,
+            "digest_ref": record.digest_ref,
+        },
+    )
+
+    bind_calls = []
+    attach_calls = []
+
+    def _fake_bind(artifact_id, bundle_scope_id, role="reference"):
+        bind_calls.append((artifact_id, bundle_scope_id, role))
+        return None
+
+    def _fake_attach(artifact_id, *, context_ref=None, digest_ref=None):
+        attach_calls.append((artifact_id, context_ref, digest_ref))
+        existing = artifact_state.setdefault(artifact_id, {})
+        existing["context_ref"] = context_ref
+        existing["digest_ref"] = digest_ref
+        existing.setdefault("text_ref", f"ctx://artifact/{artifact_id}")
+        return None
+
+    monkeypatch.setattr(source_service, "bind_artifact_to_source_bundle", _fake_bind)
+    monkeypatch.setattr(source_service, "attach_source_refs_to_artifact", _fake_attach)
 
     persisted_calls = []
 
@@ -69,7 +117,12 @@ async def test_issue_and_pr_sources_materialize_assets_and_session_scope(monkeyp
     issue_with_session = await source_service.prepare_github_issue_source("acme", "repo", 123, session_id="s1")
     assert issue_with_session["bundle"]["context_ref"] == "ctx://bundle/s1"
     assert issue_with_session["bundle"]["artifact_refs"]
+    assert all(ref.get("context_ref") == "ctx://bundle/s1" for ref in issue_with_session["bundle"]["artifact_refs"])
+    assert all(ref.get("digest_ref") == "ctx://digest/s1" for ref in issue_with_session["bundle"]["artifact_refs"])
     assert issue_with_session["bundle"]["completeness_ledger"]["asset_entries_created"] >= 1
+    assert "non_projectable_assets_total" in issue_with_session["bundle"]["completeness_ledger"]
+    assert "source_complete_definition" in issue_with_session["bundle"]["completeness_ledger"]
+    assert issue_with_session["bundle"]["asset_entries"][0]["artifact_ref"]["context_ref"] == "ctx://bundle/s1"
 
     issue_no_session = await source_service.prepare_github_issue_source("acme", "repo", 123, session_id=None)
     assert issue_no_session["bundle"]["context_ref"] is None
@@ -78,7 +131,19 @@ async def test_issue_and_pr_sources_materialize_assets_and_session_scope(monkeyp
     pr_with_session = await source_service.prepare_github_pr_source("acme", "repo", 456, session_id="s1")
     assert pr_with_session["bundle"]["digest_ref"] == "ctx://digest/s1"
     assert pr_with_session["bundle"]["artifact_refs"]
+    assert all(ref.get("context_ref") == "ctx://bundle/s1" for ref in pr_with_session["bundle"]["artifact_refs"])
+    assert all(ref.get("digest_ref") == "ctx://digest/s1" for ref in pr_with_session["bundle"]["artifact_refs"])
     assert pr_with_session["bundle"]["completeness_ledger"]["review_comments_loaded"] is True
+    assert "non_projectable_assets_total" in pr_with_session["bundle"]["completeness_ledger"]
+    assert "source_complete_definition" in pr_with_session["bundle"]["completeness_ledger"]
+
+    assert bind_calls, "expected source-bundle bindings to be written"
+    issue_bind_scopes = [scope for _, scope, _ in bind_calls if "#issue:123" in scope]
+    pr_bind_scopes = [scope for _, scope, _ in bind_calls if "#pull_request:456" in scope]
+    assert issue_bind_scopes
+    assert pr_bind_scopes
+    assert attach_calls, "expected source refs to be attached when session exists"
+    assert all(call[1] == "ctx://bundle/s1" and call[2] == "ctx://digest/s1" for call in attach_calls)
 
     assert persisted_calls, "expected persist function to be called when session_id is provided"
     assert all(call["session_id"] == "s1" for call in persisted_calls)

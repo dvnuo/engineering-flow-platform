@@ -16,6 +16,7 @@ from src.file_artifacts.storage import storage as artifact_storage
 from src.github.api import github_channel
 from src.github.asset_links import extract_github_asset_urls
 from src.github.doc_refs import parse_github_doc_ref
+from src.source_bundle_completeness import apply_session_scope_requirement
 from src.source_context import persist_github_source_bundle_and_digest
 from src.utils.attachment import download_and_process_attachment
 from src.utils.file_parser import parse_file, save_uploaded_file
@@ -64,33 +65,95 @@ async def _materialize_asset(
     }
 
 
-def _build_asset_ledger(*, source_kind: str, body_loaded: bool, comments_loaded: bool, review_comments_loaded: bool, asset_entries: list[dict], partial_reasons: list[str]) -> dict:
+def _build_asset_ledger(
+    *,
+    source_kind: str,
+    body_loaded: bool,
+    body_nonempty: bool,
+    comments_loaded: bool,
+    review_comments_loaded: bool,
+    asset_entries: list[dict],
+    partial_reasons: list[str],
+) -> dict:
     projectable_assets_total = sum(1 for e in asset_entries if can_project_to_text(e.get("content_type"), e.get("filename")))
+    non_projectable_assets_total = max(0, len(asset_entries) - projectable_assets_total)
     text_assets_loaded = sum(1 for e in asset_entries if e.get("parse_status") == "completed" and e.get("projected_to_text"))
     text_assets_with_full_ref = sum(1 for e in asset_entries if e.get("text_ref"))
+    binary_asset_bodies_available = non_projectable_assets_total == 0
 
     source_complete_for_generation = body_loaded and comments_loaded and (review_comments_loaded if source_kind == "pull_request" else True)
     if projectable_assets_total > 0:
         source_complete_for_generation = source_complete_for_generation and (text_assets_loaded >= projectable_assets_total)
 
-    source_complete_including_binary_bodies = source_complete_for_generation and (len(asset_entries) == 0 or len(asset_entries) >= projectable_assets_total)
+    source_complete_including_binary_bodies = source_complete_for_generation and (
+        non_projectable_assets_total == 0 or binary_asset_bodies_available
+    )
     source_complete = source_complete_for_generation
 
     return {
         "source_kind": source_kind,
         "body_loaded": body_loaded,
+        "body_nonempty": body_nonempty,
         "comments_loaded": comments_loaded,
         "review_comments_loaded": review_comments_loaded,
         "asset_urls_total": len(asset_entries),
         "asset_entries_created": len(asset_entries),
         "projectable_assets_total": projectable_assets_total,
+        "non_projectable_assets_total": non_projectable_assets_total,
         "text_assets_loaded": text_assets_loaded,
         "text_assets_with_full_ref": text_assets_with_full_ref,
+        "binary_asset_bodies_available": binary_asset_bodies_available,
         "partial_reasons": partial_reasons,
         "source_complete": source_complete,
         "source_complete_for_generation": source_complete_for_generation,
         "source_complete_including_binary_bodies": source_complete_including_binary_bodies,
+        "source_complete_definition": (
+            "source_complete_for_generation requires fetched body/comments and full text projection of all projectable assets. "
+            "Non-projectable/binary assets are metadata+artifact only in GitHub V1; source_complete_including_binary_bodies "
+            "is false when non_projectable_assets_total > 0."
+        ),
     }
+
+
+def _finalize_bundle_artifacts(
+    *,
+    asset_entries: list[dict],
+    bundle_scope_id: str,
+    context_ref: str | None,
+    digest_ref: str | None,
+) -> tuple[list[dict], list[dict]]:
+    refreshed_asset_entries: list[dict] = []
+    refreshed_bundle_artifact_refs: list[dict] = []
+    seen_artifact_ids: set[str] = set()
+
+    for entry in asset_entries:
+        refreshed_entry = dict(entry or {})
+        artifact_id = str(refreshed_entry.get("artifact_id") or "").strip()
+        if not artifact_id:
+            refreshed_asset_entries.append(refreshed_entry)
+            continue
+
+        bind_artifact_to_source_bundle(artifact_id, bundle_scope_id)
+        if context_ref and digest_ref:
+            attach_source_refs_to_artifact(
+                artifact_id,
+                context_ref=context_ref,
+                digest_ref=digest_ref,
+            )
+
+        record = artifact_storage.get_artifact(artifact_id)
+        if record:
+            refreshed_ref = build_artifact_ref_dict(record)
+            refreshed_entry["artifact_ref"] = refreshed_ref
+            if not refreshed_entry.get("text_ref") and record.text_ref:
+                refreshed_entry["text_ref"] = record.text_ref
+            if artifact_id not in seen_artifact_ids:
+                refreshed_bundle_artifact_refs.append(refreshed_ref)
+                seen_artifact_ids.add(artifact_id)
+
+        refreshed_asset_entries.append(refreshed_entry)
+
+    return refreshed_asset_entries, refreshed_bundle_artifact_refs
 
 
 async def prepare_github_file_source(raw: str, default_ref, *, session_id: str | None = None) -> dict:
@@ -218,8 +281,11 @@ async def prepare_github_file_source(raw: str, default_ref, *, session_id: str |
     else:
         bundle["context_ref"] = None
         bundle["digest_ref"] = None
-        if "session_scope_missing" not in partial_reasons:
-            partial_reasons.append("session_scope_missing")
+    apply_session_scope_requirement(
+        bundle["completeness_ledger"],
+        has_context_ref=bool(bundle.get("context_ref")),
+        has_digest_ref=bool(bundle.get("digest_ref")),
+    )
     refreshed = artifact_storage.get_artifact(artifact.artifact_id)
     if refreshed:
         bundle["artifact_refs"] = [build_artifact_ref_dict(refreshed)]
@@ -279,11 +345,12 @@ async def prepare_github_issue_source(
                     partial_reasons.append(f"asset_parse_failed:{locator}")
 
     artifact_refs = [e["artifact_ref"] for e in asset_entries if e.get("artifact_ref")]
-    body_loaded = bool(str(issue.get("body") or "").strip())
+    body_nonempty = bool(str(issue.get("body") or "").strip())
     comments_loaded = (not include_comments) or isinstance(comments, list)
     ledger = _build_asset_ledger(
         source_kind="issue",
-        body_loaded=body_loaded,
+        body_loaded=isinstance(issue, dict),
+        body_nonempty=body_nonempty,
         comments_loaded=comments_loaded,
         review_comments_loaded=True,
         asset_entries=asset_entries,
@@ -322,7 +389,20 @@ async def prepare_github_issue_source(
     else:
         bundle["context_ref"] = None
         bundle["digest_ref"] = None
-        ledger.setdefault("partial_reasons", []).append("session_scope_missing")
+    apply_session_scope_requirement(
+        ledger,
+        has_context_ref=bool(bundle.get("context_ref")),
+        has_digest_ref=bool(bundle.get("digest_ref")),
+    )
+
+    refreshed_asset_entries, refreshed_artifact_refs = _finalize_bundle_artifacts(
+        asset_entries=asset_entries,
+        bundle_scope_id=f"github:{repo_full_name}#issue:{issue_number}",
+        context_ref=bundle.get("context_ref"),
+        digest_ref=bundle.get("digest_ref"),
+    )
+    bundle["asset_entries"] = refreshed_asset_entries
+    bundle["artifact_refs"] = refreshed_artifact_refs
 
     return {"bundle": bundle, "persisted": persisted}
 
@@ -402,7 +482,8 @@ async def prepare_github_pr_source(
     artifact_refs = [e["artifact_ref"] for e in asset_entries if e.get("artifact_ref")]
     ledger = _build_asset_ledger(
         source_kind="pull_request",
-        body_loaded=bool(str(pr.get("body") or "").strip()),
+        body_loaded=isinstance(pr, dict),
+        body_nonempty=bool(str(pr.get("body") or "").strip()),
         comments_loaded=(not include_issue_comments) or isinstance(issue_comments, list),
         review_comments_loaded=(not include_review_comments) or isinstance(review_comments, list),
         asset_entries=asset_entries,
@@ -442,6 +523,19 @@ async def prepare_github_pr_source(
     else:
         bundle["context_ref"] = None
         bundle["digest_ref"] = None
-        ledger.setdefault("partial_reasons", []).append("session_scope_missing")
+    apply_session_scope_requirement(
+        ledger,
+        has_context_ref=bool(bundle.get("context_ref")),
+        has_digest_ref=bool(bundle.get("digest_ref")),
+    )
+
+    refreshed_asset_entries, refreshed_artifact_refs = _finalize_bundle_artifacts(
+        asset_entries=asset_entries,
+        bundle_scope_id=f"github:{repo_full_name}#pull_request:{pull_number}",
+        context_ref=bundle.get("context_ref"),
+        digest_ref=bundle.get("digest_ref"),
+    )
+    bundle["asset_entries"] = refreshed_asset_entries
+    bundle["artifact_refs"] = refreshed_artifact_refs
 
     return {"bundle": bundle, "persisted": persisted}

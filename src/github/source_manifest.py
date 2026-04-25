@@ -49,6 +49,18 @@ def format_github_source_manifest(bundle: dict, *, include_preview: bool = True)
             f"source_complete: {bool(completeness.get('source_complete', False))}",
         ]
     )
+    if source_kind in {"issue", "pull_request"}:
+        lines.extend(
+            [
+                f"source_complete_for_generation: {bool(completeness.get('source_complete_for_generation', False))}",
+                f"source_complete_including_binary_bodies: {bool(completeness.get('source_complete_including_binary_bodies', False))}",
+                f"projectable_assets_total: {int(completeness.get('projectable_assets_total', 0) or 0)}",
+                f"text_assets_loaded: {int(completeness.get('text_assets_loaded', 0) or 0)}",
+                f"text_assets_with_full_ref: {int(completeness.get('text_assets_with_full_ref', 0) or 0)}",
+                f"non_projectable_assets_total: {int(completeness.get('non_projectable_assets_total', 0) or 0)}",
+                f"source_complete_definition: {completeness.get('source_complete_definition') or ''}",
+            ]
+        )
 
     _add_preview(lines, bundle, include_preview=include_preview)
 

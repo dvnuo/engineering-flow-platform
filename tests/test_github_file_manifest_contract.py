@@ -68,7 +68,17 @@ def test_issue_manifest_includes_issue_identity_and_refs():
         "context_ref": "ctx://s1/issue",
         "digest_ref": "ctx://s1/issue/digest",
         "body_markdown": "Issue body",
-        "completeness_ledger": {"source_complete": True, "partial_reasons": []},
+        "completeness_ledger": {
+            "source_complete": True,
+            "source_complete_for_generation": True,
+            "source_complete_including_binary_bodies": False,
+            "projectable_assets_total": 2,
+            "text_assets_loaded": 2,
+            "text_assets_with_full_ref": 2,
+            "non_projectable_assets_total": 1,
+            "source_complete_definition": "def",
+            "partial_reasons": [],
+        },
     }
     manifest = format_manifest(bundle)
     assert "source_kind: issue" in manifest
@@ -76,6 +86,11 @@ def test_issue_manifest_includes_issue_identity_and_refs():
     assert "artifact_refs: ['att-1']" in manifest
     assert "context_ref: ctx://s1/issue" in manifest
     assert "digest_ref: ctx://s1/issue/digest" in manifest
+    assert "source_complete_for_generation: True" in manifest
+    assert "source_complete_including_binary_bodies: False" in manifest
+    assert "text_assets_loaded: 2" in manifest
+    assert "non_projectable_assets_total: 1" in manifest
+    assert "source_complete_definition: def" in manifest
 
 
 def test_pr_manifest_includes_pr_identity_and_refs():
@@ -86,7 +101,17 @@ def test_pr_manifest_includes_pr_identity_and_refs():
         "context_ref": "ctx://s1/pr",
         "digest_ref": "ctx://s1/pr/digest",
         "body_markdown": "PR body",
-        "completeness_ledger": {"source_complete": False, "partial_reasons": ["x"]},
+        "completeness_ledger": {
+            "source_complete": False,
+            "source_complete_for_generation": False,
+            "source_complete_including_binary_bodies": False,
+            "projectable_assets_total": 1,
+            "text_assets_loaded": 0,
+            "text_assets_with_full_ref": 0,
+            "non_projectable_assets_total": 0,
+            "source_complete_definition": "def-pr",
+            "partial_reasons": ["x"],
+        },
     }
     manifest = format_manifest(bundle)
     assert "source_kind: pull_request" in manifest
@@ -94,4 +119,9 @@ def test_pr_manifest_includes_pr_identity_and_refs():
     assert "artifact_refs: ['att-2']" in manifest
     assert "context_ref: ctx://s1/pr" in manifest
     assert "digest_ref: ctx://s1/pr/digest" in manifest
+    assert "source_complete_for_generation: False" in manifest
+    assert "source_complete_including_binary_bodies: False" in manifest
+    assert "text_assets_loaded: 0" in manifest
+    assert "non_projectable_assets_total: 0" in manifest
+    assert "source_complete_definition: def-pr" in manifest
     assert "[preview]" in manifest
