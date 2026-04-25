@@ -16,6 +16,7 @@ from src.file_artifacts.storage import storage as artifact_storage
 from src.github.api import github_channel
 from src.github.asset_links import extract_github_asset_urls
 from src.github.doc_refs import parse_github_doc_ref
+from src.source_bundle_completeness import apply_session_scope_requirement
 from src.source_context import persist_github_source_bundle_and_digest
 from src.utils.attachment import download_and_process_attachment
 from src.utils.file_parser import parse_file, save_uploaded_file
@@ -280,8 +281,11 @@ async def prepare_github_file_source(raw: str, default_ref, *, session_id: str |
     else:
         bundle["context_ref"] = None
         bundle["digest_ref"] = None
-        if "session_scope_missing" not in partial_reasons:
-            partial_reasons.append("session_scope_missing")
+    apply_session_scope_requirement(
+        bundle["completeness_ledger"],
+        has_context_ref=bool(bundle.get("context_ref")),
+        has_digest_ref=bool(bundle.get("digest_ref")),
+    )
     refreshed = artifact_storage.get_artifact(artifact.artifact_id)
     if refreshed:
         bundle["artifact_refs"] = [build_artifact_ref_dict(refreshed)]
@@ -385,7 +389,11 @@ async def prepare_github_issue_source(
     else:
         bundle["context_ref"] = None
         bundle["digest_ref"] = None
-        ledger.setdefault("partial_reasons", []).append("session_scope_missing")
+    apply_session_scope_requirement(
+        ledger,
+        has_context_ref=bool(bundle.get("context_ref")),
+        has_digest_ref=bool(bundle.get("digest_ref")),
+    )
 
     refreshed_asset_entries, refreshed_artifact_refs = _finalize_bundle_artifacts(
         asset_entries=asset_entries,
@@ -515,7 +523,11 @@ async def prepare_github_pr_source(
     else:
         bundle["context_ref"] = None
         bundle["digest_ref"] = None
-        ledger.setdefault("partial_reasons", []).append("session_scope_missing")
+    apply_session_scope_requirement(
+        ledger,
+        has_context_ref=bool(bundle.get("context_ref")),
+        has_digest_ref=bool(bundle.get("digest_ref")),
+    )
 
     refreshed_asset_entries, refreshed_artifact_refs = _finalize_bundle_artifacts(
         asset_entries=asset_entries,

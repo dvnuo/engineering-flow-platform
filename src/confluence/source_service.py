@@ -6,6 +6,7 @@ from typing import Optional
 
 from src.file_artifacts import can_project_to_text
 from src.file_artifacts.service import attach_source_refs_to_artifact, bind_artifact_to_source_bundle, build_artifact_ref_dict
+from src.source_bundle_completeness import apply_session_scope_requirement
 from src.source_context import persist_confluence_source_bundle_and_digest
 from src.utils.attachment import download_and_process_attachment
 
@@ -363,8 +364,13 @@ async def prepare_confluence_page_source(
             "source_complete": ledger["source_complete"],
             "partial_reasons": list(ledger.get("partial_reasons") or []),
         }
-        if "session_scope_missing" not in ledger["partial_reasons"]:
-            ledger["partial_reasons"].append("session_scope_missing")
+    apply_session_scope_requirement(
+        ledger,
+        has_context_ref=bool(persisted.get("context_ref")),
+        has_digest_ref=bool(persisted.get("digest_ref")),
+    )
+    if persisted.get("context_ref") is None and persisted.get("digest_ref") is None:
+        persisted["source_complete"] = ledger["source_complete"]
 
     from src.file_artifacts.storage import storage as artifact_storage
 
