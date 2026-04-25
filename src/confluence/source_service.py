@@ -6,6 +6,7 @@ from typing import Optional
 
 from src.file_artifacts import can_project_to_text
 from src.file_artifacts.service import attach_source_refs_to_artifact, bind_artifact_to_source_bundle, build_artifact_ref_dict
+from src.file_artifacts.storage import storage as artifact_storage
 from src.source_bundle_completeness import apply_session_scope_requirement
 from src.source_context import persist_confluence_source_bundle_and_digest
 from src.utils.attachment import download_and_process_attachment
@@ -132,6 +133,10 @@ async def prepare_confluence_page_source(
         "text_attachments_with_full_ref": 0,
         "text_attachments_preview_only": 0,
         "text_attachment_bodies_complete": False,
+        "non_projectable_attachments_total": 0,
+        "binary_attachment_bodies_available": True,
+        "binary_attachment_bodies_skipped_count": 0,
+        "binary_attachment_body_policy": "loaded",
         "attachment_body_partial_reasons": [],
         "children_loaded": int(children_ledger.get("loaded", len(children))),
         "children_total": int(children_ledger.get("total", len(children))),
@@ -148,8 +153,10 @@ async def prepare_confluence_page_source(
         ledger["partial_reasons"].append("descendants_not_supported")
 
     ledger["source_complete_definition"] = (
-        "source_complete requires page_body_complete, comments_complete, attachments_complete, "
-        "children_complete, and descendants coverage support."
+        "source_complete_for_generation requires page body, comments, attachment metadata, projectable text attachment bodies, "
+        "children coverage, and descendants completeness where supported. "
+        "source_complete_including_binary_bodies additionally requires binary/non-projectable attachment bodies; "
+        "Confluence V1 keeps those attachments metadata-only."
     )
     ledger["source_metadata_complete"] = bool(ledger["page_body_complete"])
     ledger["source_text_complete"] = bool(ledger["page_body_complete"] and ledger["comments_complete"])
@@ -161,7 +168,7 @@ async def prepare_confluence_page_source(
         and ledger["text_attachment_bodies_complete"]
         and ledger["children_complete"]
     )
-    ledger["source_complete_including_binary_bodies"] = ledger["source_complete_for_generation"]
+    ledger["source_complete_including_binary_bodies"] = False
     ledger["source_complete"] = (
         not partial_reasons
         and ledger["page_body_complete"]
@@ -182,6 +189,13 @@ async def prepare_confluence_page_source(
             media_type = _infer_attachment_media_type(att, filename)
             is_image = media_type.startswith("image/")
             if is_image or not can_project_to_text(media_type, filename):
+                ledger["non_projectable_attachments_total"] += 1
+                ledger["binary_attachment_bodies_skipped_count"] += 1
+                ledger["binary_attachment_bodies_available"] = False
+                ledger["binary_attachment_body_policy"] = "metadata_only"
+                reason = f"{'image_attachment_body_skipped' if is_image else 'binary_attachment_body_skipped'}:{filename}"
+                ledger["attachment_body_partial_reasons"].append(reason)
+                ledger["partial_reasons"].append(reason)
                 continue
             ledger["text_attachments_total"] += 1
             link = (att.get("_links") or {}).get("download")
@@ -231,8 +245,6 @@ async def prepare_confluence_page_source(
                         f"{failure_reason}:{parse_error}" if parse_error else failure_reason
                     )
                 if getattr(result, "artifact_id", None):
-                    from src.file_artifacts.storage import storage as artifact_storage
-
                     record = artifact_storage.get_artifact(result.artifact_id)
                     if record:
                         bind_artifact_to_source_bundle(record.artifact_id, f"confluence:{page_id}")
@@ -342,6 +354,11 @@ async def prepare_confluence_page_source(
         and ledger["text_attachment_bodies_complete"]
         and ledger["source_tree_complete"]
     )
+    ledger["source_complete_including_binary_bodies"] = bool(
+        ledger["source_complete_for_generation"]
+        and ledger.get("binary_attachment_bodies_available", False)
+        and int(ledger.get("binary_attachment_bodies_skipped_count", 0)) == 0
+    )
     ledger["source_complete"] = bool(
         not ledger["partial_reasons"]
         and ledger["page_body_complete"]
@@ -371,8 +388,6 @@ async def prepare_confluence_page_source(
     )
     if persisted.get("context_ref") is None and persisted.get("digest_ref") is None:
         persisted["source_complete"] = ledger["source_complete"]
-
-    from src.file_artifacts.storage import storage as artifact_storage
 
     refreshed_artifact_refs = []
     for ref in artifact_refs:
@@ -409,6 +424,10 @@ async def prepare_confluence_page_source(
         "descendants_supported": ledger.get("descendants_supported", False),
         "descendants_complete": ledger.get("descendants_complete", False),
         "source_complete_definition": ledger.get("source_complete_definition", ""),
+        "non_projectable_attachments_total": ledger.get("non_projectable_attachments_total", 0),
+        "binary_attachment_bodies_available": ledger.get("binary_attachment_bodies_available", False),
+        "binary_attachment_bodies_skipped_count": ledger.get("binary_attachment_bodies_skipped_count", 0),
+        "binary_attachment_body_policy": ledger.get("binary_attachment_body_policy", "loaded"),
         "descendants_pages_complete": ledger.get("descendants_pages_complete", False),
         "descendants_comments_complete": ledger.get("descendants_comments_complete", False),
         "descendants_attachments_complete": ledger.get("descendants_attachments_complete", False),

@@ -9,6 +9,7 @@ from src.source_context import persist_jira_source_bundle_and_digest
 from src.source_bundle_completeness import apply_session_scope_requirement
 from src.file_artifacts import can_project_to_text
 from src.file_artifacts.service import attach_source_refs_to_artifact, bind_artifact_to_source_bundle, build_artifact_ref_dict
+from src.file_artifacts.storage import storage as artifact_storage
 from src.utils.attachment import download_and_process_attachment as _default_download_and_process_attachment
 
 from .adapter import JiraFormatAdapter
@@ -156,7 +157,6 @@ async def prepare_jira_issue_source(
                         f"{parse_reason}:{item['parse_error']}" if item["parse_error"] else parse_reason
                     )
                 if getattr(result, "artifact_id", None):
-                    from src.file_artifacts.storage import storage as artifact_storage
                     record = artifact_storage.get_artifact(result.artifact_id)
                     if record:
                         bind_artifact_to_source_bundle(record.artifact_id, f"jira:{issue_key}")
@@ -288,7 +288,6 @@ async def prepare_jira_issue_source(
     )
     if persisted.get("context_ref") is None and persisted.get("digest_ref") is None:
         persisted["source_complete"] = ledger["source_complete"]
-    from src.file_artifacts.storage import storage as artifact_storage
     refreshed_artifact_refs: list[dict] = []
     for ref in artifact_refs:
         artifact_id = ref.get("artifact_id")

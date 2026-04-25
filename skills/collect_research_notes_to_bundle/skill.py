@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Dict, List
 
 from src.agents.executor import SkillResult, skill
@@ -16,14 +17,27 @@ from src.runtime.requirement_bundle_assets import (
 )
 from src.utils.redaction import sanitize_exception_message
 
-from skills.collect_requirements_to_bundle.skill import (
-    _extract_json_dict,
+from skills.shared_bundle_source_loaders import (
     _load_confluence_sources,
     _load_github_doc_sources,
     _load_jira_sources,
 )
 
 logger = logging.getLogger(__name__)
+JSON_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_json_fence(text: str) -> str:
+    match = JSON_FENCE_RE.match(text or "")
+    return (match.group(1) if match else (text or "")).strip()
+
+
+def _extract_json_dict(raw: str) -> Dict[str, Any]:
+    cleaned = _strip_json_fence(raw)
+    parsed = json.loads(cleaned)
+    if not isinstance(parsed, dict):
+        raise RequirementBundleError("LLM output must be a JSON object")
+    return parsed
 
 
 @skill(
