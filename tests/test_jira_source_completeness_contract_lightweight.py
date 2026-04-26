@@ -27,6 +27,20 @@ def _load_jira_source_service_with_stubs():
 
     source_context = types.ModuleType("src.source_context")
     source_context.persist_jira_source_bundle_and_digest = lambda **kwargs: {"context_ref": "ctx://jira", "digest_ref": "ctx://jira/d", "source_digest_chunk_count": 0}
+    scope_mod = types.ModuleType("src.source_bundle_completeness")
+
+    def apply_session_scope_requirement(ledger, *, has_context_ref, has_digest_ref):
+        if has_context_ref and has_digest_ref:
+            return ledger
+        partial_reasons = ledger.setdefault("partial_reasons", [])
+        if "session_scope_missing" not in partial_reasons:
+            partial_reasons.append("session_scope_missing")
+        ledger["source_complete_for_generation"] = False
+        ledger["source_complete_including_binary_bodies"] = False
+        ledger["source_complete"] = False
+        return ledger
+
+    scope_mod.apply_session_scope_requirement = apply_session_scope_requirement
 
     utils_pkg = types.ModuleType("src.utils")
     utils_pkg.__path__ = []
@@ -97,6 +111,7 @@ def _load_jira_source_service_with_stubs():
         "src.file_artifacts.service": fa_service,
         "src.file_artifacts.storage": fa_storage,
         "src.source_context": source_context,
+        "src.source_bundle_completeness": scope_mod,
         "src.utils": utils_pkg,
         "src.utils.attachment": attachment_mod,
         "src.jira.adapter": adapter_mod,
