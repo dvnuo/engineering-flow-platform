@@ -1,7 +1,19 @@
 import pytest
 
-from src.agents.executor import SkillResult
-from src.runtime.jira_workflow_review import run_jira_workflow_review
+from tests._lightweight_runtime_loaders import load_jira_workflow_review_lightweight
+
+
+@pytest.fixture(autouse=True)
+def _lightweight_runtime_module():
+    import sys
+
+    module, cleanup = load_jira_workflow_review_lightweight()
+    try:
+        globals()["run_jira_workflow_review"] = module.run_jira_workflow_review
+        globals()["SkillResult"] = sys.modules["src.agents.executor"].SkillResult
+        yield
+    finally:
+        cleanup()
 
 
 @pytest.mark.asyncio

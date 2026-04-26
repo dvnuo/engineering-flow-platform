@@ -13,6 +13,48 @@ class _Storage:
     def get_artifact(self, artifact_id: str):
         return self.records.get(str(artifact_id))
 
+    def upsert_artifact(self, record):
+        self.records[str(record.artifact_id)] = record
+        return record
+
+    def update_artifact_status(self, artifact_id, *, parse_status=None, parse_error=None):
+        rec = self.get_artifact(artifact_id)
+        if rec is None:
+            return None
+        if parse_status is not None:
+            setattr(rec, "parse_status", parse_status)
+        if parse_error is not None:
+            setattr(rec, "parse_error", parse_error)
+        return rec
+
+    def update_artifact_projection(self, artifact_id, *, projection_kind=None, preview=None, chunk_count=None, total_chars=None):
+        rec = self.get_artifact(artifact_id)
+        if rec is None:
+            return None
+        if projection_kind is not None:
+            setattr(rec, "projection_kind", projection_kind)
+        if preview is not None:
+            setattr(rec, "preview", preview)
+        if chunk_count is not None:
+            setattr(rec, "chunk_count", chunk_count)
+        if total_chars is not None:
+            setattr(rec, "total_chars", total_chars)
+        return rec
+
+    def update_artifact_references(self, artifact_id, *, text_ref=None, context_ref=None, digest_ref=None, full_markdown_chars=None):
+        rec = self.get_artifact(artifact_id)
+        if rec is None:
+            return None
+        if text_ref is not None:
+            setattr(rec, "text_ref", text_ref)
+        if context_ref is not None:
+            setattr(rec, "context_ref", context_ref)
+        if digest_ref is not None:
+            setattr(rec, "digest_ref", digest_ref)
+        if full_markdown_chars is not None:
+            setattr(rec, "full_markdown_chars", full_markdown_chars)
+        return rec
+
 
 def _scope_stub_module() -> types.ModuleType:
     module = types.ModuleType("src.source_bundle_completeness")
@@ -60,6 +102,47 @@ def _base_artifact_modules():
         "context_ref": getattr(record, "context_ref", None),
         "digest_ref": getattr(record, "digest_ref", None),
     }
+    service_mod.register_existing_file_as_artifact = lambda file_id, **kwargs: storage.upsert_artifact(
+        types.SimpleNamespace(
+            artifact_id=str(file_id),
+            file_id=str(file_id),
+            filename=kwargs.get("provider_metadata", {}).get("path", kwargs.get("source_locator", str(file_id))),
+            content_type=kwargs.get("provider_metadata", {}).get("content_type", "application/octet-stream"),
+            source_type=kwargs.get("source_type"),
+            source_kind=kwargs.get("source_kind"),
+            source_locator=kwargs.get("source_locator"),
+            projection_kind=None,
+            preview=None,
+            text_ref=None,
+            context_ref=None,
+            digest_ref=None,
+            parse_status="pending",
+            parse_error=None,
+            chunk_count=0,
+            total_chars=0,
+            full_markdown_chars=0,
+        )
+    )
+
+    def _update_projection_from_parse_result(artifact_id, parse_result, preview=None, **kwargs):
+        markdown = getattr(parse_result, "markdown", "") or ""
+        storage.update_artifact_projection(
+            artifact_id,
+            projection_kind="text",
+            preview=preview if preview is not None else markdown[:2000],
+            chunk_count=len(getattr(parse_result, "blocks", []) or []),
+            total_chars=len(markdown),
+        )
+        storage.update_artifact_references(
+            artifact_id,
+            text_ref=f"ctx://context/{kwargs.get('persist_text_ref_session_id')}/{kwargs.get('persist_text_ref_kind')}/sha"
+            if kwargs.get("persist_text_ref_session_id") and kwargs.get("persist_text_ref_kind")
+            else None,
+            full_markdown_chars=len(markdown),
+        )
+        return storage.update_artifact_status(artifact_id, parse_status="completed")
+
+    service_mod.update_projection_from_parse_result = _update_projection_from_parse_result
 
     return file_artifacts_pkg, service_mod, storage_mod, storage
 
@@ -239,5 +322,65 @@ def load_jira_source_service_lightweight():
     module, cleanup = _load_module_with_stubs(
         "src.jira.source_service", Path("src/jira/source_service.py"), modules
     )
+    module._test_storage = storage
+    return module, cleanup
+
+
+def load_github_source_service_lightweight():
+    src_pkg = types.ModuleType("src")
+    src_pkg.__path__ = []
+
+    github_pkg = types.ModuleType("src.github")
+    github_pkg.__path__ = []
+
+    file_artifacts_pkg, fa_service, fa_storage, storage = _base_artifact_modules()
+
+    github_api_mod = types.ModuleType("src.github.api")
+    github_api_mod.github_channel = types.SimpleNamespace()
+
+    github_links_mod = types.ModuleType("src.github.asset_links")
+    github_links_mod.extract_github_asset_urls = lambda text: []
+
+    github_doc_ref_mod = types.ModuleType("src.github.doc_refs")
+
+    def _parse_github_doc_ref(raw, default_ref):
+        return types.SimpleNamespace(
+            owner=getattr(default_ref, "owner", "o"),
+            repo=getattr(default_ref, "repo", "r"),
+            branch=getattr(default_ref, "branch", "main"),
+            path=str(raw),
+        )
+
+    github_doc_ref_mod.parse_github_doc_ref = _parse_github_doc_ref
+
+    source_context_mod = types.ModuleType("src.source_context")
+    source_context_mod.persist_github_source_bundle_and_digest = lambda **kwargs: {"context_ref": "ctx://gh", "digest_ref": "ctx://gh/d"}
+
+    scope_mod = _scope_stub_module()
+
+    utils_pkg = types.ModuleType("src.utils")
+    utils_pkg.__path__ = []
+    attachment_mod = types.ModuleType("src.utils.attachment")
+    attachment_mod.download_and_process_attachment = None
+    file_parser_mod = types.ModuleType("src.utils.file_parser")
+    file_parser_mod.parse_file = None
+    file_parser_mod.save_uploaded_file = None
+
+    modules = {
+        "src": src_pkg,
+        "src.github": github_pkg,
+        "src.file_artifacts": file_artifacts_pkg,
+        "src.file_artifacts.service": fa_service,
+        "src.file_artifacts.storage": fa_storage,
+        "src.github.api": github_api_mod,
+        "src.github.asset_links": github_links_mod,
+        "src.github.doc_refs": github_doc_ref_mod,
+        "src.source_context": source_context_mod,
+        "src.source_bundle_completeness": scope_mod,
+        "src.utils": utils_pkg,
+        "src.utils.attachment": attachment_mod,
+        "src.utils.file_parser": file_parser_mod,
+    }
+    module, cleanup = _load_module_with_stubs("src.github.source_service", Path("src/github/source_service.py"), modules)
     module._test_storage = storage
     return module, cleanup

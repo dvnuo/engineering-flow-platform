@@ -1,9 +1,13 @@
 import json
+import importlib.util
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+if importlib.util.find_spec("ruamel.yaml") is None:  # pragma: no cover - environment dependent
+    pytest.skip("full jira exporter runtime dependencies unavailable (missing ruamel.yaml)", allow_module_level=True)
 
 from src.jira.exporter import (
     _download_issue_attachments,
