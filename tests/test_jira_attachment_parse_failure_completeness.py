@@ -1,10 +1,11 @@
 import pytest
 
+from tests._lightweight_source_service_loaders import load_jira_source_service_lightweight
+
 
 @pytest.mark.asyncio
-async def test_jira_projectable_attachment_parse_failure_lowers_completeness(monkeypatch):
-    from src.jira.source_service import prepare_jira_issue_source
-
+async def test_jira_projectable_attachment_parse_failure_lowers_completeness():
+    module, cleanup = load_jira_source_service_lightweight()
     class _Channel:
         api_version = "3"
         _auth_header = {}
@@ -51,20 +52,24 @@ async def test_jira_projectable_attachment_parse_failure_lowers_completeness(mon
     async def _fake_download(**kwargs):
         return _Result()
 
-    monkeypatch.setattr("src.jira.jira_channel", _Channel())
-    monkeypatch.setattr("src.jira.source_service.JiraFormatAdapter", _Adapter)
-    monkeypatch.setattr("src.jira.download_and_process_attachment", _fake_download)
-
-    monkeypatch.setattr(
-        "src.jira.source_service.persist_jira_source_bundle_and_digest",
-        lambda **kwargs: {"context_ref": "c", "digest_ref": "d", "source_digest_chunk_count": 0},
+    module.jira_channel = _Channel()
+    module.JiraFormatAdapter = _Adapter
+    module.persist_jira_source_bundle_and_digest = (
+        lambda **kwargs: {"context_ref": "c", "digest_ref": "d", "source_digest_chunk_count": 0}
     )
 
-    out = await prepare_jira_issue_source("P-1", session_id="s1")
-    ledger = out.bundle["completeness_ledger"]
+    import sys
 
-    assert ledger["text_attachments_loaded"] == 0
-    assert ledger["text_attachment_bodies_complete"] is False
-    assert ledger["source_complete_for_generation"] is False
-    assert ledger["source_complete"] is False
-    assert any(str(r).startswith("attachment_text_processing_failed:a.pdf:parse_failed") for r in ledger["attachment_body_partial_reasons"])
+    sys.modules["src.jira"].download_and_process_attachment = _fake_download
+
+    try:
+        out = await module.prepare_jira_issue_source("P-1", session_id="s1")
+        ledger = out.bundle["completeness_ledger"]
+
+        assert ledger["text_attachments_loaded"] == 0
+        assert ledger["text_attachment_bodies_complete"] is False
+        assert ledger["source_complete_for_generation"] is False
+        assert ledger["source_complete"] is False
+        assert any(str(r).startswith("attachment_text_processing_failed:a.pdf:parse_failed") for r in ledger["attachment_body_partial_reasons"])
+    finally:
+        cleanup()
