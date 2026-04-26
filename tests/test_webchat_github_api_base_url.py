@@ -2,7 +2,9 @@ import json
 
 import pytest
 
-from src.gateway import webchat
+from pathlib import Path
+
+from tests._lightweight_webchat_loader import load_webchat_lightweight
 
 
 class DummyRequest:
@@ -40,6 +42,7 @@ class FakeResponse:
     ],
 )
 async def test_copilot_auth_start_uses_normalized_github_base(monkeypatch, configured_base, expected_prefix):
+    webchat, cleanup = load_webchat_lightweight()
     captured = {}
 
     class FakeAsyncClient:
@@ -63,19 +66,23 @@ async def test_copilot_auth_start_uses_normalized_github_base(monkeypatch, confi
                 },
             )
 
-    monkeypatch.setattr(webchat.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient())
-    monkeypatch.setattr(webchat.global_config, "_config", {"github": {"base_url": configured_base}}, raising=False)
+    try:
+        monkeypatch.setattr(webchat.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient())
+        monkeypatch.setattr(webchat.global_config, "_config", {"github": {"base_url": configured_base}}, raising=False)
 
-    response = await webchat.api_copilot_auth_start(DummyRequest())
-    payload = json.loads(response.text)
+        response = await webchat.api_copilot_auth_start(DummyRequest())
+        payload = json.loads(response.text)
 
-    assert response.status == 200
-    assert payload["auth_id"]
-    assert captured["url"] == expected_prefix
+        assert response.status == 200
+        assert payload["auth_id"]
+        assert captured["url"] == expected_prefix
+    finally:
+        cleanup()
 
 
 @pytest.mark.asyncio
 async def test_copilot_auth_check_uses_normalized_enterprise_base(monkeypatch):
+    webchat, cleanup = load_webchat_lightweight()
     captured = {}
     webchat._pending_authorizations["auth-1"] = {
         "expires_at": 9999999999,
@@ -94,19 +101,28 @@ async def test_copilot_auth_check_uses_normalized_enterprise_base(monkeypatch):
             captured["url"] = url
             return FakeResponse(400, {"error": "authorization_pending"})
 
-    monkeypatch.setattr(webchat.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient())
-    monkeypatch.setattr(
-        webchat.global_config,
-        "_config",
-        {"github": {"base_url": "https://github.company.com"}},
-        raising=False,
-    )
+    try:
+        monkeypatch.setattr(webchat.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient())
+        monkeypatch.setattr(
+            webchat.global_config,
+            "_config",
+            {"github": {"base_url": "https://github.company.com"}},
+            raising=False,
+        )
 
-    response = await webchat.api_copilot_auth_check(
-        DummyRequest({"auth_id": "auth-1", "device_code": "device-code"})
-    )
-    payload = json.loads(response.text)
+        response = await webchat.api_copilot_auth_check(
+            DummyRequest({"auth_id": "auth-1", "device_code": "device-code"})
+        )
+        payload = json.loads(response.text)
 
-    assert response.status == 200
-    assert payload["status"] == "pending"
-    assert captured["url"] == "https://github.company.com/api/v3/copilot/token_verification"
+        assert response.status == 200
+        assert payload["status"] == "pending"
+        assert captured["url"] == "https://github.company.com/api/v3/copilot/token_verification"
+    finally:
+        cleanup()
+
+
+def test_webchat_github_base_url_source_contract():
+    source = Path("src/gateway/webchat.py").read_text(encoding="utf-8")
+    assert "normalize_github_api_base_url" in source
+    assert "def _get_github_api_base_url() -> str:" in source
