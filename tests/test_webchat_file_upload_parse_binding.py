@@ -1,12 +1,17 @@
 import io
-import importlib.util
 import json
 
 import pytest
 from aiohttp.test_utils import make_mocked_request
 from multidict import CIMultiDict
 
-if importlib.util.find_spec("ruamel.yaml") is None:  # pragma: no cover - environment dependent
+try:  # pragma: no cover - environment dependent
+    import ruamel.yaml as _ruamel_yaml  # noqa: F401
+    _HAS_RUAMEL_YAML = True
+except Exception:  # pragma: no cover - environment dependent
+    _HAS_RUAMEL_YAML = False
+
+if not _HAS_RUAMEL_YAML:  # pragma: no cover - environment dependent
     pytest.skip("full webchat runtime dependencies unavailable (missing ruamel.yaml)", allow_module_level=True)
 
 from src.gateway import webchat
