@@ -42,7 +42,7 @@ from src.agents.core import run_chat_execution
 from src.hooks.session_memory import save_session_summary
 from src.agents.errors import extract_error_details, LLMError
 from src.hooks.file_context import inject_context
-from src.config import config as global_config
+from src.config import config as global_config, DEFAULT_LLM_MODEL
 from src.github.url_utils import normalize_github_api_base_url
 from src.runtime.chat_orchestration_adapter import execute_chat_orchestration, execute_runtime_task_request
 from src.runtime.runtime_task_tracker import RuntimeTaskTracker
@@ -834,7 +834,7 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Get request-scoped model (trusted portal override only)
         model_override = _extract_trusted_model_override(request, data)
-        model = model_override or global_config.llm.get('model', 'gpt-5-mini')
+        model = model_override or global_config.llm.get('model', DEFAULT_LLM_MODEL)
         
         # Run agent (history is managed internally by session_manager)
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
@@ -1096,7 +1096,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
 
         # Get request-scoped model (trusted portal override only)
         model_override = _extract_trusted_model_override(request, data)
-        model = model_override or global_config.llm.get('model', 'gpt-5-mini')
+        model = model_override or global_config.llm.get('model', DEFAULT_LLM_MODEL)
 
         # Run agent and stream response
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)

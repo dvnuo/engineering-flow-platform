@@ -310,7 +310,7 @@ def test_agent_process_source_prefers_self_model_in_multiple_paths():
     from src.agents import core
 
     source = inspect.getsource(core.Agent.process)
-    expected = 'self.model or config.llm.get("model", "gpt-5-mini")'
+    expected = 'self.model or config.llm.get("model", DEFAULT_LLM_MODEL)'
     assert source.count(expected) >= 2
 
 
@@ -755,6 +755,28 @@ def test_resolve_output_boundary_uses_model_limit_tokens(monkeypatch):
     assert boundary["max_output_tokens"] == 128000
     assert boundary["max_chat_output_tokens"] == 120000
     assert boundary["max_chat_output_chars"] == 120000 * 4
+
+
+def test_resolve_model_limits_defaults_to_default_llm_model_when_missing(monkeypatch):
+    from src.config import config, resolve_model_limits
+
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {
+            "model_limits": {
+                "gpt-5.4-mini": {
+                    "max_context_window_tokens": 400000,
+                    "max_prompt_tokens": 272000,
+                    "max_output_tokens": 128000,
+                }
+            }
+        },
+    )
+    limits = resolve_model_limits(None)
+    assert limits["max_context_window_tokens"] == 400000
+    assert limits["max_prompt_tokens"] == 272000
+    assert limits["max_output_tokens"] == 128000
 
 
 @pytest.mark.parametrize(

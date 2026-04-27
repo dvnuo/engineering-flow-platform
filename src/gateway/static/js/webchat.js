@@ -2642,21 +2642,28 @@
     // Provider to Model mapping
     const providerModels = {
         github_copilot: [
-            { value: 'gpt-4o', label: 'GPT-4o' },
+            { value: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
+            { value: 'gpt-5.4', label: 'GPT-5.4' },
+            { value: 'gpt-5.3-codex', label: 'GPT-5.3-Codex' },
             { value: 'gpt-5-mini', label: 'GPT-5 mini' },
             { value: 'gpt-5', label: 'GPT-5' },
+            { value: 'gpt-4.1', label: 'GPT-4.1' },
+            { value: 'gpt-4o', label: 'GPT-4o' },
             { value: 'gpt-5.1-codex', label: 'GPT-5.1-Codex' },
             { value: 'gpt-5.1-codex-max', label: 'GPT-5.1-Codex-Max' },
             { value: 'gpt-5.2', label: 'GPT-5.2' },
             { value: 'gpt-5.3-codex-max', label: 'GPT-5.3-Codex-Max' },
-            { value: 'gpt-5.4', label: 'GPT-5.4' },
             { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
         ],
         openai: [
-            { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
-            { value: 'gpt-4', label: 'GPT-4' },
+            { value: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
+            { value: 'gpt-5', label: 'GPT-5' },
+            { value: 'gpt-5-mini', label: 'GPT-5 mini' },
+            { value: 'gpt-4.1', label: 'GPT-4.1' },
             { value: 'gpt-4o', label: 'GPT-4o' },
             { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+            { value: 'gpt-4', label: 'GPT-4' },
+            { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
         ],
         anthropic: [
             { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
@@ -2973,7 +2980,7 @@
                 // LLM settings
                 if (config.llm) {
                     const provider = config.llm.provider || 'github_copilot';
-                    const model = config.llm.model || 'gpt-5-mini';
+                    const model = config.llm.model || 'gpt-5.4-mini';
                     llmProvider.value = provider;
                     // Update model dropdown with current provider and model
                     updateModelDropdown(provider, model);
@@ -2984,9 +2991,9 @@
                         copilotAuthSection.style.display = 'block';
                     }
                 } else {
-                    // Default to github_copilot with gpt-4o
+                    // Default to github_copilot with gpt-5.4-mini
                     llmProvider.value = 'github_copilot';
-                    updateModelDropdown('github_copilot', 'gpt-5-mini');
+                    updateModelDropdown('github_copilot', 'gpt-5.4-mini');
                     if (copilotAuthSection) copilotAuthSection.style.display = 'block';
                 }
 

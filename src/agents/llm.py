@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from src.config import config
+from src.config import config, DEFAULT_LLM_MODEL, resolve_llm_temperature, service_reload_manager
 from src.utils.redaction import redact_value, safe_preview, sanitize_exception_message
 from src.sessions.usage import usage_tracker, estimate_cost
 from .errors import (
@@ -406,7 +406,7 @@ class OpenAIProvider(BaseProvider):
             api_base=config.llm.get('api_base', 'https://api.openai.com/v1'),
             api_key_env='EFP_LLM_API_KEY'
         )
-        self.default_model = config.llm.get('model', 'gpt-3.5-turbo')
+        self.default_model = config.llm.get('model', DEFAULT_LLM_MODEL)
     
     async def chat(
         self,
@@ -414,7 +414,7 @@ class OpenAIProvider(BaseProvider):
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
-        temperature: float = 0.7,
+        temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
@@ -431,6 +431,7 @@ class OpenAIProvider(BaseProvider):
         
         # Use config setting if not explicitly provided
         enable_reasoning = reasoning_replay if reasoning_replay is not None else config.llm.get('reasoning_replay', False)
+        resolved_temperature = resolve_llm_temperature(temperature)
         
         # GPT-5 models require max_completion_tokens instead of max_tokens
         model_name = (model or self.default_model).lower()
@@ -447,7 +448,7 @@ class OpenAIProvider(BaseProvider):
             "messages": all_messages,
         }
         if include_temperature:
-            payload["temperature"] = temperature
+            payload["temperature"] = resolved_temperature
         payload[max_tokens_key] = max_tokens or config.llm.get('max_tokens', 64000)
         
         # Add reasoning_replay if enabled (for o1/o3 style reasoning)
@@ -556,6 +557,7 @@ class OpenAIProvider(BaseProvider):
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
+        temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
@@ -568,9 +570,10 @@ class OpenAIProvider(BaseProvider):
                 for item in input_items:
                     if item.get("type") == "message":
                         chat_messages.append({"role": item.get("role", "user"), "content": item.get("content", "")})
-            return await self.chat(messages=chat_messages, system_prompt=system_prompt, tools=tools, model=model, max_tokens=max_tokens, reasoning_replay=reasoning_replay)
+            return await self.chat(messages=chat_messages, system_prompt=system_prompt, tools=tools, model=model, temperature=temperature, max_tokens=max_tokens, reasoning_replay=reasoning_replay)
         
         model_name = model or self.default_model
+        resolved_temperature = resolve_llm_temperature(temperature)
         
         # Convert messages to input_items if provided
         if input_items is None and messages is not None:
@@ -592,6 +595,8 @@ class OpenAIProvider(BaseProvider):
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),
             "text": {"format": {"type": "text"}},
         }
+        if not model_name.lower().startswith("gpt-5"):
+            payload["temperature"] = resolved_temperature
         
         # Add tools if provided (Responses API format)
         if converted_tools:
@@ -785,6 +790,7 @@ class OpenAIProvider(BaseProvider):
             "input": input_items,
             "tools": converted_tools,
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),
+            "temperature": payload.get("temperature"),
         })
         
         # Calculate cost and record usage
@@ -805,12 +811,16 @@ class OpenAIProvider(BaseProvider):
 
     def list_models(self) -> List[str]:
         return [
-            "gpt-3.5-turbo",
-            "gpt-3.5-turbo-16k",
-            "gpt-4",
-            "gpt-4-turbo",
+            "gpt-5.4-mini",
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-4.1",
             "gpt-4o",
             "gpt-4o-mini",
+            "gpt-4",
+            "gpt-4-turbo",
+            "gpt-3.5-turbo",
+            "gpt-3.5-turbo-16k",
         ]
 
 
@@ -823,7 +833,7 @@ class GitHubCopilotProvider(BaseProvider):
             api_base=config.llm.get('api_base', 'https://api.githubcopilot.com'),
             api_key_env='GITHUB_COPILOT_TOKEN'
         )
-        self.default_model = config.llm.get('model', 'gpt-5-mini')
+        self.default_model = config.llm.get('model', DEFAULT_LLM_MODEL)
     
     def _get_headers(self) -> Dict[str, str]:
         """Override to include Copilot-specific headers."""
@@ -841,7 +851,7 @@ class GitHubCopilotProvider(BaseProvider):
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
-        temperature: float = 0.7,
+        temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
@@ -864,9 +874,11 @@ class GitHubCopilotProvider(BaseProvider):
             all_messages.append({"role": "system", "content": system_prompt})
         all_messages.extend(messages)
         
+        resolved_temperature = resolve_llm_temperature(temperature)
         payload = {
             "model": model or self.default_model,
             "messages": all_messages,
+            "temperature": resolved_temperature,
         }
         
         # Add tools support (similar to OpenAI)
@@ -962,6 +974,7 @@ class GitHubCopilotProvider(BaseProvider):
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
+        temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
@@ -985,6 +998,7 @@ class GitHubCopilotProvider(BaseProvider):
                 system_prompt=system_prompt,
                 tools=tools,
                 model=model,
+                temperature=temperature,
                 max_tokens=max_tokens,
                 reasoning_replay=reasoning_replay,
             )
@@ -1001,6 +1015,7 @@ class GitHubCopilotProvider(BaseProvider):
             }
         
         model_name = model or self.default_model
+        resolved_temperature = resolve_llm_temperature(temperature)
         
         # Convert messages to input_items if provided
         if input_items is None and messages is not None:
@@ -1021,6 +1036,7 @@ class GitHubCopilotProvider(BaseProvider):
             "input": input_items,
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),
             "text": {"format": {"type": "text"}},
+            "temperature": resolved_temperature,
         }
         
         # Add tools if provided (Responses API format)
@@ -1213,6 +1229,7 @@ class GitHubCopilotProvider(BaseProvider):
             "input": input_items,
             "tools": converted_tools,
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),
+            "temperature": payload.get("temperature"),
         })
 
         # Calculate cost and record usage
@@ -1236,12 +1253,24 @@ class GitHubCopilotProvider(BaseProvider):
             "input": input_items,
             "tools": converted_tools,  # Use converted tools (same as actual request)
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),  # Match actual default
+            "temperature": payload.get("temperature"),
         })
         
         return result
     
     def list_models(self) -> List[str]:
-        return ["gpt-4", "gpt-4-turbo"]
+        return [
+            "gpt-5.4-mini",
+            "gpt-5.4",
+            "gpt-5.3-codex",
+            "gpt-5-mini",
+            "gpt-5",
+            "gpt-4.1",
+            "gpt-4o",
+            "gemini-2.5-pro",
+            "gpt-4",
+            "gpt-4-turbo",
+        ]
 
 
 class ClaudeProvider(BaseProvider):
@@ -1270,7 +1299,7 @@ class ClaudeProvider(BaseProvider):
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
-        temperature: float = 0.7,
+        temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
@@ -1292,11 +1321,12 @@ class ClaudeProvider(BaseProvider):
                 continue
             all_messages.append({"role": msg["role"], "content": msg["content"]})
         
+        resolved_temperature = resolve_llm_temperature(temperature)
         payload = {
             "model": model or self.default_model,
             "messages": all_messages,
             "max_tokens": max_tokens or 4096,
-            "temperature": temperature,
+            "temperature": resolved_temperature,
         }
         
         if system_prompt:
@@ -1442,7 +1472,7 @@ class OllamaProvider(BaseProvider):
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
-        temperature: float = 0.7,
+        temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
@@ -1452,12 +1482,13 @@ class OllamaProvider(BaseProvider):
             full_messages.append({"role": "system", "content": system_prompt})
         full_messages.extend(messages)
         
+        resolved_temperature = resolve_llm_temperature(temperature)
         payload = {
             "model": model or self.default_model,
             "messages": full_messages,
             "stream": False,
             "options": {
-                "temperature": temperature,
+                "temperature": resolved_temperature,
                 "num_predict": max_tokens or config.llm.get('max_tokens', 64000),
             }
         }
@@ -1668,7 +1699,7 @@ class LLMClient:
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
         provider: Optional[str] = None,
-        temperature: float = 0.7,
+        temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         reasoning_replay: Optional[bool] = None,
     ) -> Dict[str, Any]:
@@ -1702,6 +1733,7 @@ class LLMClient:
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         model: Optional[str] = None,
+        temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         provider: Optional[str] = None,
         reasoning_replay: Optional[bool] = None,
@@ -1723,6 +1755,7 @@ class LLMClient:
                 system_prompt=system_prompt,
                 tools=tools,
                 model=model,
+                temperature=temperature,
                 max_tokens=max_tokens,
                 provider=provider,
                 reasoning_replay=reasoning_replay,
@@ -1871,6 +1904,7 @@ class LLMClient:
                     system_prompt=system_prompt,
                     tools=tools,
                     model=effective_model,
+                    temperature=temperature,
                     max_tokens=max_tokens,
                     provider=provider,
                     reasoning_replay=reasoning_replay,
@@ -1896,6 +1930,7 @@ class LLMClient:
             system_prompt=system_prompt,
             tools=tools,
             model=model,
+            temperature=temperature,
             max_tokens=max_tokens,
             reasoning_replay=reasoning_replay,
         )
@@ -1939,13 +1974,12 @@ class LLMClient:
 llm_client = LLMClient()
 
 # Register for config reload
-from src.config import service_reload_manager
 service_reload_manager.register('llm', llm_client.reinit)
 
 # Models that support vision/image input
 USE_VISION_MODELS = {
-    "openai": {"gpt-5-mini", "gpt-5", "gpt-4o"},
-    "github_copilot": {"gpt-5-mini", "gpt-5", "gemini-2.5-pro", "gpt-4o"},
+    "openai": {"gpt-5.4-mini", "gpt-5-mini", "gpt-5", "gpt-4o"},
+    "github_copilot": {"gpt-5.4-mini", "gpt-5-mini", "gpt-5", "gemini-2.5-pro", "gpt-4o"},
     "claude": {"claude-sonnet", "claude-haiku", "claude-opus"},
     "ollama": set(),  # Ollama vision support varies
 }
@@ -1978,8 +2012,8 @@ def get_vision_fallback_model(provider: str) -> Optional[str]:
         return None
     
     vision_fallbacks = {
-        "openai": "gpt-5-mini",
-        "github_copilot": "gpt-5-mini",
+        "openai": "gpt-5.4-mini",
+        "github_copilot": "gpt-5.4-mini",
         "claude": "claude-haiku-4-20250514",
         "ollama": None,
     }

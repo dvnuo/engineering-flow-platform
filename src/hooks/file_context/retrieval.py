@@ -4,7 +4,7 @@ import re
 from collections import defaultdict
 from typing import List, Dict, Set, Tuple
 
-from src.config import config, resolve_model_limits
+from src.config import config, resolve_model_limits, DEFAULT_LLM_MODEL
 
 from .models import Chunk, RetrievalRequest, RetrievalResult
 from .storage import storage
@@ -94,7 +94,7 @@ class RetrievalEngine:
     def _resolve_budget_thresholds(self, request: RetrievalRequest) -> Tuple[int, int, int]:
         """Resolve retrieval thresholds from model prompt limits, with emergency legacy fallback."""
         llm_cfg = config.llm if isinstance(config.llm, dict) else {}
-        model = str(llm_cfg.get("model") or "").strip()
+        model = str(llm_cfg.get("model") or DEFAULT_LLM_MODEL).strip()
         known_model_keys = ("gpt-4o", "gpt-4.1", "gpt-5-mini", "gpt-5.3-codex", "gpt-5.4-mini", "gemini-2.5-pro")
         model_limits = resolve_model_limits(model or None)
         prompt_budget = int(model_limits.get("max_prompt_tokens") or 0) if any(k in model.lower() for k in known_model_keys) else 0

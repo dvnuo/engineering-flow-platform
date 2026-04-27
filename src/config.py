@@ -1,6 +1,7 @@
 """Configuration loader for Engineering Flow Platform."""
 
 import logging
+import math
 import os
 import time
 import copy
@@ -17,6 +18,9 @@ logger = logging.getLogger(__name__)
 _yaml = YAML()
 _yaml.preserve_quotes = True
 _yaml.indent(mapping=2, sequence=4, offset=2)
+
+DEFAULT_LLM_MODEL = "gpt-5.4-mini"
+DEFAULT_LLM_TEMPERATURE = 0.7
 
 
 class ServiceReloadManager:
@@ -739,9 +743,28 @@ def _safe_positive_int(value: Any, default: int) -> int:
         return default
 
 
+def resolve_llm_temperature(explicit: Optional[Any] = None) -> float:
+    source = explicit if explicit is not None else config.llm.get("temperature", DEFAULT_LLM_TEMPERATURE)
+    if isinstance(source, bool):
+        return float(DEFAULT_LLM_TEMPERATURE)
+    if source is None:
+        return float(DEFAULT_LLM_TEMPERATURE)
+    if isinstance(source, str):
+        source = source.strip()
+        if not source:
+            return float(DEFAULT_LLM_TEMPERATURE)
+    try:
+        parsed = float(source)
+    except (TypeError, ValueError):
+        return float(DEFAULT_LLM_TEMPERATURE)
+    if not math.isfinite(parsed) or parsed < 0 or parsed > 2:
+        return float(DEFAULT_LLM_TEMPERATURE)
+    return float(parsed)
+
+
 def resolve_model_limits(model: Optional[str] = None) -> Dict[str, int]:
     llm_cfg = config.llm if isinstance(config.llm, dict) else {}
-    configured_model = str(model or llm_cfg.get("model") or "").strip()
+    configured_model = str(model or llm_cfg.get("model") or DEFAULT_LLM_MODEL).strip()
     configured_limits = llm_cfg.get("model_limits") if isinstance(llm_cfg.get("model_limits"), dict) else {}
     candidates: Dict[str, Dict[str, int]] = dict(DEFAULT_MODEL_LIMITS)
     for key, raw in configured_limits.items():
