@@ -18,6 +18,9 @@ _yaml = YAML()
 _yaml.preserve_quotes = True
 _yaml.indent(mapping=2, sequence=4, offset=2)
 
+DEFAULT_LLM_MODEL = "gpt-5.4-mini"
+DEFAULT_LLM_TEMPERATURE = 0.7
+
 
 class ServiceReloadManager:
     """Manager for services that need to be reinitialized when config changes."""
@@ -737,6 +740,25 @@ def _safe_positive_int(value: Any, default: int) -> int:
         return parsed if parsed > 0 else default
     except Exception:
         return default
+
+
+def resolve_llm_temperature(explicit: Optional[Any] = None) -> float:
+    source = explicit if explicit is not None else config.llm.get("temperature", DEFAULT_LLM_TEMPERATURE)
+    if isinstance(source, bool):
+        return float(DEFAULT_LLM_TEMPERATURE)
+    if source is None:
+        return float(DEFAULT_LLM_TEMPERATURE)
+    if isinstance(source, str):
+        source = source.strip()
+        if not source:
+            return float(DEFAULT_LLM_TEMPERATURE)
+    try:
+        parsed = float(source)
+    except (TypeError, ValueError):
+        return float(DEFAULT_LLM_TEMPERATURE)
+    if parsed < 0 or parsed > 2:
+        return float(DEFAULT_LLM_TEMPERATURE)
+    return float(parsed)
 
 
 def resolve_model_limits(model: Optional[str] = None) -> Dict[str, int]:

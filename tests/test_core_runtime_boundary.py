@@ -310,7 +310,7 @@ def test_agent_process_source_prefers_self_model_in_multiple_paths():
     from src.agents import core
 
     source = inspect.getsource(core.Agent.process)
-    expected = 'self.model or config.llm.get("model", "gpt-5-mini")'
+    expected = 'self.model or config.llm.get("model", DEFAULT_LLM_MODEL)'
     assert source.count(expected) >= 2
 
 

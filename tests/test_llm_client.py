@@ -11,6 +11,7 @@ import httpx
 
 # Import after path setup
 from src.agents.llm import LLMClient
+from src.config import config, resolve_llm_temperature, DEFAULT_LLM_TEMPERATURE
 
 
 class MockResponse:
@@ -1014,6 +1015,104 @@ class TestGitHubCopilotProvider:
             assert headers["Accept"] == "application/vnd.github.copilot-chat-preview+json"
 
 
+class TestTemperatureResolution:
+    def test_resolve_llm_temperature_prefers_config_when_explicit_missing(self, monkeypatch):
+        monkeypatch.setitem(config._config, "llm", {"temperature": 0.23})
+        assert resolve_llm_temperature() == 0.23
+
+    def test_resolve_llm_temperature_explicit_wins(self, monkeypatch):
+        monkeypatch.setitem(config._config, "llm", {"temperature": 0.23})
+        assert resolve_llm_temperature(0.11) == 0.11
+
+    @pytest.mark.parametrize("value", [None, "", "not-a-number", -0.1, 2.1, True, False])
+    def test_resolve_llm_temperature_invalid_values_fallback_default(self, monkeypatch, value):
+        monkeypatch.setitem(config._config, "llm", {"temperature": value})
+        assert resolve_llm_temperature() == DEFAULT_LLM_TEMPERATURE
+
+    @pytest.mark.asyncio
+    async def test_openai_chat_temperature_from_config_non_gpt5(self, monkeypatch):
+        from src.agents.llm import OpenAIProvider
+
+        monkeypatch.setitem(config._config, "llm", {"temperature": 0.23, "max_tokens": 256})
+        provider = OpenAIProvider()
+        provider._check_api_key = lambda: None
+
+        with patch.object(provider, "_call_api", new_callable=AsyncMock) as mock_call_api:
+            mock_call_api.return_value = {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+            await provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-4o")
+            payload = mock_call_api.call_args.args[1]
+            assert payload["temperature"] == 0.23
+
+    @pytest.mark.asyncio
+    async def test_openai_chat_gpt5_omits_temperature(self, monkeypatch):
+        from src.agents.llm import OpenAIProvider
+
+        monkeypatch.setitem(config._config, "llm", {"temperature": 0.23, "max_tokens": 256})
+        provider = OpenAIProvider()
+        provider._check_api_key = lambda: None
+
+        with patch.object(provider, "_call_api", new_callable=AsyncMock) as mock_call_api:
+            mock_call_api.return_value = {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+            await provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-5.4-mini")
+            payload = mock_call_api.call_args.args[1]
+            assert "temperature" not in payload
+
+    @pytest.mark.asyncio
+    async def test_github_copilot_chat_temperature_config_and_explicit(self, monkeypatch):
+        from src.agents.llm import GitHubCopilotProvider
+
+        monkeypatch.setitem(config._config, "llm", {"temperature": 0.23, "api_key": "k", "max_tokens": 256})
+        provider = GitHubCopilotProvider()
+
+        with patch.object(provider, "_call_api", new_callable=AsyncMock) as mock_call_api:
+            mock_call_api.return_value = {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+            await provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-5.4-mini")
+            payload = mock_call_api.call_args.args[1]
+            assert payload["temperature"] == 0.23
+
+            await provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-5.4-mini", temperature=0.12)
+            payload = mock_call_api.call_args.args[1]
+            assert payload["temperature"] == 0.12
+
+    @pytest.mark.asyncio
+    async def test_github_copilot_responses_temperature_config_and_explicit(self, monkeypatch):
+        from src.agents.llm import GitHubCopilotProvider
+
+        monkeypatch.setitem(config._config, "llm", {"temperature": 0.23, "api_key": "k", "max_tokens": 256})
+        provider = GitHubCopilotProvider()
+
+        with patch.object(provider, "_call_api", new_callable=AsyncMock) as mock_call_api:
+            mock_call_api.return_value = {
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+            await provider.responses(input_items=[{"type": "message", "role": "user", "content": "hello"}], model="gpt-5.4-mini")
+            payload = mock_call_api.call_args.args[1]
+            assert payload["temperature"] == 0.23
+
+            await provider.responses(
+                input_items=[{"type": "message", "role": "user", "content": "hello"}],
+                model="gpt-5.4-mini",
+                temperature=0.12,
+            )
+            payload = mock_call_api.call_args.args[1]
+            assert payload["temperature"] == 0.12
+
+    @pytest.mark.asyncio
+    async def test_llmclient_responses_chat_fallback_forwards_temperature(self):
+        client = LLMClient()
+        client.providers = {"openai": object()}
+        client.default_provider = "openai"
+        client.chat = AsyncMock(return_value={"content": "ok"})
+
+        await client.responses(
+            messages=[{"role": "user", "content": "hi"}],
+            provider="openai",
+            temperature=0.19,
+        )
+        assert client.chat.call_args.kwargs["temperature"] == 0.19
+
+
 class TestOllamaProvider:
     """Tests for Ollama provider."""
 
@@ -1089,6 +1188,7 @@ class TestVisionModelSelection:
         # Vision models
         assert is_vision_model("openai", "gpt-4o") is True
         assert is_vision_model("openai", "gpt-4o-mini") is True
+        assert is_vision_model("openai", "gpt-5.4-mini") is True
         assert is_vision_model("openai", "gpt-5-mini") is True
         assert is_vision_model("openai", "gpt-5") is True
         # Non-vision models
@@ -1101,6 +1201,7 @@ class TestVisionModelSelection:
         from src.agents.llm import is_vision_model
         # Vision models
         assert is_vision_model("github_copilot", "gpt-4o") is True
+        assert is_vision_model("github_copilot", "gpt-5.4-mini") is True
         assert is_vision_model("github_copilot", "gpt-5-mini") is True
         assert is_vision_model("github_copilot", "gpt-5") is True
         assert is_vision_model("github_copilot", "gemini-2.5-pro") is True
@@ -1130,13 +1231,13 @@ class TestVisionModelSelection:
     def test_get_vision_fallback_model_openai(self):
         """Test fallback model for OpenAI."""
         from src.agents.llm import get_vision_fallback_model
-        assert get_vision_fallback_model("openai") == "gpt-5-mini"
+        assert get_vision_fallback_model("openai") == "gpt-5.4-mini"
 
     def test_get_vision_fallback_model_github_copilot(self):
         """Test fallback model for GitHub Copilot."""
         from src.agents.llm import get_vision_fallback_model
-        assert get_vision_fallback_model("github_copilot") == "gpt-5-mini"
-        assert get_vision_fallback_model("github") == "gpt-5-mini"
+        assert get_vision_fallback_model("github_copilot") == "gpt-5.4-mini"
+        assert get_vision_fallback_model("github") == "gpt-5.4-mini"
 
     def test_get_vision_fallback_model_claude(self):
         """Test fallback model for Claude."""

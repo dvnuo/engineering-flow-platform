@@ -34,7 +34,7 @@ from src.agents.llm import (
 from src.agents.memory import memory_system
 from src.memory.update_manager import MemoryUpdateManager
 from src.agents.thinking import ThinkLevel, normalize_think_level, format_runtime_info
-from src.config import config, resolve_output_boundary
+from src.config import config, resolve_output_boundary, DEFAULT_LLM_MODEL
 from src.utils.truncate import truncate, truncate_with_count
 from src.utils.redaction import safe_preview, redact_value, sanitize_exception_message
 from src.sessions.manager import session_manager
@@ -2128,7 +2128,7 @@ You have access to the following tools. When a user asks you to do something tha
         # ===== END SKILL MATCHING =====
 
         # ===== MESSAGE COMPACTION =====
-        model = self.model or config.llm.get("model", "gpt-5-mini")
+        model = self.model or config.llm.get("model", DEFAULT_LLM_MODEL)
         messages, pre_request_context_state = await prepare_progressive_messages(
             messages=messages,
             model=model,
@@ -2373,7 +2373,7 @@ You have access to the following tools. When a user asks you to do something tha
             if iteration > 1:
                 loop_messages, loop_context_state = await prepare_progressive_messages(
                     messages=loop_messages,
-                    model=self.model or config.llm.get("model", "gpt-5-mini"),
+                    model=self.model or config.llm.get("model", DEFAULT_LLM_MODEL),
                     session_id=session_id,
                     stage="tool_loop",
                     recent_count=5,
@@ -3302,7 +3302,7 @@ You have access to the following tools. When a user asks you to do something tha
             system_prompt=initial_system_prompt,
             tools=[],
         )
-        initial_prompt_budget = resolve_prompt_budget(stage="skill_generation", model=(self.model or config.llm.get("model", "gpt-5-mini")))
+        initial_prompt_budget = resolve_prompt_budget(stage="skill_generation", model=(self.model or config.llm.get("model", DEFAULT_LLM_MODEL)))
         initial_prompt_budget_tokens = int(initial_prompt_budget.get("prompt_budget_tokens", 0) or 0)
         flow = resolve_skill_response_flow(
             skill,
@@ -3462,7 +3462,7 @@ You have access to the following tools. When a user asks you to do something tha
         max_skill_compaction_budget = 32000  # 12% of 264K context for completed_steps
         
         # Resolve skill mode context window (similar to regular chat)
-        model = self.model or config.llm.get("model", "gpt-5-mini")
+        model = self.model or config.llm.get("model", DEFAULT_LLM_MODEL)
         context_window = resolve_context_window_tokens(model)
         # Trigger compaction at 80% of context window
         skill_max_tokens = int(context_window * 0.8)

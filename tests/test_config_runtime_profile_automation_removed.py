@@ -98,3 +98,22 @@ def test_set_managed_overlay_ignores_provider_automation_subtrees(tmp_path):
 
     assert effective["confluence"]["enabled"] is True
     assert "automation" not in effective["confluence"]
+
+
+def test_set_managed_overlay_applies_and_clears_llm_temperature(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    _write_base_config(config_path)
+
+    cfg = Config(str(config_path))
+    cfg.set_managed_overlay("rp1", 1, {"llm": {"temperature": 0.2}})
+    cfg.load()
+
+    effective = cfg.get_effective_config()
+    assert effective["llm"]["temperature"] == 0.2
+    raw_text = config_path.read_text(encoding="utf-8")
+    assert "temperature: 0.2" in raw_text
+
+    cfg.clear_managed_overlay()
+    cfg.load()
+    cleared = cfg.get_effective_config()
+    assert "temperature" not in cleared.get("llm", {})

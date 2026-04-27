@@ -98,7 +98,7 @@ when_to_use:
   - For triage workflows
 references:
   - references/playbook.md
-model: gpt-5-mini
+model: gpt-5.4-mini
 hooks:
   - precheck
 task_tools:
