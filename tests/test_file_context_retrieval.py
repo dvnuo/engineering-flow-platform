@@ -61,3 +61,25 @@ def test_retrieval_engine_fallback_thresholds_for_unknown_model(monkeypatch):
             config.llm.pop("model", None)
         else:
             config.llm["model"] = original_model
+
+
+def test_retrieval_engine_uses_default_llm_model_when_config_model_missing(monkeypatch):
+    engine = RetrievalEngine()
+
+    had_model = "model" in config.llm
+    original_model = config.llm.get("model")
+    try:
+        config.llm.pop("model", None)
+
+        direct, topk, summarize = engine._resolve_budget_thresholds(
+            RetrievalRequest(session_id="s1", query="A", top_k=1)
+        )
+
+        assert direct == 13600
+        assert topk == 54400
+        assert summarize == 128000
+    finally:
+        if had_model:
+            config.llm["model"] = original_model
+        else:
+            config.llm.pop("model", None)
