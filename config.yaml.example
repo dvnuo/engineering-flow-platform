@@ -29,7 +29,7 @@ llm:
   # provider: "github_copilot"
   # api_base: "https://api.githubcopilot.com"
   # api_key: "ghp_YOUR_GITHUB_TOKEN"
-  # model: "gpt-5-mini"
+  # model: "gpt-5.4-mini"
   
   # Or Anthropic Claude Configuration
   # provider: "anthropic"

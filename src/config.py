@@ -1,6 +1,7 @@
 """Configuration loader for Engineering Flow Platform."""
 
 import logging
+import math
 import os
 import time
 import copy
@@ -756,14 +757,14 @@ def resolve_llm_temperature(explicit: Optional[Any] = None) -> float:
         parsed = float(source)
     except (TypeError, ValueError):
         return float(DEFAULT_LLM_TEMPERATURE)
-    if parsed < 0 or parsed > 2:
+    if not math.isfinite(parsed) or parsed < 0 or parsed > 2:
         return float(DEFAULT_LLM_TEMPERATURE)
     return float(parsed)
 
 
 def resolve_model_limits(model: Optional[str] = None) -> Dict[str, int]:
     llm_cfg = config.llm if isinstance(config.llm, dict) else {}
-    configured_model = str(model or llm_cfg.get("model") or "").strip()
+    configured_model = str(model or llm_cfg.get("model") or DEFAULT_LLM_MODEL).strip()
     configured_limits = llm_cfg.get("model_limits") if isinstance(llm_cfg.get("model_limits"), dict) else {}
     candidates: Dict[str, Dict[str, int]] = dict(DEFAULT_MODEL_LIMITS)
     for key, raw in configured_limits.items():

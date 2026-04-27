@@ -811,12 +811,16 @@ class OpenAIProvider(BaseProvider):
 
     def list_models(self) -> List[str]:
         return [
-            "gpt-3.5-turbo",
-            "gpt-3.5-turbo-16k",
-            "gpt-4",
-            "gpt-4-turbo",
+            "gpt-5.4-mini",
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-4.1",
             "gpt-4o",
             "gpt-4o-mini",
+            "gpt-4",
+            "gpt-4-turbo",
+            "gpt-3.5-turbo",
+            "gpt-3.5-turbo-16k",
         ]
 
 
@@ -1255,7 +1259,18 @@ class GitHubCopilotProvider(BaseProvider):
         return result
     
     def list_models(self) -> List[str]:
-        return ["gpt-4", "gpt-4-turbo"]
+        return [
+            "gpt-5.4-mini",
+            "gpt-5.4",
+            "gpt-5.3-codex",
+            "gpt-5-mini",
+            "gpt-5",
+            "gpt-4.1",
+            "gpt-4o",
+            "gemini-2.5-pro",
+            "gpt-4",
+            "gpt-4-turbo",
+        ]
 
 
 class ClaudeProvider(BaseProvider):

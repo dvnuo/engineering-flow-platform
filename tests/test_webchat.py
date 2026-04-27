@@ -3676,6 +3676,24 @@ console.log('ok');
     assert result.returncode == 0, result.stderr
 
 
+def test_webchat_js_provider_model_defaults_default_to_gpt_5_4_mini():
+    repo_root = Path(__file__).parent.parent
+    js = (repo_root / "src" / "gateway" / "static" / "js" / "webchat.js").read_text(encoding="utf-8")
+
+    github_start = js.find("github_copilot: [")
+    openai_start = js.find("openai: [")
+    assert github_start >= 0 and openai_start >= 0
+
+    github_block = js[github_start:openai_start]
+    openai_end = js.find("],", openai_start)
+    openai_block = js[openai_start:openai_end]
+
+    assert "{ value: 'gpt-5.4-mini', label: 'GPT-5.4 mini' }" in github_block
+    assert "{ value: 'gpt-5.4-mini', label: 'GPT-5.4 mini' }" in openai_block
+    assert "{ value: 'gpt-5-mini', label: 'GPT-5 mini' }" in github_block
+    assert "{ value: 'gpt-5-mini', label: 'GPT-5 mini' }" in openai_block
+
+
 @pytest.mark.asyncio
 async def test_assistant_persist_and_result_payload_share_display_blocks(monkeypatch):
     from src.agents.core import Agent

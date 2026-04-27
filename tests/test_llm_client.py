@@ -1024,7 +1024,7 @@ class TestTemperatureResolution:
         monkeypatch.setitem(config._config, "llm", {"temperature": 0.23})
         assert resolve_llm_temperature(0.11) == 0.11
 
-    @pytest.mark.parametrize("value", [None, "", "not-a-number", -0.1, 2.1, True, False])
+    @pytest.mark.parametrize("value", [None, "", "not-a-number", -0.1, 2.1, True, False, "nan", "NaN", float("nan"), "inf", float("inf")])
     def test_resolve_llm_temperature_invalid_values_fallback_default(self, monkeypatch, value):
         monkeypatch.setitem(config._config, "llm", {"temperature": value})
         assert resolve_llm_temperature() == DEFAULT_LLM_TEMPERATURE
@@ -1054,6 +1054,40 @@ class TestTemperatureResolution:
         with patch.object(provider, "_call_api", new_callable=AsyncMock) as mock_call_api:
             mock_call_api.return_value = {"choices": [{"message": {"content": "ok"}}], "usage": {}}
             await provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-5.4-mini")
+            payload = mock_call_api.call_args.args[1]
+            assert "temperature" not in payload
+
+    @pytest.mark.asyncio
+    async def test_openai_responses_temperature_from_config_non_gpt5(self, monkeypatch):
+        from src.agents.llm import OpenAIProvider
+
+        monkeypatch.setitem(config._config, "llm", {"temperature": 0.23, "max_tokens": 256})
+        provider = OpenAIProvider()
+        provider._check_api_key = lambda: None
+
+        with patch.object(provider, "_call_api", new_callable=AsyncMock) as mock_call_api:
+            mock_call_api.return_value = {
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+            await provider.responses(input_items=[{"type": "message", "role": "user", "content": "hello"}], model="gpt-4o")
+            payload = mock_call_api.call_args.args[1]
+            assert payload["temperature"] == 0.23
+
+    @pytest.mark.asyncio
+    async def test_openai_responses_gpt5_omits_temperature(self, monkeypatch):
+        from src.agents.llm import OpenAIProvider
+
+        monkeypatch.setitem(config._config, "llm", {"temperature": 0.23, "max_tokens": 256})
+        provider = OpenAIProvider()
+        provider._check_api_key = lambda: None
+
+        with patch.object(provider, "_call_api", new_callable=AsyncMock) as mock_call_api:
+            mock_call_api.return_value = {
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+            await provider.responses(input_items=[{"type": "message", "role": "user", "content": "hello"}], model="gpt-5.4-mini")
             payload = mock_call_api.call_args.args[1]
             assert "temperature" not in payload
 
@@ -1111,6 +1145,17 @@ class TestTemperatureResolution:
             temperature=0.19,
         )
         assert client.chat.call_args.kwargs["temperature"] == 0.19
+
+    def test_provider_list_models_default_first(self):
+        from src.agents.llm import OpenAIProvider, GitHubCopilotProvider
+
+        openai_models = OpenAIProvider().list_models()
+        copilot_models = GitHubCopilotProvider().list_models()
+
+        assert openai_models[0] == "gpt-5.4-mini"
+        assert "gpt-5-mini" in openai_models
+        assert copilot_models[0] == "gpt-5.4-mini"
+        assert "gpt-5-mini" in copilot_models
 
 
 class TestOllamaProvider:
