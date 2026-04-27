@@ -3,6 +3,7 @@
 import pytest
 import asyncio
 from typing import Any
+from pathlib import Path
 
 from src.agents.model_fallback import (
     ModelCandidate,
@@ -17,6 +18,7 @@ from src.agents.model_fallback import (
     LOCAL_FALLBACK,
     get_fallback_order,
 )
+from src.config import DEFAULT_LLM_MODEL
 
 
 class TestModelCandidate:
@@ -253,6 +255,20 @@ class TestPredefinedOrders:
         """Test get_fallback_order with unknown returns default."""
         result = get_fallback_order("unknown")
         assert result == FALLBACK_ORDER
+
+    def test_default_fallback_order_prefers_default_llm_model(self):
+        assert FALLBACK_ORDER[0].provider == "openai"
+        assert FALLBACK_ORDER[0].model == DEFAULT_LLM_MODEL
+        assert FALLBACK_ORDER[0].priority == 0
+
+    def test_fast_fallback_order_prefers_default_llm_model(self):
+        assert FAST_FALLBACK[0].provider == "openai"
+        assert FAST_FALLBACK[0].model == DEFAULT_LLM_MODEL
+        assert FAST_FALLBACK[0].priority == 0
+
+    def test_unknown_fallback_order_uses_default_llm_model_first(self):
+        result = get_fallback_order("unknown")
+        assert result[0].model == DEFAULT_LLM_MODEL
     
     def test_fallback_order_priority(self):
         """Test that FALLBACK_ORDER is ordered by priority."""
@@ -287,7 +303,7 @@ class TestFallbackAttempt:
             "success": False,
             "duration_ms": 1500.0,
         }
-    
+
     def test_successful_attempt(self):
         """Test successful attempt."""
         candidate = ModelCandidate(provider="openai", model="gpt-4o")
@@ -296,9 +312,16 @@ class TestFallbackAttempt:
             success=True,
             duration_ms=500.0
         )
-        
+
         assert attempt.error is None
         assert attempt.success is True
+
+
+def test_readme_llm_example_uses_default_llm_model():
+    text = Path("README.md").read_text(encoding="utf-8")
+    llm_section = text[text.find("### LLM Providers"): text.find("### Control-Plane Runtime Settings")]
+    assert 'model: "gpt-5.4-mini"' in llm_section
+    assert 'model: "gpt-4o"' not in llm_section
 
 
 class TestIntegration:

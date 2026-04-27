@@ -75,7 +75,7 @@ Access the web UI at `http://localhost:8000/`
 llm:
   provider: "openai"  # openai (default), github_copilot
   api_key: "sk-..."
-  model: "gpt-4o"
+  model: "gpt-5.4-mini"
 ```
 
 ### Control-Plane Runtime Settings

@@ -18,6 +18,8 @@ import asyncio
 import logging
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Type, Union
 
+from src.config import DEFAULT_LLM_MODEL
+
 logger = logging.getLogger(__name__)
 
 
@@ -243,16 +245,18 @@ async def with_model_fallback(
 
 # Predefined fallback order for common scenarios
 FALLBACK_ORDER: List[ModelCandidate] = [
-    ModelCandidate(provider="openai", model="gpt-4o", priority=0, weight=1.0),
-    ModelCandidate(provider="openai", model="gpt-4o-mini", priority=1, weight=0.5),
-    ModelCandidate(provider="anthropic", model="claude-sonnet-4", priority=2, weight=0.8),
-    ModelCandidate(provider="anthropic", model="claude-haiku-3-5", priority=3, weight=0.4),
+    ModelCandidate(provider="openai", model=DEFAULT_LLM_MODEL, priority=0, weight=1.0),
+    ModelCandidate(provider="openai", model="gpt-4o", priority=1, weight=0.8),
+    ModelCandidate(provider="openai", model="gpt-4o-mini", priority=2, weight=0.5),
+    ModelCandidate(provider="anthropic", model="claude-sonnet-4", priority=3, weight=0.8),
+    ModelCandidate(provider="anthropic", model="claude-haiku-3-5", priority=4, weight=0.4),
 ]
 
 # Fast fallback (less aggressive)
 FAST_FALLBACK: List[ModelCandidate] = [
-    ModelCandidate(provider="openai", model="gpt-4o", priority=0, weight=1.0),
-    ModelCandidate(provider="openai", model="gpt-4o-mini", priority=1, weight=0.5),
+    ModelCandidate(provider="openai", model=DEFAULT_LLM_MODEL, priority=0, weight=1.0),
+    ModelCandidate(provider="openai", model="gpt-4o", priority=1, weight=0.8),
+    ModelCandidate(provider="openai", model="gpt-4o-mini", priority=2, weight=0.5),
 ]
 
 # Budget fallback (prioritize cheaper models)
