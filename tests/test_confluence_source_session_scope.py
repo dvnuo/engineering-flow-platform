@@ -1,11 +1,11 @@
 import pytest
 
+from tests._lightweight_source_service_loaders import load_confluence_source_service_lightweight
+
 
 @pytest.mark.asyncio
-async def test_prepare_confluence_page_source_respects_session_scope(monkeypatch):
-    from src.confluence.source_service import prepare_confluence_page_source
-    from src.file_artifacts.models import ArtifactRecord
-
+async def test_prepare_confluence_page_source_respects_session_scope():
+    module, cleanup = load_confluence_source_service_lightweight()
     class _Channel:
         base_url = "https://c"
         _auth_header = {}
@@ -45,39 +45,42 @@ async def test_prepare_confluence_page_source_respects_session_scope(monkeypatch
     async def _fake_download(**kwargs):
         return _Result()
 
-    from src.file_artifacts.storage import storage as artifact_storage
-
     def _fake_get_artifact(_artifact_id):
-        return ArtifactRecord(
-            artifact_id="a1",
-            file_id="a1",
-            source_type="confluence",
-            source_kind="page_attachment",
-            filename="a.pdf",
-            content_type="application/pdf",
-            size=1,
-            text_ref="txt-ref",
+        return type(
+            "Record",
+            (),
+            {
+                "artifact_id": "a1",
+                "file_id": "a1",
+                "source_type": "confluence",
+                "source_kind": "page_attachment",
+                "filename": "a.pdf",
+                "content_type": "application/pdf",
+                "size": 1,
+                "text_ref": "txt-ref",
+                "context_ref": None,
+                "digest_ref": None,
+            },
         )
 
-    monkeypatch.setattr(artifact_storage, "get_artifact", _fake_get_artifact)
-    monkeypatch.setattr(
-        "src.confluence.source_service.persist_confluence_source_bundle_and_digest",
-        lambda **kwargs: {"context_ref": "ctx", "digest_ref": "dig"},
-    )
+    module.artifact_storage.get_artifact = _fake_get_artifact
 
-    without_session = await prepare_confluence_page_source("1", session_id=None, channel=_Channel(), downloader=_fake_download)
-    assert without_session["manifest"]["context_ref"] is None
-    assert without_session["manifest"]["digest_ref"] is None
-    assert without_session["artifact_refs"]
-    assert "session_scope_missing" in without_session["bundle"]["completeness_ledger"]["partial_reasons"]
+    try:
+        without_session = await module.prepare_confluence_page_source("1", session_id=None, channel=_Channel(), downloader=_fake_download)
+        assert without_session["manifest"]["context_ref"] is None
+        assert without_session["manifest"]["digest_ref"] is None
+        assert without_session["artifact_refs"]
+        assert "session_scope_missing" in without_session["bundle"]["completeness_ledger"]["partial_reasons"]
 
-    with_session = await prepare_confluence_page_source(
-        "1",
-        session_id="s1",
-        channel=_Channel(),
-        downloader=_fake_download,
-        persist_fn=lambda **kwargs: {"context_ref": "ctx", "digest_ref": "dig"},
-    )
-    assert with_session["manifest"]["context_ref"] == "ctx"
-    assert with_session["manifest"]["digest_ref"] == "dig"
-    assert with_session["artifact_refs"]
+        with_session = await module.prepare_confluence_page_source(
+            "1",
+            session_id="s1",
+            channel=_Channel(),
+            downloader=_fake_download,
+            persist_fn=lambda **kwargs: {"context_ref": "ctx", "digest_ref": "dig"},
+        )
+        assert with_session["manifest"]["context_ref"] == "ctx"
+        assert with_session["manifest"]["digest_ref"] == "dig"
+        assert with_session["artifact_refs"]
+    finally:
+        cleanup()

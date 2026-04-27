@@ -1,10 +1,11 @@
 import pytest
 
+from tests._lightweight_source_service_loaders import load_jira_source_service_lightweight
+
 
 @pytest.mark.asyncio
-async def test_jira_attachment_always_persists_text_ref(monkeypatch):
-    from src.jira.source_service import prepare_jira_issue_source
-
+async def test_jira_attachment_always_persists_text_ref():
+    module, cleanup = load_jira_source_service_lightweight()
     class _Channel:
         api_version = "3"
         _auth_header = {}
@@ -48,8 +49,8 @@ async def test_jira_attachment_always_persists_text_ref(monkeypatch):
         parse_error = None
         projected_to_text = True
 
-    monkeypatch.setattr("src.jira.jira_channel", _Channel())
-    monkeypatch.setattr("src.jira.source_service.JiraFormatAdapter", _Adapter)
+    module.jira_channel = _Channel()
+    module.JiraFormatAdapter = _Adapter
 
     captured = {}
 
@@ -57,23 +58,29 @@ async def test_jira_attachment_always_persists_text_ref(monkeypatch):
         captured["bundle"] = kwargs["bundle"]
         return {"context_ref": "c", "digest_ref": "d", "source_digest_chunk_count": 0}
 
-    monkeypatch.setattr("src.jira.source_service.persist_jira_source_bundle_and_digest", _fake_persist)
+    module.persist_jira_source_bundle_and_digest = _fake_persist
 
     async def _fake_download(**kwargs):
         return _Result()
 
-    monkeypatch.setattr("src.jira.download_and_process_attachment", _fake_download)
+    import sys
+    import types
 
-    from src.file_artifacts.storage import storage as artifact_storage
-    from src.file_artifacts.models import ArtifactRecord
+    sys.modules["src.jira"].download_and_process_attachment = _fake_download
+    module.artifact_storage.get_artifact = lambda _artifact_id: types.SimpleNamespace(
+        artifact_id="art-1",
+        file_id="art-1",
+        source_type="jira",
+        source_kind="issue_attachment",
+        filename="a.pdf",
+        content_type="application/pdf",
+        size=1,
+        text_ref="text-1",
+    )
 
-    def _fake_get_artifact(_artifact_id):
-        return ArtifactRecord(
-            artifact_id="art-1", file_id="art-1", source_type="jira", source_kind="issue_attachment", filename="a.pdf", content_type="application/pdf", size=1, text_ref="text-1"
-        )
-
-    monkeypatch.setattr(artifact_storage, "get_artifact", _fake_get_artifact)
-
-    result = await prepare_jira_issue_source("P-1", session_id="s1")
-    assert result.bundle["attachments"][0]["text_ref"] == "text-1"
-    assert captured["bundle"]["artifact_refs"][0]["text_ref"] == "text-1"
+    try:
+        result = await module.prepare_jira_issue_source("P-1", session_id="s1")
+        assert result.bundle["attachments"][0]["text_ref"] == "text-1"
+        assert captured["bundle"]["artifact_refs"][0]["text_ref"] == "text-1"
+    finally:
+        cleanup()

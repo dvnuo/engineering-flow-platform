@@ -5,6 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests._optional_runtime_deps import skip_if_missing_ruamel_yaml
+
+skip_if_missing_ruamel_yaml("full jira exporter runtime dependencies unavailable (missing ruamel.yaml)")
+
 from src.jira.exporter import (
     _download_issue_attachments,
     _resolve_output_directory,

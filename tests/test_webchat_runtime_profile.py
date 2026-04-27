@@ -1,6 +1,6 @@
 import pytest
 
-from src.gateway import webchat
+from tests._lightweight_webchat_loader import load_webchat_lightweight
 
 
 class _Req:
@@ -14,6 +14,7 @@ class _Req:
 
 @pytest.mark.asyncio
 async def test_internal_apply_runtime_profile_trusted(monkeypatch):
+    webchat, cleanup = load_webchat_lightweight()
     captured = {}
     monkeypatch.setattr(
         webchat.global_config,
@@ -23,87 +24,111 @@ async def test_internal_apply_runtime_profile_trusted(monkeypatch):
         ) or ["llm", "proxy"],
     )
 
-    req = _Req(
-        payload={
-            "runtime_profile_id": "rp_x",
-            "revision": 3,
-            "config": {"llm": {"provider": "openai"}, "proxy": {"enabled": True}},
-        },
-        headers={"X-Portal-Author-Source": "portal"},
-    )
-    resp = await webchat.api_apply_runtime_profile(req)
+    try:
+        req = _Req(
+            payload={
+                "runtime_profile_id": "rp_x",
+                "revision": 3,
+                "config": {"llm": {"provider": "openai"}, "proxy": {"enabled": True}},
+            },
+            headers={"X-Portal-Author-Source": "portal"},
+        )
+        resp = await webchat.api_apply_runtime_profile(req)
 
-    assert resp.status == 200
-    body = resp.body.decode("utf-8")
-    assert '"success": true' in body
-    assert '"updated_sections": ["llm", "proxy"]' in body
-    assert '"cleared": false' in body
-    assert captured["runtime_profile_id"] == "rp_x"
-    assert captured["revision"] == 3
+        assert resp.status == 200
+        body = resp.body.decode("utf-8")
+        assert '"success": true' in body
+        assert '"updated_sections": ["llm", "proxy"]' in body
+        assert '"cleared": false' in body
+        assert captured["runtime_profile_id"] == "rp_x"
+        assert captured["revision"] == 3
+    finally:
+        cleanup()
 
 
 @pytest.mark.asyncio
 async def test_internal_apply_runtime_profile_clear(monkeypatch):
+    webchat, cleanup = load_webchat_lightweight()
     cleared = {"value": False}
     monkeypatch.setattr(webchat.global_config, "clear_managed_overlay", lambda: cleared.update({"value": True}))
 
-    req = _Req(
-        payload={"runtime_profile_id": None, "revision": None, "config": {}},
-        headers={"X-Portal-Author-Source": "portal"},
-    )
-    resp = await webchat.api_apply_runtime_profile(req)
+    try:
+        req = _Req(
+            payload={"runtime_profile_id": None, "revision": None, "config": {}},
+            headers={"X-Portal-Author-Source": "portal"},
+        )
+        resp = await webchat.api_apply_runtime_profile(req)
 
-    assert resp.status == 200
-    body = resp.body.decode("utf-8")
-    assert '"cleared": true' in body
-    assert cleared["value"] is True
+        assert resp.status == 200
+        body = resp.body.decode("utf-8")
+        assert '"cleared": true' in body
+        assert cleared["value"] is True
+    finally:
+        cleanup()
 
 
 @pytest.mark.asyncio
 async def test_internal_apply_runtime_profile_untrusted_rejected():
+    webchat, cleanup = load_webchat_lightweight()
     req = _Req(
         payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
         headers={},
     )
-    resp = await webchat.api_apply_runtime_profile(req)
-    assert resp.status == 403
+    try:
+        resp = await webchat.api_apply_runtime_profile(req)
+        assert resp.status == 403
+    finally:
+        cleanup()
 
 
 @pytest.mark.asyncio
 async def test_internal_apply_runtime_profile_trusted_succeeds_with_portal_source_marker(monkeypatch):
+    webchat, cleanup = load_webchat_lightweight()
     monkeypatch.setattr(webchat.global_config, "set_managed_overlay", lambda *_args, **_kwargs: ["jira"])
     req = _Req(
         payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
         headers={"X-Portal-Author-Source": "portal"},
     )
-    resp = await webchat.api_apply_runtime_profile(req)
-    assert resp.status == 200
+    try:
+        resp = await webchat.api_apply_runtime_profile(req)
+        assert resp.status == 200
+    finally:
+        cleanup()
 
 
 @pytest.mark.asyncio
 async def test_internal_apply_runtime_profile_trusted_ignores_unrecognized_header(monkeypatch):
+    webchat, cleanup = load_webchat_lightweight()
     monkeypatch.setattr(webchat.global_config, "set_managed_overlay", lambda *_args, **_kwargs: ["jira"])
     req = _Req(
         payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
         headers={"X-Portal-Author-Source": "portal", "X-Arbitrary-Header": "wrong"},
     )
-    resp = await webchat.api_apply_runtime_profile(req)
-    assert resp.status == 200
+    try:
+        resp = await webchat.api_apply_runtime_profile(req)
+        assert resp.status == 200
+    finally:
+        cleanup()
 
 
 @pytest.mark.asyncio
 async def test_internal_apply_runtime_profile_trusted_remains_valid_with_extra_header(monkeypatch):
+    webchat, cleanup = load_webchat_lightweight()
     monkeypatch.setattr(webchat.global_config, "set_managed_overlay", lambda *_args, **_kwargs: ["jira"])
     req = _Req(
         payload={"runtime_profile_id": "rp_x", "revision": 1, "config": {"jira": {"enabled": True}}},
         headers={"X-Portal-Author-Source": "portal", "X-Arbitrary-Header": "anything"},
     )
-    resp = await webchat.api_apply_runtime_profile(req)
-    assert resp.status == 200
+    try:
+        resp = await webchat.api_apply_runtime_profile(req)
+        assert resp.status == 200
+    finally:
+        cleanup()
 
 
 @pytest.mark.asyncio
 async def test_api_get_config_returns_effective_with_runtime_profile_meta(monkeypatch):
+    webchat, cleanup = load_webchat_lightweight()
     monkeypatch.setattr(webchat.global_config, "get_effective_config", lambda: {"jira": {"enabled": True}, "ssh": {"x": 1}})
     monkeypatch.setattr(
         webchat.global_config,
@@ -111,9 +136,12 @@ async def test_api_get_config_returns_effective_with_runtime_profile_meta(monkey
         lambda: {"runtime_profile_id": "rp_1", "revision": 2, "managed_sections": ["jira"]},
     )
 
-    resp = await webchat.api_get_config(_Req())
-    assert resp.status == 200
-    data = resp.body.decode("utf-8")
-    assert '"runtime_profile_id": "rp_1"' in data
-    assert '"jira": {"enabled": true}' in data
-    assert '"ssh"' not in data
+    try:
+        resp = await webchat.api_get_config(_Req())
+        assert resp.status == 200
+        data = resp.body.decode("utf-8")
+        assert '"runtime_profile_id": "rp_1"' in data
+        assert '"jira": {"enabled": true}' in data
+        assert '"ssh"' not in data
+    finally:
+        cleanup()

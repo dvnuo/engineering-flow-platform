@@ -2,6 +2,10 @@ import asyncio
 from pathlib import Path
 import importlib
 import pytest
+from tests._optional_runtime_deps import skip_if_missing_ruamel_yaml
+
+skip_if_missing_ruamel_yaml("full runtime dependencies unavailable (missing ruamel.yaml)")
+
 
 
 @pytest.fixture(autouse=True)

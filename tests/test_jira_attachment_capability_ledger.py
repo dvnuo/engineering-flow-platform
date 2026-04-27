@@ -1,10 +1,11 @@
 import pytest
 
+from tests._lightweight_source_service_loaders import load_jira_source_service_lightweight
+
 
 @pytest.mark.asyncio
-async def test_jira_attachment_binary_skipped_respects_capability(monkeypatch):
-    from src.jira.source_service import prepare_jira_issue_source
-
+async def test_jira_attachment_binary_skipped_respects_capability():
+    module, cleanup = load_jira_source_service_lightweight()
     class _Channel:
         api_version = "3"
         _auth_header = {}
@@ -43,17 +44,28 @@ async def test_jira_attachment_binary_skipped_respects_capability(monkeypatch):
         def _extract_acceptance_criteria(self, _issue):
             return ""
 
-    monkeypatch.setattr("src.jira.jira_channel", _Channel())
-    monkeypatch.setattr("src.jira.source_service.JiraFormatAdapter", _Adapter)
-    monkeypatch.setattr(
-        "src.jira.source_service.persist_jira_source_bundle_and_digest",
-        lambda **kwargs: {"context_ref": "c", "digest_ref": "d", "source_digest_chunk_count": 0},
+    module.jira_channel = _Channel()
+    module.JiraFormatAdapter = _Adapter
+    module.persist_jira_source_bundle_and_digest = (
+        lambda **kwargs: {"context_ref": "c", "digest_ref": "d", "source_digest_chunk_count": 0}
+    )
+    module.can_project_to_text = (
+        lambda mime, filename: str(mime or "").startswith("text/")
+        or str(mime or "") in {
+            "application/pdf",
+            "application/json",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }
     )
 
-    result = await prepare_jira_issue_source("P-1", include_attachments=False, session_id="s1")
-    reasons = result.bundle["completeness_ledger"]["attachment_body_partial_reasons"]
+    try:
+        result = await module.prepare_jira_issue_source("P-1", include_attachments=False, session_id="s1")
+        reasons = result.bundle["completeness_ledger"]["attachment_body_partial_reasons"]
 
-    assert all("a.pdf" not in r for r in reasons)
-    assert all("a.docx" not in r for r in reasons)
-    assert all("a.xlsx" not in r for r in reasons)
-    assert any("a.png" in r for r in reasons)
+        assert all("a.pdf" not in r for r in reasons)
+        assert all("a.docx" not in r for r in reasons)
+        assert all("a.xlsx" not in r for r in reasons)
+        assert any("a.png" in r for r in reasons)
+    finally:
+        cleanup()

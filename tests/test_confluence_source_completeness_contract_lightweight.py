@@ -21,9 +21,15 @@ def _load_confluence_source_service_with_stubs():
     fa_service.attach_source_refs_to_artifact = lambda *args, **kwargs: None
     fa_service.bind_artifact_to_source_bundle = lambda *args, **kwargs: None
     fa_service.build_artifact_ref_dict = lambda record: {"artifact_id": getattr(record, "artifact_id", "a1")}
+    fa_storage = types.ModuleType("src.file_artifacts.storage")
+    fa_storage.storage = types.SimpleNamespace(get_artifact=lambda artifact_id: None)
 
     source_context = types.ModuleType("src.source_context")
     source_context.persist_confluence_source_bundle_and_digest = lambda **kwargs: {"context_ref": "ctx://conf", "digest_ref": "ctx://conf/d"}
+    scope_mod = types.ModuleType("src.source_bundle_completeness")
+    spec_scope = importlib.util.spec_from_file_location("src.source_bundle_completeness", Path("src/source_bundle_completeness.py"))
+    assert spec_scope and spec_scope.loader
+    spec_scope.loader.exec_module(scope_mod)
 
     utils_pkg = types.ModuleType("src.utils")
     utils_pkg.__path__ = []
@@ -51,7 +57,9 @@ def _load_confluence_source_service_with_stubs():
         "src.confluence": confluence_pkg,
         "src.file_artifacts": file_artifacts_pkg,
         "src.file_artifacts.service": fa_service,
+        "src.file_artifacts.storage": fa_storage,
         "src.source_context": source_context,
+        "src.source_bundle_completeness": scope_mod,
         "src.utils": utils_pkg,
         "src.utils.attachment": attachment_mod,
         "src.confluence.adapter": adapter_mod,

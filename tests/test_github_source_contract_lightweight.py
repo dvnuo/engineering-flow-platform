@@ -44,6 +44,10 @@ def _load_github_modules_lightweight():
 
     source_context_mod = types.ModuleType("src.source_context")
     source_context_mod.persist_github_source_bundle_and_digest = lambda **kwargs: {"context_ref": "ctx", "digest_ref": "dig"}
+    scope_mod = types.ModuleType("src.source_bundle_completeness")
+    spec_scope = importlib.util.spec_from_file_location("src.source_bundle_completeness", Path("src/source_bundle_completeness.py"))
+    assert spec_scope and spec_scope.loader
+    spec_scope.loader.exec_module(scope_mod)
 
     utils_pkg = types.ModuleType("src.utils")
     utils_pkg.__path__ = []
@@ -65,6 +69,7 @@ def _load_github_modules_lightweight():
         "src.github.asset_links": github_links_mod,
         "src.github.doc_refs": github_doc_ref_mod,
         "src.source_context": source_context_mod,
+        "src.source_bundle_completeness": scope_mod,
         "src.utils": utils_pkg,
         "src.utils.attachment": attachment_mod,
         "src.utils.file_parser": file_parser_mod,

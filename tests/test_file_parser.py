@@ -3,15 +3,23 @@
 import pytest
 import tempfile
 from pathlib import Path
+import sys
 
-from src.utils.file_parser.validators import (
-    validate_file_size,
-    validate_content_type,
-    sanitize_filename,
-    get_safe_extension,
-    is_image_file,
-    FILENAME_PATTERN,
-)
+from tests._lightweight_file_parser_loader import load_file_parser_lightweight
+
+_file_parser_module, _file_parser_cleanup = load_file_parser_lightweight()
+_validators = sys.modules["src.utils.file_parser.validators"]
+
+validate_file_size = _validators.validate_file_size
+validate_content_type = _validators.validate_content_type
+sanitize_filename = _validators.sanitize_filename
+get_safe_extension = _validators.get_safe_extension
+is_image_file = _validators.is_image_file
+FILENAME_PATTERN = _validators.FILENAME_PATTERN
+
+
+def teardown_module(_module):
+    _file_parser_cleanup()
 
 
 class TestValidateFileSize:

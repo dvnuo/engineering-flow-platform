@@ -1,6 +1,6 @@
 import pytest
 
-from src.github.url_utils import normalize_github_api_base_url
+from tests._lightweight_runtime_loaders import load_github_url_utils_lightweight
 
 
 @pytest.mark.parametrize(
@@ -14,4 +14,5 @@ from src.github.url_utils import normalize_github_api_base_url
     ],
 )
 def test_normalize_github_api_base_url_config_semantics(raw, expected):
-    assert normalize_github_api_base_url(raw) == expected
+    module = load_github_url_utils_lightweight()
+    assert module.normalize_github_api_base_url(raw) == expected

@@ -1,14 +1,23 @@
+import types
 from unittest.mock import AsyncMock
 
 import pytest
 
-from src.utils.attachment import AttachmentResult
+from tests._lightweight_runtime_loaders import load_confluence_init_lightweight
+
+
+@pytest.fixture(autouse=True)
+def _lightweight_confluence_module():
+    module, cleanup = load_confluence_init_lightweight()
+    try:
+        globals()["confluence"] = module
+        yield
+    finally:
+        cleanup()
 
 
 @pytest.mark.asyncio
 async def test_confluence_image_attachments_are_metadata_only_and_not_downloaded(monkeypatch):
-    import src.confluence as confluence
-
     monkeypatch.setattr(
         confluence.confluence_channel,
         "get_attachments",
@@ -39,8 +48,6 @@ async def test_confluence_image_attachments_are_metadata_only_and_not_downloaded
 
 @pytest.mark.asyncio
 async def test_confluence_text_attachment_still_uses_existing_preview_flow(monkeypatch):
-    import src.confluence as confluence
-
     monkeypatch.setattr(
         confluence.confluence_channel,
         "get_attachments",
@@ -57,7 +64,7 @@ async def test_confluence_text_attachment_still_uses_existing_preview_flow(monke
     )
 
     mock_download = AsyncMock(
-        return_value=AttachmentResult(
+        return_value=types.SimpleNamespace(
             file_id="file-1",
             content_type="text/plain",
             content="hello from attachment",
@@ -77,8 +84,6 @@ async def test_confluence_text_attachment_still_uses_existing_preview_flow(monke
 
 @pytest.mark.asyncio
 async def test_confluence_attachment_output_is_bounded_and_reports_omitted_count(monkeypatch):
-    import src.confluence as confluence
-
     attachments = [
         {
             "title": f"step-{idx}.png",
@@ -107,8 +112,6 @@ async def test_confluence_attachment_output_is_bounded_and_reports_omitted_count
 
 @pytest.mark.asyncio
 async def test_unexpected_base64_result_is_not_inlined(monkeypatch):
-    import src.confluence as confluence
-
     monkeypatch.setattr(
         confluence.confluence_channel,
         "get_attachments",
@@ -125,7 +128,7 @@ async def test_unexpected_base64_result_is_not_inlined(monkeypatch):
     )
 
     mock_download = AsyncMock(
-        return_value=AttachmentResult(
+        return_value=types.SimpleNamespace(
             file_id="file-2",
             content_type="application/octet-stream",
             content="AAAABBBBCCCCDDDDEEEE",

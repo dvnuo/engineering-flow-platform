@@ -5,6 +5,18 @@ import pytest
 from aiohttp.test_utils import make_mocked_request
 from multidict import CIMultiDict
 
+try:  # pragma: no cover - environment dependent
+    import ruamel.yaml as _ruamel_yaml  # noqa: F401
+    _HAS_RUAMEL_YAML = True
+except Exception:  # pragma: no cover - environment dependent
+    _HAS_RUAMEL_YAML = False
+
+if not _HAS_RUAMEL_YAML:  # pragma: no cover - environment dependent
+    pytest.skip("full webchat runtime dependencies unavailable (missing ruamel.yaml)", allow_module_level=True)
+
+from src.gateway import webchat
+from src.hooks.file_context.storage import storage
+
 class _Multipart:
     def __init__(self, field):
         self._field = field
@@ -21,12 +33,6 @@ class _Field:
 
 @pytest.mark.asyncio
 async def test_upload_and_parse_binds_session_and_rebuilds(monkeypatch):
-    try:
-        from src.gateway import webchat
-        from src.hooks.file_context.storage import storage
-    except ModuleNotFoundError as exc:  # pragma: no cover - environment dependent
-        pytest.skip(f"webchat import unavailable in this environment: {exc}")
-
     req = make_mocked_request("POST", "/api/files/upload?session_id=s-bind", headers=CIMultiDict())
     async def _multipart():
         return _Multipart(_Field())
@@ -59,12 +65,6 @@ async def test_upload_and_parse_binds_session_and_rebuilds(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_parse_exception_marks_file_and_artifact_failed(monkeypatch):
-    try:
-        from src.gateway import webchat
-        from src.hooks.file_context.storage import storage
-    except ModuleNotFoundError as exc:  # pragma: no cover - environment dependent
-        pytest.skip(f"webchat import unavailable in this environment: {exc}")
-
     req = make_mocked_request("POST", "/api/files/upload?session_id=s-bind-err", headers=CIMultiDict())
 
     async def _multipart():
