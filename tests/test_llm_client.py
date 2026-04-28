@@ -1309,3 +1309,48 @@ def test_openai_provider_debug_fallback_max_tokens_matches_responses_default():
     source = inspect.getsource(OpenAIProvider.responses)
     assert "config.llm.get('max_tokens', 1000)" not in source
     assert "config.llm.get('max_tokens', 64000)" in source
+
+@pytest.mark.asyncio
+async def test_openai_chat_tools_payload_sets_parallel_tool_calls_false_by_default(monkeypatch, openai_provider):
+    captured = {}
+
+    async def _fake_call_api(_path, payload):
+        captured.update(payload)
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    monkeypatch.setattr(openai_provider, "_call_api", _fake_call_api)
+    monkeypatch.setitem(config._config, "llm", {"model": "gpt-5-mini"})
+
+    await openai_provider.chat(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {"name": "jira_search", "parameters": {"type": "object"}}}],
+    )
+
+    assert captured.get("tool_choice") == "auto"
+    assert captured.get("parallel_tool_calls") is False
+
+
+@pytest.mark.asyncio
+async def test_github_copilot_responses_tools_payload_respects_parallel_tool_calls_config(
+    monkeypatch, github_copilot_provider
+):
+    captured = {}
+
+    async def _fake_call_api(_path, payload):
+        captured.update(payload)
+        return {"output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]}
+
+    monkeypatch.setattr(github_copilot_provider, "_call_api", _fake_call_api)
+    monkeypatch.setitem(
+        config._config,
+        "llm",
+        {"model": "gpt-5-mini", "api_key": "test-key", "tool_loop": {"parallel_tool_calls": True}},
+    )
+
+    await github_copilot_provider.responses(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {"name": "jira_search", "parameters": {"type": "object"}}}],
+    )
+
+    assert captured.get("tool_choice") == "auto"
+    assert captured.get("parallel_tool_calls") is True

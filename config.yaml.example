@@ -93,6 +93,13 @@ llm:
     chars_per_token_estimate: 4
     max_chat_output_chars: null
     oversized_output_strategy: "save_and_manifest"
+  tool_loop:
+    # Keep agent actions sequential: action -> observation -> next action.
+    one_tool_per_turn: true
+    # For OpenAI-compatible providers that support it.
+    parallel_tool_calls: false
+    # Number of repeated identical tool/args/result patterns allowed before stopping.
+    max_repeated_tool_signature: 2
   response_flow:
     # Direct completion is the default.
     plan_policy: "explicit_or_complex"

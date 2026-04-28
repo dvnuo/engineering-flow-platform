@@ -446,6 +446,7 @@ async def _run_chat_via_execution_bus(
 
     async def _chat_handler(execution_request):
         payload = execution_request.input_payload
+        handler_metadata = dict(getattr(execution_request, "metadata", {}) or {})
         effective_request_id = getattr(execution_request, "request_id", None) or resolved_request_id
         return await run_chat_execution(
             agent,
@@ -460,6 +461,7 @@ async def _run_chat_via_execution_bus(
             reasoning_replay=payload.get("reasoning_replay"),
             stream_callback=payload.get("stream_callback"),
             request_id=effective_request_id,
+            execution_metadata=handler_metadata,
         )
 
     merged_metadata = dict(execution_metadata or {})

@@ -179,11 +179,62 @@ async def test_execute_tool_via_runtime_bus_propagates_governance_passthrough_hi
     assert governance_hint.get("tool_result_passthrough_recommended") is True
 
 
+@pytest.mark.asyncio
+async def test_execute_tool_via_runtime_bus_forwards_execution_metadata_and_preserves_tool_fields(monkeypatch):
+    from src.agents import core
+
+    captured = {}
+
+    async def _fake_execute_tool_or_task_orchestration(**kwargs):
+        captured.update(kwargs)
+        return make_execution_result(
+            request_id="req-2",
+            status="success",
+            output_payload={"success": True, "content": "ok"},
+            artifacts={},
+        )
+
+    monkeypatch.setattr(core, "execute_tool_or_task_orchestration", _fake_execute_tool_or_task_orchestration)
+
+    await core._execute_tool_via_runtime_bus(
+        session_id="s-2",
+        tool_name="jira_search",
+        args={"q": "abc"},
+        execution_metadata={
+            "allowed_capability_ids": ["tool:jira_search"],
+            "tool_name": "evil_override",
+            "task_boundary": True,
+        },
+    )
+
+    metadata = captured.get("metadata") or {}
+    assert metadata.get("allowed_capability_ids") == ["tool:jira_search"]
+    assert metadata.get("tool_name") == "jira_search"
+    assert metadata.get("task_boundary") is False
+
+
 def test_core_no_longer_directly_calls_should_passthrough_tool_result():
     from src.agents import core
 
     source = inspect.getsource(core.Agent.process)
     assert "should_passthrough_tool_result(" not in source
+
+
+def test_max_iterations_wording_is_honest_and_not_completed():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent.process)
+    assert "Task completed after maximum iterations." not in source
+    assert "Stopped after reaching the maximum number of tool iterations before reliable completion." in source
+
+
+def test_agent_process_contains_one_tool_per_turn_and_no_progress_guards():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent.process)
+    assert "one_tool_per_turn" in source
+    assert '"policy": "one_tool_per_turn"' in source
+    assert "no_progress_warning" in source
 
 
 def test_core_safe_int_handles_none_for_max_chat_output_chars():
@@ -355,7 +406,11 @@ def test_tool_feedback_text_for_non_jira_confluence_uses_default_8000_limit():
     long_value = "A" * 9005
     output = core._tool_feedback_text_for_tool("github_get_pull_request", long_value)
 
-    assert output.startswith("A" * 8000)
+    assert output.startswith("[tool_result]")
+    assert "tool_name: github_get_pull_request" in output
+    assert "truncated: true" in output
+    assert "content_chars: 9005" in output
+    assert ("A" * 8000) in output
     assert "1005 chars hidden" in output
     assert len(output) < len(long_value)
 
@@ -380,7 +435,10 @@ def test_tool_feedback_text_for_short_jira_confluence_keeps_full_text():
 
     value = "short jira body"
     output = core._tool_feedback_text_for_tool("jira_get_issue", value, session_id="s-core")
-    assert output == value
+    assert output.startswith("[tool_result]")
+    assert "tool_name: jira_get_issue" in output
+    assert "truncated: false" in output
+    assert output.endswith(value)
 
 
 def test_large_source_feedback_projection_is_idempotent():
@@ -465,6 +523,27 @@ def test_real_projected_marker_with_ctx_ref_passes_through():
         "Summary:\nhello"
     )
     assert core._tool_feedback_text_for_tool("github_get_pull_request", projected) == projected
+
+
+def test_tool_feedback_text_for_failed_tool_result_sets_success_false():
+    from src.agents import core
+    from src.agents.executor import ToolResult
+
+    value = ToolResult(success=False, content="Error: blocked by policy", error="blocked by policy")
+    output = core._tool_feedback_text_for_tool("github_get_pull_request", value)
+    assert output.startswith("[tool_result]")
+    assert "success: false" in output
+    assert "error: blocked by policy" in output
+
+
+def test_allowed_tool_names_from_execution_metadata_filters_tool_capabilities_only():
+    from src.agents import core
+
+    allowed = core._allowed_tool_names_from_execution_metadata(
+        {"allowed_capability_ids": ["tool:jira_search", "skill:x", "adapter_action:y"]}
+    )
+    assert allowed == {"jira_search"}
+    assert core._allowed_tool_names_from_execution_metadata(None) == set()
 
 
 def test_assistant_skill_projected_marker_is_recognized_and_idempotent():
