@@ -142,6 +142,41 @@ async def test_run_command_non_git_non_gh_does_not_call_credential_resolver(monk
 
 
 @pytest.mark.asyncio
+async def test_run_command_non_git_non_gh_does_not_import_credential_resolver(monkeypatch):
+    import builtins
+
+    captured_env = {}
+
+    class Proc:
+        returncode = 0
+
+        async def communicate(self):
+            return b"ok", b""
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured_env.update(kwargs.get("env", {}))
+        return Proc()
+
+    real_import = builtins.__import__
+
+    def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "src.runtime.credential_resolver":
+            raise AssertionError("credential_resolver should not be imported for non git/gh commands")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+    result = await run_command("ls", ["-la"])
+
+    assert result["ok"] is True
+    assert "GH_TOKEN" not in captured_env
+    assert "GITHUB_TOKEN" not in captured_env
+    assert "GIT_ASKPASS" not in captured_env
+    assert "EFP_GITHUB_TOKEN" not in captured_env
+
+
+@pytest.mark.asyncio
 async def test_run_command_cleanup_always_called(monkeypatch):
     cleanup_called = {"value": False}
 

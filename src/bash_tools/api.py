@@ -10,10 +10,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Any, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from src.runtime.credential_resolver import ToolCredentialEnv
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +30,19 @@ COMMON_COMMANDS = [
     "vi", "vim", "nano", "code",
     "echo", "printf", "date", "whoami", "id",
 ]
+
+
+class _NoopCredentialEnv:
+    env: Dict[str, str] = {}
+
+    def cleanup(self) -> None:
+        return None
+
+    def redact_text(self, value: Any) -> str:
+        return "" if value is None else str(value)
+
+    def redact_args(self, args: List[str]) -> List[str]:
+        return [self.redact_text(arg) for arg in args]
 
 
 def get_workspace_dir() -> str:
@@ -209,12 +219,6 @@ def _validate_cwd(cwd: str = None) -> str:
     return cwd
 
 
-def _empty_credential_env():
-    from src.runtime.credential_resolver import ToolCredentialEnv
-
-    return ToolCredentialEnv()
-
-
 def build_env_for_command(cmd: str, args: List[str] = None, cwd: str = None):
     from src.runtime.credential_resolver import build_env_for_command as _build_env_for_command
 
@@ -222,11 +226,9 @@ def build_env_for_command(cmd: str, args: List[str] = None, cwd: str = None):
 
 
 def _build_credential_env(cmd: str, args: List[str], cwd: str):
-    from src.runtime.credential_resolver import ToolCredentialEnv
-
     normalized_cmd = (cmd or "").strip()
     if normalized_cmd not in {"git", "gh"}:
-        return ToolCredentialEnv()
+        return _NoopCredentialEnv()
     return build_env_for_command(normalized_cmd, args=args, cwd=cwd)
 
 
@@ -320,7 +322,7 @@ async def run_command(
             if k in allowed_keys:
                 safe_env[k] = v
     
-    credential_env = _empty_credential_env()
+    credential_env = _NoopCredentialEnv()
     try:
         credential_env = _build_credential_env(cmd, args=args, cwd=cwd)
     except Exception as exc:
