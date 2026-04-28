@@ -7,12 +7,13 @@ async def test_run_triggered_event_task_github_mention_passes_session_id_to_agen
 
     calls = {"agent": 0, "comment": 0}
 
-    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage):
+    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage, execution_metadata=None):
         calls["agent"] += 1
         assert session_id == "sess-1"
         assert "GitHub" in message
         assert user_name == "triggered-event"
         assert track_usage is False
+        assert execution_metadata is None
         return {"response": "ok"}
 
     async def _fake_add_comment(owner, repo, issue_number, body):
@@ -47,12 +48,13 @@ async def test_run_triggered_event_task_jira_assigned_passes_session_id_to_agent
 
     calls = {"agent": 0, "comment": 0}
 
-    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage):
+    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage, execution_metadata=None):
         calls["agent"] += 1
         assert session_id == "sess-2"
         assert "Jira" in message
         assert user_name == "triggered-event"
         assert track_usage is False
+        assert execution_metadata is None
         return {"response": "looks good"}
 
     async def _fake_add_comment(issue_key, body):
@@ -85,7 +87,7 @@ async def test_run_triggered_event_task_github_mention_blocked_does_not_writebac
 
     called = {"comment": 0}
 
-    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage):
+    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage, execution_metadata=None):
         return {"response": "ok"}
 
     async def _fake_add_comment(*args, **kwargs):
@@ -122,7 +124,7 @@ async def test_run_triggered_event_task_jira_assigned_blocked_does_not_writeback
 
     called = {"comment": 0}
 
-    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage):
+    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage, execution_metadata=None):
         return {"response": "ok"}
 
     async def _fake_add_comment(*args, **kwargs):
@@ -159,7 +161,7 @@ async def test_run_triggered_event_task_confluence_mention_blocked_does_not_writ
 
     called = {"comment": 0}
 
-    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage):
+    async def _fake_run_chat_execution(*, agent, message, session_id, user_name, track_usage, execution_metadata=None):
         return {"response": "ok"}
 
     async def _fake_add_comment(*args, **kwargs):
@@ -188,3 +190,61 @@ async def test_run_triggered_event_task_confluence_mention_blocked_does_not_writ
     assert result["secondary_action_id"] == "channel_action:confluence_add_comment"
     assert result["secondary_action_capability_type"] == "channel_action"
     assert result["blocked"] is True
+
+
+@pytest.mark.asyncio
+async def test_triggered_event_task_forwards_execution_metadata_to_agent(monkeypatch):
+    from src.runtime.triggered_event_task import run_triggered_event_task
+
+    captured: dict = {}
+    metadata = {
+        "allowed_capability_ids": ["tool:jira_search"],
+        "llm_tool_loop": {
+            "one_tool_per_turn": True,
+            "parallel_tool_calls": False,
+            "max_repeated_tool_signature": 2,
+        },
+    }
+
+    async def _fake_run_chat_execution(
+        *,
+        agent,
+        message,
+        session_id,
+        user_name,
+        track_usage,
+        execution_metadata=None,
+    ):
+        captured["execution_metadata"] = execution_metadata
+        return {"response": "ok"}
+
+    async def _fake_add_comment(owner, repo, issue_number, body):
+        return None
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+
+    result = await run_triggered_event_task(
+        {
+            "source_kind": "github.mention",
+            "session_id": "test-session",
+            "owner": "octo",
+            "repo": "repo",
+            "issue_number": 123,
+            "body": "@agent please investigate",
+            "_execution_metadata": metadata,
+            "_action_gate": lambda action_id, kwargs: {"blocked": False},
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["execution_metadata"] == metadata
+
+
+def test_triggered_event_execution_bus_preserves_execution_metadata_source_guard():
+    import inspect
+    import src.runtime.execution_bus as execution_bus
+
+    source = inspect.getsource(execution_bus)
+    assert '"_execution_metadata"' in source
+    assert "dict(metadata)" in source

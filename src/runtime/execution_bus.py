@@ -1347,6 +1347,8 @@ def build_default_execution_bus(
         if not source_kind:
             raise ValueError("Missing source_kind for triggered_event_task")
         payload["source_kind"] = source_kind
+        if metadata:
+            payload["_execution_metadata"] = dict(metadata)
         return payload
 
     async def task_handler(request: ExecutionRequest) -> ExecutionResult:
