@@ -2453,7 +2453,7 @@ def build_default_execution_bus(
                         "task_boundary": True,
                     },
                 )
-            return await _execute_skill_backed_task(
+            result = await _execute_skill_backed_task(
                 request,
                 task_id=task_id,
                 task_type=task_type,
@@ -2461,6 +2461,26 @@ def build_default_execution_bus(
                 event_prefix=f"task.{task_template.template_id.replace('_', '.')}",
                 allow_payload_skill_name=False,
             )
+            if isinstance(result.output_payload, dict):
+                result.output_payload["task_template_id"] = task_template.template_id
+                result.output_payload["task_type"] = task_type
+            normalized_events: list[Dict[str, Any]] = []
+            for event in list(result.runtime_events or []):
+                if not isinstance(event, dict):
+                    normalized_events.append(event)
+                    continue
+                detail = event.get("detail_payload")
+                if isinstance(detail, dict):
+                    enriched_detail = dict(detail)
+                    enriched_detail["task_template_id"] = task_template.template_id
+                    enriched_detail["task_type"] = task_type
+                    enriched_event = dict(event)
+                    enriched_event["detail_payload"] = enriched_detail
+                    normalized_events.append(enriched_event)
+                else:
+                    normalized_events.append(event)
+            result.runtime_events = normalized_events
+            return result
 
         if task_type != "tool_task":
             return make_execution_result(

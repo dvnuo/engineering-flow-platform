@@ -3443,6 +3443,30 @@ async def test_bundle_action_task_routes_to_task_template_skill(monkeypatch):
     assert observed["skill_name"] == "collect_requirements_to_bundle"
     assert result.status == "success"
     assert result.output_payload["task_template_id"] == "collect_requirements_to_bundle"
+    assert any(
+        evt.get("detail_payload", {}).get("task_template_id") == "collect_requirements_to_bundle"
+        for evt in result.runtime_events
+        if isinstance(evt, dict)
+    )
+
+
+@pytest.mark.asyncio
+async def test_bundle_action_task_template_id_fallback_does_not_accept_bundle_template_id():
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={
+            "task_type": "bundle_action_task",
+            "template_id": "requirement.v1",
+            "bundle_template_id": "requirement.v1",
+            "bundle_ref": {"repo": "org/assets", "path": "bundles/RB-1", "branch": "main"},
+            "manifest_ref": {"repo": "org/assets", "path": "bundles/RB-1/bundle.yaml", "branch": "main"},
+            "sources": {"jira": ["ABC-1"]},
+        },
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "blocked"
+    assert "Unsupported task_template_id" in result.output_payload["error"]
 
 
 @pytest.mark.asyncio

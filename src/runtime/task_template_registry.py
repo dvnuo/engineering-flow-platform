@@ -110,11 +110,15 @@ def require_task_template(template_id: str) -> TaskTemplateDefinition:
 
 def resolve_task_template_from_payload(payload: Dict[str, Any]) -> TaskTemplateDefinition | None:
     normalized_payload = payload if isinstance(payload, dict) else {}
+
+    # Preferred field for runtime task-template routing.
     task_template_id = str(normalized_payload.get("task_template_id") or "").strip().lower()
     if task_template_id:
         return get_task_template(task_template_id)
 
-    # Backward-compatible fallback only when `template_id` clearly points to a task template.
+    # Fallback for legacy callers: only accept `template_id` if it is NOT a known
+    # bundle template id (e.g. requirement.v1). `bundle_template_id` remains the
+    # canonical bundle layout identifier.
     template_id = str(normalized_payload.get("template_id") or "").strip().lower()
     if not template_id:
         return None
