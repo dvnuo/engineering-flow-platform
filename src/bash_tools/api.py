@@ -6,13 +6,14 @@ Two tools:
 """
 
 import asyncio
-import importlib.util
 import logging
 import os
 import subprocess
-import sys
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.runtime.credential_resolver import ToolCredentialEnv
 
 logger = logging.getLogger(__name__)
 
@@ -208,15 +209,25 @@ def _validate_cwd(cwd: str = None) -> str:
     return cwd
 
 
+def _empty_credential_env():
+    from src.runtime.credential_resolver import ToolCredentialEnv
+
+    return ToolCredentialEnv()
+
+
+def build_env_for_command(cmd: str, args: List[str] = None, cwd: str = None):
+    from src.runtime.credential_resolver import build_env_for_command as _build_env_for_command
+
+    return _build_env_for_command(cmd, args=args, cwd=cwd)
+
+
 def _build_credential_env(cmd: str, args: List[str], cwd: str):
-    module_path = Path(__file__).parent.parent / "runtime" / "credential_resolver.py"
-    spec = importlib.util.spec_from_file_location("efp_runtime_credential_resolver", module_path)
-    if not spec or not spec.loader:
-        raise RuntimeError("Failed to load credential resolver")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["efp_runtime_credential_resolver"] = module
-    spec.loader.exec_module(module)
-    return module.build_env_for_command(cmd, args=args, cwd=cwd)
+    from src.runtime.credential_resolver import ToolCredentialEnv
+
+    normalized_cmd = (cmd or "").strip()
+    if normalized_cmd not in {"git", "gh"}:
+        return ToolCredentialEnv()
+    return build_env_for_command(normalized_cmd, args=args, cwd=cwd)
 
 
 async def run_command(
@@ -309,7 +320,20 @@ async def run_command(
             if k in allowed_keys:
                 safe_env[k] = v
     
-    credential_env = _build_credential_env(cmd, args=args, cwd=cwd)
+    credential_env = _empty_credential_env()
+    try:
+        credential_env = _build_credential_env(cmd, args=args, cwd=cwd)
+    except Exception as exc:
+        logger.exception("Failed to prepare credential environment for command: %s", cmd)
+        return {
+            "ok": False,
+            "error": "E_CREDENTIAL_ENV_FAILED",
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": credential_env.redact_text(str(exc)),
+            "duration_ms": 0,
+            "truncated": {"stdout": False, "stderr": False},
+        }
     safe_env.update(credential_env.env)
 
     # Execute
@@ -345,12 +369,12 @@ async def run_command(
 
             duration_ms = int((asyncio.get_running_loop().time() - start_time) * 1000)
 
-            # Truncate if needed
-            stdout_bytes = stdout[:max_output_bytes]
-            stderr_bytes = stderr[:max_output_bytes]
-
-            stdout_text = credential_env.redact_text(stdout_bytes.decode("utf-8", errors="replace"))
-            stderr_text = credential_env.redact_text(stderr_bytes.decode("utf-8", errors="replace"))
+            stdout_full_text = stdout.decode("utf-8", errors="replace")
+            stderr_full_text = stderr.decode("utf-8", errors="replace")
+            stdout_redacted = credential_env.redact_text(stdout_full_text)
+            stderr_redacted = credential_env.redact_text(stderr_full_text)
+            stdout_text = stdout_redacted[:max_output_bytes]
+            stderr_text = stderr_redacted[:max_output_bytes]
 
             is_success = process.returncode == 0
             return {

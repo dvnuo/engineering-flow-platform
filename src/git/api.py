@@ -136,7 +136,12 @@ class GitClient:
             cleanup()
 
     def _get_github_token(self) -> str:
-        return (config.get("github", {}) or {}).get("api_token", "")
+        github_config = config.get("github", {}) or {}
+        if not isinstance(github_config, dict):
+            return ""
+        if not bool(github_config.get("enabled")):
+            return ""
+        return str(github_config.get("api_token") or "").strip()
 
     def _build_askpass_env(self) -> tuple[Optional[dict], Callable[[], None]]:
         token = self._get_github_token()
@@ -222,8 +227,30 @@ def setup_git_user_sync() -> bool:
     if not user_name or not user_email:
         return False
 
-    subprocess.run(["git", "config", "--global", "user.name", user_name], check=False)
-    subprocess.run(["git", "config", "--global", "user.email", user_email], check=False)
+    try:
+        name_result = subprocess.run(
+            ["git", "config", "--global", "user.name", user_name],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        email_result = subprocess.run(
+            ["git", "config", "--global", "user.email", user_email],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception as exc:
+        logger.warning("Failed to configure git user: %s", exc)
+        return False
+
+    if name_result.returncode != 0 or email_result.returncode != 0:
+        logger.warning(
+            "Failed to configure git user: name_rc=%s email_rc=%s",
+            name_result.returncode,
+            email_result.returncode,
+        )
+        return False
 
     logger.info("Git user configured: %s <%s>", user_name, user_email)
     return True

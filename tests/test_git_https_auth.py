@@ -107,13 +107,71 @@ def test_setup_git_user_sync_uses_profile_config(monkeypatch):
             return {"user": {"name": "Bot", "email": "bot@example.com"}}
         return default
 
-    def fake_run(cmd, check=False):
-        calls.append((cmd, check))
-        return None
+    class FakeCompleted:
+        returncode = 0
+
+    def fake_run(cmd, check=False, capture_output=False, text=False):
+        calls.append((cmd, check, capture_output, text))
+        return FakeCompleted()
 
     monkeypatch.setattr("src.git.api.config.get", fake_get)
     monkeypatch.setattr("src.git.api.subprocess.run", fake_run)
 
     assert setup_git_user_sync() is True
-    assert (["git", "config", "--global", "user.name", "Bot"], False) in calls
-    assert (["git", "config", "--global", "user.email", "bot@example.com"], False) in calls
+    assert (["git", "config", "--global", "user.name", "Bot"], False, True, True) in calls
+    assert (["git", "config", "--global", "user.email", "bot@example.com"], False, True, True) in calls
+
+
+def test_setup_git_user_sync_returns_false_on_git_config_failure(monkeypatch):
+    class FakeCompleted:
+        returncode = 1
+
+    def fake_get(key, default=None):
+        if key == "git":
+            return {"user": {"name": "Bot", "email": "bot@example.com"}}
+        return default
+
+    def fake_run(cmd, check=False, capture_output=False, text=False):
+        return FakeCompleted()
+
+    monkeypatch.setattr("src.git.api.config.get", fake_get)
+    monkeypatch.setattr("src.git.api.subprocess.run", fake_run)
+
+    assert setup_git_user_sync() is False
+
+
+def test_git_client_askpass_respects_github_enabled_false(monkeypatch):
+    def fake_get(key, default=None):
+        if key == "github":
+            return {"enabled": False, "api_token": "ghp_should_not_be_used", "base_url": ""}
+        return default
+
+    monkeypatch.setattr("src.git.api.config.get", fake_get)
+
+    client = GitClient(workspace=".")
+    env, cleanup = client._build_askpass_env()
+    try:
+        assert env is None
+    finally:
+        cleanup()
+
+
+def test_git_client_askpass_uses_token_only_when_enabled(monkeypatch):
+    token = "ghp_test_token"
+
+    def fake_get(key, default=None):
+        if key == "github":
+            return {"enabled": True, "api_token": token, "base_url": ""}
+        return default
+
+    monkeypatch.setattr("src.git.api.config.get", fake_get)
+
+    client = GitClient(workspace=".")
+    env, cleanup = client._build_askpass_env()
+    try:
+        assert env is not None
+        assert env["EFP_GITHUB_TOKEN"] == token
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
+        assert env["GIT_ASKPASS"]
+    finally:
+        cleanup()
