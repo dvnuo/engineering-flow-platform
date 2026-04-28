@@ -3896,6 +3896,18 @@ You have access to the following tools. When a user asks you to do something tha
                     len(skill_tool_schemas),
                     len(available_tools),
                 )
+
+            portal_allowed_tools = _allowed_tool_names_from_execution_metadata(execution_metadata)
+            if portal_allowed_tools:
+                portal_allowed_tools.update(INTERNAL_SUPPORT_TOOL_NAMES)
+                before_count = len(available_tools or [])
+                available_tools = intersect_tool_schemas_by_names(available_tools, portal_allowed_tools)
+                logger.debug(
+                    "[SkillMode][Tool Policy] Portal capability tool filter applied: before=%s after=%s allowed=%s",
+                    before_count,
+                    len(available_tools or []),
+                    sorted(portal_allowed_tools),
+                )
             
             logger.debug(f"[SkillMode] available_tools count={len(available_tools)}")
             if available_tools and isinstance(available_tools[0], dict):

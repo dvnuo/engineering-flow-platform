@@ -1757,6 +1757,26 @@ def test_continue_skill_mode_source_uses_budget_estimation_and_skill_generation_
     assert "degrade_projected_context_sources_in_responses_input_items(input_items)" in source
 
 
+def test_legacy_skill_mode_applies_portal_capability_filter_to_visible_tools():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent._continue_skill_mode)
+
+    assert "portal_allowed_tools = _allowed_tool_names_from_execution_metadata(execution_metadata)" in source
+    assert "available_tools = intersect_tool_schemas_by_names(available_tools, portal_allowed_tools)" in source
+    assert "[SkillMode][Tool Policy] Portal capability tool filter applied" in source
+
+
+def test_legacy_skill_mode_portal_filter_runs_before_llm_kwargs():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent._continue_skill_mode)
+
+    filter_index = source.index("portal_allowed_tools = _allowed_tool_names_from_execution_metadata(execution_metadata)")
+    llm_kwargs_index = source.index("llm_kwargs = {")
+    assert filter_index < llm_kwargs_index
+
+
 def test_is_tool_allowed_by_skill_runtime_allows_internal_support_tools():
     from src.agents import core
     from src.skills.runtime import SkillRuntimeConfig
