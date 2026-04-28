@@ -3470,6 +3470,52 @@ async def test_bundle_action_task_template_id_fallback_does_not_accept_bundle_te
 
 
 @pytest.mark.asyncio
+async def test_bundle_action_task_metadata_portal_task_template_id_fallback_succeeds(monkeypatch):
+    observed = {}
+
+    async def _fake_run_skill_execution(skill_name, **kwargs):
+        observed["skill_name"] = skill_name
+        observed["kwargs"] = kwargs
+        return SkillResult(success=True, output="ok", data={"updated_files": []})
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_skill_execution", _fake_run_skill_execution)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        metadata={"portal_task_template_id": "collect_requirements_to_bundle"},
+        input_payload={
+            "task_type": "bundle_action_task",
+            "bundle_template_id": "requirement.v1",
+            "bundle_ref": {"repo": "org/assets", "path": "bundles/RB-1", "branch": "main"},
+            "manifest_ref": {"repo": "org/assets", "path": "bundles/RB-1/bundle.yaml", "branch": "main"},
+            "sources": {"jira": ["ABC-1"]},
+        },
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "success"
+    assert observed["skill_name"] == "collect_requirements_to_bundle"
+    assert result.output_payload["task_template_id"] == "collect_requirements_to_bundle"
+
+
+@pytest.mark.asyncio
+async def test_bundle_action_task_without_task_template_id_and_metadata_is_blocked():
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={
+            "task_type": "bundle_action_task",
+            "bundle_template_id": "requirement.v1",
+            "bundle_ref": {"repo": "org/assets", "path": "bundles/RB-1", "branch": "main"},
+            "manifest_ref": {"repo": "org/assets", "path": "bundles/RB-1/bundle.yaml", "branch": "main"},
+            "sources": {"jira": ["ABC-1"]},
+        },
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "blocked"
+    assert "Unsupported task_template_id" in result.output_payload["error"]
+
+
+@pytest.mark.asyncio
 async def test_bundle_action_task_unknown_task_template_blocked(monkeypatch):
     called = {"value": False}
 
@@ -3594,6 +3640,41 @@ async def test_github_review_task_with_task_template_id_succeeds(monkeypatch):
         input_payload={
             "task_type": "github_review_task",
             "task_template_id": "github_pr_review",
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 7,
+        },
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "success"
+    assert result.output_payload["task_template_id"] == "github_pr_review"
+    assert any(evt.get("detail_payload", {}).get("task_template_id") == "github_pr_review" for evt in result.runtime_events)
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_uses_metadata_task_template_id_fallback(monkeypatch):
+    async def _fake_run_github_review_task(_payload):
+        return {
+            "success": True,
+            "review_summary": "ok",
+            "review_event": "COMMENT",
+            "review_written": True,
+            "comment_written": True,
+            "error": None,
+            "runtime_events": [],
+            "secondary_action_attempted": True,
+            "secondary_action_success": True,
+            "secondary_action_id": "adapter:github:review_pull_request",
+            "result": {},
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        metadata={"portal_task_template_id": "github_pr_review"},
+        input_payload={
+            "task_type": "github_review_task",
             "owner": "acme",
             "repo": "demo",
             "pull_number": 7,

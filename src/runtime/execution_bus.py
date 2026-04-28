@@ -445,6 +445,22 @@ def _get_required(payload: Dict[str, Any], key: str) -> Any:
     return payload[key]
 
 
+def _resolve_request_task_template_id(request: ExecutionRequest) -> str | None:
+    """Resolve task template id with a defensive metadata fallback.
+
+    Preferred contract: Portal should always send `input_payload.task_template_id`.
+    `metadata.portal_task_template_id` is only a fallback for older dispatchers
+    or partial UI flows and should not be treated as the primary path.
+    """
+    input_payload = request.input_payload if isinstance(request.input_payload, dict) else {}
+    payload_value = str(input_payload.get("task_template_id") or "").strip().lower()
+    if payload_value:
+        return payload_value
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    metadata_value = str(metadata.get("portal_task_template_id") or "").strip().lower()
+    return metadata_value or None
+
+
 def _coerce_task_tool_result(raw_result: Any) -> Dict[str, Any]:
     """Normalize task tool results from heterogeneous return types."""
     if isinstance(raw_result, ToolResult) or (
@@ -1285,7 +1301,7 @@ def build_default_execution_bus(
                 task_id=task_id,
                 detail_payload={
                     "task_type": task_type,
-                    "task_template_id": str(request.input_payload.get("task_template_id") or "").strip().lower() or None,
+                    "task_template_id": _resolve_request_task_template_id(request),
                     "skill_name": skill_name,
                     "success": skill_success,
                     "capability_id": capability.get("capability_id"),
@@ -1303,7 +1319,7 @@ def build_default_execution_bus(
             status="success" if skill_success else normalized_skill.status,
             output_payload={
                 "task_type": task_type,
-                "task_template_id": str(request.input_payload.get("task_template_id") or "").strip().lower() or None,
+                "task_template_id": _resolve_request_task_template_id(request),
                 "success": skill_success,
                 "bundle_ref": bundle_ref,
                 "updated_files": updated_files,
@@ -2024,6 +2040,7 @@ def build_default_execution_bus(
         if task_type == "github_review_task":
             capability = resolve_task_capability_plan(task_type, request.input_payload)
             involved_capability_ids = list(capability.get("involved_capability_ids") or [])
+            resolved_task_template_id = _resolve_request_task_template_id(request)
             involved_action_ids = list(involved_capability_ids)
             owner = _get_required(request.input_payload, "owner")
             repo = _get_required(request.input_payload, "repo")
@@ -2159,7 +2176,7 @@ def build_default_execution_bus(
                         "owner": owner,
                         "repo": repo,
                         "pull_number": pull_number,
-                        "task_template_id": str(request.input_payload.get("task_template_id") or "").strip().lower() or None,
+                        "task_template_id": resolved_task_template_id,
                         "comment_written": comment_written,
                         "review_written": review_written,
                         "review_event": review_event,
@@ -2185,7 +2202,7 @@ def build_default_execution_bus(
                     "owner": owner,
                     "repo": repo,
                     "pull_number": pull_number,
-                    "task_template_id": str(request.input_payload.get("task_template_id") or "").strip().lower() or None,
+                    "task_template_id": resolved_task_template_id,
                     "review_summary": review_summary,
                     "review_event": review_event,
                     "review_written": review_written,
@@ -2414,8 +2431,16 @@ def build_default_execution_bus(
             )
 
         if task_type == "bundle_action_task":
-            task_template = resolve_task_template_from_payload(request.input_payload)
-            task_template_id = str(request.input_payload.get("task_template_id") or "").strip().lower()
+            # Preferred contract: Portal should send input_payload.task_template_id.
+            # metadata.portal_task_template_id is a defensive fallback only.
+            payload_for_template = dict(request.input_payload or {})
+            task_template = resolve_task_template_from_payload(payload_for_template)
+            if task_template is None:
+                metadata_template_id = str((request.metadata or {}).get("portal_task_template_id") or "").strip().lower()
+                if metadata_template_id:
+                    payload_for_template["task_template_id"] = metadata_template_id
+                    task_template = resolve_task_template_from_payload(payload_for_template)
+            task_template_id = str(payload_for_template.get("task_template_id") or "").strip().lower()
             if task_template is None:
                 return make_execution_result(
                     request_id=request.request_id,
@@ -2440,7 +2465,7 @@ def build_default_execution_bus(
                         "task_boundary": True,
                     },
                 )
-            validation_error = _validate_bundle_action_task_payload(request.input_payload, task_template)
+            validation_error = _validate_bundle_action_task_payload(payload_for_template, task_template)
             if validation_error:
                 return make_execution_result(
                     request_id=request.request_id,
@@ -2453,8 +2478,22 @@ def build_default_execution_bus(
                         "task_boundary": True,
                     },
                 )
+            task_request = request
+            if payload_for_template != (request.input_payload or {}):
+                task_request = make_execution_request(
+                    request_id=request.request_id,
+                    source_type=request.source_type,
+                    source_ref=request.source_ref,
+                    agent_id=request.agent_id,
+                    session_id=request.session_id,
+                    execution_type=request.execution_type,
+                    input_payload=payload_for_template,
+                    context_ref=request.context_ref,
+                    policy_profile_id=request.policy_profile_id,
+                    metadata=request.metadata,
+                )
             result = await _execute_skill_backed_task(
-                request,
+                task_request,
                 task_id=task_id,
                 task_type=task_type,
                 default_skill_name=str(task_template.default_skill_name or "").strip() or "",
