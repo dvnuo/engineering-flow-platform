@@ -165,6 +165,34 @@ def _dict_or_empty(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _normalize_model_id_for_capabilities(model: Optional[str]) -> str:
+    """Normalize a configured model reference for capability checks only.
+
+    Do not use this to rewrite the API payload model field.
+    It is only for feature detection such as whether temperature is supported.
+    """
+    value = str(model or "").strip().lower()
+    if not value:
+        return ""
+    for sep in ("/", ":"):
+        if sep in value:
+            value = value.rsplit(sep, 1)[-1].strip()
+    return value
+
+
+def _supports_temperature_parameter(provider: str, model: Optional[str]) -> bool:
+    """Return whether this provider/model payload may include temperature.
+
+    GPT-5 family models currently reject temperature in this runtime path.
+    Keep temperature for non-GPT-5 models to preserve existing behavior.
+    """
+    provider_key = str(provider or "").strip().lower()
+    model_id = _normalize_model_id_for_capabilities(model)
+    if provider_key in {"openai", "github_copilot"} and model_id.startswith("gpt-5"):
+        return False
+    return True
+
+
 
 
 def _convert_messages_to_input_items(messages: List[Dict]) -> List[Dict]:
@@ -446,17 +474,17 @@ class OpenAIProvider(BaseProvider):
         resolved_temperature = resolve_llm_temperature(temperature)
         
         # GPT-5 models require max_completion_tokens instead of max_tokens
-        model_name = (model or self.default_model).lower()
-        if model_name.startswith("gpt-5"):
+        model_name_raw = model or self.default_model
+        model_id = _normalize_model_id_for_capabilities(model_name_raw)
+        if model_id.startswith("gpt-5"):
             max_tokens_key = "max_completion_tokens"
         else:
             max_tokens_key = "max_tokens"
         
-        # GPT-5 models don't support temperature parameter
-        include_temperature = not model_name.startswith("gpt-5")
+        include_temperature = _supports_temperature_parameter(self.name, model_name_raw)
         
         payload = {
-            "model": model or self.default_model,
+            "model": model_name_raw,
             "messages": all_messages,
         }
         if include_temperature:
@@ -608,7 +636,7 @@ class OpenAIProvider(BaseProvider):
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),
             "text": {"format": {"type": "text"}},
         }
-        if not model_name.lower().startswith("gpt-5"):
+        if _supports_temperature_parameter(self.name, model_name):
             payload["temperature"] = resolved_temperature
         
         # Add tools if provided (Responses API format)
@@ -889,11 +917,13 @@ class GitHubCopilotProvider(BaseProvider):
         all_messages.extend(messages)
         
         resolved_temperature = resolve_llm_temperature(temperature)
+        model_name = model or self.default_model
         payload = {
-            "model": model or self.default_model,
+            "model": model_name,
             "messages": all_messages,
-            "temperature": resolved_temperature,
         }
+        if _supports_temperature_parameter(self.name, model_name):
+            payload["temperature"] = resolved_temperature
         
         # Add tools support (similar to OpenAI)
         if tools:
@@ -1051,8 +1081,9 @@ class GitHubCopilotProvider(BaseProvider):
             "input": input_items,
             "max_output_tokens": max_tokens or config.llm.get('max_tokens', 64000),
             "text": {"format": {"type": "text"}},
-            "temperature": resolved_temperature,
         }
+        if _supports_temperature_parameter(self.name, model_name):
+            payload["temperature"] = resolved_temperature
         
         # Add tools if provided (Responses API format)
         if converted_tools:

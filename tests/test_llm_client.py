@@ -1092,7 +1092,48 @@ class TestTemperatureResolution:
             assert "temperature" not in payload
 
     @pytest.mark.asyncio
-    async def test_github_copilot_chat_temperature_config_and_explicit(self, monkeypatch):
+    async def test_github_copilot_chat_temperature_config_and_explicit_non_gpt5(self, monkeypatch):
+        from src.agents.llm import GitHubCopilotProvider
+
+        monkeypatch.setitem(config._config, "llm", {"temperature": 0.23, "api_key": "k", "max_tokens": 256})
+        provider = GitHubCopilotProvider()
+
+        with patch.object(provider, "_call_api", new_callable=AsyncMock) as mock_call_api:
+            mock_call_api.return_value = {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+            await provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-4.1")
+            payload = mock_call_api.call_args.args[1]
+            assert payload["temperature"] == 0.23
+
+            await provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-4.1", temperature=0.12)
+            payload = mock_call_api.call_args.args[1]
+            assert payload["temperature"] == 0.12
+
+    @pytest.mark.asyncio
+    async def test_github_copilot_responses_temperature_config_and_explicit_non_gpt5(self, monkeypatch):
+        from src.agents.llm import GitHubCopilotProvider
+
+        monkeypatch.setitem(config._config, "llm", {"temperature": 0.23, "api_key": "k", "max_tokens": 256})
+        provider = GitHubCopilotProvider()
+
+        with patch.object(provider, "_call_api", new_callable=AsyncMock) as mock_call_api:
+            mock_call_api.return_value = {
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+            await provider.responses(input_items=[{"type": "message", "role": "user", "content": "hello"}], model="gpt-4.1")
+            payload = mock_call_api.call_args.args[1]
+            assert payload["temperature"] == 0.23
+
+            await provider.responses(
+                input_items=[{"type": "message", "role": "user", "content": "hello"}],
+                model="gpt-4.1",
+                temperature=0.12,
+            )
+            payload = mock_call_api.call_args.args[1]
+            assert payload["temperature"] == 0.12
+
+    @pytest.mark.asyncio
+    async def test_github_copilot_chat_gpt5_omits_temperature_even_explicit(self, monkeypatch):
         from src.agents.llm import GitHubCopilotProvider
 
         monkeypatch.setitem(config._config, "llm", {"temperature": 0.23, "api_key": "k", "max_tokens": 256})
@@ -1102,14 +1143,14 @@ class TestTemperatureResolution:
             mock_call_api.return_value = {"choices": [{"message": {"content": "ok"}}], "usage": {}}
             await provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-5.4-mini")
             payload = mock_call_api.call_args.args[1]
-            assert payload["temperature"] == 0.23
+            assert "temperature" not in payload
 
             await provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-5.4-mini", temperature=0.12)
             payload = mock_call_api.call_args.args[1]
-            assert payload["temperature"] == 0.12
+            assert "temperature" not in payload
 
     @pytest.mark.asyncio
-    async def test_github_copilot_responses_temperature_config_and_explicit(self, monkeypatch):
+    async def test_github_copilot_responses_gpt5_omits_temperature_even_explicit(self, monkeypatch):
         from src.agents.llm import GitHubCopilotProvider
 
         monkeypatch.setitem(config._config, "llm", {"temperature": 0.23, "api_key": "k", "max_tokens": 256})
@@ -1122,7 +1163,7 @@ class TestTemperatureResolution:
             }
             await provider.responses(input_items=[{"type": "message", "role": "user", "content": "hello"}], model="gpt-5.4-mini")
             payload = mock_call_api.call_args.args[1]
-            assert payload["temperature"] == 0.23
+            assert "temperature" not in payload
 
             await provider.responses(
                 input_items=[{"type": "message", "role": "user", "content": "hello"}],
@@ -1130,7 +1171,20 @@ class TestTemperatureResolution:
                 temperature=0.12,
             )
             payload = mock_call_api.call_args.args[1]
-            assert payload["temperature"] == 0.12
+            assert "temperature" not in payload
+
+    @pytest.mark.parametrize("provider,model,expected", [
+        ("openai", "gpt-5.4-mini", False),
+        ("openai", "openai/gpt-5.4-mini", False),
+        ("github_copilot", "github_copilot:gpt-5.1-codex", False),
+        ("github_copilot", "gpt-4.1", True),
+        ("openai", "gpt-4o", True),
+        ("claude", "claude-sonnet-4-20250514", True),
+    ])
+    def test_supports_temperature_parameter(self, provider, model, expected):
+        from src.agents.llm import _supports_temperature_parameter
+
+        assert _supports_temperature_parameter(provider, model) is expected
 
     @pytest.mark.asyncio
     async def test_llmclient_responses_chat_fallback_forwards_temperature(self):
