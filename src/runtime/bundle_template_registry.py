@@ -5,19 +5,11 @@ from typing import Any, Dict
 
 
 @dataclass(frozen=True)
-class BundleActionDefinition:
-    action_id: str
-    skill_name: str
-    requires_sources: bool = False
-    required_artifacts: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
 class BundleTemplateDefinition:
     template_id: str
     display_name: str
     artifact_files: dict[str, str]
-    actions: dict[str, BundleActionDefinition]
+    compatible_task_template_ids: tuple[str, ...] = ()
 
 
 _BUNDLE_TEMPLATE_REGISTRY: Dict[str, BundleTemplateDefinition] = {
@@ -28,18 +20,10 @@ _BUNDLE_TEMPLATE_REGISTRY: Dict[str, BundleTemplateDefinition] = {
             "requirements": "requirements.yaml",
             "test_cases": "test-cases.yaml",
         },
-        actions={
-            "collect_requirements": BundleActionDefinition(
-                action_id="collect_requirements",
-                skill_name="collect_requirements_to_bundle",
-                requires_sources=True,
-            ),
-            "design_test_cases": BundleActionDefinition(
-                action_id="design_test_cases",
-                skill_name="design_test_cases_from_bundle",
-                required_artifacts=("requirements",),
-            ),
-        },
+        compatible_task_template_ids=(
+            "collect_requirements_to_bundle",
+            "design_test_cases_from_bundle",
+        ),
     ),
     "research.v1": BundleTemplateDefinition(
         template_id="research.v1",
@@ -47,13 +31,7 @@ _BUNDLE_TEMPLATE_REGISTRY: Dict[str, BundleTemplateDefinition] = {
         artifact_files={
             "research_notes": "research-notes.yaml",
         },
-        actions={
-            "collect_research_notes": BundleActionDefinition(
-                action_id="collect_research_notes",
-                skill_name="collect_research_notes_to_bundle",
-                requires_sources=True,
-            ),
-        },
+        compatible_task_template_ids=("collect_research_notes_to_bundle",),
     ),
     "development.v1": BundleTemplateDefinition(
         template_id="development.v1",
@@ -61,12 +39,7 @@ _BUNDLE_TEMPLATE_REGISTRY: Dict[str, BundleTemplateDefinition] = {
         artifact_files={
             "implementation_plan": "implementation-plan.yaml",
         },
-        actions={
-            "generate_implementation_plan": BundleActionDefinition(
-                action_id="generate_implementation_plan",
-                skill_name="generate_implementation_plan_from_bundle",
-            ),
-        },
+        compatible_task_template_ids=("generate_implementation_plan_from_bundle",),
     ),
     "operations.v1": BundleTemplateDefinition(
         template_id="operations.v1",
@@ -74,12 +47,7 @@ _BUNDLE_TEMPLATE_REGISTRY: Dict[str, BundleTemplateDefinition] = {
         artifact_files={
             "runbook": "runbook.yaml",
         },
-        actions={
-            "generate_runbook": BundleActionDefinition(
-                action_id="generate_runbook",
-                skill_name="generate_runbook_from_bundle",
-            ),
-        },
+        compatible_task_template_ids=("generate_runbook_from_bundle",),
     ),
 }
 
@@ -102,23 +70,6 @@ def require_bundle_template(template_id: str) -> BundleTemplateDefinition:
     if resolved is None:
         raise _bundle_error(f"Unsupported bundle template_id: {template_id}")
     return resolved
-
-
-def get_bundle_action(template_id: str, action_id: str) -> BundleActionDefinition | None:
-    template = get_bundle_template(template_id)
-    if template is None:
-        return None
-    normalized_action_id = str(action_id or "").strip().lower()
-    if not normalized_action_id:
-        return None
-    return template.actions.get(normalized_action_id)
-
-
-def require_bundle_action(template_id: str, action_id: str) -> BundleActionDefinition:
-    action = get_bundle_action(template_id, action_id)
-    if action is None:
-        raise _bundle_error(f"Unsupported bundle action '{action_id}' for template '{template_id}'")
-    return action
 
 
 def resolve_bundle_template_id_from_manifest(manifest: Dict[str, Any]) -> str:

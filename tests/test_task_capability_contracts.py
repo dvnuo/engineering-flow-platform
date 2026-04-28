@@ -172,34 +172,10 @@ def test_execution_bus_resolve_task_capability_plan_delegates_to_canonical_contr
     assert plan is sentinel
 
 
-def test_resolve_task_capability_contract_requirement_bundle_collect_task():
-    plan = resolve_task_capability_contract(
-        "requirement_bundle_collect_task",
-        {"bundle_ref": {"repo": "acme/demo", "path": "bundles/a", "branch": "feat/a"}},
-    )
-
-    assert plan["primary_capability_id"] == "skill:collect_requirements_to_bundle"
-    assert plan["capability_id"] == "skill:collect_requirements_to_bundle"
-    assert plan["capability_type"] == "skill"
-    assert plan["involved_capability_ids"] == ["skill:collect_requirements_to_bundle"]
-
-
-def test_resolve_task_capability_contract_requirement_bundle_design_test_cases_task():
-    plan = resolve_task_capability_contract(
-        "requirement_bundle_design_test_cases_task",
-        {"bundle_ref": {"repo": "acme/demo", "path": "bundles/a", "branch": "feat/a"}},
-    )
-
-    assert plan["primary_capability_id"] == "skill:design_test_cases_from_bundle"
-    assert plan["capability_id"] == "skill:design_test_cases_from_bundle"
-    assert plan["capability_type"] == "skill"
-    assert plan["involved_capability_ids"] == ["skill:design_test_cases_from_bundle"]
-
-
 def test_resolve_task_capability_contract_bundle_action_task_requirement_collect():
     plan = resolve_task_capability_contract(
         "bundle_action_task",
-        {"template_id": "requirement.v1", "action_id": "collect_requirements"},
+        {"task_template_id": "collect_requirements_to_bundle", "bundle_template_id": "requirement.v1"},
     )
     assert plan["primary_capability_id"] == "skill:collect_requirements_to_bundle"
     assert plan["capability_id"] == "skill:collect_requirements_to_bundle"
@@ -208,7 +184,7 @@ def test_resolve_task_capability_contract_bundle_action_task_requirement_collect
 def test_resolve_task_capability_contract_bundle_action_task_requirement_design():
     plan = resolve_task_capability_contract(
         "bundle_action_task",
-        {"template_id": "requirement.v1", "action_id": "design_test_cases"},
+        {"task_template_id": "design_test_cases_from_bundle", "bundle_template_id": "requirement.v1"},
     )
     assert plan["primary_capability_id"] == "skill:design_test_cases_from_bundle"
     assert plan["capability_id"] == "skill:design_test_cases_from_bundle"
@@ -217,7 +193,7 @@ def test_resolve_task_capability_contract_bundle_action_task_requirement_design(
 def test_resolve_task_capability_contract_bundle_action_task_research_collect():
     plan = resolve_task_capability_contract(
         "bundle_action_task",
-        {"template_id": "research.v1", "action_id": "collect_research_notes"},
+        {"task_template_id": "collect_research_notes_to_bundle", "bundle_template_id": "research.v1"},
     )
     assert plan["primary_capability_id"] == "skill:collect_research_notes_to_bundle"
     assert plan["capability_id"] == "skill:collect_research_notes_to_bundle"
@@ -226,7 +202,7 @@ def test_resolve_task_capability_contract_bundle_action_task_research_collect():
 def test_resolve_task_capability_contract_bundle_action_task_development_generate():
     plan = resolve_task_capability_contract(
         "bundle_action_task",
-        {"template_id": "development.v1", "action_id": "generate_implementation_plan"},
+        {"task_template_id": "generate_implementation_plan_from_bundle", "bundle_template_id": "development.v1"},
     )
     assert plan["primary_capability_id"] == "skill:generate_implementation_plan_from_bundle"
     assert plan["capability_id"] == "skill:generate_implementation_plan_from_bundle"
@@ -235,7 +211,7 @@ def test_resolve_task_capability_contract_bundle_action_task_development_generat
 def test_resolve_task_capability_contract_bundle_action_task_operations_generate():
     plan = resolve_task_capability_contract(
         "bundle_action_task",
-        {"template_id": "operations.v1", "action_id": "generate_runbook"},
+        {"task_template_id": "generate_runbook_from_bundle", "bundle_template_id": "operations.v1"},
     )
     assert plan["primary_capability_id"] == "skill:generate_runbook_from_bundle"
     assert plan["capability_id"] == "skill:generate_runbook_from_bundle"
@@ -244,7 +220,7 @@ def test_resolve_task_capability_contract_bundle_action_task_operations_generate
 def test_resolve_task_capability_contract_bundle_action_task_unknown_is_unresolved():
     plan = resolve_task_capability_contract(
         "bundle_action_task",
-        {"template_id": "unknown.v1", "action_id": "does_not_exist"},
+        {"task_template_id": "unknown_template"},
     )
     assert plan["capability_resolution"] == "unresolved"
 

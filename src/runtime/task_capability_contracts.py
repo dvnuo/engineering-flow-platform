@@ -12,10 +12,10 @@ policy, auditing, and capability metadata remain consistent across call paths.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-from src.runtime.bundle_template_registry import get_bundle_action
 from src.runtime.capability_registry import get_capability_registry
+from src.runtime.task_template_registry import resolve_task_template_from_payload
 
 
 def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -86,7 +86,9 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
         }
 
     if normalized_task_type == "github_review_task":
-        skill_name = str(normalized_payload.get("skill_name") or "review-pull-request").strip().lower() or "review-pull-request"
+        task_template = resolve_task_template_from_payload(normalized_payload)
+        default_skill_name = task_template.default_skill_name if task_template else "review-pull-request"
+        skill_name = str(normalized_payload.get("skill_name") or default_skill_name).strip().lower() or "review-pull-request"
         primary_capability_id = f"skill:{skill_name}"
         descriptor = registry.get(primary_capability_id)
         involved = _resolve_involved_capability_ids_for_task(normalized_task_type, normalized_payload)
@@ -137,12 +139,17 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
         }
 
     if normalized_task_type == "bundle_action_task":
-        template_id = str(normalized_payload.get("template_id") or "").strip().lower()
-        action_id = str(normalized_payload.get("action_id") or "").strip().lower()
-        action = get_bundle_action(template_id, action_id)
-        if action is None:
-            return fallback
-        primary_capability_id = f"skill:{action.skill_name}"
+        task_template = resolve_task_template_from_payload(normalized_payload)
+        if task_template is None or task_template.task_type != "bundle_action_task":
+            unresolved = dict(fallback)
+            unresolved["task_template_id"] = str(normalized_payload.get("task_template_id") or "").strip().lower() or None
+            return unresolved
+        skill_name = str(task_template.default_skill_name or "").strip().lower()
+        if not skill_name:
+            unresolved = dict(fallback)
+            unresolved["task_template_id"] = task_template.template_id
+            return unresolved
+        primary_capability_id = f"skill:{skill_name}"
         descriptor = registry.get(primary_capability_id)
         involved = [primary_capability_id]
         if descriptor is None:
@@ -153,6 +160,7 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
                 "action_id": primary_capability_id,
                 "capability_type": "skill",
                 "involved_capability_ids": involved,
+                "task_template_id": task_template.template_id,
             }
         return {
             **fallback,
@@ -164,58 +172,9 @@ def resolve_task_capability_contract(task_type: str, payload: Dict[str, Any]) ->
             "policy_tags": list(descriptor.policy_tags or []),
             "requires_identity_binding": bool(descriptor.requires_identity_binding),
             "capability_resolution": "resolved",
+            "task_template_id": task_template.template_id,
         }
 
-
-    if normalized_task_type == "requirement_bundle_collect_task":
-        primary_capability_id = "skill:collect_requirements_to_bundle"
-        descriptor = registry.get(primary_capability_id)
-        involved = [primary_capability_id]
-        if descriptor is None:
-            return {
-                **fallback,
-                "primary_capability_id": primary_capability_id,
-                "capability_id": primary_capability_id,
-                "action_id": primary_capability_id,
-                "capability_type": "skill",
-                "involved_capability_ids": involved,
-            }
-        return {
-            **fallback,
-            "primary_capability_id": descriptor.capability_id,
-            "capability_id": descriptor.capability_id,
-            "capability_type": descriptor.type,
-            "action_id": descriptor.capability_id,
-            "involved_capability_ids": involved,
-            "policy_tags": list(descriptor.policy_tags or []),
-            "requires_identity_binding": bool(descriptor.requires_identity_binding),
-            "capability_resolution": "resolved",
-        }
-
-    if normalized_task_type == "requirement_bundle_design_test_cases_task":
-        primary_capability_id = "skill:design_test_cases_from_bundle"
-        descriptor = registry.get(primary_capability_id)
-        involved = [primary_capability_id]
-        if descriptor is None:
-            return {
-                **fallback,
-                "primary_capability_id": primary_capability_id,
-                "capability_id": primary_capability_id,
-                "action_id": primary_capability_id,
-                "capability_type": "skill",
-                "involved_capability_ids": involved,
-            }
-        return {
-            **fallback,
-            "primary_capability_id": descriptor.capability_id,
-            "capability_id": descriptor.capability_id,
-            "capability_type": descriptor.type,
-            "action_id": descriptor.capability_id,
-            "involved_capability_ids": involved,
-            "policy_tags": list(descriptor.policy_tags or []),
-            "requires_identity_binding": bool(descriptor.requires_identity_binding),
-            "capability_resolution": "resolved",
-        }
     if normalized_task_type == "delegation_task":
         skill_name = str(normalized_payload.get("skill_name") or "").strip().lower()
         if not skill_name:
@@ -273,7 +232,9 @@ def _resolve_involved_capability_ids_for_task(task_type: str, payload: Dict[str,
             involved.add("adapter:jira:update_issue")
         return sorted(involved)
     if normalized_task_type == "github_review_task":
-        skill_name = str(payload.get("skill_name") or "review-pull-request").strip().lower() or "review-pull-request"
+        task_template = resolve_task_template_from_payload(payload)
+        default_skill_name = task_template.default_skill_name if task_template else "review-pull-request"
+        skill_name = str(payload.get("skill_name") or default_skill_name).strip().lower() or "review-pull-request"
         writeback_mode = str(payload.get("writeback_mode") or "").strip().lower()
         secondary = "adapter:github:add_comment" if writeback_mode == "issue_comment" else "adapter:github:review_pull_request"
         return [secondary, f"skill:{skill_name}"]

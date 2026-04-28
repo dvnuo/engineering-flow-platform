@@ -10,7 +10,6 @@ from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, r
 from src.agents.subagent import run_subagent_execution
 from src.agents.tasks import task_manager
 from src.runtime.adapter_executor import execute_adapter_action
-from src.runtime.bundle_template_registry import get_bundle_action
 from src.runtime.capability_registry import get_capability_registry
 from src.runtime.contracts import (
     DelegationResult,
@@ -34,6 +33,7 @@ from src.runtime.governance_bus import (
 from src.runtime.github_review import run_github_review_task
 from src.runtime.jira_workflow_review import run_jira_workflow_review
 from src.runtime.leader_orchestration import dispatch_task_breakdown_as_delegations, run_delegation_cycle
+from src.runtime.task_template_registry import resolve_task_template_from_payload
 from src.runtime.triggered_event_task import run_triggered_event_task
 from src.utils.redaction import safe_preview, sanitize_exception_message
 
@@ -445,6 +445,22 @@ def _get_required(payload: Dict[str, Any], key: str) -> Any:
     return payload[key]
 
 
+def _resolve_request_task_template_id(request: ExecutionRequest) -> str | None:
+    """Resolve task template id with a defensive metadata fallback.
+
+    Preferred contract: Portal should always send `input_payload.task_template_id`.
+    `metadata.portal_task_template_id` is only a fallback for older dispatchers
+    or partial UI flows and should not be treated as the primary path.
+    """
+    input_payload = request.input_payload if isinstance(request.input_payload, dict) else {}
+    payload_value = str(input_payload.get("task_template_id") or "").strip().lower()
+    if payload_value:
+        return payload_value
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    metadata_value = str(metadata.get("portal_task_template_id") or "").strip().lower()
+    return metadata_value or None
+
+
 def _coerce_task_tool_result(raw_result: Any) -> Dict[str, Any]:
     """Normalize task tool results from heterogeneous return types."""
     if isinstance(raw_result, ToolResult) or (
@@ -620,6 +636,38 @@ def _as_list_of_strings(value: Any) -> list[str]:
                     normalized.append(text)
         return normalized
     return []
+
+
+def _validate_bundle_action_task_payload(payload: Dict[str, Any], task_template: Any) -> Optional[str]:
+    if not str(getattr(task_template, "default_skill_name", "") or "").strip():
+        return f"task_template_id '{task_template.template_id}' is missing default_skill_name"
+
+    if bool(getattr(task_template, "requires_bundle", False)):
+        bundle_ref = payload.get("bundle_ref") if isinstance(payload.get("bundle_ref"), dict) else None
+        manifest_ref = payload.get("manifest_ref") if isinstance(payload.get("manifest_ref"), dict) else None
+        if not bundle_ref:
+            return "bundle_action_task requires bundle_ref"
+        if not manifest_ref:
+            return "bundle_action_task requires manifest_ref"
+
+    compatible_bundle_templates = tuple(getattr(task_template, "compatible_bundle_templates", ()) or ())
+    if compatible_bundle_templates:
+        bundle_template_id = str(payload.get("bundle_template_id") or "").strip().lower()
+        if not bundle_template_id:
+            return "bundle_action_task requires bundle_template_id"
+        if bundle_template_id not in compatible_bundle_templates:
+            return (
+                f"bundle_template_id '{bundle_template_id}' is incompatible with task_template_id "
+                f"'{task_template.template_id}'"
+            )
+
+    if bool(getattr(task_template, "requires_sources", False)):
+        sources = payload.get("sources") if isinstance(payload.get("sources"), dict) else {}
+        has_sources = any(_as_list_of_strings(value) for value in sources.values())
+        if not has_sources:
+            return "bundle_action_task requires non-empty sources"
+
+    return None
 
 
 def resolve_task_capability_plan(task_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1253,6 +1301,7 @@ def build_default_execution_bus(
                 task_id=task_id,
                 detail_payload={
                     "task_type": task_type,
+                    "task_template_id": _resolve_request_task_template_id(request),
                     "skill_name": skill_name,
                     "success": skill_success,
                     "capability_id": capability.get("capability_id"),
@@ -1270,6 +1319,7 @@ def build_default_execution_bus(
             status="success" if skill_success else normalized_skill.status,
             output_payload={
                 "task_type": task_type,
+                "task_template_id": _resolve_request_task_template_id(request),
                 "success": skill_success,
                 "bundle_ref": bundle_ref,
                 "updated_files": updated_files,
@@ -1990,6 +2040,7 @@ def build_default_execution_bus(
         if task_type == "github_review_task":
             capability = resolve_task_capability_plan(task_type, request.input_payload)
             involved_capability_ids = list(capability.get("involved_capability_ids") or [])
+            resolved_task_template_id = _resolve_request_task_template_id(request)
             involved_action_ids = list(involved_capability_ids)
             owner = _get_required(request.input_payload, "owner")
             repo = _get_required(request.input_payload, "repo")
@@ -2125,6 +2176,7 @@ def build_default_execution_bus(
                         "owner": owner,
                         "repo": repo,
                         "pull_number": pull_number,
+                        "task_template_id": resolved_task_template_id,
                         "comment_written": comment_written,
                         "review_written": review_written,
                         "review_event": review_event,
@@ -2150,6 +2202,7 @@ def build_default_execution_bus(
                     "owner": owner,
                     "repo": repo,
                     "pull_number": pull_number,
+                    "task_template_id": resolved_task_template_id,
                     "review_summary": review_summary,
                     "review_event": review_event,
                     "review_written": review_written,
@@ -2377,49 +2430,96 @@ def build_default_execution_bus(
                 runtime_events=runtime_events,
             )
 
-        if task_type == "requirement_bundle_collect_task":
-            return await _execute_skill_backed_task(
-                request,
-                task_id=task_id,
-                task_type=task_type,
-                default_skill_name="collect_requirements_to_bundle",
-                event_prefix="task.requirement_bundle_collect",
-            )
-
-        if task_type == "requirement_bundle_design_test_cases_task":
-            return await _execute_skill_backed_task(
-                request,
-                task_id=task_id,
-                task_type=task_type,
-                default_skill_name="design_test_cases_from_bundle",
-                event_prefix="task.requirement_bundle_design_test_cases",
-            )
-
         if task_type == "bundle_action_task":
-            template_id = str(request.input_payload.get("template_id") or "").strip().lower()
-            action_id = str(request.input_payload.get("action_id") or "").strip().lower()
-            action = get_bundle_action(template_id, action_id)
-            if action is None:
+            # Preferred contract: Portal should send input_payload.task_template_id.
+            # metadata.portal_task_template_id is a defensive fallback only.
+            payload_for_template = dict(request.input_payload or {})
+            task_template = resolve_task_template_from_payload(payload_for_template)
+            if task_template is None:
+                metadata_template_id = str((request.metadata or {}).get("portal_task_template_id") or "").strip().lower()
+                if metadata_template_id:
+                    payload_for_template["task_template_id"] = metadata_template_id
+                    task_template = resolve_task_template_from_payload(payload_for_template)
+            task_template_id = str(payload_for_template.get("task_template_id") or "").strip().lower()
+            if task_template is None:
                 return make_execution_result(
                     request_id=request.request_id,
                     status="blocked",
                     output_payload={
                         "task_type": task_type,
-                        "template_id": template_id,
-                        "action_id": action_id,
+                        "task_template_id": task_template_id or None,
                         "success": False,
-                        "error": f"Unsupported bundle action '{action_id}' for template '{template_id}'",
+                        "error": f"Unsupported task_template_id for bundle_action_task: {task_template_id or 'missing'}",
                         "task_boundary": True,
                     },
                 )
-            return await _execute_skill_backed_task(
-                request,
+            if task_template.task_type != "bundle_action_task":
+                return make_execution_result(
+                    request_id=request.request_id,
+                    status="blocked",
+                    output_payload={
+                        "task_type": task_type,
+                        "task_template_id": task_template.template_id,
+                        "success": False,
+                        "error": f"task_template_id '{task_template.template_id}' is incompatible with task_type '{task_type}'",
+                        "task_boundary": True,
+                    },
+                )
+            validation_error = _validate_bundle_action_task_payload(payload_for_template, task_template)
+            if validation_error:
+                return make_execution_result(
+                    request_id=request.request_id,
+                    status="blocked",
+                    output_payload={
+                        "task_type": task_type,
+                        "task_template_id": task_template.template_id,
+                        "success": False,
+                        "error": validation_error,
+                        "task_boundary": True,
+                    },
+                )
+            task_request = request
+            if payload_for_template != (request.input_payload or {}):
+                task_request = make_execution_request(
+                    request_id=request.request_id,
+                    source_type=request.source_type,
+                    source_ref=request.source_ref,
+                    agent_id=request.agent_id,
+                    session_id=request.session_id,
+                    execution_type=request.execution_type,
+                    input_payload=payload_for_template,
+                    context_ref=request.context_ref,
+                    policy_profile_id=request.policy_profile_id,
+                    metadata=request.metadata,
+                )
+            result = await _execute_skill_backed_task(
+                task_request,
                 task_id=task_id,
                 task_type=task_type,
-                default_skill_name=action.skill_name,
-                event_prefix="task.bundle_action",
+                default_skill_name=str(task_template.default_skill_name or "").strip() or "",
+                event_prefix=f"task.{task_template.template_id.replace('_', '.')}",
                 allow_payload_skill_name=False,
             )
+            if isinstance(result.output_payload, dict):
+                result.output_payload["task_template_id"] = task_template.template_id
+                result.output_payload["task_type"] = task_type
+            normalized_events: list[Dict[str, Any]] = []
+            for event in list(result.runtime_events or []):
+                if not isinstance(event, dict):
+                    normalized_events.append(event)
+                    continue
+                detail = event.get("detail_payload")
+                if isinstance(detail, dict):
+                    enriched_detail = dict(detail)
+                    enriched_detail["task_template_id"] = task_template.template_id
+                    enriched_detail["task_type"] = task_type
+                    enriched_event = dict(event)
+                    enriched_event["detail_payload"] = enriched_detail
+                    normalized_events.append(enriched_event)
+                else:
+                    normalized_events.append(event)
+            result.runtime_events = normalized_events
+            return result
 
         if task_type != "tool_task":
             return make_execution_result(
