@@ -4100,7 +4100,7 @@ You have access to the following tools. When a user asks you to do something tha
 
             raw_output = (llm_result.get("content") or "").strip()
             function_calls = llm_result.get("function_calls", []) or llm_result.get("tool_calls", []) or []
-            skill_tool_loop_cfg = _resolve_tool_loop_config(None)
+            skill_tool_loop_cfg = _resolve_tool_loop_config(execution_metadata)
             if skill_tool_loop_cfg.get("one_tool_per_turn", True) and len(function_calls) > 1:
                 original_count = len(function_calls)
                 function_calls = function_calls[:1]

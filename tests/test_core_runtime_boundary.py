@@ -1777,6 +1777,15 @@ def test_legacy_skill_mode_portal_filter_runs_before_llm_kwargs():
     assert filter_index < llm_kwargs_index
 
 
+def test_legacy_skill_mode_tool_loop_config_uses_execution_metadata():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent._continue_skill_mode)
+
+    assert "skill_tool_loop_cfg = _resolve_tool_loop_config(execution_metadata)" in source
+    assert "skill_tool_loop_cfg = _resolve_tool_loop_config(None)" not in source
+
+
 def test_is_tool_allowed_by_skill_runtime_allows_internal_support_tools():
     from src.agents import core
     from src.skills.runtime import SkillRuntimeConfig
