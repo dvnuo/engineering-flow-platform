@@ -181,16 +181,26 @@ def _normalize_model_id_for_capabilities(model: Optional[str]) -> str:
 
 
 def _supports_temperature_parameter(provider: str, model: Optional[str]) -> bool:
-    """Return whether this provider/model payload may include temperature.
+    """Return whether the actual API payload may include temperature.
 
-    GPT-5 family models currently reject temperature in this runtime path.
-    Keep temperature for non-GPT-5 models to preserve existing behavior.
+    Policy:
+    - Only exact gpt-4 may include temperature.
+    - gpt-4.1, gpt-4o, gpt-4-turbo, gpt-5*, Claude, Ollama,
+      Gemini, and all other models must omit temperature.
+
+    This function is for payload capability checks only. It must not rewrite
+    the API payload model field.
     """
     provider_key = str(provider or "").strip().lower()
     model_id = _normalize_model_id_for_capabilities(model)
-    if provider_key in {"openai", "github_copilot"} and model_id.startswith("gpt-5"):
+
+    # Only OpenAI-compatible GPT-4 payloads may include temperature.
+    # Keep provider-aware behavior so Claude/Ollama never accidentally send
+    # temperature even if a bad model string is configured.
+    if provider_key not in {"openai", "github_copilot"}:
         return False
-    return True
+
+    return model_id == "gpt-4"
 
 
 
@@ -1368,13 +1378,15 @@ class ClaudeProvider(BaseProvider):
                 continue
             all_messages.append({"role": msg["role"], "content": msg["content"]})
         
+        model_name = model or self.default_model
         resolved_temperature = resolve_llm_temperature(temperature)
         payload = {
-            "model": model or self.default_model,
+            "model": model_name,
             "messages": all_messages,
             "max_tokens": max_tokens or 4096,
-            "temperature": resolved_temperature,
         }
+        if _supports_temperature_parameter(self.name, model_name):
+            payload["temperature"] = resolved_temperature
         
         if system_prompt:
             payload["system"] = system_prompt
@@ -1529,15 +1541,18 @@ class OllamaProvider(BaseProvider):
             full_messages.append({"role": "system", "content": system_prompt})
         full_messages.extend(messages)
         
+        model_name = model or self.default_model
         resolved_temperature = resolve_llm_temperature(temperature)
+        options = {
+            "num_predict": max_tokens or config.llm.get('max_tokens', 64000),
+        }
+        if _supports_temperature_parameter(self.name, model_name):
+            options["temperature"] = resolved_temperature
         payload = {
-            "model": model or self.default_model,
+            "model": model_name,
             "messages": full_messages,
             "stream": False,
-            "options": {
-                "temperature": resolved_temperature,
-                "num_predict": max_tokens or config.llm.get('max_tokens', 64000),
-            }
+            "options": options,
         }
         
         # Add tools support for Ollama (format varies by model version)
