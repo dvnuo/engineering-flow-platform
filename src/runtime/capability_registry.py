@@ -171,6 +171,64 @@ class _CapabilityBuilder:
                 )
             )
 
+        self._register_required_runtime_skill_capabilities()
+
+
+    def _register_required_runtime_skill_capabilities(self) -> None:
+        required_descriptors = [
+            CapabilityDescriptor(
+                capability_id="skill:collect_requirements_to_bundle",
+                type="skill",
+                name="collect_requirements_to_bundle",
+                policy_tags=["skill", "bundle"],
+                requires_identity_binding=False,
+                metadata={"runtime_required": True},
+            ),
+            CapabilityDescriptor(
+                capability_id="skill:design_test_cases_from_bundle",
+                type="skill",
+                name="design_test_cases_from_bundle",
+                policy_tags=["skill", "bundle"],
+                requires_identity_binding=False,
+                metadata={"runtime_required": True},
+            ),
+            CapabilityDescriptor(
+                capability_id="skill:collect_research_notes_to_bundle",
+                type="skill",
+                name="collect_research_notes_to_bundle",
+                policy_tags=["skill", "bundle"],
+                requires_identity_binding=False,
+                metadata={"runtime_required": True},
+            ),
+            CapabilityDescriptor(
+                capability_id="skill:generate_implementation_plan_from_bundle",
+                type="skill",
+                name="generate_implementation_plan_from_bundle",
+                policy_tags=["skill", "bundle"],
+                requires_identity_binding=False,
+                metadata={"runtime_required": True},
+            ),
+            CapabilityDescriptor(
+                capability_id="skill:generate_runbook_from_bundle",
+                type="skill",
+                name="generate_runbook_from_bundle",
+                policy_tags=["skill", "bundle"],
+                requires_identity_binding=False,
+                metadata={"runtime_required": True},
+            ),
+            CapabilityDescriptor(
+                capability_id="skill:review-pull-request",
+                type="skill",
+                name="review-pull-request",
+                policy_tags=["skill", "review", "github"],
+                requires_identity_binding=True,
+                metadata={"runtime_required": True, "provider": "github"},
+            ),
+        ]
+        for descriptor in required_descriptors:
+            if not self.registry.exists(descriptor.capability_id):
+                self.registry.register(descriptor)
+
     def _register_adapter_actions(self) -> None:
         adapter_descriptors = [
             *build_github_adapter_capabilities(),

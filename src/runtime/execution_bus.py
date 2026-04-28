@@ -10,7 +10,6 @@ from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, r
 from src.agents.subagent import run_subagent_execution
 from src.agents.tasks import task_manager
 from src.runtime.adapter_executor import execute_adapter_action
-from src.runtime.bundle_template_registry import get_bundle_action
 from src.runtime.capability_registry import get_capability_registry
 from src.runtime.contracts import (
     DelegationResult,
@@ -34,6 +33,7 @@ from src.runtime.governance_bus import (
 from src.runtime.github_review import run_github_review_task
 from src.runtime.jira_workflow_review import run_jira_workflow_review
 from src.runtime.leader_orchestration import dispatch_task_breakdown_as_delegations, run_delegation_cycle
+from src.runtime.task_template_registry import resolve_task_template_from_payload
 from src.runtime.triggered_event_task import run_triggered_event_task
 from src.utils.redaction import safe_preview, sanitize_exception_message
 
@@ -620,6 +620,38 @@ def _as_list_of_strings(value: Any) -> list[str]:
                     normalized.append(text)
         return normalized
     return []
+
+
+def _validate_bundle_action_task_payload(payload: Dict[str, Any], task_template: Any) -> Optional[str]:
+    if not str(getattr(task_template, "default_skill_name", "") or "").strip():
+        return f"task_template_id '{task_template.template_id}' is missing default_skill_name"
+
+    if bool(getattr(task_template, "requires_bundle", False)):
+        bundle_ref = payload.get("bundle_ref") if isinstance(payload.get("bundle_ref"), dict) else None
+        manifest_ref = payload.get("manifest_ref") if isinstance(payload.get("manifest_ref"), dict) else None
+        if not bundle_ref:
+            return "bundle_action_task requires bundle_ref"
+        if not manifest_ref:
+            return "bundle_action_task requires manifest_ref"
+
+    compatible_bundle_templates = tuple(getattr(task_template, "compatible_bundle_templates", ()) or ())
+    if compatible_bundle_templates:
+        bundle_template_id = str(payload.get("bundle_template_id") or "").strip().lower()
+        if not bundle_template_id:
+            return "bundle_action_task requires bundle_template_id"
+        if bundle_template_id not in compatible_bundle_templates:
+            return (
+                f"bundle_template_id '{bundle_template_id}' is incompatible with task_template_id "
+                f"'{task_template.template_id}'"
+            )
+
+    if bool(getattr(task_template, "requires_sources", False)):
+        sources = payload.get("sources") if isinstance(payload.get("sources"), dict) else {}
+        has_sources = any(_as_list_of_strings(value) for value in sources.values())
+        if not has_sources:
+            return "bundle_action_task requires non-empty sources"
+
+    return None
 
 
 def resolve_task_capability_plan(task_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1253,6 +1285,7 @@ def build_default_execution_bus(
                 task_id=task_id,
                 detail_payload={
                     "task_type": task_type,
+                    "task_template_id": str(request.input_payload.get("task_template_id") or "").strip().lower() or None,
                     "skill_name": skill_name,
                     "success": skill_success,
                     "capability_id": capability.get("capability_id"),
@@ -1270,6 +1303,7 @@ def build_default_execution_bus(
             status="success" if skill_success else normalized_skill.status,
             output_payload={
                 "task_type": task_type,
+                "task_template_id": str(request.input_payload.get("task_template_id") or "").strip().lower() or None,
                 "success": skill_success,
                 "bundle_ref": bundle_ref,
                 "updated_files": updated_files,
@@ -2125,6 +2159,7 @@ def build_default_execution_bus(
                         "owner": owner,
                         "repo": repo,
                         "pull_number": pull_number,
+                        "task_template_id": str(request.input_payload.get("task_template_id") or "").strip().lower() or None,
                         "comment_written": comment_written,
                         "review_written": review_written,
                         "review_event": review_event,
@@ -2150,6 +2185,7 @@ def build_default_execution_bus(
                     "owner": owner,
                     "repo": repo,
                     "pull_number": pull_number,
+                    "task_template_id": str(request.input_payload.get("task_template_id") or "").strip().lower() or None,
                     "review_summary": review_summary,
                     "review_event": review_event,
                     "review_written": review_written,
@@ -2377,38 +2413,43 @@ def build_default_execution_bus(
                 runtime_events=runtime_events,
             )
 
-        if task_type == "requirement_bundle_collect_task":
-            return await _execute_skill_backed_task(
-                request,
-                task_id=task_id,
-                task_type=task_type,
-                default_skill_name="collect_requirements_to_bundle",
-                event_prefix="task.requirement_bundle_collect",
-            )
-
-        if task_type == "requirement_bundle_design_test_cases_task":
-            return await _execute_skill_backed_task(
-                request,
-                task_id=task_id,
-                task_type=task_type,
-                default_skill_name="design_test_cases_from_bundle",
-                event_prefix="task.requirement_bundle_design_test_cases",
-            )
-
         if task_type == "bundle_action_task":
-            template_id = str(request.input_payload.get("template_id") or "").strip().lower()
-            action_id = str(request.input_payload.get("action_id") or "").strip().lower()
-            action = get_bundle_action(template_id, action_id)
-            if action is None:
+            task_template = resolve_task_template_from_payload(request.input_payload)
+            task_template_id = str(request.input_payload.get("task_template_id") or "").strip().lower()
+            if task_template is None:
                 return make_execution_result(
                     request_id=request.request_id,
                     status="blocked",
                     output_payload={
                         "task_type": task_type,
-                        "template_id": template_id,
-                        "action_id": action_id,
+                        "task_template_id": task_template_id or None,
                         "success": False,
-                        "error": f"Unsupported bundle action '{action_id}' for template '{template_id}'",
+                        "error": f"Unsupported task_template_id for bundle_action_task: {task_template_id or 'missing'}",
+                        "task_boundary": True,
+                    },
+                )
+            if task_template.task_type != "bundle_action_task":
+                return make_execution_result(
+                    request_id=request.request_id,
+                    status="blocked",
+                    output_payload={
+                        "task_type": task_type,
+                        "task_template_id": task_template.template_id,
+                        "success": False,
+                        "error": f"task_template_id '{task_template.template_id}' is incompatible with task_type '{task_type}'",
+                        "task_boundary": True,
+                    },
+                )
+            validation_error = _validate_bundle_action_task_payload(request.input_payload, task_template)
+            if validation_error:
+                return make_execution_result(
+                    request_id=request.request_id,
+                    status="blocked",
+                    output_payload={
+                        "task_type": task_type,
+                        "task_template_id": task_template.template_id,
+                        "success": False,
+                        "error": validation_error,
                         "task_boundary": True,
                     },
                 )
@@ -2416,8 +2457,8 @@ def build_default_execution_bus(
                 request,
                 task_id=task_id,
                 task_type=task_type,
-                default_skill_name=action.skill_name,
-                event_prefix="task.bundle_action",
+                default_skill_name=str(task_template.default_skill_name or "").strip() or "",
+                event_prefix=f"task.{task_template.template_id.replace('_', '.')}",
                 allow_payload_skill_name=False,
             )
 
