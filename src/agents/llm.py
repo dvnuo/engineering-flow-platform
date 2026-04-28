@@ -56,6 +56,18 @@ _HTTPX_TRACE_ENABLED = None
 # Set log_level: DEBUG in config.yaml or use --debug flag
 # When DEBUG, verbose diagnostics are logged with redacted/truncated previews.
 
+
+
+def _parallel_tool_calls_enabled() -> bool:
+    llm_cfg = getattr(config, "llm", {}) if config is not None else {}
+    if not isinstance(llm_cfg, dict):
+        return False
+    tool_loop = llm_cfg.get("tool_loop")
+    if not isinstance(tool_loop, dict):
+        return False
+    value = tool_loop.get("parallel_tool_calls")
+    return value if isinstance(value, bool) else False
+
 def _setup_httpx_logging():
     """Configure httpx logging based on debug settings."""
     global _HTTPX_TRACE_ENABLED
@@ -466,6 +478,7 @@ class OpenAIProvider(BaseProvider):
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+            payload["parallel_tool_calls"] = _parallel_tool_calls_enabled()
         
         # Debug: Log chat request details
         if _is_debug_enabled():
@@ -602,6 +615,7 @@ class OpenAIProvider(BaseProvider):
         if converted_tools:
             payload["tools"] = converted_tools
             payload["tool_choice"] = "auto"
+            payload["parallel_tool_calls"] = _parallel_tool_calls_enabled()
         
         # Debug: Log request details (before calling _call_api)
         if _is_debug_enabled():
@@ -885,6 +899,7 @@ class GitHubCopilotProvider(BaseProvider):
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+            payload["parallel_tool_calls"] = _parallel_tool_calls_enabled()
         
         # Debug: Log request
         if _is_debug_enabled():
@@ -1043,6 +1058,7 @@ class GitHubCopilotProvider(BaseProvider):
         if converted_tools:
             payload["tools"] = converted_tools
             payload["tool_choice"] = "auto"
+            payload["parallel_tool_calls"] = _parallel_tool_calls_enabled()
         
         # Debug: Log request details (before calling _call_api)
         if _is_debug_enabled():

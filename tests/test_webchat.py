@@ -472,6 +472,47 @@ async def test_chat_execution_bus_adapter_merges_execution_metadata_without_over
 
 
 @pytest.mark.asyncio
+async def test_chat_execution_bus_handler_uses_execution_request_metadata_for_agent(monkeypatch):
+    from src.gateway import webchat
+
+    captured = {}
+
+    async def _fake_run_chat_execution(agent, **kwargs):
+        captured.update(kwargs)
+        return {"response": "ok"}
+
+    async def _fake_execute_chat_orchestration(**kwargs):
+        req = type(
+            "Req",
+            (),
+            {
+                "input_payload": kwargs["input_payload"],
+                "metadata": {"allowed_capability_ids": ["tool:jira_search"], "llm_tool_loop": {"one_tool_per_turn": True}},
+                "request_id": kwargs["request_id"],
+                "session_id": kwargs["session_id"],
+            },
+        )()
+        output_payload = await kwargs["chat_handler"](req)
+        return type("R", (), {"status": "success", "output_payload": output_payload, "runtime_events": []})()
+
+    monkeypatch.setattr(webchat, "run_chat_execution", _fake_run_chat_execution)
+    monkeypatch.setattr(webchat, "execute_chat_orchestration", _fake_execute_chat_orchestration)
+
+    await webchat._run_chat_via_execution_bus(
+        agent=object(),
+        session_id="s-chat",
+        message="hello",
+        user_name="u1",
+        portal_user_id=None,
+        portal_user_name=None,
+        execution_metadata={"allowed_capability_ids": ["tool:ignored_by_handler"]},
+    )
+
+    assert captured["execution_metadata"]["allowed_capability_ids"] == ["tool:jira_search"]
+    assert captured["execution_metadata"]["llm_tool_loop"]["one_tool_per_turn"] is True
+
+
+@pytest.mark.asyncio
 async def test_chat_execution_bus_adapter_persists_last_execution_id(monkeypatch):
     from src.gateway import webchat
 
@@ -3544,7 +3585,7 @@ def test_core_max_iterations_response_text_is_consistent():
     repo_root = Path(__file__).parent.parent
     core_py = (repo_root / "src" / "agents" / "core.py").read_text(encoding="utf-8")
 
-    max_iter_anchor = "max_iterations_text = \"Task completed after maximum iterations.\""
+    max_iter_anchor = "Stopped after reaching the maximum number of tool iterations before reliable completion."
     start = core_py.find(max_iter_anchor)
     assert start != -1
     chunk = core_py[start: start + 1100]
@@ -3552,6 +3593,7 @@ def test_core_max_iterations_response_text_is_consistent():
     assert 'send_event("complete", {' in chunk
     assert '"response": max_iterations_text' in chunk
     assert '_build_assistant_result_payload(' in chunk
+    assert "Task completed after maximum iterations." not in core_py
     assert '"Task completed (max iterations reached)"' not in chunk
 
 

@@ -10,7 +10,7 @@ import platform
 import re
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from src.agents.skill_mode import (
     SkillSession,
@@ -662,6 +662,143 @@ def _is_projected_feedback(text: str) -> bool:
     return False
 
 
+
+
+def _as_bool_config(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    return default
+
+
+def _as_int_config(value: Any, default: int, *, min_value: int = 1, max_value: int = 10) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(min_value, min(max_value, parsed))
+
+
+def _resolve_tool_loop_config(execution_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+
+    llm_cfg = getattr(config, "llm", {}) if config is not None else {}
+    if isinstance(llm_cfg, dict):
+        raw_tool_loop = llm_cfg.get("tool_loop")
+        if isinstance(raw_tool_loop, dict):
+            merged.update(raw_tool_loop)
+
+    if isinstance(execution_metadata, dict):
+        metadata_tool_loop = execution_metadata.get("llm_tool_loop")
+        if isinstance(metadata_tool_loop, dict):
+            merged.update(metadata_tool_loop)
+
+    return {
+        "one_tool_per_turn": _as_bool_config(merged.get("one_tool_per_turn"), True),
+        "parallel_tool_calls": _as_bool_config(merged.get("parallel_tool_calls"), False),
+        "max_repeated_tool_signature": _as_int_config(
+            merged.get("max_repeated_tool_signature"),
+            2,
+            min_value=1,
+            max_value=10,
+        ),
+    }
+
+
+def _single_line(value: Any, *, limit: int = 500) -> str:
+    text = str(value or "").replace("\n", " ").replace("\r", " ").strip()
+    return safe_preview(text, limit)
+
+
+def _tool_feedback_success_and_error(value: Any, text: str) -> tuple[bool, str]:
+    success_attr = getattr(value, "success", None)
+    error_attr = getattr(value, "error", None)
+
+    if isinstance(success_attr, bool):
+        success = success_attr
+    else:
+        stripped = str(text or "").lstrip()
+        success = not stripped.startswith("Error:")
+
+    error_text = ""
+    if error_attr:
+        error_text = _single_line(error_attr)
+    elif not success:
+        error_text = _single_line(text, limit=500)
+
+    return success, error_text
+
+
+def _build_tool_result_envelope(
+    *,
+    tool_name: Optional[str],
+    value: Any,
+    raw_text: str,
+    body_text: str,
+    truncated: bool,
+    context_ref: str = "",
+) -> str:
+    if str(body_text or "").lstrip().startswith("[tool_result]"):
+        return body_text
+
+    success, error_text = _tool_feedback_success_and_error(value, raw_text)
+    guidance = (
+        "Use this observation to decide the next action. Do not repeat the same tool call unless the arguments or hypothesis changed."
+        if success
+        else "The tool failed or was blocked. Do not retry the same call with unchanged arguments; change strategy or ask for missing information."
+    )
+
+    return (
+        "[tool_result]\n"
+        f"tool_name: {_single_line(tool_name or '')}\n"
+        f"success: {'true' if success else 'false'}\n"
+        f"error: {error_text}\n"
+        f"content_chars: {len(raw_text or '')}\n"
+        f"truncated: {'true' if truncated else 'false'}\n"
+        f"context_ref: {context_ref}\n"
+        f"guidance: {guidance}\n"
+        "---\n"
+        f"{body_text}"
+    )
+
+
+def _allowed_tool_names_from_execution_metadata(execution_metadata: Optional[Dict[str, Any]]) -> Set[str]:
+    if not isinstance(execution_metadata, dict):
+        return set()
+
+    allowed: Set[str] = set()
+    raw_ids = execution_metadata.get("allowed_capability_ids")
+    if not isinstance(raw_ids, list):
+        return allowed
+
+    for item in raw_ids:
+        if not isinstance(item, str):
+            continue
+        normalized = item.strip()
+        if not normalized.lower().startswith("tool:"):
+            continue
+        tool_name = normalized.split(":", 1)[1].strip()
+        if tool_name:
+            allowed.add(tool_name)
+
+    return allowed
+
+
+def _build_tool_progress_signature(tool_name: str, args: Dict[str, Any], output_text: str) -> str:
+    args_text = json.dumps(args or {}, sort_keys=True, ensure_ascii=False, default=str)
+    return "|".join([
+        str(tool_name or ""),
+        _hash_text(args_text, max_len=500),
+        _hash_text(str(output_text or ""), max_len=1000),
+    ])
+
+
+def _latest_tool_observation_preview(loop_messages: List[Dict[str, Any]], *, limit: int = 4000) -> str:
+    for item in reversed(loop_messages or []):
+        if isinstance(item, dict) and item.get("role") == "tool":
+            return safe_preview(item.get("content") or "", limit)
+    return ""
+
+
 def _tool_feedback_text_for_tool(
     tool_name: Optional[str],
     value: Any,
@@ -673,15 +810,29 @@ def _tool_feedback_text_for_tool(
     text = str(value)
     if _is_projected_feedback(text):
         return text
-    if not (tool_name and tool_name.startswith(LARGE_SOURCE_TOOL_PREFIXES)):
-        return _tool_feedback_text(text, max_length=DEFAULT_TOOL_FEEDBACK_MAX_LENGTH)
     if _is_projected_large_source_feedback(text):
         return text
+    if not (tool_name and tool_name.startswith(LARGE_SOURCE_TOOL_PREFIXES)):
+        body = _tool_feedback_text(text, max_length=DEFAULT_TOOL_FEEDBACK_MAX_LENGTH)
+        truncated = len(text) > DEFAULT_TOOL_FEEDBACK_MAX_LENGTH
+        return _build_tool_result_envelope(
+            tool_name=tool_name,
+            value=value,
+            raw_text=text,
+            body_text=body,
+            truncated=truncated,
+        )
     projection_cfg = _resolve_context_projection_cfg()
     jira_conf_cfg = projection_cfg.get("jira_confluence") if isinstance(projection_cfg.get("jira_confluence"), dict) else {}
     max_chars = int(jira_conf_cfg.get("model_feedback_max_chars", DEFAULT_TOOL_FEEDBACK_MAX_LENGTH) or DEFAULT_TOOL_FEEDBACK_MAX_LENGTH)
     if len(text) <= max_chars:
-        return text
+        return _build_tool_result_envelope(
+            tool_name=tool_name,
+            value=value,
+            raw_text=text,
+            body_text=text,
+            truncated=False,
+        )
     return _build_large_source_envelope(
         tool_name=tool_name,
         text=text,
@@ -1304,6 +1455,7 @@ async def _execute_tool_via_runtime_bus(
     runtime_config: Optional[SkillRuntimeConfig] = None,
     event_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
     source_ref: str = "agents.core",
+    execution_metadata: Optional[Dict[str, Any]] = None,
 ) -> ToolResult:
     """Phase 1 compatibility helper to route tool/task execution through ExecutionBus.
 
@@ -1322,13 +1474,16 @@ async def _execute_tool_via_runtime_bus(
     else:
         input_payload = {"tool_name": tool_name, "kwargs": dict(args)}
 
+    runtime_metadata = dict(execution_metadata or {}) if isinstance(execution_metadata, dict) else {}
+    runtime_metadata.update({"tool_name": tool_name, "task_boundary": use_task_boundary})
+
     result = await execute_tool_or_task_orchestration(
         source_type="agent",
         source_ref=source_ref,
         execution_type=execution_type,
         session_id=session_id,
         input_payload=input_payload,
-        metadata={"tool_name": tool_name, "task_boundary": use_task_boundary},
+        metadata=runtime_metadata,
         execute_tool_func=execute_tool_by_name,
     )
     payload: Dict[str, Any] = result.output_payload if isinstance(result.output_payload, dict) else {"value": result.output_payload}
@@ -1831,6 +1986,7 @@ You have access to the following tools. When a user asks you to do something tha
         portal_user_id: Optional[str] = None,
         portal_user_name: Optional[str] = None,
         request_id: Optional[str] = None,
+        execution_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Process a user message with ReAct pattern.
         
@@ -2193,6 +2349,12 @@ You have access to the following tools. When a user asks you to do something tha
         max_tool_iterations = config.session.get("max_iterations", 30) if hasattr(config, 'session') else 30
         
         iteration = 0
+        tool_loop_cfg = _resolve_tool_loop_config(execution_metadata)
+        one_tool_per_turn = bool(tool_loop_cfg.get("one_tool_per_turn", True))
+        max_repeated_tool_signature = int(tool_loop_cfg.get("max_repeated_tool_signature", 2) or 2)
+        last_tool_progress_signature: Optional[str] = None
+        repeated_tool_progress_count = 0
+        no_progress_stop_reason: Optional[str] = None
         runtime_events_for_result: List[Dict[str, Any]] = []
         latest_request_budget: Dict[str, Any] = {}
         
@@ -2259,6 +2421,42 @@ You have access to the following tools. When a user asks you to do something tha
                 if latest_request_budget:
                     payload["request_budget"] = dict(latest_request_budget)
             return payload
+
+        def record_tool_progress(tool_name: str, args: Dict[str, Any], feedback_text: str) -> Optional[str]:
+            nonlocal last_tool_progress_signature, repeated_tool_progress_count
+
+            signature = _build_tool_progress_signature(tool_name, args, feedback_text)
+            if signature == last_tool_progress_signature:
+                repeated_tool_progress_count += 1
+            else:
+                last_tool_progress_signature = signature
+                repeated_tool_progress_count = 0
+
+            if repeated_tool_progress_count == 1:
+                warning = (
+                    "[tool_policy]\n"
+                    "The previous tool call repeated the same tool name, arguments, and result pattern. "
+                    "Do not call the same tool with unchanged arguments again. "
+                    "Change the query/tool/hypothesis, or answer using the evidence already available."
+                )
+                loop_messages.append({"role": "user", "content": warning})
+                send_event(
+                    "tool_policy",
+                    {
+                        "policy": "no_progress_warning",
+                        "tool": tool_name,
+                        "repeated_count": repeated_tool_progress_count,
+                    },
+                )
+                return None
+
+            if repeated_tool_progress_count >= max_repeated_tool_signature:
+                return (
+                    "Stopped because the agent repeated the same tool call/result pattern "
+                    "and was no longer making progress."
+                )
+
+            return None
 
         def emit_context_snapshot(
             stage: str,
@@ -2460,10 +2658,23 @@ You have access to the following tools. When a user asks you to do something tha
             
             # Only pass model if explicitly set
             loop_tools = self.tools
+
             if active_skill_runtime and active_skill_runtime.tool_policy_declared:
                 always_allowed = set(active_skill_runtime.allowed_tools_set)
                 always_allowed.add("context_read_ref")
-                loop_tools = intersect_tool_schemas_by_names(self.tools, always_allowed)
+                loop_tools = intersect_tool_schemas_by_names(loop_tools, always_allowed)
+
+            portal_allowed_tools = _allowed_tool_names_from_execution_metadata(execution_metadata)
+            if portal_allowed_tools:
+                portal_allowed_tools.update(INTERNAL_SUPPORT_TOOL_NAMES)
+                before_count = len(loop_tools or [])
+                loop_tools = intersect_tool_schemas_by_names(loop_tools, portal_allowed_tools)
+                logger.debug(
+                    "[Tool Policy] Portal capability tool filter applied: before=%s after=%s allowed=%s",
+                    before_count,
+                    len(loop_tools or []),
+                    sorted(portal_allowed_tools),
+                )
 
             llm_kwargs = dict(
                 input_items=input_items,
@@ -2714,6 +2925,33 @@ You have access to the following tools. When a user asks you to do something tha
             content = (llm_result.get("content") or "").strip()
             function_calls = llm_result.get("function_calls", [])
             tool_calls = function_calls  # alias
+            if one_tool_per_turn and len(function_calls) > 1:
+                original_count = len(function_calls)
+                skipped_names = []
+                for skipped in function_calls[1:]:
+                    fn = skipped.get("function") if isinstance(skipped, dict) else None
+                    if isinstance(fn, dict):
+                        skipped_names.append(str(fn.get("name") or ""))
+                    elif isinstance(skipped, dict):
+                        skipped_names.append(str(skipped.get("name") or ""))
+
+                function_calls = function_calls[:1]
+                tool_calls = function_calls
+
+                logger.info(
+                    "[Tool Policy] one_tool_per_turn selected first tool call; original_count=%s skipped=%s",
+                    original_count,
+                    [name for name in skipped_names if name],
+                )
+                send_event(
+                    "tool_policy",
+                    {
+                        "policy": "one_tool_per_turn",
+                        "original_count": original_count,
+                        "executed_count": 1,
+                        "skipped_tools": [name for name in skipped_names if name],
+                    },
+                )
             staged_mode = bool(isinstance(loop_context_state, dict) and isinstance(loop_context_state.get("budget"), dict) and (loop_context_state.get("budget") or {}).get("generation_mode") == "staged")
             
             # Save intermediate chatlog after EVERY LLM call (for recovery on interruption)
@@ -2996,16 +3234,21 @@ You have access to the following tools. When a user asks you to do something tha
                             result=safe_preview(deny_result, 500),
                             success=False,
                         )
+                        denied_feedback_text = _tool_feedback_text_for_tool(
+                            tool_name, deny_result, session_id=session_id, source_id=call_id or tool_name
+                        )
                         loop_messages.append(
                             {
                                 "role": "tool",
-                                "content": _tool_feedback_text_for_tool(
-                                    tool_name, deny_result, session_id=session_id, source_id=call_id or tool_name
-                                ),
+                                "content": denied_feedback_text,
                                 "tool_call_id": call_id,
                                 "tool_name": tool_name,
                             }
                         )
+                        stop_reason = record_tool_progress(tool_name, args, denied_feedback_text)
+                        if stop_reason:
+                            no_progress_stop_reason = stop_reason
+                            break
                         executed_tool_results.append((tool_name, deny_result))
                         _run_post_tool_hooks_via_governance(
                             runtime_config=active_skill_runtime,
@@ -3034,16 +3277,21 @@ You have access to the following tools. When a user asks you to do something tha
                         result=safe_preview(short_result, 500),
                         success=short_result.success,
                     )
+                    short_circuit_feedback_text = _tool_feedback_text_for_tool(
+                        tool_name, short_result, session_id=session_id, source_id=call_id or tool_name
+                    )
                     loop_messages.append(
                         {
                             "role": "tool",
-                            "content": _tool_feedback_text_for_tool(
-                                tool_name, short_result, session_id=session_id, source_id=call_id or tool_name
-                            ),
+                            "content": short_circuit_feedback_text,
                             "tool_call_id": call_id,
                             "tool_name": tool_name,
                         }
                     )
+                    stop_reason = record_tool_progress(tool_name, args, short_circuit_feedback_text)
+                    if stop_reason:
+                        no_progress_stop_reason = stop_reason
+                        break
                     send_event("tool_result", {
                         "tool": tool_name,
                         "call_id": call_id,
@@ -3085,6 +3333,7 @@ You have access to the following tools. When a user asks you to do something tha
                     event_callback=send_event,
                     args=args,
                     source_ref="agents.core.tool_loop",
+                    execution_metadata=execution_metadata,
                 )
                 result_preview = safe_preview(tool_result, 200)
                 post_hook_effects = _run_post_tool_hooks_via_governance(
@@ -3121,17 +3370,22 @@ You have access to the following tools. When a user asks you to do something tha
                 # By appending to the end, we get:
                 #   ... old messages ... -> assistant(tool_calls) -> tool_result [CORRECT]
                 # The tool result naturally comes after the assistant message in the iteration order.
+                feedback_text = _tool_feedback_text_for_tool(
+                    tool_name, tool_result, session_id=session_id, source_id=call_id or tool_name
+                )
                 tool_result_msg = {
                     "role": "tool",
-                    "content": _tool_feedback_text_for_tool(
-                        tool_name, tool_result, session_id=session_id, source_id=call_id or tool_name
-                    ),
+                    "content": feedback_text,
                     "tool_call_id": call_id,
                     "tool_name": tool_name,
                 }
                 
                 # Append tool result to end of loop_messages
                 loop_messages.append(tool_result_msg)
+                stop_reason = record_tool_progress(tool_name, args, feedback_text)
+                if stop_reason:
+                    no_progress_stop_reason = stop_reason
+                    break
                 
                 # NOTE: We do NOT save tool results to session history.
                 # Tool results in session history cause ordering issues because:
@@ -3181,6 +3435,36 @@ You have access to the following tools. When a user asks you to do something tha
                     )
                     return attach_runtime_events(result)
             
+            if no_progress_stop_reason:
+                no_progress_text = (
+                    f"{no_progress_stop_reason}\n\n"
+                    "Here is the latest observation preview:\n"
+                    f"{_latest_tool_observation_preview(loop_messages, limit=4000)}"
+                ).strip()
+
+                await self._persist_assistant_message(session_id, no_progress_text)
+                send_event(
+                    "complete",
+                    {
+                        "response": no_progress_text,
+                        "total_iterations": iteration,
+                        "note": "no_progress_guard",
+                    },
+                )
+                tracer.complete_execution("no_progress_guard")
+
+                from src.skills import get_tracer
+                tracer_instance = get_tracer()
+                events = tracer_instance.get_events_for_ui(limit=10, session_id=session_id)
+
+                result = self._build_assistant_result_payload(
+                    no_progress_text,
+                    usage=usage_data or {},
+                    events=events,
+                    user_message_id=user_message_id,
+                )
+                return attach_runtime_events(result)
+
             # Send iteration complete event
             send_event("iteration_end", {"iteration": iteration})
             
@@ -3189,7 +3473,15 @@ You have access to the following tools. When a user asks you to do something tha
         
         # Safety: max iterations reached
         logger.warning(f"[Tool Loop] Max iterations ({max_tool_iterations}) reached")
-        max_iterations_text = "Task completed after maximum iterations."
+        latest_observation = _latest_tool_observation_preview(loop_messages, limit=4000)
+        max_iterations_text = (
+            "Stopped after reaching the maximum number of tool iterations before reliable completion. "
+            "Here is the best partial result based on the latest observations."
+        )
+        if latest_observation:
+            max_iterations_text = (
+                f"{max_iterations_text}\n\nLatest observation preview:\n{latest_observation}"
+            )
         await self._persist_assistant_message(session_id, max_iterations_text)
         
         # Send completion event
@@ -3785,6 +4077,25 @@ You have access to the following tools. When a user asks you to do something tha
 
             raw_output = (llm_result.get("content") or "").strip()
             function_calls = llm_result.get("function_calls", []) or llm_result.get("tool_calls", []) or []
+            skill_tool_loop_cfg = _resolve_tool_loop_config(None)
+            if skill_tool_loop_cfg.get("one_tool_per_turn", True) and len(function_calls) > 1:
+                original_count = len(function_calls)
+                function_calls = function_calls[:1]
+                logger.info(
+                    "[SkillMode][Tool Policy] one_tool_per_turn selected first tool call; original_count=%s",
+                    original_count,
+                )
+                try:
+                    send_skill_event(
+                        "skill_tool_policy",
+                        {
+                            "policy": "one_tool_per_turn",
+                            "original_count": original_count,
+                            "executed_count": 1,
+                        },
+                    )
+                except Exception:
+                    pass
             turn_state.has_function_calls = bool(function_calls)
 
             logger.debug(f"[SkillMode] raw_output={safe_preview(raw_output, 300)}")
@@ -4261,6 +4572,7 @@ async def run_chat_execution(
     portal_user_id: Optional[str] = None,
     portal_user_name: Optional[str] = None,
     request_id: Optional[str] = None,
+    execution_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Thin adapter for unified runtime bus chat execution."""
     process_kwargs: Dict[str, Any] = {
@@ -4275,6 +4587,7 @@ async def run_chat_execution(
         "portal_user_id": portal_user_id,
         "portal_user_name": portal_user_name,
         "request_id": request_id,
+        "execution_metadata": execution_metadata,
     }
     result = await agent.process(**process_kwargs)
     context_state = await apply_progressive_context_after_turn(
