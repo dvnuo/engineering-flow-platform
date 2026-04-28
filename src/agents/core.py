@@ -2701,6 +2701,8 @@ You have access to the following tools. When a user asks you to do something tha
                                 session_id=session_id,
                                 tool_name="jira_prepare_issue_context",
                                 args={"issue_key_or_url": jira_hint},
+                                source_ref="agents.core.source_context_prepare",
+                                execution_metadata=execution_metadata,
                             )
                             source_manifest = str(prepared.content or "")
                             source_type = "jira"
@@ -2709,6 +2711,8 @@ You have access to the following tools. When a user asks you to do something tha
                                 session_id=session_id,
                                 tool_name="confluence_prepare_page_context",
                                 args={"page_id_or_url": confluence_hint},
+                                source_ref="agents.core.source_context_prepare",
+                                execution_metadata=execution_metadata,
                             )
                             source_manifest = str(prepared.content or "")
                             source_type = "confluence"
@@ -3523,6 +3527,7 @@ You have access to the following tools. When a user asks you to do something tha
         track_usage: bool = True,
         stream_callback: Optional[Callable[[str], None]] = None,
         request_id: Optional[str] = None,
+        execution_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Start a legacy lightweight skill-mode session (explicit compatibility path)."""
         from src.skills import get_tracer
@@ -3644,6 +3649,7 @@ You have access to the following tools. When a user asks you to do something tha
             skill=skill,
             stream_callback=stream_callback,
             request_id=request_id,
+            execution_metadata=execution_metadata,
         )
 
     async def _continue_skill_mode(
@@ -3657,6 +3663,7 @@ You have access to the following tools. When a user asks you to do something tha
         skill: Any = None,
         stream_callback: Optional[Callable[[str], None]] = None,
         request_id: Optional[str] = None,
+        execution_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Continue an existing lightweight skill-mode session."""
         from src.skills import get_tracer
@@ -3917,6 +3924,8 @@ You have access to the following tools. When a user asks you to do something tha
                         session_id=session_id,
                         tool_name="jira_prepare_issue_context",
                         args={"issue_key_or_url": jira_hint},
+                        source_ref="agents.core.skill_mode_source_context_prepare",
+                        execution_metadata=execution_metadata,
                     )
                     source_manifest = str(prepared.content or "")
                 elif confluence_hint:
@@ -3924,6 +3933,8 @@ You have access to the following tools. When a user asks you to do something tha
                         session_id=session_id,
                         tool_name="confluence_prepare_page_context",
                         args={"page_id_or_url": confluence_hint},
+                        source_ref="agents.core.skill_mode_source_context_prepare",
+                        execution_metadata=execution_metadata,
                     )
                     source_manifest = str(prepared.content or "")
                 if source_manifest:
@@ -4209,6 +4220,7 @@ You have access to the following tools. When a user asks you to do something tha
                         tool_name=tool_name,
                         args=normalized_args,
                         source_ref="agents.core.skill_mode_loop",
+                        execution_metadata=execution_metadata,
                     )
                     output_text = _tool_feedback_text_for_tool(
                         tool_name, tool_result, session_id=session_id, source_id=call_id or tool_name

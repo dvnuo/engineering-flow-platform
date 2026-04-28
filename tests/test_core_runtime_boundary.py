@@ -237,6 +237,37 @@ def test_agent_process_contains_one_tool_per_turn_and_no_progress_guards():
     assert "no_progress_warning" in source
 
 
+def test_agent_internal_source_prepare_calls_forward_execution_metadata():
+    from src.agents import core
+
+    source = inspect.getsource(core.Agent.process)
+
+    assert 'source_ref="agents.core.source_context_prepare"' in source
+    assert "execution_metadata=execution_metadata" in source
+
+
+def _blocks_around(source: str, needle: str, size: int = 500):
+    start = 0
+    while True:
+        idx = source.find(needle, start)
+        if idx == -1:
+            break
+        yield source[idx : idx + size]
+        start = idx + len(needle)
+
+
+def test_all_source_prepare_calls_forward_execution_metadata():
+    from pathlib import Path
+
+    source = Path("src/agents/core.py").read_text()
+    blocks = list(_blocks_around(source, 'tool_name="jira_prepare_issue_context"'))
+    blocks += list(_blocks_around(source, 'tool_name="confluence_prepare_page_context"'))
+
+    assert blocks
+    for block in blocks:
+        assert "execution_metadata=execution_metadata" in block
+
+
 def test_core_safe_int_handles_none_for_max_chat_output_chars():
     from src.agents import core
 
