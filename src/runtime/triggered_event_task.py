@@ -17,13 +17,18 @@ def _require(payload: Dict[str, Any], key: str) -> Any:
     return value
 
 
-async def _run_agent_response(message: str, session_id: str) -> str:
+async def _run_agent_response(
+    message: str,
+    session_id: str,
+    execution_metadata: Dict[str, Any] | None = None,
+) -> str:
     result = await run_chat_execution(
         agent=agent,
         message=message,
         session_id=session_id,
         user_name="triggered-event",
         track_usage=False,
+        execution_metadata=execution_metadata if isinstance(execution_metadata, dict) else None,
     )
     response_text = str(result.get("response") or result.get("output") or "").strip()
     if not response_text:
@@ -62,6 +67,9 @@ def _evaluate_action_gate(
 async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     source_kind = str(payload.get("source_kind") or "").strip().lower()
     session_id = str(_require(payload, "session_id"))
+    execution_metadata = payload.get("_execution_metadata")
+    if not isinstance(execution_metadata, dict):
+        execution_metadata = None
     secondary_action_id, secondary_action_capability_type = _resolve_secondary_action(source_kind)
     if source_kind == "github.mention":
         owner = str(_require(payload, "owner"))
@@ -81,7 +89,11 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"评论内容:\n{comment_body}\n\n"
             "请生成一段简洁、直接、可直接发布的回复。必要时可使用已有工具查看更多上下文。"
         )
-        response_text = await _run_agent_response(message, session_id)
+        response_text = await _run_agent_response(
+            message,
+            session_id,
+            execution_metadata=execution_metadata,
+        )
         gate_result = _evaluate_action_gate(
             payload,
             action_id=secondary_action_id,
@@ -125,7 +137,11 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"Assignee: {assignee}\n\n"
             "请先审阅该 issue，再生成首条处理评论（包含你的理解、下一步、缺失信息）。"
         )
-        response_text = await _run_agent_response(message, session_id)
+        response_text = await _run_agent_response(
+            message,
+            session_id,
+            execution_metadata=execution_metadata,
+        )
         gate_result = _evaluate_action_gate(
             payload,
             action_id=secondary_action_id,
@@ -167,7 +183,11 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"评论内容:\n{comment_body}\n\n"
             "请生成简洁且有帮助的回复。"
         )
-        response_text = await _run_agent_response(message, session_id)
+        response_text = await _run_agent_response(
+            message,
+            session_id,
+            execution_metadata=execution_metadata,
+        )
         gate_result = _evaluate_action_gate(
             payload,
             action_id=secondary_action_id,
@@ -212,7 +232,11 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"评论内容:\n{comment_body}\n\n"
             "请生成简洁且有帮助的回复。"
         )
-        response_text = await _run_agent_response(message, session_id)
+        response_text = await _run_agent_response(
+            message,
+            session_id,
+            execution_metadata=execution_metadata,
+        )
         gate_result = _evaluate_action_gate(
             payload,
             action_id=secondary_action_id,
