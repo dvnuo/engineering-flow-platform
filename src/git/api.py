@@ -7,12 +7,13 @@ import logging
 import os
 import re
 import stat
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import urlsplit, urlunsplit
 
-from src.config import config
+from src.config import config, service_reload_manager
 
 logger = logging.getLogger(__name__)
 
@@ -211,4 +212,29 @@ async def setup_git_user() -> bool:
     return True
 
 
-__all__ = ["GitClient", "setup_git_user"]
+def setup_git_user_sync() -> bool:
+    """Setup git user from config (sync version for config reload hooks)."""
+    git_config = config.get("git", {}) or {}
+    user = git_config.get("user", {}) or {}
+    user_name = str(user.get("name") or "").strip()
+    user_email = str(user.get("email") or "").strip()
+
+    if not user_name or not user_email:
+        return False
+
+    subprocess.run(["git", "config", "--global", "user.name", user_name], check=False)
+    subprocess.run(["git", "config", "--global", "user.email", user_email], check=False)
+
+    logger.info("Git user configured: %s <%s>", user_name, user_email)
+    return True
+
+
+def reinit_git_config() -> None:
+    """Reload hook for git-related config updates."""
+    setup_git_user_sync()
+
+
+service_reload_manager.register("git", reinit_git_config)
+
+
+__all__ = ["GitClient", "setup_git_user", "setup_git_user_sync", "reinit_git_config"]

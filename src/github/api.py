@@ -115,6 +115,11 @@ class GitHubChannel:
         **kwargs
     ) -> Any:
         """Make an API request with rate limit handling and exponential backoff."""
+        if not self.enabled:
+            raise RuntimeError("GitHub integration is disabled")
+        if not self.token:
+            raise RuntimeError("GitHub token is not configured")
+
         base_url = normalize_github_api_base_url(self.base_url)
         url = f"{base_url}{endpoint}"
         

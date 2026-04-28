@@ -6,9 +6,11 @@ Two tools:
 """
 
 import asyncio
+import importlib.util
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -206,6 +208,17 @@ def _validate_cwd(cwd: str = None) -> str:
     return cwd
 
 
+def _build_credential_env(cmd: str, args: List[str], cwd: str):
+    module_path = Path(__file__).parent.parent / "runtime" / "credential_resolver.py"
+    spec = importlib.util.spec_from_file_location("efp_runtime_credential_resolver", module_path)
+    if not spec or not spec.loader:
+        raise RuntimeError("Failed to load credential resolver")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["efp_runtime_credential_resolver"] = module
+    spec.loader.exec_module(module)
+    return module.build_env_for_command(cmd, args=args, cwd=cwd)
+
+
 async def run_command(
     cmd: str,
     args: List[str] = None,
@@ -296,71 +309,75 @@ async def run_command(
             if k in allowed_keys:
                 safe_env[k] = v
     
+    credential_env = _build_credential_env(cmd, args=args, cwd=cwd)
+    safe_env.update(credential_env.env)
+
     # Execute
     start_time = asyncio.get_event_loop().time()
-    
+
     try:
-        process = await asyncio.create_subprocess_exec(
-            cmd, *args,
-            cwd=cwd,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=safe_env,
-        )
-        
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=timeout_ms / 1000
+            process = await asyncio.create_subprocess_exec(
+                cmd, *args,
+                cwd=cwd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=safe_env,
             )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=timeout_ms / 1000
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                return {
+                    "ok": False,
+                    "error": "E_TIMEOUT",
+                    "exit_code": -1,
+                    "stdout": "",
+                    "stderr": credential_env.redact_text("Command timed out"),
+                    "duration_ms": timeout_ms,
+                    "truncated": {"stdout": False, "stderr": False},
+                }
+
+            duration_ms = int((asyncio.get_running_loop().time() - start_time) * 1000)
+
+            # Truncate if needed
+            stdout_bytes = stdout[:max_output_bytes]
+            stderr_bytes = stderr[:max_output_bytes]
+
+            stdout_text = credential_env.redact_text(stdout_bytes.decode("utf-8", errors="replace"))
+            stderr_text = credential_env.redact_text(stderr_bytes.decode("utf-8", errors="replace"))
+
+            is_success = process.returncode == 0
             return {
-                "ok": False,
-                "error": "E_TIMEOUT",
-                "exit_code": -1,
-                "stdout": "",
-                "stderr": "Command timed out",
-                "duration_ms": timeout_ms,
-                "truncated": {"stdout": False, "stderr": False},
+                "ok": is_success,
+                "exit_code": process.returncode,
+                "stdout": stdout_text,
+                "stderr": stderr_text,
+                "duration_ms": duration_ms,
+                "truncated": {
+                    "stdout": len(stdout) > max_output_bytes,
+                    "stderr": len(stderr) > max_output_bytes,
+                },
+                "meta": {
+                    "cmd": credential_env.redact_text(cmd),
+                    "args": credential_env.redact_args(args),
+                    "cwd": cwd,
+                }
             }
-        
-        duration_ms = int((asyncio.get_running_loop().time() - start_time) * 1000)
-        
-        # Truncate if needed
-        stdout_bytes = stdout[:max_output_bytes]
-        stderr_bytes = stderr[:max_output_bytes]
-        
-        stdout_text = stdout_bytes.decode("utf-8", errors="replace")
-        stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-        
-        is_success = process.returncode == 0
-        return {
-            "ok": is_success,
-            "exit_code": process.returncode,
-            "stdout": stdout_text,
-            "stderr": stderr_text,
-            "duration_ms": duration_ms,
-            "truncated": {
-                "stdout": len(stdout) > max_output_bytes,
-                "stderr": len(stderr) > max_output_bytes,
-            },
-            "meta": {
-                "cmd": cmd,
-                "args": args,
-                "cwd": cwd,
-            }
-        }
-        
+        finally:
+            credential_env.cleanup()
     except FileNotFoundError:
         return {
             "ok": False,
             "error": "E_NOT_FOUND",
             "exit_code": 127,
             "stdout": "",
-            "stderr": f"Command not found: {cmd}",
+            "stderr": credential_env.redact_text(f"Command not found: {cmd}"),
             "duration_ms": 0,
             "truncated": {"stdout": False, "stderr": False},
         }
@@ -371,7 +388,7 @@ async def run_command(
             "error": "E_EXEC_FAILED",
             "exit_code": -1,
             "stdout": "",
-            "stderr": str(e),
+            "stderr": credential_env.redact_text(str(e)),
             "duration_ms": 0,
             "truncated": {"stdout": False, "stderr": False},
         }

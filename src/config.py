@@ -61,6 +61,7 @@ class ServiceReloadManager:
             'jira': ['jira'],
             'confluence': ['confluence'],
             'github': ['github'],
+            'git': ['git'],
             'session': ['session'],
         }
         

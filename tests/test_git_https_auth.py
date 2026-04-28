@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 import src.git as git_module
-from src.git.api import GitClient
+from src.git.api import GitClient, setup_git_user_sync
 from src.gateway.webchat import _remove_legacy_ssh_config
 
 
@@ -95,3 +95,25 @@ def test_git_module_public_surface_includes_expected_tools():
     assert callable(git_module.git_commit)
     assert callable(git_module.git_push)
     assert callable(git_module.git_clone)
+    assert callable(git_module.setup_git_user_sync)
+    assert callable(git_module.reinit_git_config)
+
+
+def test_setup_git_user_sync_uses_profile_config(monkeypatch):
+    calls = []
+
+    def fake_get(key, default=None):
+        if key == "git":
+            return {"user": {"name": "Bot", "email": "bot@example.com"}}
+        return default
+
+    def fake_run(cmd, check=False):
+        calls.append((cmd, check))
+        return None
+
+    monkeypatch.setattr("src.git.api.config.get", fake_get)
+    monkeypatch.setattr("src.git.api.subprocess.run", fake_run)
+
+    assert setup_git_user_sync() is True
+    assert (["git", "config", "--global", "user.name", "Bot"], False) in calls
+    assert (["git", "config", "--global", "user.email", "bot@example.com"], False) in calls
