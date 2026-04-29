@@ -253,20 +253,89 @@ async def _get_current_pr_head_sha(owner: str, repo: str, pull_number: int) -> s
     return None
 
 
+def _metadata_has_identity_binding(metadata: Dict[str, Any]) -> bool:
+    nested = metadata.get("identity_binding")
+    if isinstance(nested, dict):
+        system_type = str(nested.get("system_type") or "").strip()
+        binding_id = str(nested.get("id") or nested.get("identity_binding_id") or "").strip()
+        external_account_id = str(nested.get("external_account_id") or "").strip()
+        if system_type and (binding_id or external_account_id):
+            return True
+    system_type = str(metadata.get("identity_binding_system_type") or "").strip()
+    binding_id = str(metadata.get("identity_binding_id") or "").strip()
+    external_account_id = str(metadata.get("identity_binding_external_account_id") or "").strip()
+    return bool(system_type and (binding_id or external_account_id))
+
+
+def _safe_identity_fragment(value: Any, fallback: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        text = fallback
+    cleaned = []
+    for ch in text:
+        cleaned.append(ch if ch.isalnum() or ch in {"-", "_", ".", ":"} else "-")
+    result = "".join(cleaned).strip("-")
+    return result[:120] or fallback
+
+
+def _ensure_github_writeback_identity_binding(
+    metadata: Dict[str, Any],
+    *,
+    payload: Dict[str, Any],
+    action_id: str,
+    kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
+    enriched = dict(metadata or {})
+    if action_id not in {"adapter:github:review_pull_request", "adapter:github:add_comment"}:
+        return enriched
+    if _metadata_has_identity_binding(enriched):
+        return enriched
+    owner = kwargs.get("owner") or payload.get("owner")
+    repo = kwargs.get("repo") or payload.get("repo")
+    pull_number = kwargs.get("pull_number") or payload.get("pull_number")
+    task_ref = (
+        enriched.get("portal_task_id")
+        or enriched.get("task_id")
+        or payload.get("automation_rule_id")
+        or payload.get("rule_id")
+        or payload.get("dedupe_key")
+        or f"{owner}/{repo}#{pull_number}"
+        or "unknown"
+    )
+    binding_id = f"runtime-github-review:{_safe_identity_fragment(task_ref, 'unknown')}"
+    external_account_id = (
+        enriched.get("github_identity_external_account_id")
+        or enriched.get("github_actor")
+        or enriched.get("github_login")
+        or payload.get("identity_binding_external_account_id")
+        or payload.get("_runtime_agent_id")
+        or payload.get("agent_id")
+        or enriched.get("agent_id")
+        or "runtime-github-integration"
+    )
+    enriched["identity_binding"] = {
+        "system_type": "github",
+        "id": binding_id,
+        "external_account_id": str(external_account_id),
+    }
+    enriched["identity_binding_source"] = "github_review_task"
+    enriched["identity_binding_runtime_managed"] = True
+    return enriched
+
+
 async def execute_github_review_action(action_id: str, kwargs: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     execution_metadata = payload.get("_execution_metadata")
-    metadata = dict(execution_metadata) if isinstance(execution_metadata, dict) else None
-    if metadata is None:
-        metadata = {}
-    if "identity_binding" not in metadata and isinstance(payload.get("identity_binding"), dict):
-        metadata["identity_binding"] = dict(payload.get("identity_binding") or {})
-    for key in ("identity_binding_system_type", "identity_binding_id", "identity_binding_external_account_id"):
-        if key not in metadata and payload.get(key) is not None:
-            metadata[key] = payload.get(key)
-    session_id = payload.get("session_id") or payload.get("_runtime_session_id")
-    agent_id = payload.get("agent_id") or payload.get("_runtime_agent_id")
+    base_metadata = dict(execution_metadata) if isinstance(execution_metadata, dict) else {}
+    metadata = _ensure_github_writeback_identity_binding(
+        base_metadata,
+        payload=payload,
+        action_id=action_id,
+        kwargs=kwargs,
+    )
+    session_id = payload.get("session_id") or payload.get("_runtime_session_id") or metadata.get("session_id") or metadata.get("chat_session_id")
+    agent_id = payload.get("agent_id") or payload.get("_runtime_agent_id") or metadata.get("agent_id") or metadata.get("chat_agent_id")
     policy_profile_id = payload.get("policy_profile_id")
-    if policy_profile_id is None and isinstance(metadata, dict):
+    if policy_profile_id is None:
         policy_profile_id = metadata.get("policy_profile_id")
     return await execute_adapter_action_via_bus(
         action_id,
@@ -358,7 +427,7 @@ async def _execute_review_skill_via_chat_loop(
         return {"success": False, "output": review_text, "error": str(error_value), "data": {"execution_mode": "chat_tool_loop", "chat_session_id": chat_session_id, "chat_request_id": chat_request_id, "chat_status": chat_result.status}, "runtime_events": all_chat_events}
     if not review_text:
         return {"success": False, "output": "", "error": "Chat/tool-loop review returned empty review content", "data": {"execution_mode": "chat_tool_loop", "chat_session_id": chat_session_id, "chat_request_id": chat_request_id, "chat_status": chat_result.status}, "runtime_events": all_chat_events}
-    return {"success": True, "output": review_text, "error": None, "data": {"review_summary": review_text, "requested_review_event": requested_event_text, "execution_mode": "chat_tool_loop", "chat_session_id": chat_session_id, "chat_request_id": chat_request_id, "chat_status": chat_result.status}, "runtime_events": all_chat_events}
+    return {"success": True, "output": review_text, "error": None, "data": {"review_summary": review_text, "requested_review_event": requested_event_text, "execution_mode": "chat_tool_loop", "chat_session_id": chat_session_id, "chat_request_id": chat_request_id, "chat_agent_id": agent_id, "chat_status": chat_result.status}, "runtime_events": all_chat_events}
 
 
 async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -732,10 +801,27 @@ async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                 )
             )
         else:
+            writeback_payload = dict(payload)
+            writeback_metadata = dict(writeback_payload.get("_execution_metadata") or {})
+            if skill_data.get("chat_session_id") and not (
+                writeback_payload.get("session_id")
+                or writeback_payload.get("_runtime_session_id")
+                or writeback_metadata.get("session_id")
+                or writeback_metadata.get("chat_session_id")
+            ):
+                writeback_metadata["chat_session_id"] = skill_data.get("chat_session_id")
+            if skill_data.get("chat_agent_id") and not (
+                writeback_payload.get("agent_id")
+                or writeback_payload.get("_runtime_agent_id")
+                or writeback_metadata.get("agent_id")
+                or writeback_metadata.get("chat_agent_id")
+            ):
+                writeback_metadata["chat_agent_id"] = skill_data.get("chat_agent_id")
+            writeback_payload["_execution_metadata"] = writeback_metadata
             add_comment_result = await execute_github_review_action(
                 secondary_action_id,
                 action_payload,
-                payload,
+                writeback_payload,
             )
             secondary_action_success = bool(add_comment_result.get("success"))
             actions_applied.append({"action_id": secondary_action_id, "success": secondary_action_success, "error": add_comment_result.get("error")})

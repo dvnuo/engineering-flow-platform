@@ -528,7 +528,7 @@ async def test_github_review_task_forwards_runtime_context_to_bus_helper(monkeyp
     assert captured["meta"]["session_id"] == "s-123"
     assert captured["meta"]["agent_id"] == "agent-123"
     assert captured["meta"]["policy_profile_id"] == "pp-123"
-    assert captured["meta"]["metadata"] == {"k": "v"}
+    assert captured["meta"]["metadata"]["k"] == "v"
 
 
 @pytest.mark.asyncio
@@ -561,8 +561,8 @@ async def test_github_review_task_forwards_identity_binding_metadata_to_bus_help
 
     assert result["success"] is True
     assert captured["action_id"] == "adapter:github:review_pull_request"
-    assert captured["meta"]["metadata"]["identity_binding_system_type"] == "github"
-    assert captured["meta"]["metadata"]["identity_binding_external_account_id"] == "acct-1"
+    assert captured["meta"]["metadata"]["identity_binding"]["system_type"] == "github"
+    assert captured["meta"]["metadata"]["identity_binding"]["external_account_id"] == "acct-1"
 
 
 @pytest.mark.asyncio
