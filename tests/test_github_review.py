@@ -1,3 +1,4 @@
+from pathlib import Path
 import pytest
 from tests._optional_runtime_deps import skip_if_missing_ruamel_yaml
 
@@ -839,6 +840,11 @@ async def test_github_review_task_uses_chat_tool_loop_not_execute_skill(monkeypa
     assert result["success"] is True
     assert result["result"]["skill"]["data"]["execution_mode"] == "chat_tool_loop"
 
+    source = Path("src/runtime/github_review.py").read_text()
+    assert "execute_skill(" not in source
+    assert "from src.agents.executor import execute_skill" not in source
+    assert not Path("skills/review-pull-request/skill.py").exists()
+
 
 def test_build_github_review_chat_prompt_contains_handoff_constraints():
     from src.runtime.github_review import _build_github_review_chat_prompt
@@ -856,3 +862,68 @@ def test_build_github_review_chat_prompt_contains_handoff_constraints():
     assert "Do NOT call github_add_comment" in prompt
     assert "Do NOT call github_add_pr_review_comment" in prompt
     assert "runtime task wrapper" in prompt
+
+
+@pytest.mark.asyncio
+async def test_execute_review_skill_via_chat_loop_forces_read_only_allowed_capability_ids(monkeypatch):
+    from src.runtime.contracts import make_execution_result
+    from src.runtime.github_review import _execute_review_skill_via_chat_loop
+
+    captured = {}
+
+    async def fake_execute_chat_orchestration(**kwargs):
+        captured["metadata"] = kwargs["metadata"]
+        return make_execution_result(
+            request_id=kwargs["request_id"],
+            status="success",
+            output_payload={
+                "response": "## Pull Request Summary\nLooks good.",
+                "runtime_events": [{"event_type": "skill_matched", "detail_payload": {"skill": "review-pull-request"}}],
+            },
+            runtime_events=[{"event_type": "skill_runtime_applied", "detail_payload": {"skill": "review-pull-request"}}],
+        )
+
+    monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_chat_orchestration", fake_execute_chat_orchestration)
+
+    result = await _execute_review_skill_via_chat_loop(
+        payload={"_execution_metadata": {"allowed_capability_ids": ["tool:github_add_comment"]}},
+        owner="acme", repo="demo", pull_number=1, skill_name="review-pull-request", requested_event="COMMENT",
+        requested_head_sha=None, review_target=None, review_metadata=None, skill_kwargs={}, automation_trace={},
+    )
+
+    assert result["success"] is True
+    assert captured["metadata"]["allowed_capability_ids"] == [
+        "tool:github_get_pr",
+        "tool:github_get_pr_files",
+        "tool:github_get_pr_file_patch",
+        "tool:github_get_pr_diff",
+        "tool:github_get_pr_comments",
+        "tool:github_list_pr_reviews",
+    ]
+    assert "tool:github_add_comment" not in captured["metadata"]["allowed_capability_ids"]
+    assert "tool:github_add_pr_review_comment" not in captured["metadata"]["allowed_capability_ids"]
+
+
+@pytest.mark.asyncio
+async def test_execute_review_skill_via_chat_loop_fails_when_skill_not_found(monkeypatch):
+    from src.runtime.contracts import make_execution_result
+    from src.runtime.github_review import _execute_review_skill_via_chat_loop
+
+    async def fake_execute_chat_orchestration(**kwargs):
+        return make_execution_result(
+            request_id=kwargs["request_id"],
+            status="success",
+            output_payload={"response": "Skill not found: review-pull-request"},
+            runtime_events=[],
+        )
+
+    monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_chat_orchestration", fake_execute_chat_orchestration)
+
+    result = await _execute_review_skill_via_chat_loop(
+        payload={"_execution_metadata": {}},
+        owner="acme", repo="demo", pull_number=1, skill_name="review-pull-request", requested_event="COMMENT",
+        requested_head_sha=None, review_target=None, review_metadata=None, skill_kwargs={}, automation_trace={},
+    )
+
+    assert result["success"] is False
+    assert "could not activate skill" in (result["error"] or "")

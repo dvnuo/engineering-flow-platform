@@ -3946,3 +3946,47 @@ async def test_execution_bus_github_review_task_forwards_runtime_request_context
     assert captured["_runtime_session_id"] == "sess-ctx-1"
     assert captured["_runtime_agent_id"] == "agent-ctx-1"
     assert captured["_execution_metadata"]["task_id"] == "t1"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_writeback_uses_runtime_session_agent_policy_fallback(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    captured = {}
+
+    async def _fake_chat_loop(**_kwargs):
+        return {
+            "success": True,
+            "output": "## Pull Request Summary\nok",
+            "error": None,
+            "data": {
+                "review_summary": "## Pull Request Summary\nok",
+                "execution_mode": "chat_tool_loop",
+                "chat_session_id": "chat-s",
+                "chat_request_id": "chat-r",
+            },
+            "runtime_events": [],
+        }
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **meta):
+        captured["meta"] = meta
+        return {"success": True, "error": None, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_chat_loop)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 1,
+            "_runtime_session_id": "sess-1",
+            "_runtime_agent_id": "agent-1",
+            "_execution_metadata": {"policy_profile_id": "policy-1"},
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["meta"]["session_id"] == "sess-1"
+    assert captured["meta"]["agent_id"] == "agent-1"
+    assert captured["meta"]["policy_profile_id"] == "policy-1"

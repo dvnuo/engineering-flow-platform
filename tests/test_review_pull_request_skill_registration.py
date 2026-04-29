@@ -1,21 +1,21 @@
-import pytest
+from pathlib import Path
 
 
-@pytest.mark.asyncio
-async def test_review_pull_request_skill_is_registered_but_requires_chat_tool_loop():
-    from src.agents.executor import execute_skill, list_available_skills
+def test_review_pull_request_has_no_python_skill_executor_path():
+    assert not Path("skills/review-pull-request/skill.py").exists()
 
-    assert "review-pull-request" in list_available_skills()
+    from src.agents.executor import list_available_skills
 
-    result = await execute_skill(
-        "review-pull-request",
-        _use_execution_bus=False,
-        owner="acme",
-        repo="repo",
-        pull_number=1,
-        review_event="APPROVE",
-    )
+    assert "review-pull-request" not in list_available_skills()
 
-    assert result.success is False
-    assert "chat/tool-loop skill" in (result.error or "")
-    assert result.data["execution_mode"] == "chat_tool_loop_required"
+
+def test_review_pull_request_markdown_skill_is_available():
+    from src.skills import skill_registry
+
+    if not skill_registry._initialized:
+        skill_registry.load_skills()
+
+    skill = skill_registry.get_skill("review-pull-request")
+    assert skill is not None
+    assert skill.name == "review-pull-request"
+    assert "github_get_pr" in skill.tools

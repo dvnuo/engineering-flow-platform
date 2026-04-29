@@ -85,7 +85,15 @@ _TASK_TEMPLATE_REGISTRY: Dict[str, TaskTemplateDefinition] = {
         default_trigger="github_pr_review_requested",
         default_skill_name="review-pull-request",
         required_inputs=("owner", "repo", "pull_number"),
-        optional_inputs=("review_event", "head_sha", "writeback_mode", "review_target", "review_target_type"),
+        optional_inputs=(
+            "review_event",
+            "head_sha",
+            "writeback_mode",
+            "review_target",
+            "review_target_type",
+            "skill_name",
+            "execution_mode",
+        ),
     ),
 }
 

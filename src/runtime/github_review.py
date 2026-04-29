@@ -13,6 +13,15 @@ from src.runtime.runtime_adapter_execution import execute_adapter_action_via_bus
 
 logger = logging.getLogger(__name__)
 
+_READ_ONLY_GITHUB_REVIEW_TOOL_CAPABILITY_IDS = [
+    "tool:github_get_pr",
+    "tool:github_get_pr_files",
+    "tool:github_get_pr_file_patch",
+    "tool:github_get_pr_diff",
+    "tool:github_get_pr_comments",
+    "tool:github_list_pr_reviews",
+]
+
 
 def _resolve_github_review_chat_session_id(payload: Dict[str, Any], owner: str, repo: str, pull_number: int) -> str:
     for key in ("chat_session_id", "session_id", "_runtime_session_id"):
@@ -84,6 +93,57 @@ def _extract_review_text_from_chat_result(output_payload: Dict[str, Any]) -> str
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return ""
+
+
+def _event_payload(event: Any) -> Dict[str, Any]:
+    if not isinstance(event, dict):
+        return {}
+    payload = event.get("detail_payload")
+    if isinstance(payload, dict):
+        return payload
+    payload = event.get("data")
+    if isinstance(payload, dict):
+        return payload
+    return event
+
+
+def _event_type(event: Any) -> str:
+    if not isinstance(event, dict):
+        return ""
+    return str(event.get("event_type") or event.get("event") or event.get("type") or "").strip()
+
+
+def _chat_result_confirms_skill_activation(events: list[Any], skill_name: str) -> bool:
+    expected = str(skill_name or "").strip()
+    if not expected:
+        return False
+    for event in events:
+        event_type = _event_type(event)
+        payload = _event_payload(event)
+        candidate = str(payload.get("skill") or payload.get("skill_name") or payload.get("active_skill") or "").strip()
+        if candidate == expected and event_type in {"skill_matched", "skill_runtime_applied", "skill_contract_active"}:
+            return True
+    return False
+
+
+def _chat_result_has_skill_not_found(output_payload: Dict[str, Any], events: list[Any], skill_name: str) -> bool:
+    expected = str(skill_name or "").strip()
+    texts = []
+    for key in ("response", "output", "content", "message", "error"):
+        value = output_payload.get(key)
+        if isinstance(value, str):
+            texts.append(value)
+    for text in texts:
+        lowered = text.lower()
+        if "skill not found" in lowered and expected.lower() in lowered:
+            return True
+    for event in events:
+        payload = _event_payload(event)
+        reason = str(payload.get("reason") or "").strip().lower()
+        candidate = str(payload.get("skill") or payload.get("skill_name") or "").strip()
+        if reason == "skill_not_found" and candidate == expected:
+            return True
+    return False
 
 
 def _event(event_type: str, state: str, detail_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -195,14 +255,19 @@ async def _get_current_pr_head_sha(owner: str, repo: str, pull_number: int) -> s
 async def execute_github_review_action(action_id: str, kwargs: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     execution_metadata = payload.get("_execution_metadata")
     metadata = dict(execution_metadata) if isinstance(execution_metadata, dict) else None
+    session_id = payload.get("session_id") or payload.get("_runtime_session_id")
+    agent_id = payload.get("agent_id") or payload.get("_runtime_agent_id")
+    policy_profile_id = payload.get("policy_profile_id")
+    if policy_profile_id is None and isinstance(metadata, dict):
+        policy_profile_id = metadata.get("policy_profile_id")
     return await execute_adapter_action_via_bus(
         action_id,
         kwargs,
         source_type="runtime",
         source_ref="github_review",
-        session_id=payload.get("session_id"),
-        agent_id=payload.get("agent_id"),
-        policy_profile_id=payload.get("policy_profile_id"),
+        session_id=session_id,
+        agent_id=agent_id,
+        policy_profile_id=policy_profile_id,
         metadata=metadata,
     )
 
@@ -236,6 +301,7 @@ async def _execute_review_skill_via_chat_loop(
     chat_request_id = f"{chat_request_id}:chat" if chat_request_id else f"github-review-chat:{owner}:{repo}:{pull_number}"
     requested_event_text = requested_event or "COMMENT"
     writeback_mode = str(payload.get("writeback_mode") or "").strip() or None
+    original_allowed_capability_ids = metadata.get("allowed_capability_ids")
     message = _build_github_review_chat_prompt(
         skill_name=skill_name, owner=owner, repo=repo, pull_number=pull_number, requested_head_sha=requested_head_sha,
         review_target=review_target, requested_event=requested_event_text, writeback_mode=writeback_mode, runtime_managed_writeback=True,
@@ -246,10 +312,12 @@ async def _execute_review_skill_via_chat_loop(
     agent = Agent(model=model, session_id=chat_session_id, agent_id=agent_id, agent_name=metadata.get("agent_name") if isinstance(metadata.get("agent_name"), str) else None)
     chat_metadata = {
         **metadata, "path": "/api/tasks/execute/github_review_task/chat", "task_type": "github_review_task", "skill_name": skill_name,
-        "execution_mode": "chat_tool_loop", "runtime_managed_writeback": True, "review_metadata": review_metadata, "skill_kwargs": skill_kwargs,
+        "execution_mode": "chat_tool_loop", "runtime_managed_writeback": True, "allowed_capability_ids": list(_READ_ONLY_GITHUB_REVIEW_TOOL_CAPABILITY_IDS), "review_metadata": review_metadata, "skill_kwargs": skill_kwargs,
         "github_review": {"owner": owner, "repo": repo, "pull_number": pull_number, "expected_head_sha": requested_head_sha, "review_target": review_target, "requested_review_event": requested_event_text},
         **automation_trace,
     }
+    if original_allowed_capability_ids is not None:
+        chat_metadata["outer_allowed_capability_ids"] = original_allowed_capability_ids
     async def _chat_handler(execution_request):
         chat_payload = execution_request.input_payload or {}
         handler_metadata = dict(getattr(execution_request, "metadata", {}) or {})
@@ -267,12 +335,19 @@ async def _execute_review_skill_via_chat_loop(
     )
     output_payload = chat_result.output_payload if isinstance(chat_result.output_payload, dict) else {}
     review_text = _extract_review_text_from_chat_result(output_payload)
+    chat_runtime_events = list(chat_result.runtime_events or [])
+    payload_runtime_events = output_payload.get("runtime_events") if isinstance(output_payload.get("runtime_events"), list) else []
+    all_chat_events = [*chat_runtime_events, *payload_runtime_events]
+    if _chat_result_has_skill_not_found(output_payload, all_chat_events, skill_name):
+        return {"success": False, "output": "", "error": f"Chat/tool-loop review could not activate skill '{skill_name}'", "data": {"execution_mode": "chat_tool_loop", "chat_session_id": chat_session_id, "chat_request_id": chat_request_id, "chat_status": chat_result.status, "skill_activation": "not_found"}, "runtime_events": all_chat_events}
+    if not _chat_result_confirms_skill_activation(all_chat_events, skill_name):
+        return {"success": False, "output": review_text, "error": f"Chat/tool-loop review did not activate required skill '{skill_name}'", "data": {"execution_mode": "chat_tool_loop", "chat_session_id": chat_session_id, "chat_request_id": chat_request_id, "chat_status": chat_result.status, "skill_activation": "missing_runtime_event"}, "runtime_events": all_chat_events}
     if chat_result.status in {"error", "blocked"}:
         error_value = output_payload.get("error") or output_payload.get("message") or f"Chat/tool-loop review failed with status={chat_result.status}"
-        return {"success": False, "output": review_text, "error": str(error_value), "data": {"execution_mode": "chat_tool_loop", "chat_session_id": chat_session_id, "chat_request_id": chat_request_id, "chat_status": chat_result.status}, "runtime_events": list(chat_result.runtime_events or [])}
+        return {"success": False, "output": review_text, "error": str(error_value), "data": {"execution_mode": "chat_tool_loop", "chat_session_id": chat_session_id, "chat_request_id": chat_request_id, "chat_status": chat_result.status}, "runtime_events": all_chat_events}
     if not review_text:
-        return {"success": False, "output": "", "error": "Chat/tool-loop review returned empty review content", "data": {"execution_mode": "chat_tool_loop", "chat_session_id": chat_session_id, "chat_request_id": chat_request_id, "chat_status": chat_result.status}, "runtime_events": list(chat_result.runtime_events or [])}
-    return {"success": True, "output": review_text, "error": None, "data": {"review_summary": review_text, "requested_review_event": requested_event_text, "execution_mode": "chat_tool_loop", "chat_session_id": chat_session_id, "chat_request_id": chat_request_id, "chat_status": chat_result.status}, "runtime_events": list(chat_result.runtime_events or [])}
+        return {"success": False, "output": "", "error": "Chat/tool-loop review returned empty review content", "data": {"execution_mode": "chat_tool_loop", "chat_session_id": chat_session_id, "chat_request_id": chat_request_id, "chat_status": chat_result.status}, "runtime_events": all_chat_events}
+    return {"success": True, "output": review_text, "error": None, "data": {"review_summary": review_text, "requested_review_event": requested_event_text, "execution_mode": "chat_tool_loop", "chat_session_id": chat_session_id, "chat_request_id": chat_request_id, "chat_status": chat_result.status}, "runtime_events": all_chat_events}
 
 
 async def run_github_review_task(payload: Dict[str, Any]) -> Dict[str, Any]:
