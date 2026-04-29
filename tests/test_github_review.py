@@ -886,7 +886,12 @@ async def test_execute_review_skill_via_chat_loop_forces_read_only_allowed_capab
     monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_chat_orchestration", fake_execute_chat_orchestration)
 
     result = await _execute_review_skill_via_chat_loop(
-        payload={"_execution_metadata": {"allowed_capability_ids": ["tool:github_add_comment"]}},
+        payload={"_execution_metadata": {
+            "allowed_capability_ids": ["tool:github_add_comment"],
+            "allowed_capability_types": ["action"],
+            "allowed_actions": ["review_pull_request"],
+            "allowed_adapter_actions": ["adapter:github:review_pull_request"],
+        }},
         owner="acme", repo="demo", pull_number=1, skill_name="review-pull-request", requested_event="COMMENT",
         requested_head_sha=None, review_target=None, review_metadata=None, skill_kwargs={}, automation_trace={},
     )
@@ -902,6 +907,9 @@ async def test_execute_review_skill_via_chat_loop_forces_read_only_allowed_capab
     ]
     assert "tool:github_add_comment" not in captured["metadata"]["allowed_capability_ids"]
     assert "tool:github_add_pr_review_comment" not in captured["metadata"]["allowed_capability_ids"]
+    assert captured["metadata"]["allowed_capability_types"] == ["tool"]
+    assert captured["metadata"]["outer_allowed_capability_ids"] == ["tool:github_add_comment"]
+    assert captured["metadata"]["outer_allowed_capability_types"] == ["action"]
 
 
 @pytest.mark.asyncio
@@ -968,6 +976,7 @@ async def test_execute_review_skill_via_chat_loop_real_orchestration_not_blocked
             "_runtime_agent_id": "agent-1",
             "_execution_metadata": {
                 "allowed_capability_ids": ["tool:github_add_comment"],
+                "allowed_capability_types": ["action"],
                 "model": "test-model",
             },
         },
@@ -991,3 +1000,5 @@ async def test_execute_review_skill_via_chat_loop_real_orchestration_not_blocked
     assert "tool:github_get_pr" in allowed
     assert "tool:github_add_comment" not in allowed
     assert "tool:github_add_pr_review_comment" not in allowed
+    assert captured["execution_metadata"]["allowed_capability_types"] == ["tool"]
+    assert captured["execution_metadata"]["outer_allowed_capability_types"] == ["action"]

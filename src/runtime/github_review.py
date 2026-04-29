@@ -21,6 +21,7 @@ _READ_ONLY_GITHUB_REVIEW_TOOL_CAPABILITY_IDS = [
     "tool:github_get_pr_comments",
     "tool:github_list_pr_reviews",
 ]
+_READ_ONLY_GITHUB_REVIEW_CAPABILITY_TYPES = ["tool"]
 
 
 def _resolve_github_review_chat_session_id(payload: Dict[str, Any], owner: str, repo: str, pull_number: int) -> str:
@@ -302,6 +303,7 @@ async def _execute_review_skill_via_chat_loop(
     requested_event_text = requested_event or "COMMENT"
     writeback_mode = str(payload.get("writeback_mode") or "").strip() or None
     original_allowed_capability_ids = metadata.get("allowed_capability_ids")
+    original_allowed_capability_types = metadata.get("allowed_capability_types")
     message = _build_github_review_chat_prompt(
         skill_name=skill_name, owner=owner, repo=repo, pull_number=pull_number, requested_head_sha=requested_head_sha,
         review_target=review_target, requested_event=requested_event_text, writeback_mode=writeback_mode, runtime_managed_writeback=True,
@@ -312,12 +314,14 @@ async def _execute_review_skill_via_chat_loop(
     agent = Agent(model=model, session_id=chat_session_id, agent_id=agent_id, agent_name=metadata.get("agent_name") if isinstance(metadata.get("agent_name"), str) else None)
     chat_metadata = {
         **metadata, "path": "/api/tasks/execute/github_review_task/chat", "task_type": "github_review_task", "skill_name": skill_name,
-        "execution_mode": "chat_tool_loop", "runtime_managed_writeback": True, "allowed_capability_ids": list(_READ_ONLY_GITHUB_REVIEW_TOOL_CAPABILITY_IDS), "review_metadata": review_metadata, "skill_kwargs": skill_kwargs,
+        "execution_mode": "chat_tool_loop", "runtime_managed_writeback": True, "allowed_capability_ids": list(_READ_ONLY_GITHUB_REVIEW_TOOL_CAPABILITY_IDS), "allowed_capability_types": list(_READ_ONLY_GITHUB_REVIEW_CAPABILITY_TYPES), "review_metadata": review_metadata, "skill_kwargs": skill_kwargs,
         "github_review": {"owner": owner, "repo": repo, "pull_number": pull_number, "expected_head_sha": requested_head_sha, "review_target": review_target, "requested_review_event": requested_event_text},
         **automation_trace,
     }
     if original_allowed_capability_ids is not None:
         chat_metadata["outer_allowed_capability_ids"] = original_allowed_capability_ids
+    if original_allowed_capability_types is not None:
+        chat_metadata["outer_allowed_capability_types"] = original_allowed_capability_types
     async def _chat_handler(execution_request):
         chat_payload = execution_request.input_payload or {}
         handler_metadata = dict(getattr(execution_request, "metadata", {}) or {})

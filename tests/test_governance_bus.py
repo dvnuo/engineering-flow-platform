@@ -740,3 +740,64 @@ def test_evaluate_capability_constraint_decision_blocks_non_chat_without_capabil
     )
     assert decision is not None
     assert decision["reason"] == "allowed_capability_ids"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_read_only_tool_with_tool_type_allowlist():
+    called = {"tool": False}
+
+    async def _fake_tool(tool_name, **kwargs):
+        called["tool"] = True
+        return {"success": True, "content": f"called {tool_name}"}
+
+    bus = build_default_execution_bus(execute_tool_func=_fake_tool)
+    req = make_execution_request(
+        source_type="agent",
+        source_ref="agents.core.tool_loop",
+        execution_type="tool",
+        session_id="s-chat",
+        input_payload={
+            "tool_name": "github_get_pr",
+            "kwargs": {"owner": "acme", "repo": "demo", "pull_number": 1},
+        },
+        metadata={
+            "allowed_capability_ids": ["tool:github_get_pr", "tool:github_get_pr_files"],
+            "allowed_capability_types": ["tool"],
+        },
+    )
+
+    result = await bus.execute(req)
+
+    assert called["tool"] is True
+    assert result.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_blocks_tool_when_action_type_allowlist_leaks_into_tool_loop():
+    called = {"tool": False}
+
+    async def _fake_tool(tool_name, **kwargs):
+        called["tool"] = True
+        return {"success": True, "content": f"called {tool_name}"}
+
+    bus = build_default_execution_bus(execute_tool_func=_fake_tool)
+    req = make_execution_request(
+        source_type="agent",
+        source_ref="agents.core.tool_loop",
+        execution_type="tool",
+        session_id="s-chat",
+        input_payload={
+            "tool_name": "github_get_pr",
+            "kwargs": {"owner": "acme", "repo": "demo", "pull_number": 1},
+        },
+        metadata={
+            "allowed_capability_ids": ["tool:github_get_pr", "tool:github_get_pr_files"],
+            "allowed_capability_types": ["action"],
+        },
+    )
+
+    result = await bus.execute(req)
+
+    assert called["tool"] is False
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_capability_types"
