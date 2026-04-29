@@ -3908,3 +3908,41 @@ async def test_execution_bus_triggered_event_task_success_includes_secondary_gov
         "secondary_action_id",
     ):
         assert key in result.output_payload
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_github_review_task_forwards_runtime_request_context(monkeypatch):
+    captured = {}
+
+    async def _fake_run_github_review_task(payload):
+        captured.update(payload)
+        return {
+            "success": True,
+            "review_summary": "ok",
+            "review_event": "COMMENT",
+            "review_written": True,
+            "comment_written": True,
+            "secondary_action_attempted": True,
+            "secondary_action_success": True,
+            "secondary_action_id": "adapter:github:review_pull_request",
+            "runtime_events": [],
+            "result": {"skill": {"name": "review-pull-request", "success": True, "output": "ok", "error": None, "data": {"execution_mode": "chat_tool_loop", "chat_session_id": "s", "chat_request_id": "r"}}},
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        request_id="req-ctx-1",
+        session_id="sess-ctx-1",
+        agent_id="agent-ctx-1",
+        source_type="agent",
+        execution_type="task",
+        metadata={"task_id": "t1"},
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 1},
+    )
+    await bus.execute(req)
+
+    assert captured["_runtime_request_id"] == "req-ctx-1"
+    assert captured["_runtime_session_id"] == "sess-ctx-1"
+    assert captured["_runtime_agent_id"] == "agent-ctx-1"
+    assert captured["_execution_metadata"]["task_id"] == "t1"
