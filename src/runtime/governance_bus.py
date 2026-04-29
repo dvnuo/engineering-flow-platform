@@ -466,6 +466,8 @@ def _evaluate_capability_constraints(
     normalized_capability_type = str(capability_type or "").strip().lower()
     normalized_action_id = str(action_id or "").strip().lower()
     normalized_action_name = normalized_action_id.split(":")[-1] if normalized_action_id else ""
+    has_capability_id_context = bool(normalized_capability_id or normalized_action_id)
+    has_capability_type_context = bool(normalized_capability_type)
 
     if _matches_capability_constraint(
         constraints=denied_capability_ids,
@@ -483,14 +485,20 @@ def _evaluate_capability_constraints(
     ):
         return {"reason": "denied_adapter_actions", "message": f"Adapter action blocked: {normalized_action_id}"}
 
-    if allowed_capability_ids and not _matches_capability_constraint(
+    # Important:
+    # Chat executions can carry allowed_capability_ids as tool-loop metadata.
+    # A chat request itself has no resolved capability_id; do not block the
+    # chat admission just because tool allowlist metadata is present.
+    # The allowlist is still enforced for real tool/skill/task requests because
+    # those requests have resolved capability context.
+    if allowed_capability_ids and has_capability_id_context and not _matches_capability_constraint(
         constraints=allowed_capability_ids,
         capability_id=normalized_capability_id,
         capability_type=normalized_capability_type,
         action_name=normalized_action_name,
     ):
         return {"reason": "allowed_capability_ids", "message": "Capability not in allowlist"}
-    if allowed_capability_types and (not normalized_capability_type or normalized_capability_type not in allowed_capability_types):
+    if allowed_capability_types and has_capability_type_context and normalized_capability_type not in allowed_capability_types:
         return {"reason": "allowed_capability_types", "message": "Capability type not in allowlist"}
     if normalized_action_id and allowed_adapter_actions and not _matches_action_constraint(
         constraints=allowed_adapter_actions,

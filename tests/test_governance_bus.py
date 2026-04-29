@@ -611,3 +611,76 @@ def test_governance_hook_facades_delegate_to_skill_runtime(monkeypatch):
     )
     assert effects.modified_args == {"x": 1}
     assert calls and calls[0]["stage"] == "pre_tool"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_chat_with_tool_capability_allowlist_metadata():
+    called = {"chat": False}
+
+    async def _chat_handler(_request):
+        called["chat"] = True
+        return {"response": "ok"}
+
+    bus = build_default_execution_bus(chat_handler=_chat_handler)
+    req = make_execution_request(
+        source_type="chat",
+        source_ref="github_review_task",
+        execution_type="chat",
+        session_id="s-chat",
+        input_payload={"message": "/skill use review-pull-request"},
+        metadata={
+            "allowed_capability_ids": ["tool:github_get_pr", "tool:github_get_pr_files"],
+            "execution_mode": "chat_tool_loop",
+        },
+    )
+
+    result = await bus.execute(req)
+
+    assert called["chat"] is True
+    assert result.status == "success"
+    assert result.output_payload["response"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_still_blocks_tool_not_in_allowed_capability_ids():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        source_ref="agents.core.tool_loop",
+        execution_type="tool",
+        session_id="s-chat",
+        input_payload={
+            "tool_name": "github_add_comment",
+            "kwargs": {"owner": "acme", "repo": "demo", "issue_number": 1, "comment": "should not run"},
+        },
+        metadata={"allowed_capability_ids": ["tool:github_get_pr", "tool:github_get_pr_files"]},
+    )
+
+    result = await bus.execute(req)
+
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_capability_ids"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_chat_with_capability_type_filter_metadata():
+    called = {"chat": False}
+
+    async def _chat_handler(_request):
+        called["chat"] = True
+        return {"response": "ok"}
+
+    bus = build_default_execution_bus(chat_handler=_chat_handler)
+    req = make_execution_request(
+        source_type="chat",
+        source_ref="github_review_task",
+        execution_type="chat",
+        session_id="s-chat",
+        input_payload={"message": "hello"},
+        metadata={"allowed_capability_types": ["tool"]},
+    )
+
+    result = await bus.execute(req)
+
+    assert called["chat"] is True
+    assert result.status == "success"
