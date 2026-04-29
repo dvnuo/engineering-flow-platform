@@ -9,6 +9,7 @@ from src.runtime.governance_bus import (
     GovernanceDecision,
     build_default_governance_bus,
     _resolve_capability_context,
+    evaluate_capability_constraint_decision,
 )
 from src.runtime.task_capability_contracts import resolve_task_capability_contract
 
@@ -684,3 +685,58 @@ async def test_default_governance_allows_chat_with_capability_type_filter_metada
 
     assert called["chat"] is True
     assert result.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_blocks_non_chat_without_capability_context_when_allowlist_present():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        source_ref="unknown_task_boundary",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "unknown_future_task", "foo": "bar"},
+        metadata={"allowed_capability_ids": ["tool:github_get_pr"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_capability_ids"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_blocks_non_chat_without_capability_type_when_type_allowlist_present():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="event",
+        source_ref="unknown_event_boundary",
+        execution_type="event",
+        session_id="s-event",
+        input_payload={"event_type": "unknown"},
+        metadata={"allowed_capability_types": ["tool"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_capability_types"
+
+
+def test_evaluate_capability_constraint_decision_allows_chat_metadata_without_capability_context():
+    decision = evaluate_capability_constraint_decision(
+        metadata={"allowed_capability_ids": ["tool:github_get_pr"]},
+        capability_id=None,
+        capability_type=None,
+        action_id=None,
+        execution_type="chat",
+    )
+    assert decision is None
+
+
+def test_evaluate_capability_constraint_decision_blocks_non_chat_without_capability_context():
+    decision = evaluate_capability_constraint_decision(
+        metadata={"allowed_capability_ids": ["tool:github_get_pr"]},
+        capability_id=None,
+        capability_type=None,
+        action_id=None,
+        execution_type="task",
+    )
+    assert decision is not None
+    assert decision["reason"] == "allowed_capability_ids"

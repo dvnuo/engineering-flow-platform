@@ -114,6 +114,7 @@ class DefaultGovernanceBus(GovernanceBus):
             capability_id=capability_context.get("capability_id"),
             capability_type=capability_context.get("capability_type"),
             action_id=capability_context.get("action_id"),
+            execution_type=request.execution_type,
         )
         if capability_decision is not None:
             deny_reason = capability_decision.get("reason") or "capability_policy_blocked"
@@ -440,6 +441,7 @@ def _evaluate_capability_constraints(
     capability_id: Optional[str],
     capability_type: Optional[str],
     action_id: Optional[str],
+    execution_type: Optional[str] = None,
 ) -> Optional[Dict[str, str]]:
     denied_capability_ids = _normalize_constraint_capability_ids(
         metadata.get("denied_capability_ids"),
@@ -466,8 +468,14 @@ def _evaluate_capability_constraints(
     normalized_capability_type = str(capability_type or "").strip().lower()
     normalized_action_id = str(action_id or "").strip().lower()
     normalized_action_name = normalized_action_id.split(":")[-1] if normalized_action_id else ""
+    normalized_execution_type = str(execution_type or "").strip().lower()
     has_capability_id_context = bool(normalized_capability_id or normalized_action_id)
     has_capability_type_context = bool(normalized_capability_type)
+    is_chat_request_without_capability_context = (
+        normalized_execution_type == "chat"
+        and not has_capability_id_context
+        and not has_capability_type_context
+    )
 
     if _matches_capability_constraint(
         constraints=denied_capability_ids,
@@ -491,15 +499,19 @@ def _evaluate_capability_constraints(
     # chat admission just because tool allowlist metadata is present.
     # The allowlist is still enforced for real tool/skill/task requests because
     # those requests have resolved capability context.
-    if allowed_capability_ids and has_capability_id_context and not _matches_capability_constraint(
-        constraints=allowed_capability_ids,
-        capability_id=normalized_capability_id,
-        capability_type=normalized_capability_type,
-        action_name=normalized_action_name,
-    ):
-        return {"reason": "allowed_capability_ids", "message": "Capability not in allowlist"}
-    if allowed_capability_types and has_capability_type_context and normalized_capability_type not in allowed_capability_types:
-        return {"reason": "allowed_capability_types", "message": "Capability type not in allowlist"}
+    if allowed_capability_ids and not is_chat_request_without_capability_context:
+        if not has_capability_id_context:
+            return {"reason": "allowed_capability_ids", "message": "Capability not in allowlist"}
+        if not _matches_capability_constraint(
+            constraints=allowed_capability_ids,
+            capability_id=normalized_capability_id,
+            capability_type=normalized_capability_type,
+            action_name=normalized_action_name,
+        ):
+            return {"reason": "allowed_capability_ids", "message": "Capability not in allowlist"}
+    if allowed_capability_types and not is_chat_request_without_capability_context:
+        if not has_capability_type_context or normalized_capability_type not in allowed_capability_types:
+            return {"reason": "allowed_capability_types", "message": "Capability type not in allowlist"}
     if normalized_action_id and allowed_adapter_actions and not _matches_action_constraint(
         constraints=allowed_adapter_actions,
         action_id=normalized_action_id,
@@ -516,12 +528,14 @@ def evaluate_capability_constraint_decision(
     capability_id: Optional[str],
     capability_type: Optional[str],
     action_id: Optional[str],
+    execution_type: Optional[str] = None,
 ) -> Optional[Dict[str, str]]:
     return _evaluate_capability_constraints(
         metadata=metadata,
         capability_id=capability_id,
         capability_type=capability_type,
         action_id=action_id,
+        execution_type=execution_type,
     )
 
 
