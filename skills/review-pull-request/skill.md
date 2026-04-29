@@ -81,3 +81,13 @@ Inline comment style should be concise and reviewer-like:
 
 Use available review references to deepen language-aware review quality.
 Load only relevant language references based on changed files.
+
+## Automation handoff mode
+
+When the user/task says "runtime-managed writeback" or "Do not call github_add_comment / github_add_pr_review_comment":
+
+- Use read-only GitHub tools to inspect the PR.
+- Do not call `github_add_comment`.
+- Do not call `github_add_pr_review_comment`.
+- Return the final review body as markdown.
+- The runtime task wrapper will perform freshness checks, governance checks, and GitHub writeback.

@@ -2074,6 +2074,10 @@ def build_default_execution_bus(
                 {
                     **dict(request.input_payload or {}),
                     "_action_gate": _github_action_gate,
+                    "_runtime_request_id": request.request_id,
+                    "_runtime_session_id": request.session_id,
+                    "_runtime_agent_id": request.agent_id,
+                    "_execution_metadata": dict(request.metadata or {}),
                 }
             )
 

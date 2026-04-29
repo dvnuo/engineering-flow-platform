@@ -9,6 +9,7 @@ from src.runtime.governance_bus import (
     GovernanceDecision,
     build_default_governance_bus,
     _resolve_capability_context,
+    evaluate_capability_constraint_decision,
 )
 from src.runtime.task_capability_contracts import resolve_task_capability_contract
 
@@ -611,3 +612,192 @@ def test_governance_hook_facades_delegate_to_skill_runtime(monkeypatch):
     )
     assert effects.modified_args == {"x": 1}
     assert calls and calls[0]["stage"] == "pre_tool"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_chat_with_tool_capability_allowlist_metadata():
+    called = {"chat": False}
+
+    async def _chat_handler(_request):
+        called["chat"] = True
+        return {"response": "ok"}
+
+    bus = build_default_execution_bus(chat_handler=_chat_handler)
+    req = make_execution_request(
+        source_type="chat",
+        source_ref="github_review_task",
+        execution_type="chat",
+        session_id="s-chat",
+        input_payload={"message": "/skill use review-pull-request"},
+        metadata={
+            "allowed_capability_ids": ["tool:github_get_pr", "tool:github_get_pr_files"],
+            "execution_mode": "chat_tool_loop",
+        },
+    )
+
+    result = await bus.execute(req)
+
+    assert called["chat"] is True
+    assert result.status == "success"
+    assert result.output_payload["response"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_still_blocks_tool_not_in_allowed_capability_ids():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="agent",
+        source_ref="agents.core.tool_loop",
+        execution_type="tool",
+        session_id="s-chat",
+        input_payload={
+            "tool_name": "github_add_comment",
+            "kwargs": {"owner": "acme", "repo": "demo", "issue_number": 1, "comment": "should not run"},
+        },
+        metadata={"allowed_capability_ids": ["tool:github_get_pr", "tool:github_get_pr_files"]},
+    )
+
+    result = await bus.execute(req)
+
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_capability_ids"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_chat_with_capability_type_filter_metadata():
+    called = {"chat": False}
+
+    async def _chat_handler(_request):
+        called["chat"] = True
+        return {"response": "ok"}
+
+    bus = build_default_execution_bus(chat_handler=_chat_handler)
+    req = make_execution_request(
+        source_type="chat",
+        source_ref="github_review_task",
+        execution_type="chat",
+        session_id="s-chat",
+        input_payload={"message": "hello"},
+        metadata={"allowed_capability_types": ["tool"]},
+    )
+
+    result = await bus.execute(req)
+
+    assert called["chat"] is True
+    assert result.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_blocks_non_chat_without_capability_context_when_allowlist_present():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="task",
+        source_ref="unknown_task_boundary",
+        execution_type="task",
+        session_id="s-task",
+        input_payload={"task_type": "unknown_future_task", "foo": "bar"},
+        metadata={"allowed_capability_ids": ["tool:github_get_pr"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_capability_ids"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_blocks_non_chat_without_capability_type_when_type_allowlist_present():
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        source_type="event",
+        source_ref="unknown_event_boundary",
+        execution_type="event",
+        session_id="s-event",
+        input_payload={"event_type": "unknown"},
+        metadata={"allowed_capability_types": ["tool"]},
+    )
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_capability_types"
+
+
+def test_evaluate_capability_constraint_decision_allows_chat_metadata_without_capability_context():
+    decision = evaluate_capability_constraint_decision(
+        metadata={"allowed_capability_ids": ["tool:github_get_pr"]},
+        capability_id=None,
+        capability_type=None,
+        action_id=None,
+        execution_type="chat",
+    )
+    assert decision is None
+
+
+def test_evaluate_capability_constraint_decision_blocks_non_chat_without_capability_context():
+    decision = evaluate_capability_constraint_decision(
+        metadata={"allowed_capability_ids": ["tool:github_get_pr"]},
+        capability_id=None,
+        capability_type=None,
+        action_id=None,
+        execution_type="task",
+    )
+    assert decision is not None
+    assert decision["reason"] == "allowed_capability_ids"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_allows_read_only_tool_with_tool_type_allowlist():
+    called = {"tool": False}
+
+    async def _fake_tool(tool_name, **kwargs):
+        called["tool"] = True
+        return {"success": True, "content": f"called {tool_name}"}
+
+    bus = build_default_execution_bus(execute_tool_func=_fake_tool)
+    req = make_execution_request(
+        source_type="agent",
+        source_ref="agents.core.tool_loop",
+        execution_type="tool",
+        session_id="s-chat",
+        input_payload={
+            "tool_name": "github_get_pr",
+            "kwargs": {"owner": "acme", "repo": "demo", "pull_number": 1},
+        },
+        metadata={
+            "allowed_capability_ids": ["tool:github_get_pr", "tool:github_get_pr_files"],
+            "allowed_capability_types": ["tool"],
+        },
+    )
+
+    result = await bus.execute(req)
+
+    assert called["tool"] is True
+    assert result.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_blocks_tool_when_action_type_allowlist_leaks_into_tool_loop():
+    called = {"tool": False}
+
+    async def _fake_tool(tool_name, **kwargs):
+        called["tool"] = True
+        return {"success": True, "content": f"called {tool_name}"}
+
+    bus = build_default_execution_bus(execute_tool_func=_fake_tool)
+    req = make_execution_request(
+        source_type="agent",
+        source_ref="agents.core.tool_loop",
+        execution_type="tool",
+        session_id="s-chat",
+        input_payload={
+            "tool_name": "github_get_pr",
+            "kwargs": {"owner": "acme", "repo": "demo", "pull_number": 1},
+        },
+        metadata={
+            "allowed_capability_ids": ["tool:github_get_pr", "tool:github_get_pr_files"],
+            "allowed_capability_types": ["action"],
+        },
+    )
+
+    result = await bus.execute(req)
+
+    assert called["tool"] is False
+    assert result.status == "blocked"
+    assert result.output_payload["reason"] == "allowed_capability_types"

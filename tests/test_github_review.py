@@ -1,8 +1,8 @@
+from pathlib import Path
 import pytest
 from tests._optional_runtime_deps import skip_if_missing_ruamel_yaml
 
 skip_if_missing_ruamel_yaml("full runtime dependencies unavailable (missing ruamel.yaml)")
-
 
 
 class _SkillResult:
@@ -13,12 +13,23 @@ class _SkillResult:
         self.data = data or {}
 
 
+
+def _chat_skill_result(output="", *, success=True, error=None, data=None, runtime_events=None):
+    return {
+        "success": success,
+        "output": output,
+        "error": error,
+        "data": data or {},
+        "runtime_events": runtime_events or [],
+    }
+
+
 @pytest.mark.asyncio
 async def test_github_review_task_maps_approved_to_approve_event(monkeypatch):
     from src.runtime.github_review import run_github_review_task
 
     async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(success=True, output="Looks good", data={"approved": True})
+        return _chat_skill_result("Looks good", data={"approved": True})
 
     captured = {}
 
@@ -27,7 +38,7 @@ async def test_github_review_task_maps_approved_to_approve_event(monkeypatch):
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 1}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task({"owner": "acme", "repo": "demo", "pull_number": 1})
@@ -43,7 +54,7 @@ async def test_github_review_task_maps_rejected_to_request_changes_event(monkeyp
     from src.runtime.github_review import run_github_review_task
 
     async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(success=True, output="Need changes", data={"approved": False})
+        return _chat_skill_result("Need changes", data={"approved": False})
 
     captured = {}
 
@@ -52,7 +63,7 @@ async def test_github_review_task_maps_rejected_to_request_changes_event(monkeyp
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 2}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task({"owner": "acme", "repo": "demo", "pull_number": 2})
@@ -67,7 +78,7 @@ async def test_github_review_task_plain_summary_defaults_to_comment_event(monkey
     from src.runtime.github_review import run_github_review_task
 
     async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(success=True, output="Summary only", data={})
+        return _chat_skill_result("Summary only", data={})
 
     captured = {}
 
@@ -76,7 +87,7 @@ async def test_github_review_task_plain_summary_defaults_to_comment_event(monkey
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 3}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task({"owner": "acme", "repo": "demo", "pull_number": 3})
@@ -91,7 +102,7 @@ async def test_github_review_task_uses_payload_review_event_when_skill_has_no_ev
     from src.runtime.github_review import run_github_review_task
 
     async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(success=True, output="Summary only", data={})
+        return _chat_skill_result("Summary only", data={})
 
     captured = {}
 
@@ -100,7 +111,7 @@ async def test_github_review_task_uses_payload_review_event_when_skill_has_no_ev
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 31}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
@@ -117,7 +128,7 @@ async def test_github_review_task_payload_approve_used_as_fallback_default(monke
     from src.runtime.github_review import run_github_review_task
 
     async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(success=True, output="Looks fine", data={"review_summary": "Looks fine"})
+        return _chat_skill_result("Looks fine", data={"review_summary": "Looks fine"})
 
     captured = {}
 
@@ -125,7 +136,7 @@ async def test_github_review_task_payload_approve_used_as_fallback_default(monke
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 35}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
@@ -142,11 +153,7 @@ async def test_github_review_task_explicit_skill_review_event_wins_over_payload_
     from src.runtime.github_review import run_github_review_task
 
     async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(
-            success=True,
-            output="Needs work",
-            data={"review_summary": "Needs work", "review_event": "REQUEST_CHANGES"},
-        )
+        return _chat_skill_result("Needs work", data={"review_summary": "Needs work", "review_event": "REQUEST_CHANGES"})
 
     captured = {}
 
@@ -154,7 +161,7 @@ async def test_github_review_task_explicit_skill_review_event_wins_over_payload_
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 36}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
@@ -171,11 +178,7 @@ async def test_github_review_task_requested_review_event_field_does_not_override
     from src.runtime.github_review import run_github_review_task
 
     async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(
-            success=True,
-            output="Looks fine",
-            data={"review_summary": "Looks fine", "requested_review_event": "APPROVE"},
-        )
+        return _chat_skill_result("Looks fine", data={"review_summary": "Looks fine", "requested_review_event": "APPROVE"})
 
     captured = {}
 
@@ -183,7 +186,7 @@ async def test_github_review_task_requested_review_event_field_does_not_override
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 37}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
@@ -200,7 +203,7 @@ async def test_github_review_task_invalid_payload_review_event_falls_back_to_com
     from src.runtime.github_review import run_github_review_task
 
     async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(success=True, output="Summary only", data={})
+        return _chat_skill_result("Summary only", data={})
 
     captured = {}
 
@@ -208,7 +211,7 @@ async def test_github_review_task_invalid_payload_review_event_falls_back_to_com
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 32}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
@@ -225,7 +228,7 @@ async def test_github_review_task_skill_event_overrides_payload_default(monkeypa
     from src.runtime.github_review import run_github_review_task
 
     async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(success=True, output="Needs changes", data={"review_event": "REQUEST_CHANGES"})
+        return _chat_skill_result("Needs changes", data={"review_event": "REQUEST_CHANGES"})
 
     captured = {}
 
@@ -233,7 +236,7 @@ async def test_github_review_task_skill_event_overrides_payload_default(monkeypa
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 33}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
@@ -250,7 +253,7 @@ async def test_github_review_task_skill_approved_inference_overrides_payload_def
     from src.runtime.github_review import run_github_review_task
 
     async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(success=True, output="Looks good", data={"approved": True})
+        return _chat_skill_result("Looks good", data={"approved": True})
 
     captured = {}
 
@@ -258,7 +261,7 @@ async def test_github_review_task_skill_approved_inference_overrides_payload_def
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 34}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
@@ -275,7 +278,7 @@ async def test_github_review_task_explicit_issue_comment_fallback(monkeypatch):
     from src.runtime.github_review import run_github_review_task
 
     async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(success=True, output="Fallback comment", data={})
+        return _chat_skill_result("Fallback comment", data={})
 
     captured = {}
 
@@ -284,7 +287,7 @@ async def test_github_review_task_explicit_issue_comment_fallback(monkeypatch):
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 4}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
@@ -316,7 +319,7 @@ async def test_github_review_task_head_sha_mismatch_suppresses_writeback(monkeyp
     async def _fake_get_current_pr_head_sha(_owner, _repo, _pull_number):
         return "sha-new"
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
     monkeypatch.setattr("src.runtime.github_review._get_current_pr_head_sha", _fake_get_current_pr_head_sha)
     monkeypatch.setattr("src.runtime.github_review.execute_github_review_action", _unexpected_execute_github_review_action)
@@ -370,7 +373,7 @@ async def test_github_review_task_precheck_freshness_failure_does_not_block_skil
     async def _flaky_get_current_pr_head_sha(_owner, _repo, _pull_number):
         raise RuntimeError("temporary api failure")
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
     monkeypatch.setattr("src.runtime.github_review.execute_github_review_action", _fake_execute_github_review_action)
     monkeypatch.setattr("src.runtime.github_review._get_current_pr_head_sha", _flaky_get_current_pr_head_sha)
@@ -402,7 +405,7 @@ async def test_github_review_task_head_sha_match_still_writes_review(monkeypatch
     async def _fake_get_current_pr_head_sha(_owner, _repo, _pull_number):
         return "sha-1"
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
     monkeypatch.setattr("src.runtime.github_review._get_current_pr_head_sha", _fake_get_current_pr_head_sha)
 
@@ -420,7 +423,7 @@ async def test_github_review_task_gate_with_blocked_false_allows_secondary_actio
     from src.runtime.github_review import run_github_review_task
 
     async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(success=True, output="Looks good", data={"approved": True})
+        return _chat_skill_result("Looks good", data={"approved": True})
 
     captured = {}
 
@@ -429,7 +432,7 @@ async def test_github_review_task_gate_with_blocked_false_allows_secondary_actio
         captured["kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 7}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
@@ -459,7 +462,7 @@ async def test_github_review_task_gate_with_blocked_true_blocks_secondary_action
         called["adapter"] = True
         return {"success": True, "error": None, "result": {"id": 8}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
@@ -493,7 +496,7 @@ async def test_github_review_task_forwards_runtime_context_to_bus_helper(monkeyp
     from src.runtime.github_review import run_github_review_task
 
     async def _fake_execute_skill(*_args, **_kwargs):
-        return _SkillResult(success=True, output="Looks good", data={"approved": True})
+        return _chat_skill_result("Looks good", data={"approved": True})
 
     captured = {}
 
@@ -503,7 +506,7 @@ async def test_github_review_task_forwards_runtime_context_to_bus_helper(monkeyp
         captured["meta"] = meta
         return {"success": True, "error": None, "result": {"id": 9}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
 
     result = await run_github_review_task(
@@ -525,7 +528,41 @@ async def test_github_review_task_forwards_runtime_context_to_bus_helper(monkeyp
     assert captured["meta"]["session_id"] == "s-123"
     assert captured["meta"]["agent_id"] == "agent-123"
     assert captured["meta"]["policy_profile_id"] == "pp-123"
-    assert captured["meta"]["metadata"] == {"k": "v"}
+    assert captured["meta"]["metadata"]["k"] == "v"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_forwards_identity_binding_metadata_to_bus_helper(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _chat_skill_result("Looks good", data={"approved": True})
+
+    captured = {}
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **meta):
+        captured["action_id"] = action_id
+        captured["meta"] = meta
+        return {"success": True, "error": None, "result": {"id": 90}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 29,
+            "_execution_metadata": {"policy_profile_id": "pp-ib"},
+            "identity_binding_system_type": "github",
+            "identity_binding_external_account_id": "acct-1",
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["action_id"] == "adapter:github:review_pull_request"
+    assert captured["meta"]["metadata"]["identity_binding"]["system_type"] == "github"
+    assert captured["meta"]["metadata"]["identity_binding"]["external_account_id"] == "acct-1"
 
 
 @pytest.mark.asyncio
@@ -543,7 +580,7 @@ async def test_github_review_task_failed_skill_without_error_uses_output_as_erro
     async def _fail_bus_call(*_args, **_kwargs):
         raise AssertionError("secondary write-back should not run for failed skill")
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fail_bus_call)
 
     result = await run_github_review_task({"owner": "acme", "repo": "demo", "pull_number": 24})
@@ -565,7 +602,7 @@ async def test_github_review_task_failed_skill_without_error_or_output_uses_gene
     async def _fail_bus_call(*_args, **_kwargs):
         raise AssertionError("secondary write-back should not run for failed skill")
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fail_bus_call)
 
     result = await run_github_review_task({"owner": "acme", "repo": "demo", "pull_number": 25})
@@ -581,12 +618,12 @@ async def test_github_review_task_parses_json_object_string_skill_kwargs(monkeyp
 
     captured = {}
 
-    async def _fake_execute_skill(skill_name, **kwargs):
-        captured["skill_name"] = skill_name
+    async def _fake_execute_skill(**kwargs):
+        captured["skill_name"] = kwargs["skill_name"]
         captured["kwargs"] = kwargs
         return _SkillResult(success=False, output="stop", error="stop", data={})
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
 
     result = await run_github_review_task(
         {
@@ -598,8 +635,8 @@ async def test_github_review_task_parses_json_object_string_skill_kwargs(monkeyp
     )
 
     assert captured["skill_name"] == "review-pull-request"
-    assert captured["kwargs"]["mode"] == "strict"
-    assert captured["kwargs"]["max_comments"] == 2
+    assert captured["kwargs"]["skill_kwargs"]["mode"] == "strict"
+    assert captured["kwargs"]["skill_kwargs"]["max_comments"] == 2
     assert result["success"] is False
 
 
@@ -613,7 +650,7 @@ async def test_github_review_task_invalid_json_skill_kwargs_returns_structured_f
         called["skill"] = True
         return _SkillResult(success=True, output="ok", error=None, data={})
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
 
     result = await run_github_review_task(
         {"owner": "acme", "repo": "demo", "pull_number": 31, "skill_kwargs": "{not-json"}
@@ -635,7 +672,7 @@ async def test_github_review_task_non_object_json_skill_kwargs_returns_structure
         called["skill"] = True
         return _SkillResult(success=True, output="ok", error=None, data={})
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
 
     result = await run_github_review_task(
         {"owner": "acme", "repo": "demo", "pull_number": 32, "skill_kwargs": "[1,2]"}
@@ -656,7 +693,7 @@ async def test_github_review_task_non_dict_skill_kwargs_returns_structured_failu
         called["skill"] = True
         return _SkillResult(success=True, output="ok", error=None, data={})
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
 
     result = await run_github_review_task(
         {"owner": "acme", "repo": "demo", "pull_number": 33, "skill_kwargs": [1, 2]}
@@ -673,8 +710,8 @@ async def test_github_review_task_accepts_portal_automation_payload_shape(monkey
 
     captured = {}
 
-    async def _fake_execute_skill(skill_name, **kwargs):
-        captured["skill_name"] = skill_name
+    async def _fake_execute_skill(**kwargs):
+        captured["skill_name"] = kwargs["skill_name"]
         captured["kwargs"] = kwargs
         return _SkillResult(success=True, output="Automated review", data={"review_event": "COMMENT"})
 
@@ -683,7 +720,7 @@ async def test_github_review_task_accepts_portal_automation_payload_shape(monkey
         captured["action_kwargs"] = kwargs
         return {"success": True, "error": None, "result": {"id": 88}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
     async def _same_head_sha(_owner, _repo, _pull_number):
         return "abc123"
@@ -711,9 +748,9 @@ async def test_github_review_task_accepts_portal_automation_payload_shape(monkey
     assert result["success"] is True
     assert captured["skill_name"] == "review-pull-request"
     assert captured["kwargs"]["pull_number"] == 123
-    assert captured["kwargs"]["head_sha"] == "abc123"
+    assert captured["kwargs"]["requested_head_sha"] == "abc123"
     assert captured["kwargs"]["review_target"] == {"type": "team", "name": "acme/platform-reviewers"}
-    assert captured["kwargs"]["review_event"] == "COMMENT"
+    assert captured["kwargs"]["requested_event"] == "COMMENT"
     assert captured["action_id"] == "adapter:github:review_pull_request"
     assert captured["action_kwargs"]["pull_number"] == 123
     assert result["rule_id"] == "rule-1"
@@ -732,14 +769,14 @@ async def test_github_review_task_explicit_skill_kwargs_override_payload_default
 
     captured = {}
 
-    async def _fake_execute_skill(skill_name, **kwargs):
+    async def _fake_execute_skill(**kwargs):
         captured["kwargs"] = kwargs
         return _SkillResult(success=True, output="Automated review", data={"review_event": "COMMENT"})
 
     async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **_meta):
         return {"success": True, "error": None, "result": {"id": 89}, "runtime_events": []}
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
     monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
     async def _same_head_sha(_owner, _repo, _pull_number):
         return "abc123"
@@ -758,8 +795,8 @@ async def test_github_review_task_explicit_skill_kwargs_override_payload_default
     )
 
     assert result["success"] is True
-    assert captured["kwargs"]["head_sha"] == "override-sha"
-    assert captured["kwargs"]["review_target"] == {"type": "user", "name": "alice"}
+    assert captured["kwargs"]["skill_kwargs"]["head_sha"] == "override-sha"
+    assert captured["kwargs"]["skill_kwargs"]["review_target"] == {"type": "user", "name": "alice"}
 
 
 @pytest.mark.asyncio
@@ -772,7 +809,7 @@ async def test_github_review_task_invalid_pull_number_returns_clear_error(monkey
         called["skill"] = True
         return _SkillResult(success=True, output="unused", data={})
 
-    monkeypatch.setattr("src.runtime.github_review.execute_skill", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
 
     result = await run_github_review_task(
         {
@@ -813,3 +850,189 @@ async def test_github_review_task_missing_required_fields_preserves_trace_fields
     assert result["rule_id"] == "rule-missing"
     assert result["automation_rule_id"] == "auto-missing"
     assert result["dedupe_key"] == "dedupe-missing"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_uses_chat_tool_loop_not_execute_skill(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    called = {"chat": False}
+
+    async def _fake_chat_loop(**_kwargs):
+        called["chat"] = True
+        return _chat_skill_result("## Pull Request Summary\nLooks good.", data={"review_summary": "## Pull Request Summary\nLooks good.", "requested_review_event": "COMMENT", "execution_mode": "chat_tool_loop"})
+
+    async def fake_success_action(*_args, **_kwargs):
+        return {"success": True, "error": None, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_chat_loop)
+    monkeypatch.setattr("src.runtime.github_review.execute_github_review_action", fake_success_action)
+
+    result = await run_github_review_task({"owner": "acme", "repo": "demo", "pull_number": 1})
+
+    assert called["chat"] is True
+    assert result["success"] is True
+    assert result["result"]["skill"]["data"]["execution_mode"] == "chat_tool_loop"
+
+    source = Path("src/runtime/github_review.py").read_text()
+    assert "execute_skill(" not in source
+    assert "from src.agents.executor import execute_skill" not in source
+    assert not Path("skills/review-pull-request/skill.py").exists()
+
+
+def test_build_github_review_chat_prompt_contains_handoff_constraints():
+    from src.runtime.github_review import _build_github_review_chat_prompt
+
+    prompt = _build_github_review_chat_prompt(
+        skill_name="review-pull-request", owner="acme", repo="demo", pull_number=7,
+        requested_head_sha="abc123", review_target={"type": "pull_request"}, requested_event="COMMENT",
+        writeback_mode="review_pull_request", runtime_managed_writeback=True,
+    )
+
+    assert prompt.startswith("/skill use review-pull-request")
+    assert "Repository: acme/demo" in prompt
+    assert "Pull request: #7" in prompt
+    assert "Expected head SHA: abc123" in prompt
+    assert "Do NOT call github_add_comment" in prompt
+    assert "Do NOT call github_add_pr_review_comment" in prompt
+    assert "runtime task wrapper" in prompt
+
+
+@pytest.mark.asyncio
+async def test_execute_review_skill_via_chat_loop_forces_read_only_allowed_capability_ids(monkeypatch):
+    from src.runtime.contracts import make_execution_result
+    from src.runtime.github_review import _execute_review_skill_via_chat_loop
+
+    captured = {}
+
+    async def fake_execute_chat_orchestration(**kwargs):
+        captured["metadata"] = kwargs["metadata"]
+        return make_execution_result(
+            request_id=kwargs["request_id"],
+            status="success",
+            output_payload={
+                "response": "## Pull Request Summary\nLooks good.",
+                "runtime_events": [{"event_type": "skill_matched", "detail_payload": {"skill": "review-pull-request"}}],
+            },
+            runtime_events=[{"event_type": "skill_runtime_applied", "detail_payload": {"skill": "review-pull-request"}}],
+        )
+
+    monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_chat_orchestration", fake_execute_chat_orchestration)
+
+    result = await _execute_review_skill_via_chat_loop(
+        payload={"_execution_metadata": {
+            "allowed_capability_ids": ["tool:github_add_comment"],
+            "allowed_capability_types": ["action"],
+            "allowed_actions": ["review_pull_request"],
+            "allowed_adapter_actions": ["adapter:github:review_pull_request"],
+        }},
+        owner="acme", repo="demo", pull_number=1, skill_name="review-pull-request", requested_event="COMMENT",
+        requested_head_sha=None, review_target=None, review_metadata=None, skill_kwargs={}, automation_trace={},
+    )
+
+    assert result["success"] is True
+    assert captured["metadata"]["allowed_capability_ids"] == [
+        "tool:github_get_pr",
+        "tool:github_get_pr_files",
+        "tool:github_get_pr_file_patch",
+        "tool:github_get_pr_diff",
+        "tool:github_get_pr_comments",
+        "tool:github_list_pr_reviews",
+    ]
+    assert "tool:github_add_comment" not in captured["metadata"]["allowed_capability_ids"]
+    assert "tool:github_add_pr_review_comment" not in captured["metadata"]["allowed_capability_ids"]
+    assert captured["metadata"]["allowed_capability_types"] == ["tool"]
+    assert captured["metadata"]["outer_allowed_capability_ids"] == ["tool:github_add_comment"]
+    assert captured["metadata"]["outer_allowed_capability_types"] == ["action"]
+
+
+@pytest.mark.asyncio
+async def test_execute_review_skill_via_chat_loop_fails_when_skill_not_found(monkeypatch):
+    from src.runtime.contracts import make_execution_result
+    from src.runtime.github_review import _execute_review_skill_via_chat_loop
+
+    async def fake_execute_chat_orchestration(**kwargs):
+        return make_execution_result(
+            request_id=kwargs["request_id"],
+            status="success",
+            output_payload={"response": "Skill not found: review-pull-request"},
+            runtime_events=[],
+        )
+
+    monkeypatch.setattr("src.runtime.chat_orchestration_adapter.execute_chat_orchestration", fake_execute_chat_orchestration)
+
+    result = await _execute_review_skill_via_chat_loop(
+        payload={"_execution_metadata": {}},
+        owner="acme", repo="demo", pull_number=1, skill_name="review-pull-request", requested_event="COMMENT",
+        requested_head_sha=None, review_target=None, review_metadata=None, skill_kwargs={}, automation_trace={},
+    )
+
+    assert result["success"] is False
+    assert "could not activate skill" in (result["error"] or "")
+
+
+@pytest.mark.asyncio
+async def test_execute_review_skill_via_chat_loop_real_orchestration_not_blocked_by_tool_allowlist(monkeypatch):
+    from src.runtime.github_review import _execute_review_skill_via_chat_loop
+
+    captured = {"called": False, "execution_metadata": None}
+
+    class _FakeAgent:
+        def __init__(self, *args, **kwargs):
+            self.agent_id = kwargs.get("agent_id")
+            self.model = kwargs.get("model")
+
+    class _FakeSessionManager:
+        _initialized = True
+
+        async def initialize(self):
+            self._initialized = True
+
+    async def _fake_run_chat_execution(agent, **kwargs):
+        captured["called"] = True
+        captured["execution_metadata"] = kwargs.get("execution_metadata")
+        return {
+            "response": "## Pull Request Summary\nLooks good.",
+            "runtime_events": [
+                {"event_type": "skill_matched", "detail_payload": {"skill": "review-pull-request"}},
+                {"event_type": "skill_runtime_applied", "detail_payload": {"skill": "review-pull-request"}},
+            ],
+        }
+
+    monkeypatch.setattr("src.agents.core.Agent", _FakeAgent)
+    monkeypatch.setattr("src.agents.core.run_chat_execution", _fake_run_chat_execution)
+    monkeypatch.setattr("src.sessions.manager.session_manager", _FakeSessionManager())
+
+    result = await _execute_review_skill_via_chat_loop(
+        payload={
+            "_runtime_request_id": "task-1",
+            "_runtime_session_id": "outer-session",
+            "_runtime_agent_id": "agent-1",
+            "_execution_metadata": {
+                "allowed_capability_ids": ["tool:github_add_comment"],
+                "allowed_capability_types": ["action"],
+                "model": "test-model",
+            },
+        },
+        owner="acme",
+        repo="demo",
+        pull_number=1,
+        skill_name="review-pull-request",
+        requested_event="COMMENT",
+        requested_head_sha=None,
+        review_target=None,
+        review_metadata=None,
+        skill_kwargs={},
+        automation_trace={},
+    )
+
+    assert captured["called"] is True
+    assert result["success"] is True
+    assert result["data"]["execution_mode"] == "chat_tool_loop"
+
+    allowed = captured["execution_metadata"]["allowed_capability_ids"]
+    assert "tool:github_get_pr" in allowed
+    assert "tool:github_add_comment" not in allowed
+    assert "tool:github_add_pr_review_comment" not in allowed
+    assert captured["execution_metadata"]["allowed_capability_types"] == ["tool"]
+    assert captured["execution_metadata"]["outer_allowed_capability_types"] == ["action"]

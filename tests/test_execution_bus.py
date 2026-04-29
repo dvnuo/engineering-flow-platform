@@ -3908,3 +3908,219 @@ async def test_execution_bus_triggered_event_task_success_includes_secondary_gov
         "secondary_action_id",
     ):
         assert key in result.output_payload
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_github_review_task_forwards_runtime_request_context(monkeypatch):
+    captured = {}
+
+    async def _fake_run_github_review_task(payload):
+        captured.update(payload)
+        return {
+            "success": True,
+            "review_summary": "ok",
+            "review_event": "COMMENT",
+            "review_written": True,
+            "comment_written": True,
+            "secondary_action_attempted": True,
+            "secondary_action_success": True,
+            "secondary_action_id": "adapter:github:review_pull_request",
+            "runtime_events": [],
+            "result": {"skill": {"name": "review-pull-request", "success": True, "output": "ok", "error": None, "data": {"execution_mode": "chat_tool_loop", "chat_session_id": "s", "chat_request_id": "r"}}},
+        }
+
+    monkeypatch.setattr("src.runtime.execution_bus.run_github_review_task", _fake_run_github_review_task)
+    bus = build_default_execution_bus()
+    req = make_execution_request(
+        request_id="req-ctx-1",
+        session_id="sess-ctx-1",
+        agent_id="agent-ctx-1",
+        source_type="agent",
+        execution_type="task",
+        metadata={"task_id": "t1"},
+        input_payload={"task_type": "github_review_task", "owner": "acme", "repo": "demo", "pull_number": 1},
+    )
+    await bus.execute(req)
+
+    assert captured["_runtime_request_id"] == "req-ctx-1"
+    assert captured["_runtime_session_id"] == "sess-ctx-1"
+    assert captured["_runtime_agent_id"] == "agent-ctx-1"
+    assert captured["_execution_metadata"]["task_id"] == "t1"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_writeback_uses_runtime_session_agent_policy_fallback(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    captured = {}
+
+    async def _fake_chat_loop(**_kwargs):
+        return {
+            "success": True,
+            "output": "## Pull Request Summary\nok",
+            "error": None,
+            "data": {
+                "review_summary": "## Pull Request Summary\nok",
+                "execution_mode": "chat_tool_loop",
+                "chat_session_id": "chat-s",
+                "chat_request_id": "chat-r",
+            },
+            "runtime_events": [],
+        }
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **meta):
+        captured["meta"] = meta
+        return {"success": True, "error": None, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_chat_loop)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 1,
+            "_execution_metadata": {"policy_profile_id": "policy-1"},
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["meta"]["session_id"] == "chat-s"
+    assert captured["meta"]["policy_profile_id"] == "policy-1"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_writeback_injects_runtime_managed_github_identity_binding(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    captured = {}
+
+    async def _fake_chat_loop(**_kwargs):
+        return {
+            "success": True,
+            "output": "## Pull Request Summary\nok",
+            "error": None,
+            "data": {
+                "review_summary": "## Pull Request Summary\nok",
+                "execution_mode": "chat_tool_loop",
+                "chat_session_id": "chat-s",
+                "chat_request_id": "chat-r",
+            },
+            "runtime_events": [],
+        }
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **meta):
+        captured["action_id"] = action_id
+        captured["kwargs"] = kwargs
+        captured["meta"] = meta
+        return {"success": True, "error": None, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_chat_loop)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 1,
+            "_execution_metadata": {
+                "task_id": "task-1",
+                "portal_task_id": "portal-task-1",
+                "external_triggered": True,
+                "policy_profile_id": "policy-1",
+            },
+        }
+    )
+
+    assert result["success"] is True
+    metadata = captured["meta"]["metadata"]
+    assert metadata["identity_binding"]["system_type"] == "github"
+    assert metadata["identity_binding"]["id"].startswith("runtime-github-review:")
+    assert metadata["identity_binding"]["external_account_id"]
+    assert metadata["identity_binding_source"] == "github_review_task"
+    assert metadata["identity_binding_runtime_managed"] is True
+    assert captured["meta"]["policy_profile_id"] == "policy-1"
+
+
+@pytest.mark.asyncio
+async def test_github_review_task_writeback_preserves_explicit_identity_binding(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    captured = {}
+
+    async def _fake_chat_loop(**_kwargs):
+        return {
+            "success": True,
+            "output": "## Pull Request Summary\nok",
+            "error": None,
+            "data": {
+                "review_summary": "## Pull Request Summary\nok",
+                "execution_mode": "chat_tool_loop",
+                "chat_session_id": "chat-s",
+                "chat_request_id": "chat-r",
+            },
+            "runtime_events": [],
+        }
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **meta):
+        captured["meta"] = meta
+        return {"success": True, "error": None, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_chat_loop)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    explicit = {"system_type": "github", "id": "explicit-binding-1", "external_account_id": "octocat"}
+
+    result = await run_github_review_task(
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 1,
+            "_execution_metadata": {"identity_binding": explicit},
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["meta"]["metadata"]["identity_binding"] == explicit
+    assert "identity_binding_runtime_managed" not in captured["meta"]["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_github_review_writeback_real_adapter_bus_path_has_identity_binding(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_chat_loop(**_kwargs):
+        return {
+            "success": True,
+            "output": "## Pull Request Summary\nok",
+            "error": None,
+            "data": {
+                "review_summary": "## Pull Request Summary\nok",
+                "execution_mode": "chat_tool_loop",
+                "chat_session_id": "chat-s",
+                "chat_request_id": "chat-r",
+            },
+            "runtime_events": [],
+        }
+
+    async def _fake_execute_adapter_action(action_id, kwargs):
+        return {"success": True, "error": None, "result": {"ok": True}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_chat_loop)
+    monkeypatch.setattr("src.runtime.execution_bus.execute_adapter_action", _fake_execute_adapter_action)
+
+    result = await run_github_review_task(
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 1,
+            "_execution_metadata": {
+                "task_id": "task-1",
+                "external_triggered": True,
+                "allowed_adapter_actions": ["adapter:github:review_pull_request"],
+            },
+        }
+    )
+
+    assert result["success"] is True
+    assert result["secondary_action_success"] is True
