@@ -256,6 +256,13 @@ async def _get_current_pr_head_sha(owner: str, repo: str, pull_number: int) -> s
 async def execute_github_review_action(action_id: str, kwargs: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     execution_metadata = payload.get("_execution_metadata")
     metadata = dict(execution_metadata) if isinstance(execution_metadata, dict) else None
+    if metadata is None:
+        metadata = {}
+    if "identity_binding" not in metadata and isinstance(payload.get("identity_binding"), dict):
+        metadata["identity_binding"] = dict(payload.get("identity_binding") or {})
+    for key in ("identity_binding_system_type", "identity_binding_id", "identity_binding_external_account_id"):
+        if key not in metadata and payload.get(key) is not None:
+            metadata[key] = payload.get(key)
     session_id = payload.get("session_id") or payload.get("_runtime_session_id")
     agent_id = payload.get("agent_id") or payload.get("_runtime_agent_id")
     policy_profile_id = payload.get("policy_profile_id")

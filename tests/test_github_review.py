@@ -532,6 +532,40 @@ async def test_github_review_task_forwards_runtime_context_to_bus_helper(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_github_review_task_forwards_identity_binding_metadata_to_bus_helper(monkeypatch):
+    from src.runtime.github_review import run_github_review_task
+
+    async def _fake_execute_skill(*_args, **_kwargs):
+        return _chat_skill_result("Looks good", data={"approved": True})
+
+    captured = {}
+
+    async def _fake_execute_adapter_action_via_bus(action_id, kwargs, **meta):
+        captured["action_id"] = action_id
+        captured["meta"] = meta
+        return {"success": True, "error": None, "result": {"id": 90}, "runtime_events": []}
+
+    monkeypatch.setattr("src.runtime.github_review._execute_review_skill_via_chat_loop", _fake_execute_skill)
+    monkeypatch.setattr("src.runtime.github_review.execute_adapter_action_via_bus", _fake_execute_adapter_action_via_bus)
+
+    result = await run_github_review_task(
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "pull_number": 29,
+            "_execution_metadata": {"policy_profile_id": "pp-ib"},
+            "identity_binding_system_type": "github",
+            "identity_binding_external_account_id": "acct-1",
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["action_id"] == "adapter:github:review_pull_request"
+    assert captured["meta"]["metadata"]["identity_binding_system_type"] == "github"
+    assert captured["meta"]["metadata"]["identity_binding_external_account_id"] == "acct-1"
+
+
+@pytest.mark.asyncio
 async def test_github_review_task_failed_skill_without_error_uses_output_as_error(monkeypatch):
     from src.runtime.github_review import run_github_review_task
 
