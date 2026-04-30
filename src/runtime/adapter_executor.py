@@ -182,7 +182,11 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
         # GitHub PR general comments share the issues comments endpoint.
         raw = await github_module.github_add_comment(owner, repo, int(issue_number), str(comment))
     elif action == "reply_review_comment":
-        comment_id = payload.get("comment_id") or payload.get("review_comment_id")
+        comment_id = (
+            payload.get("in_reply_to_id")
+            or payload.get("review_comment_id")
+            or payload.get("comment_id")
+        )
         comment = payload.get("comment") or payload.get("body")
         if not owner or not repo or pull_number is None or comment_id is None or not comment:
             return {
