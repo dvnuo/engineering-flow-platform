@@ -163,3 +163,10 @@ def test_capability_registry_uses_full_tool_catalog_even_when_llm_tools_restrict
     registry = build_default_capability_registry()
     registry_tool_names = {item.name for item in registry.list_by_type("tool")}
     assert all_tool_names.issubset(registry_tool_names)
+
+
+
+def test_default_registry_includes_triggered_event_skill_and_github_reply_review_comment_adapter():
+    registry = build_default_capability_registry()
+    assert registry.exists("skill:handle-triggered-event") is True
+    assert registry.exists("adapter:github:reply_review_comment") is True

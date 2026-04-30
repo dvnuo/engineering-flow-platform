@@ -50,6 +50,26 @@ def build_github_adapter_capabilities() -> List[AdapterActionDescriptor]:
             requires_identity_binding=True,
             source_ref="src.github",
         ),
+        AdapterActionDescriptor(
+            action_id="adapter:github:reply_review_comment",
+            adapter="github",
+            name="reply_review_comment",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "owner": {"type": "string"},
+                    "repo": {"type": "string"},
+                    "pull_number": {"type": "integer"},
+                    "comment_id": {"type": "integer"},
+                    "comment": {"type": "string"},
+                },
+                "required": ["owner", "repo", "pull_number", "comment_id", "comment"],
+            },
+            output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
+            policy_tags=["github", "write", "comment", "review_comment"],
+            requires_identity_binding=True,
+            source_ref="src.github",
+        ),
     ])
 
 

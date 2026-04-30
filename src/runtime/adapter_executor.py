@@ -181,6 +181,23 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
             }
         # GitHub PR general comments share the issues comments endpoint.
         raw = await github_module.github_add_comment(owner, repo, int(issue_number), str(comment))
+    elif action == "reply_review_comment":
+        comment_id = payload.get("comment_id") or payload.get("review_comment_id")
+        comment = payload.get("comment") or payload.get("body")
+        if not owner or not repo or pull_number is None or comment_id is None or not comment:
+            return {
+                "success": False,
+                "error": "owner, repo, pull_number, comment_id, and comment are required",
+                "system": "github",
+                "action_name": action,
+            }
+        raw = await github_module.github_reply_pr_review_comment(
+            owner=owner,
+            repo=repo,
+            pull_number=int(pull_number),
+            comment_id=int(comment_id),
+            comment=str(comment),
+        )
     else:
         return {"success": False, "error": f"Unsupported github action: {action}", "system": "github", "action_name": action}
 
@@ -267,6 +284,7 @@ ACTION_ID_TO_EXECUTOR = {
     "adapter:jira:export_issues_to_markdown": lambda payload: _exec_jira("export_issues_to_markdown", payload),
     "adapter:github:review_pull_request": lambda payload: _exec_github("review_pull_request", payload),
     "adapter:github:add_comment": lambda payload: _exec_github("add_comment", payload),
+    "adapter:github:reply_review_comment": lambda payload: _exec_github("reply_review_comment", payload),
     "adapter:portal:create_delegation": lambda payload: _exec_portal("create_delegation", payload),
     "adapter:portal:list_group_delegations": lambda payload: _exec_portal("list_group_delegations", payload),
     "adapter:portal:get_group_task_board": lambda payload: _exec_portal("get_group_task_board", payload),

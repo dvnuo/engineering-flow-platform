@@ -36,14 +36,21 @@ async def _run_agent_response(
     return response_text
 
 
-def _resolve_secondary_action(source_kind: str) -> tuple[str, str]:
+def _resolve_secondary_action(source_kind: str, payload: Dict[str, Any] | None = None) -> tuple[str, str]:
+    normalized_source_kind = str(source_kind or "").strip().lower()
+    payload = payload if isinstance(payload, dict) else {}
+    if normalized_source_kind == "github.mention":
+        comment_kind = str(payload.get("comment_kind") or "").strip().lower()
+        reply_mode = str(payload.get("reply_mode") or "same_surface").strip().lower()
+        if comment_kind == "pull_request_review_comment" and reply_mode == "same_surface":
+            return ("adapter:github:reply_review_comment", "adapter_action")
+        return ("adapter:github:add_comment", "adapter_action")
     mapping = {
-        "github.mention": ("adapter:github:add_comment", "adapter_action"),
         "jira.assigned": ("adapter:jira:add_comment", "adapter_action"),
         "jira.mention": ("adapter:jira:add_comment", "adapter_action"),
         "confluence.mention": ("channel_action:confluence_add_comment", "channel_action"),
     }
-    resolved = mapping.get(source_kind)
+    resolved = mapping.get(normalized_source_kind)
     if not resolved:
         raise ValueError(f"Unsupported source_kind: {source_kind}")
     return resolved
@@ -70,24 +77,57 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     execution_metadata = payload.get("_execution_metadata")
     if not isinstance(execution_metadata, dict):
         execution_metadata = None
-    secondary_action_id, secondary_action_capability_type = _resolve_secondary_action(source_kind)
+    secondary_action_id, secondary_action_capability_type = _resolve_secondary_action(source_kind, payload)
+    def _append_github_auto_reply_marker(response_text: str, payload: Dict[str, Any]) -> str:
+        if "<!-- efp:auto-reply" in response_text:
+            return response_text
+        task_id = payload.get("task_id") or payload.get("_runtime_task_id") or payload.get("dedupe_key") or ""
+        source_comment_id = payload.get("comment_id") or payload.get("review_comment_id") or ""
+        rule_id = payload.get("automation_rule_id") or payload.get("rule_id") or ""
+        marker = (
+            f"<!-- efp:auto-reply source=github-comment-mention "
+            f"task_id={task_id} source_comment_id={source_comment_id} rule_id={rule_id} -->"
+        )
+        return response_text.rstrip() + "\n\n" + marker
     if source_kind == "github.mention":
         owner = str(_require(payload, "owner"))
         repo = str(_require(payload, "repo"))
-        issue_number = int(payload.get("issue_number") or payload.get("pull_number") or 0)
-        if issue_number <= 0:
-            raise ValueError("Missing required field: issue_number")
+        comment_kind = str(payload.get("comment_kind") or "issue_comment")
+        context_type = str(payload.get("context_type") or "")
+        issue_number = payload.get("issue_number")
+        pull_number = payload.get("pull_number")
+        comment_id = payload.get("comment_id")
+        review_comment_id = payload.get("review_comment_id")
         author = str(payload.get("author") or "unknown")
+        author_association = str(payload.get("author_association") or "")
         comment_url = str(payload.get("html_url") or payload.get("url") or "")
         comment_body = str(payload.get("body") or "")
+        path = payload.get("path")
+        line = payload.get("line")
+        side = payload.get("side")
+        diff_hunk = payload.get("diff_hunk")
         message = (
-            "你在 GitHub issue/PR 评论中被提及。\n"
+            "你在 GitHub 评论中被提及。\n"
             f"仓库: {owner}/{repo}\n"
-            f"编号: #{issue_number}\n"
+            f"Surface/comment_kind: {comment_kind}\n"
+            f"Context type: {context_type}\n"
+            f"Issue number: {issue_number}\n"
+            f"Pull number: {pull_number}\n"
+            f"Comment id: {comment_id}\n"
+            f"Review comment id: {review_comment_id}\n"
             f"作者: {author}\n"
+            f"Author association: {author_association}\n"
             f"评论链接: {comment_url}\n"
+            f"Path: {path}\n"
+            f"Line: {line}\n"
+            f"Side: {side}\n"
+            f"Diff hunk:\n{diff_hunk}\n"
             f"评论内容:\n{comment_body}\n\n"
-            "请生成一段简洁、直接、可直接发布的回复。必要时可使用已有工具查看更多上下文。"
+            "请生成一条可以直接发布到 GitHub 的回复。\n"
+            "不要输出隐藏推理过程。\n"
+            "不要声称执行了未实际执行的操作。\n"
+            "如果信息不足，请提出具体澄清问题。\n"
+            "回复要简洁、可执行。"
         )
         response_text = await _run_agent_response(
             message,
@@ -113,7 +153,20 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "blocked": True,
                 "blocked_reason": blocked_reason,
             }
-        await github_channel.add_comment(owner, repo, issue_number, response_text)
+        response_to_post = _append_github_auto_reply_marker(response_text, payload)
+        if secondary_action_id == "adapter:github:reply_review_comment":
+            pull_number_value = int(_require(payload, "pull_number"))
+            source_comment_id = int(
+                payload.get("in_reply_to_id") or payload.get("review_comment_id") or payload.get("comment_id") or 0
+            )
+            if source_comment_id <= 0:
+                raise ValueError("Missing required field: comment_id for review comment reply")
+            await github_channel.reply_pr_review_comment(owner, repo, pull_number_value, source_comment_id, response_to_post)
+        else:
+            issue_number_value = int(payload.get("issue_number") or payload.get("pull_number") or 0)
+            if issue_number_value <= 0:
+                raise ValueError("Missing required field: issue_number")
+            await github_channel.add_comment(owner, repo, issue_number_value, response_to_post)
         return {
             "success": True,
             "source_kind": source_kind,
@@ -122,6 +175,7 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             "secondary_action_success": True,
             "secondary_action_id": secondary_action_id,
             "secondary_action_capability_type": secondary_action_capability_type,
+            "posted_comment": response_to_post,
         }
 
     if source_kind == "jira.assigned":
