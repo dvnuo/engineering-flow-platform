@@ -19,6 +19,36 @@ from ruamel.yaml import YAML
 
 logger = logging.getLogger(__name__)
 
+
+def _repo_root() -> Path:
+    """Resolve repository root for local fallback discovery."""
+    return Path(__file__).resolve().parents[2]
+
+
+def resolve_project_skills_dir() -> Path:
+    """Resolve project skills directory from env, mounted path, or repo fallback."""
+    env = os.getenv("EFP_SKILLS_DIR")
+    if env and env.strip():
+        return Path(env).expanduser()
+
+    app_skills = Path("/app/skills")
+    if app_skills.exists():
+        return app_skills
+
+    repo_skills = _repo_root() / "skills"
+    if repo_skills.exists():
+        return repo_skills
+
+    return Path("skills")
+
+
+def resolve_user_skills_dir() -> Path:
+    """Resolve user skill override directory from env or ~/.efp/skills."""
+    env = os.getenv("EFP_USER_SKILLS_DIR")
+    if env and env.strip():
+        return Path(env).expanduser()
+    return Path.home() / ".efp" / "skills"
+
 # Module-level YAML instance
 _yaml = YAML()
 
@@ -93,9 +123,11 @@ class SkillRegistry:
     2. User skills: ~/.efp/skills/ (user skills override project skills)
     """
     
-    def __init__(self, project_skills_dir: str = "skills", user_skills_dir: str = "~/.efp/skills"):
-        self.project_skills_dir = Path(project_skills_dir)
-        self.user_skills_dir = Path(user_skills_dir).expanduser()
+    def __init__(self, project_skills_dir: str | Path | None = None, user_skills_dir: str | Path | None = None):
+        project_dir = resolve_project_skills_dir() if project_skills_dir is None else Path(project_skills_dir)
+        user_dir = resolve_user_skills_dir() if user_skills_dir is None else Path(user_skills_dir)
+        self.project_skills_dir = Path(project_dir).expanduser()
+        self.user_skills_dir = Path(user_dir).expanduser()
         self.skills: Dict[str, Skill] = {}
         self._initialized = False
     
@@ -397,12 +429,12 @@ class SkillRegistry:
 
 # Global registry instance (loads both project and user skills)
 skill_registry = SkillRegistry(
-    project_skills_dir="skills",
-    user_skills_dir=str(Path.home() / ".efp" / "skills")
+    project_skills_dir=None,
+    user_skills_dir=None,
 )
 
 
-def load_all_skills(skills_dir: str = "skills") -> SkillRegistry:
+def load_all_skills(skills_dir: str | Path | None = None) -> SkillRegistry:
     """Convenience function to load skills from a single directory.
     
     Note: For loading both project and user skills with override,

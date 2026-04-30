@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional
 
 from src.config import config
 from src.runtime.tool_filtering import is_tool_name_enabled_for_llm
+from src.skills.registry import resolve_project_skills_dir
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -136,23 +138,31 @@ class SkillsExecutor:
 
     def _load_skills(self):
         """Load all available skills."""
-        # Navigate up from executor/ to project root, then to skills/
-        skills_dir = Path(__file__).parent.parent.parent / "skills"
+        skills_dir = resolve_project_skills_dir()
         logger.debug(f"Loading skills from: {skills_dir}")
 
+        if not skills_dir.exists():
+            logger.debug(f"Skills directory does not exist, skipping python skill load: {skills_dir}")
+            return
+
+        parent_dir = str(skills_dir.parent)
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+
         for skill_dir in skills_dir.iterdir():
-            if skill_dir.is_dir() and skill_dir.name.startswith("_"):
+            if not skill_dir.is_dir() or skill_dir.name.startswith("_"):
                 continue
 
             skill_file = skill_dir / "skill.py"
-            if skill_file.exists():
-                logger.debug(f"Found skill file: {skill_file}")
-                # Import skill in isolated try-except to avoid failing entire load
-                try:
-                    self._import_skill(skill_dir.name, skill_file)
-                except Exception as e:
-                    logger.warning(f"Failed to load skill {skill_dir.name}: {e}")
-                    continue
+            if not skill_file.exists():
+                continue
+
+            logger.debug(f"Found skill file: {skill_file}")
+            try:
+                self._import_skill(skill_dir.name, skill_file)
+            except Exception as e:
+                logger.warning(f"Failed to load skill {skill_dir.name}: {e}")
+                continue
 
     def _import_skill(self, skill_name: str, skill_file: Path | None = None):
         """Import a skill module."""
