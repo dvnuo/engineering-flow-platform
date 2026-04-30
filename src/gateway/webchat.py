@@ -780,6 +780,7 @@ async def api_chat(request: web.Request) -> web.Response:
     request_id: Optional[str] = None
     runtime_agent_id: Optional[str] = None
     execution_metadata: Dict[str, Any] = {}
+    attachment_ids: List[str] = []
     try:
         data = await request.json()
         message = (data.get('message') or '').strip()
@@ -1087,6 +1088,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
     request_id: Optional[str] = None
     runtime_agent_id: Optional[str] = None
     execution_metadata: Dict[str, Any] = {}
+    attachment_ids: List[str] = []
     try:
         data = await request.json()
         message = (data.get('message') or '').strip()
@@ -1279,6 +1281,14 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 pass
             return response
         return web.Response(status=500, text=str(e))
+    finally:
+        if run_task is not None and not run_task.done():
+            try:
+                await run_task
+            except Exception:
+                pass
+        if session_id and attachment_ids:
+            await _cleanup_one_shot_attachments(session_id, attachment_ids)
 
 
 async def api_tasks_execute(request: web.Request) -> web.Response:

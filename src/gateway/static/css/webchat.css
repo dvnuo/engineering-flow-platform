@@ -2649,21 +2649,6 @@ input:checked + .slider:before {
     display: inline-block;
 }
 
-/* File selector dropdown - hide thumbnail by default, show on hover */
-#fileList .skill-item .file-thumbnail {
-    display: none;
-    width: 40px;
-    height: 40px;
-    object-fit: cover;
-    border-radius: 4px;
-    margin-right: 8px;
-    vertical-align: middle;
-}
-
-#fileList .skill-item:hover .file-thumbnail {
-    display: inline-block;
-}
-
 /* Image Modal */
 .image-modal {
     display: none;

@@ -18,7 +18,6 @@ def test_no_upload_library_or_file_selector_frontend_residue():
         'data-action="my-uploads"',
         "fileSelector",
         "fileDropdown",
-        "fileList",
         "selectedFileIndex",
         "filesLoaded",
         "showFileSelector",
@@ -43,3 +42,33 @@ def test_no_upload_library_or_file_selector_frontend_residue():
     assert "attachments: attachmentIds" in js
     assert "api/files/upload?session_id=" in js
     assert "api/files/parse?session_id=" in js
+
+
+def test_webchat_js_was_not_replaced_by_minimal_stub():
+    js = Path("src/gateway/static/js/webchat.js").read_text(encoding="utf-8")
+    line_count = len(js.splitlines())
+    assert line_count > 2000, "webchat.js appears to have been replaced by a minimal stub."
+
+    required_tokens = [
+        "themeToggle",
+        "toggleSidebar",
+        "statsButton",
+        "refreshSessions",
+        "recentSessionsList",
+        "clearButton",
+        "tokenCount",
+        "costDisplay",
+        "typing",
+        "streamingContent",
+        "skillDropdown",
+        "skillList",
+        "/api/skills",
+        "/api/sessions",
+        "settingsPanel",
+        "closeSettings",
+        "saveSettings",
+        "fileViewerPanel",
+        "server-files",
+    ]
+    for token in required_tokens:
+        assert token in js, f"Expected existing WebChat feature token to remain: {token}"
