@@ -700,3 +700,27 @@ async def test_channel_add_discussion_comment_calls_graphql_mutation(monkeypatch
     assert captured["variables"]["discussionId"] == "D_1"
     assert captured["variables"]["body"] == "hi"
     assert captured["variables"]["replyToId"] == "DC_1"
+
+
+def test_github_graphql_url_public_github(github_modules):
+    _, github_api = github_modules
+    github_api.github_channel.base_url = "https://api.github.com"
+    assert github_api.github_channel._graphql_url() == "https://api.github.com/graphql"
+
+
+def test_github_graphql_url_enterprise(github_modules):
+    _, github_api = github_modules
+    github_api.github_channel.base_url = "https://github.example.com/api/v3"
+    assert github_api.github_channel._graphql_url() == "https://github.example.com/api/graphql"
+
+
+@pytest.mark.asyncio
+async def test_channel_add_discussion_comment_raises_on_missing_comment(monkeypatch, github_modules):
+    _, github_api = github_modules
+
+    async def _fake_graphql_request(_query, _variables=None):
+        return {}
+
+    monkeypatch.setattr(github_api.github_channel, "graphql_request", _fake_graphql_request)
+    with pytest.raises(ValueError, match="returned no comment"):
+        await github_api.github_channel.add_discussion_comment("D_1", "hi", reply_to_id="DC_1")

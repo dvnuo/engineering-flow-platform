@@ -192,7 +192,7 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             discussion_id = str(payload.get("discussion_id") or "").strip()
             if not discussion_id:
                 raise ValueError("Missing required field: discussion_id")
-            reply_to_id = payload.get("discussion_comment_id") or payload.get("comment_id")
+            reply_to_id = payload.get("reply_to_id") or payload.get("discussion_comment_id") or payload.get("comment_id")
             await github_channel.add_discussion_comment(
                 discussion_id,
                 response_to_post,

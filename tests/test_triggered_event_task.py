@@ -477,3 +477,22 @@ async def test_run_triggered_event_task_github_discussion_comment_blocked_does_n
     result = await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"discussion_comment","reply_mode":"same_surface","owner":"octo","repo":"portal","discussion_id":"D_123","discussion_comment_id":"DC_1","comment_id":"DC_1","body":"@agent check","_action_gate":lambda action_id,_kwargs:{"blocked":True,"reason":"policy"}})
     assert result["blocked"] is True
     assert called["discussion"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_triggered_event_task_github_discussion_comment_prefers_reply_to_id(monkeypatch):
+    from src.runtime.triggered_event_task import run_triggered_event_task
+    captured = {}
+
+    async def _fake_run_chat_execution(**_kwargs):
+        return {"response": "ok"}
+
+    async def _fake_add_discussion_comment(discussion_id, body, reply_to_id=None):
+        captured.update({"discussion_id": discussion_id, "body": body, "reply_to_id": reply_to_id})
+        return {"id": "DC_2"}
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_discussion_comment", _fake_add_discussion_comment)
+    result = await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"discussion_comment","reply_mode":"same_surface","owner":"octo","repo":"portal","discussion_id":"D_123","reply_to_id":"DC_root","discussion_comment_id":"DC_child","comment_id":"DC_child","body":"@agent check"})
+    assert result["secondary_action_id"] == "adapter:github:add_discussion_comment"
+    assert captured["reply_to_id"] == "DC_root"

@@ -722,7 +722,11 @@ class GitHubChannel:
             mutation,
             {"discussionId": discussion_id, "body": body, "replyToId": reply_to_id},
         )
-        return data["addDiscussionComment"]["comment"]
+        payload = data.get("addDiscussionComment") if isinstance(data, dict) else None
+        comment = payload.get("comment") if isinstance(payload, dict) else None
+        if not isinstance(comment, dict):
+            raise ValueError("GitHub GraphQL addDiscussionComment returned no comment")
+        return comment
     
     async def list_pr_reviews(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
         """List all reviews on a pull request."""
