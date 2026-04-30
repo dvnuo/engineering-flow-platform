@@ -241,3 +241,14 @@ def test_resolve_task_capability_contract_triggered_event_task_confluence_mentio
     plan = resolve_task_capability_contract("triggered_event_task", {"source_kind": "confluence.mention"})
     assert plan["primary_capability_id"] == "skill:handle-triggered-event"
     assert "channel_action:confluence_add_comment" in plan["involved_capability_ids"]
+
+
+def test_resolve_task_capability_contract_triggered_event_task_github_review_comment_reply():
+    plan = resolve_task_capability_contract("triggered_event_task", {"source_kind": "github.mention", "comment_kind": "pull_request_review_comment", "reply_mode": "same_surface"})
+    assert "adapter:github:reply_review_comment" in plan["involved_capability_ids"]
+    assert "adapter:github:add_comment" not in plan["involved_capability_ids"]
+
+
+def test_resolve_task_capability_contract_triggered_event_task_github_review_comment_timeline_fallback():
+    plan = resolve_task_capability_contract("triggered_event_task", {"source_kind": "github.mention", "comment_kind": "pull_request_review_comment", "reply_mode": "timeline"})
+    assert "adapter:github:add_comment" in plan["involved_capability_ids"]

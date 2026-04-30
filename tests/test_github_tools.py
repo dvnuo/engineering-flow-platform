@@ -642,3 +642,23 @@ async def test_github_get_pr_files_dispatch_does_not_fail_on_error_word_in_conte
 
     result = await execute_tool("github_get_pr_files", owner="acme", repo="repo", pull_number=1)
     assert result.success is True
+
+
+
+@pytest.mark.asyncio
+async def test_channel_reply_pr_review_comment_calls_reply_endpoint(monkeypatch, github_modules):
+    _, github_api = github_modules
+    captured = {}
+
+    async def _fake_request(method, endpoint, **kwargs):
+        captured["method"] = method
+        captured["endpoint"] = endpoint
+        captured["json"] = kwargs.get("json")
+        return {"id": 99}
+
+    monkeypatch.setattr(github_api.github_channel, "_request", _fake_request)
+    result = await github_api.github_channel.reply_pr_review_comment("o", "r", 1, 2, "hi")
+    assert result["id"] == 99
+    assert captured["method"] == "POST"
+    assert captured["endpoint"] == "/repos/o/r/pulls/1/comments/2/replies"
+    assert captured["json"] == {"body": "hi"}

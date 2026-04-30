@@ -890,13 +890,25 @@ def _build_secondary_governance_summary(
     }
 
 
-def _triggered_event_secondary_action_descriptor(source_kind: str) -> Optional[Dict[str, str]]:
-    mapping = {
-        "github.mention": {
-            "action_id": "adapter:github:add_comment",
+def _triggered_event_secondary_action_descriptor(
+    source_kind: str, payload: Dict[str, Any] | None = None
+) -> Optional[Dict[str, str]]:
+    normalized_source_kind = str(source_kind or "").strip().lower()
+    payload = payload if isinstance(payload, dict) else {}
+    if normalized_source_kind == "github.mention":
+        comment_kind = str(payload.get("comment_kind") or "").strip().lower()
+        reply_mode = str(payload.get("reply_mode") or "same_surface").strip().lower()
+        action_id = (
+            "adapter:github:reply_review_comment"
+            if comment_kind == "pull_request_review_comment" and reply_mode == "same_surface"
+            else "adapter:github:add_comment"
+        )
+        return {
+            "action_id": action_id,
             "capability_type": "adapter_action",
             "event_prefix": "task.triggered_event.secondary_action",
-        },
+        }
+    mapping = {
         "jira.assigned": {
             "action_id": "adapter:jira:add_comment",
             "capability_type": "adapter_action",
@@ -913,7 +925,7 @@ def _triggered_event_secondary_action_descriptor(source_kind: str) -> Optional[D
             "event_prefix": "task.triggered_event.secondary_action",
         },
     }
-    return mapping.get(str(source_kind or "").strip().lower())
+    return mapping.get(normalized_source_kind)
 
 
 def _as_dict(value: Any) -> dict:
@@ -2242,7 +2254,7 @@ def build_default_execution_bus(
             capability = resolve_task_capability_plan(task_type, enriched_payload)
             involved_capability_ids = list(capability.get("involved_capability_ids") or [])
             source_kind = str(enriched_payload.get("source_kind") or "").strip().lower()
-            secondary_descriptor = _triggered_event_secondary_action_descriptor(source_kind)
+            secondary_descriptor = _triggered_event_secondary_action_descriptor(source_kind, enriched_payload)
             if secondary_descriptor is None:
                 raise ValueError(f"Unsupported source_kind for triggered_event_task secondary governance: {source_kind}")
             secondary_action_id = secondary_descriptor["action_id"]

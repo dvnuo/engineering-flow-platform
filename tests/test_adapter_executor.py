@@ -464,3 +464,34 @@ async def test_create_portal_delegation_from_runtime_preserves_block_reason(monk
     assert result["success"] is False
     assert result["delegation_id"] is None
     assert result["error"] == "denied_adapter_actions"
+
+
+
+def test_validate_enabled_adapter_actions_have_executors_includes_reply_review_comment():
+    from src.runtime.adapter_executor import validate_enabled_adapter_actions_have_executors
+    assert validate_enabled_adapter_actions_have_executors() == []
+
+
+@pytest.mark.asyncio
+async def test_execute_github_reply_review_comment_action_prefers_in_reply_to_id(monkeypatch):
+    captured = {}
+
+    async def _fake_reply(**kwargs):
+        captured.update(kwargs)
+        return "Review comment reply added"
+
+    monkeypatch.setattr("src.github.github_reply_pr_review_comment", _fake_reply)
+    result = await execute_adapter_action(
+        "adapter:github:reply_review_comment",
+        {
+            "owner": "o",
+            "repo": "r",
+            "pull_number": 1,
+            "comment_id": 200,
+            "review_comment_id": 150,
+            "in_reply_to_id": 100,
+            "comment": "hi",
+        },
+    )
+    assert result["success"] is True
+    assert captured["comment_id"] == 100

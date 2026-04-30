@@ -3413,6 +3413,7 @@ def test_task_template_registry_lists_expected_templates():
         "generate_implementation_plan_from_bundle",
         "generate_runbook_from_bundle",
         "github_pr_review",
+        "github_comment_mention",
     }
 
 
@@ -4124,3 +4125,25 @@ async def test_github_review_writeback_real_adapter_bus_path_has_identity_bindin
 
     assert result["success"] is True
     assert result["secondary_action_success"] is True
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_triggered_event_task_github_review_comment_secondary_action_blocked(monkeypatch):
+    async def _fake_process(*, message, session_id, **_kwargs):
+        return {"response": "ok"}
+
+    async def _fake_reply(*args, **kwargs):
+        raise AssertionError("writeback should be blocked by governance gate")
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.reply_pr_review_comment", _fake_reply)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type":"triggered_event_task","source_kind":"github.mention","comment_kind":"pull_request_review_comment","reply_mode":"same_surface","owner":"acme","repo":"demo","pull_number":1,"comment_id":2,"body":"@bot","session_id":"sess"},
+        metadata={"denied_adapter_actions":["adapter:github:reply_review_comment"]},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.output_payload["blocked_secondary_action_ids"] == ["adapter:github:reply_review_comment"]
+    event_types = [evt.get("event_type") for evt in result.runtime_events]
+    assert "task.triggered_event.secondary_action.blocked" in event_types

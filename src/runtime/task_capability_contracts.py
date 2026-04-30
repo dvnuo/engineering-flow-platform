@@ -242,7 +242,12 @@ def _resolve_involved_capability_ids_for_task(task_type: str, payload: Dict[str,
         source_kind = str(payload.get("source_kind") or "").strip().lower()
         involved = ["skill:handle-triggered-event"]
         if source_kind == "github.mention":
-            involved.append("adapter:github:add_comment")
+            comment_kind = str(payload.get("comment_kind") or "").strip().lower()
+            reply_mode = str(payload.get("reply_mode") or "same_surface").strip().lower()
+            if comment_kind == "pull_request_review_comment" and reply_mode == "same_surface":
+                involved.append("adapter:github:reply_review_comment")
+            else:
+                involved.append("adapter:github:add_comment")
         elif source_kind in {"jira.assigned", "jira.mention"}:
             involved.append("adapter:jira:add_comment")
         elif source_kind == "confluence.mention":

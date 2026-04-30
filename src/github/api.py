@@ -630,6 +630,22 @@ class GitHubChannel:
                     "event": normalized_event
                 }
             )
+
+    async def reply_pr_review_comment(
+        self,
+        owner: str,
+        repo: str,
+        pull_number: int,
+        comment_id: int,
+        body: str,
+    ) -> Dict[str, Any]:
+        """Reply to an existing PR review comment thread."""
+        logger.info(f"Replying to PR review comment {owner}/{repo}#{pull_number} comment_id={comment_id}")
+        return await self._request(
+            "POST",
+            f"/repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies",
+            json={"body": body},
+        )
     
     async def list_pr_reviews(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
         """List all reviews on a pull request."""
@@ -764,6 +780,15 @@ async def github_add_comment(owner: str, repo: str, issue_number: int, comment: 
         return f"Comment added: {owner}/{repo}#{issue_number} (ID: {comment_id})"
     except Exception as e:
         return f"Error adding comment: {e}"
+
+
+async def github_reply_pr_review_comment(owner: str, repo: str, pull_number: int, comment_id: int, comment: str) -> str:
+    try:
+        result = await github_channel.reply_pr_review_comment(owner, repo, pull_number, comment_id, comment)
+        reply_id = result.get("id", "unknown")
+        return f"Review comment reply added: {owner}/{repo}#{pull_number} (ID: {reply_id})"
+    except Exception as e:
+        return f"Error replying to PR review comment: {e}"
 
 
 async def github_get_pr_files(owner: str, repo: str, pull_number: int) -> str:

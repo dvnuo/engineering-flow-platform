@@ -224,6 +224,14 @@ class _CapabilityBuilder:
                 requires_identity_binding=True,
                 metadata={"runtime_required": True, "provider": "github"},
             ),
+            CapabilityDescriptor(
+                capability_id="skill:handle-triggered-event",
+                type="skill",
+                name="handle-triggered-event",
+                policy_tags=["skill", "triggered_event"],
+                requires_identity_binding=False,
+                metadata={"runtime_required": True},
+            ),
         ]
         for descriptor in required_descriptors:
             if not self.registry.exists(descriptor.capability_id):
