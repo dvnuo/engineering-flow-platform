@@ -30,6 +30,8 @@ def test_no_upload_library_or_file_selector_frontend_residue():
         "@file_",
         "/api/files/list",
         "/api/context/files",
+        "refreshFileList",
+        "processMessageImages",
         "fetch('')",
         "const  =",
         "let  =",
@@ -46,6 +48,8 @@ def test_no_upload_library_or_file_selector_frontend_residue():
 
 def test_webchat_js_was_not_replaced_by_minimal_stub():
     js = Path("src/gateway/static/js/webchat.js").read_text(encoding="utf-8")
+    html = Path("src/gateway/templates/webchat.html").read_text(encoding="utf-8")
+    corpus = js + "\n" + html
     line_count = len(js.splitlines())
     assert line_count > 2000, "webchat.js appears to have been replaced by a minimal stub."
 
@@ -55,7 +59,6 @@ def test_webchat_js_was_not_replaced_by_minimal_stub():
         "statsButton",
         "refreshSessions",
         "recentSessionsList",
-        "clearButton",
         "tokenCount",
         "costDisplay",
         "typing",
@@ -71,4 +74,17 @@ def test_webchat_js_was_not_replaced_by_minimal_stub():
         "server-files",
     ]
     for token in required_tokens:
-        assert token in js, f"Expected existing WebChat feature token to remain: {token}"
+        assert token in corpus, f"Expected existing WebChat feature token to remain: {token}"
+
+
+def test_required_one_shot_tokens_present():
+    js = Path("src/gateway/static/js/webchat.js").read_text(encoding="utf-8")
+    html = Path("src/gateway/templates/webchat.html").read_text(encoding="utf-8")
+    assert 'id="clearButton"' in html or 'clear-button' in html
+    assert "pendingAttachments" in js
+    assert "renderPendingAttachments" in js
+    assert "shouldParseAttachment" in js
+    assert "api/files/upload?session_id=" in js
+    assert "api/files/parse?session_id=" in js
+    assert "attachments: attachmentIds" in js
+    assert "'[attachment]'" in js or '"[attachment]"' in js
