@@ -646,6 +646,29 @@ class GitHubChannel:
             f"/repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies",
             json={"body": body},
         )
+
+    async def add_commit_comment(
+        self,
+        owner: str,
+        repo: str,
+        commit_sha: str,
+        body: str,
+        path: str | None = None,
+        line: int | None = None,
+        position: int | None = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"body": body}
+        if path:
+            payload["path"] = path
+        if line is not None:
+            payload["line"] = line
+        if position is not None:
+            payload["position"] = position
+        return await self._request(
+            "POST",
+            f"/repos/{owner}/{repo}/commits/{commit_sha}/comments",
+            json=payload,
+        )
     
     async def list_pr_reviews(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
         """List all reviews on a pull request."""
@@ -789,6 +812,31 @@ async def github_reply_pr_review_comment(owner: str, repo: str, pull_number: int
         return f"Review comment reply added: {owner}/{repo}#{pull_number} (ID: {reply_id})"
     except Exception as e:
         return f"Error replying to PR review comment: {e}"
+
+
+async def github_add_commit_comment(
+    owner: str,
+    repo: str,
+    commit_sha: str,
+    comment: str,
+    path: str | None = None,
+    line: int | None = None,
+    position: int | None = None,
+) -> str:
+    try:
+        result = await github_channel.add_commit_comment(
+            owner,
+            repo,
+            commit_sha,
+            comment,
+            path=path,
+            line=line,
+            position=position,
+        )
+        comment_id = result.get("id", "unknown")
+        return f"Commit comment added: {owner}/{repo}@{commit_sha} (ID: {comment_id})"
+    except Exception as e:
+        return f"Error adding commit comment: {e}"
 
 
 async def github_get_pr_files(owner: str, repo: str, pull_number: int) -> str:

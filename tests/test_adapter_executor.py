@@ -495,3 +495,24 @@ async def test_execute_github_reply_review_comment_action_prefers_in_reply_to_id
     )
     assert result["success"] is True
     assert captured["comment_id"] == 100
+
+
+@pytest.mark.asyncio
+async def test_execute_github_add_commit_comment_action(monkeypatch):
+    captured = {}
+
+    async def _fake_add_commit_comment(**kwargs):
+        captured.update(kwargs)
+        return "Commit comment added"
+
+    monkeypatch.setattr("src.github.github_add_commit_comment", _fake_add_commit_comment)
+    result = await execute_adapter_action("adapter:github:add_commit_comment", {"owner":"o","repo":"r","commit_sha":"abc","comment":"hi","path":"a.py","line":1,"position":2})
+    assert result["success"] is True
+    assert captured["commit_sha"] == "abc"
+    assert captured["path"] == "a.py"
+    assert captured["line"] == 1
+    assert captured["position"] == 2
+
+
+def test_validate_enabled_adapter_actions_have_executors_includes_add_commit_comment():
+    assert validate_enabled_adapter_actions_have_executors() == []

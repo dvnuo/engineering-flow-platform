@@ -202,6 +202,28 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
             comment_id=int(comment_id),
             comment=str(comment),
         )
+    elif action == "add_commit_comment":
+        commit_sha = payload.get("commit_sha") or payload.get("commit_id")
+        comment = payload.get("comment") or payload.get("body")
+        path = payload.get("path")
+        line = payload.get("line")
+        position = payload.get("position")
+        if not owner or not repo or not commit_sha or not comment:
+            return {
+                "success": False,
+                "error": "owner, repo, commit_sha (or commit_id), and comment are required",
+                "system": "github",
+                "action_name": action,
+            }
+        raw = await github_module.github_add_commit_comment(
+            owner=owner,
+            repo=repo,
+            commit_sha=str(commit_sha),
+            comment=str(comment),
+            path=str(path).strip() if isinstance(path, str) and path.strip() else None,
+            line=int(line) if isinstance(line, int) or (isinstance(line, str) and str(line).strip().isdigit()) else None,
+            position=int(position) if isinstance(position, int) or (isinstance(position, str) and str(position).strip().isdigit()) else None,
+        )
     else:
         return {"success": False, "error": f"Unsupported github action: {action}", "system": "github", "action_name": action}
 
@@ -289,6 +311,7 @@ ACTION_ID_TO_EXECUTOR = {
     "adapter:github:review_pull_request": lambda payload: _exec_github("review_pull_request", payload),
     "adapter:github:add_comment": lambda payload: _exec_github("add_comment", payload),
     "adapter:github:reply_review_comment": lambda payload: _exec_github("reply_review_comment", payload),
+    "adapter:github:add_commit_comment": lambda payload: _exec_github("add_commit_comment", payload),
     "adapter:portal:create_delegation": lambda payload: _exec_portal("create_delegation", payload),
     "adapter:portal:list_group_delegations": lambda payload: _exec_portal("list_group_delegations", payload),
     "adapter:portal:get_group_task_board": lambda payload: _exec_portal("get_group_task_board", payload),

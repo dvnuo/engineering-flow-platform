@@ -272,3 +272,10 @@ def test_resolve_task_capability_contract_triggered_event_task_github_unsupporte
     assert "skill:handle-triggered-event" in plan["involved_capability_ids"]
     assert "adapter:github:add_comment" not in plan["involved_capability_ids"]
     assert "adapter:github:reply_review_comment" not in plan["involved_capability_ids"]
+
+
+def test_resolve_task_capability_contract_triggered_event_task_github_commit_comment():
+    plan = resolve_task_capability_contract("triggered_event_task", {"source_kind":"github.mention","comment_kind":"commit_comment"})
+    assert "adapter:github:add_commit_comment" in plan["involved_capability_ids"]
+    assert "adapter:github:add_comment" not in plan["involved_capability_ids"]
+    assert "adapter:github:reply_review_comment" not in plan["involved_capability_ids"]
