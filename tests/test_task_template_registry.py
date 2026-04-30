@@ -19,3 +19,12 @@ def test_github_comment_mention_template_includes_commit_fields():
     assert "commit_id" in template.optional_inputs
     assert "commit_sha" in template.optional_inputs
     assert "position" in template.optional_inputs
+
+
+def test_github_comment_mention_template_includes_discussion_fields():
+    template = get_task_template("github_comment_mention")
+    assert template is not None
+    assert "discussion_number" in template.optional_inputs
+    assert "discussion_id" in template.optional_inputs
+    assert "discussion_comment_id" in template.optional_inputs
+    assert "reply_to_id" in template.optional_inputs

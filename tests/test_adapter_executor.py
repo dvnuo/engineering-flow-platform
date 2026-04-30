@@ -516,3 +516,19 @@ async def test_execute_github_add_commit_comment_action(monkeypatch):
 
 def test_validate_enabled_adapter_actions_have_executors_includes_add_commit_comment():
     assert validate_enabled_adapter_actions_have_executors() == []
+
+
+@pytest.mark.asyncio
+async def test_execute_github_add_discussion_comment_action(monkeypatch):
+    captured = {}
+
+    async def _fake_add_discussion_comment(**kwargs):
+        captured.update(kwargs)
+        return "Discussion comment added"
+
+    monkeypatch.setattr("src.github.github_add_discussion_comment", _fake_add_discussion_comment)
+    result = await execute_adapter_action("adapter:github:add_discussion_comment", {"discussion_id":"D1","comment":"hi","reply_to_id":"DC1"})
+    assert result["success"] is True
+    assert captured["discussion_id"] == "D1"
+    assert captured["comment"] == "hi"
+    assert captured["reply_to_id"] == "DC1"

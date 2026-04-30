@@ -681,3 +681,22 @@ async def test_channel_add_commit_comment_calls_commit_comment_endpoint(monkeypa
     assert captured["method"] == "POST"
     assert captured["endpoint"] == "/repos/o/r/commits/abc/comments"
     assert captured["json"] == {"body": "hi", "path": "a.py", "line": 1, "position": 2}
+
+
+@pytest.mark.asyncio
+async def test_channel_add_discussion_comment_calls_graphql_mutation(monkeypatch, github_modules):
+    _, github_api = github_modules
+    captured = {}
+
+    async def _fake_graphql_request(query, variables=None):
+        captured["query"] = query
+        captured["variables"] = variables
+        return {"addDiscussionComment": {"comment": {"id": "DC_2"}}}
+
+    monkeypatch.setattr(github_api.github_channel, "graphql_request", _fake_graphql_request)
+    result = await github_api.github_channel.add_discussion_comment("D_1", "hi", reply_to_id="DC_1")
+    assert result["id"] == "DC_2"
+    assert "addDiscussionComment" in captured["query"]
+    assert captured["variables"]["discussionId"] == "D_1"
+    assert captured["variables"]["body"] == "hi"
+    assert captured["variables"]["replyToId"] == "DC_1"

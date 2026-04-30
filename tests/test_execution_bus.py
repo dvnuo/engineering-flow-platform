@@ -4163,7 +4163,7 @@ async def test_execution_bus_triggered_event_task_github_unsupported_comment_kin
     req = make_execution_request(
         source_type="task",
         execution_type="task",
-        input_payload={"task_type":"triggered_event_task","source_kind":"github.mention","comment_kind":"discussion_comment","owner":"acme","repo":"demo","comment_id":2,"body":"@bot","session_id":"sess"},
+        input_payload={"task_type":"triggered_event_task","source_kind":"github.mention","comment_kind":"unknown_comment","owner":"acme","repo":"demo","comment_id":2,"body":"@bot","session_id":"sess"},
     )
     result = await build_default_execution_bus().execute(req)
     assert result.status == "error"
@@ -4227,3 +4227,23 @@ async def test_execution_bus_triggered_event_task_github_commit_comment_success(
     req = make_execution_request(source_type="task", execution_type="task", input_payload={"task_type":"triggered_event_task","source_kind":"github.mention","comment_kind":"commit_comment","reply_mode":"same_surface","owner":"acme","repo":"demo","commit_sha":"abc123","comment_id":2,"body":"@bot","session_id":"sess"})
     result = await build_default_execution_bus().execute(req)
     assert "adapter:github:add_commit_comment" in result.output_payload["applied_secondary_action_ids"]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_triggered_event_task_github_discussion_comment_secondary_action_blocked(monkeypatch):
+    async def _fake_process(*, message, session_id, **_kwargs):
+        return {"response": "ok"}
+
+    async def _fake_discussion_comment(*args, **kwargs):
+        raise AssertionError("writeback should be blocked by governance gate")
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_discussion_comment", _fake_discussion_comment)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type":"triggered_event_task","source_kind":"github.mention","comment_kind":"discussion_comment","reply_mode":"same_surface","owner":"acme","repo":"demo","discussion_id":"D_123","discussion_comment_id":"DC_1","comment_id":"DC_1","body":"@bot","session_id":"sess"},
+        metadata={"denied_adapter_actions":["adapter:github:add_discussion_comment"]},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert "adapter:github:add_discussion_comment" in result.output_payload["blocked_secondary_action_ids"]

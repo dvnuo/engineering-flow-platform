@@ -92,6 +92,24 @@ def build_github_adapter_capabilities() -> List[AdapterActionDescriptor]:
             requires_identity_binding=True,
             source_ref="src.github",
         ),
+        AdapterActionDescriptor(
+            action_id="adapter:github:add_discussion_comment",
+            adapter="github",
+            name="add_discussion_comment",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "discussion_id": {"type": "string"},
+                    "comment": {"type": "string"},
+                    "reply_to_id": {"type": "string"},
+                },
+                "required": ["discussion_id", "comment"],
+            },
+            output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
+            policy_tags=["github", "write", "comment", "discussion_comment"],
+            requires_identity_binding=True,
+            source_ref="src.github",
+        ),
     ])
 
 

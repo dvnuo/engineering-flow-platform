@@ -224,6 +224,22 @@ async def execute_github_workflow_action(action_name: str, kwargs: Dict[str, Any
             line=int(line) if isinstance(line, int) or (isinstance(line, str) and str(line).strip().isdigit()) else None,
             position=int(position) if isinstance(position, int) or (isinstance(position, str) and str(position).strip().isdigit()) else None,
         )
+    elif action == "add_discussion_comment":
+        discussion_id = payload.get("discussion_id")
+        comment = payload.get("comment") or payload.get("body")
+        reply_to_id = payload.get("reply_to_id") or payload.get("discussion_comment_id") or payload.get("comment_id")
+        if not discussion_id or not comment:
+            return {
+                "success": False,
+                "error": "discussion_id and comment are required",
+                "system": "github",
+                "action_name": action,
+            }
+        raw = await github_module.github_add_discussion_comment(
+            discussion_id=str(discussion_id),
+            comment=str(comment),
+            reply_to_id=str(reply_to_id) if reply_to_id else None,
+        )
     else:
         return {"success": False, "error": f"Unsupported github action: {action}", "system": "github", "action_name": action}
 
@@ -312,6 +328,7 @@ ACTION_ID_TO_EXECUTOR = {
     "adapter:github:add_comment": lambda payload: _exec_github("add_comment", payload),
     "adapter:github:reply_review_comment": lambda payload: _exec_github("reply_review_comment", payload),
     "adapter:github:add_commit_comment": lambda payload: _exec_github("add_commit_comment", payload),
+    "adapter:github:add_discussion_comment": lambda payload: _exec_github("add_discussion_comment", payload),
     "adapter:portal:create_delegation": lambda payload: _exec_portal("create_delegation", payload),
     "adapter:portal:list_group_delegations": lambda payload: _exec_portal("list_group_delegations", payload),
     "adapter:portal:get_group_task_board": lambda payload: _exec_portal("get_group_task_board", payload),
