@@ -36,11 +36,15 @@ async def _run_agent_response(
     return response_text
 
 
+ALLOWED_GITHUB_MENTION_COMMENT_KINDS = {"issue_comment", "pull_request_review_comment"}
+
 def _resolve_secondary_action(source_kind: str, payload: Dict[str, Any] | None = None) -> tuple[str, str]:
     normalized_source_kind = str(source_kind or "").strip().lower()
     payload = payload if isinstance(payload, dict) else {}
     if normalized_source_kind == "github.mention":
         comment_kind = str(payload.get("comment_kind") or "").strip().lower()
+        if comment_kind and comment_kind not in ALLOWED_GITHUB_MENTION_COMMENT_KINDS:
+            raise ValueError(f"Unsupported GitHub mention comment_kind: {comment_kind}")
         reply_mode = str(payload.get("reply_mode") or "same_surface").strip().lower()
         if comment_kind == "pull_request_review_comment" and reply_mode == "same_surface":
             return ("adapter:github:reply_review_comment", "adapter_action")
@@ -92,7 +96,9 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     if source_kind == "github.mention":
         owner = str(_require(payload, "owner"))
         repo = str(_require(payload, "repo"))
-        comment_kind = str(payload.get("comment_kind") or "issue_comment")
+        comment_kind = str(payload.get("comment_kind") or "issue_comment").strip().lower()
+        if comment_kind not in ALLOWED_GITHUB_MENTION_COMMENT_KINDS:
+            raise ValueError(f"Unsupported GitHub mention comment_kind: {comment_kind}")
         context_type = str(payload.get("context_type") or "")
         issue_number = payload.get("issue_number")
         pull_number = payload.get("pull_number")

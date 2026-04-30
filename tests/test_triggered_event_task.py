@@ -341,3 +341,29 @@ async def test_run_triggered_event_task_github_review_comment_blocked_does_not_w
     assert result["blocked"] is True
     assert called["reply"] == 0
     assert called["add"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_triggered_event_task_github_unsupported_comment_kind_fails(monkeypatch):
+    from src.runtime.triggered_event_task import run_triggered_event_task
+
+    called = {"reply": 0, "add": 0}
+
+    async def _fake_run_chat_execution(**_kwargs):
+        return {"response": "reply"}
+
+    async def _fake_reply(*args, **kwargs):
+        called["reply"] += 1
+
+    async def _fake_add_comment(*args, **kwargs):
+        called["add"] += 1
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.reply_pr_review_comment", _fake_reply)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+
+    with pytest.raises(ValueError, match="Unsupported GitHub mention comment_kind"):
+        await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"commit_comment","owner":"octo","repo":"portal","comment_id":100,"body":"@agent check"})
+
+    assert called["reply"] == 0
+    assert called["add"] == 0

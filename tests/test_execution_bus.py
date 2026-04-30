@@ -4147,3 +4147,24 @@ async def test_execution_bus_triggered_event_task_github_review_comment_secondar
     assert result.output_payload["blocked_secondary_action_ids"] == ["adapter:github:reply_review_comment"]
     event_types = [evt.get("event_type") for evt in result.runtime_events]
     assert "task.triggered_event.secondary_action.blocked" in event_types
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_triggered_event_task_github_unsupported_comment_kind_fails_cleanly(monkeypatch):
+    async def _fake_process(*, message, session_id, **_kwargs):
+        return {"response": "ok"}
+
+    async def _fake_add(*args, **kwargs):
+        raise AssertionError("unsupported comment_kind must not fallback to add_comment")
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add)
+
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type":"triggered_event_task","source_kind":"github.mention","comment_kind":"commit_comment","owner":"acme","repo":"demo","comment_id":2,"body":"@bot","session_id":"sess"},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "error"
+    assert "Unsupported GitHub mention comment_kind" in str(result.output_payload.get("error"))
