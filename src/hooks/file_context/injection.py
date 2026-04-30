@@ -1,6 +1,6 @@
 """Context injection for AI prompts."""
 
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 from .models import Chunk, RetrievalResult
 from .retrieval import retrieval_engine
@@ -112,19 +112,39 @@ def inject_context(
     message: str,
     top_k: int = 5,
     max_tokens: int = 4000,
-    include_images: bool = False
+    include_images: bool = False,
+    file_ids: Optional[List[str]] = None,
 ) -> Tuple[str, str, List[dict]]:
     """Inject file context into user message.
     
     Returns:
         (enhanced_message, budget_status, citations)
     """
+    if file_ids is not None:
+        session_files = storage.get_session_files(session_id)
+        completed_file_ids = {f.file_id for f in session_files if f.parse_status == "completed"}
+        allowed_file_ids = [fid for fid in file_ids if fid in completed_file_ids]
+        if not allowed_file_ids:
+            return message, "no_context", []
+        from .models import RetrievalRequest
+        retrieval_request = RetrievalRequest(
+            session_id=session_id,
+            query=message,
+            top_k=top_k,
+            max_tokens=max_tokens,
+            file_ids=allowed_file_ids,
+            include_images=include_images
+        )
+        retrieval_result = retrieval_engine.retrieve(retrieval_request)
+        prompt, budget_status = build_rag_prompt(message, retrieval_result)
+        return prompt, budget_status, retrieval_result.citations
+
     # Parse any file reference commands
     cleaned_message, references = CommandParser.parse(message)
-    
+
     # Get session files
     session_files = storage.get_session_files(session_id)
-    
+
     # Resolve references to file IDs
     file_ids = CommandParser.resolve_references(references, session_files)
     

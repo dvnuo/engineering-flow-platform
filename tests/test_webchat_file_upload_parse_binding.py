@@ -43,8 +43,7 @@ async def test_upload_and_parse_binds_session_and_rebuilds(monkeypatch):
     fid = payload["file_id"]
 
     meta = storage.get_file_meta("s-bind", fid)
-    assert meta is not None
-    assert meta.parse_status == "pending"
+    assert meta is None
 
     called = {"n": 0}
     monkeypatch.setattr("src.hooks.file_context.retrieval.retrieval_engine.rebuild_index", lambda sid: called.__setitem__("n", called["n"] + 1))
@@ -64,7 +63,7 @@ async def test_upload_and_parse_binds_session_and_rebuilds(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_parse_exception_marks_file_and_artifact_failed(monkeypatch):
+async def test_parse_exception_marks_file_failed(monkeypatch):
     req = make_mocked_request("POST", "/api/files/upload?session_id=s-bind-err", headers=CIMultiDict())
 
     async def _multipart():
@@ -92,7 +91,3 @@ async def test_parse_exception_marks_file_and_artifact_failed(monkeypatch):
     assert meta is not None
     assert meta.parse_status == "failed"
 
-    from src.file_artifacts.storage import storage as artifact_storage
-    artifact = artifact_storage.get_artifact(file_id)
-    assert artifact is not None
-    assert artifact.parse_status == "failed"

@@ -2010,10 +2010,8 @@ You have access to the following tools. When a user asks you to do something tha
         """
         usage_data = {}
         
-        # Add user message to history (with attachments if any)
+                # Add user message to history
         extra = self._build_user_author_extra(portal_user_id, portal_user_name, user_name)
-        if attachments:
-            extra["attachments"] = attachments  # Save file IDs, not base64
         user_message_id = await session_manager.add_message(
             session_id, "user", message,
             extra=extra

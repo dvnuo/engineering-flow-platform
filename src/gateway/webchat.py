@@ -27,11 +27,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.file_parser.storage import init_storage, _file_metadata, StoredFileNotFoundError, get_metadata
 init_storage()
 from src.utils.file_parser import parse_file
-from src.file_artifacts.service import (
-    bind_artifact_to_session,
-    register_existing_file_as_artifact,
-    update_projection_from_parse_result,
-)
 from src.utils.truncate import truncate
 from src.utils.redaction import safe_preview, safe_log_field, sanitize_exception_message
 from src.utils.logger import clear_log_context, set_log_context
@@ -340,6 +335,63 @@ def _sanitize_trace_value(value: Any, max_len: int = 128) -> Optional[str]:
     return cleaned[:max_len]
 
 
+
+
+def _normalize_attachment_ids(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    result: List[str] = []
+    seen: Set[str] = set()
+    for item in value:
+        if isinstance(item, str):
+            file_id = item.strip()
+        elif isinstance(item, dict):
+            file_id = str(item.get("file_id") or item.get("fileId") or item.get("id") or "").strip()
+        else:
+            continue
+        if file_id and file_id not in seen:
+            result.append(file_id)
+            seen.add(file_id)
+    return result
+
+
+async def _cleanup_one_shot_attachments(session_id: Optional[str], file_ids: List[str]) -> None:
+    if not session_id or not file_ids:
+        return
+    unique_ids: List[str] = []
+    seen: Set[str] = set()
+    for fid in file_ids:
+        if fid and fid not in seen:
+            unique_ids.append(fid)
+            seen.add(fid)
+
+    from src.utils.file_parser.storage import delete_file
+    from src.hooks.file_context.storage import storage as file_context_storage
+    from src.hooks.file_context.retrieval import retrieval_engine
+
+    touched_context = False
+    for fid in unique_ids:
+        try:
+            if hasattr(file_context_storage, "remove_file_from_session"):
+                touched_context = file_context_storage.remove_file_from_session(session_id, fid) or touched_context
+            else:
+                file_context_storage.delete_file_chunks(fid)
+                touched_context = True
+        except Exception:
+            logger.warning("Best-effort file_context cleanup failed for %s/%s", session_id, fid, exc_info=True)
+
+        try:
+            delete_file(fid)
+        except Exception:
+            logger.warning("Best-effort upload cleanup failed for %s", fid, exc_info=True)
+
+    if touched_context:
+        try:
+            retrieval_engine.rebuild_index(session_id)
+        except Exception:
+            logger.warning("Best-effort retrieval index rebuild failed for %s", session_id, exc_info=True)
+
+
 async def _collect_attached_images(
     *,
     session_id: str,
@@ -377,23 +429,7 @@ async def _collect_attached_images(
             logger.warning(f"[api_chat] Failed to process file {safe_preview(file_id, 80)}: {sanitize_exception_message(e)}")
         return False
 
-    try:
-        refs = re.findall(r'@file_([a-zA-Z0-9]+)', message)
-        for short_id in dict.fromkeys(refs):
-            try:
-                metadata = get_metadata(short_id)
-                await process_file(metadata.file_id)
-            except (StoredFileNotFoundError, ValueError):
-                from src.utils.file_parser.storage import find_file_by_prefix
-                try:
-                    fid = find_file_by_prefix(short_id)
-                    if fid:
-                        await process_file(fid)
-                except ValueError as ve:
-                    logger.warning(f"[api_chat] Prefix lookup failed: {sanitize_exception_message(ve)}")
-    except Exception as e:
-        logger.warning(f"[api_chat] @file_ parse error: {sanitize_exception_message(e)}")
-
+    # One-shot mode: only explicit request attachments are eligible.
     if attachments and isinstance(attachments, list):
         for file_id in attachments:
             await process_file(file_id)
@@ -755,7 +791,7 @@ async def api_chat(request: web.Request) -> web.Response:
         reasoning_replay = data.get('reasoning_replay', None)
         
         # Get attachments from new field
-        attachments = data.get('attachments', [])
+        attachment_ids = _normalize_attachment_ids(data.get("attachments", []))
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
         client_request_id = _extract_trusted_client_request_id(request, data)
@@ -765,11 +801,11 @@ async def api_chat(request: web.Request) -> web.Response:
             "[api_chat] Request summary: session_id=%s, has_message=%s, attachment_count=%d, portal_user_id_present=%s",
             session_id,
             bool(message),
-            len(attachments) if isinstance(attachments, list) else 0,
+            len(attachment_ids),
             bool(portal_user_id),
         )
         
-        if not message and not attachments:
+        if not message and not attachment_ids:
             return web.json_response({'error': 'Empty message'}, status=400)
         
         # Check if LLM is configured before processing
@@ -786,7 +822,7 @@ async def api_chat(request: web.Request) -> web.Response:
         attached_images = await _collect_attached_images(
             session_id=session_id,
             message=message,
-            attachments=attachments if isinstance(attachments, list) else None,
+            attachments=attachment_ids,
         )
         
         # Set placeholder message if only images
@@ -807,20 +843,20 @@ async def api_chat(request: web.Request) -> web.Response:
         logger.info("[api_chat] Message summary: session_id=%s attached_images=%d message_length=%d preview=%s", safe_log_field(session_id, 120), len(attached_images) if attached_images else 0, len(original_msg_for_history), safe_preview(original_msg_for_history, 120))
         original_message = message
         try:
-            enhanced_message, budget_status, citations = inject_context(
-                session_id=session_id,
-                message=message,
-                top_k=5,
-                max_tokens=4000
-            )
-            if enhanced_message and enhanced_message != message:
-                logger.info(f"[api_chat] File context injected: status={budget_status}, chunks={len(citations)}")
-                message = enhanced_message
-                # Attach citations to request for response
-                request['file_citations'] = citations
+            if attachment_ids:
+                enhanced_message, budget_status, citations = inject_context(
+                    session_id=session_id,
+                    message=message,
+                    top_k=5,
+                    max_tokens=4000,
+                    file_ids=attachment_ids,
+                )
+                if enhanced_message and enhanced_message != message:
+                    logger.info(f"[api_chat] File context injected: status={budget_status}, chunks={len(citations)}")
+                    message = enhanced_message
+                    request['file_citations'] = citations
         except Exception as e:
             logger.warning(f"[api_chat] File context injection failed: {sanitize_exception_message(e)}")
-            # Continue without file context if injection fails
         # Revalidate message is not empty to prevent downstream LLM input from being empty
         if not message or not message.strip():
             logger.error(f"[api_chat] ERROR: Final message is empty before Copilot API call. Payload: {json.dumps(data, ensure_ascii=False)}")
@@ -860,21 +896,24 @@ async def api_chat(request: web.Request) -> web.Response:
                 )
             except Exception:
                 logger.warning("Best-effort session metadata publish failed for chat.started", exc_info=True)
-        result = await _run_chat_via_execution_bus(
-            agent=agent,
-            message=message,
-            session_id=session_id,
-            user_name=effective_user_name,
-            portal_user_id=portal_user_id,
-            portal_user_name=portal_user_name,
-            reasoning_replay=reasoning_replay,
-            attached_images=attached_images if attached_images else None,
-            attachments=attachments if attachments else None,
-            request_path="/api/chat",
-            execution_metadata=execution_metadata,
-            agent_id=runtime_agent_id,
-            request_id=request_id,
-        )
+        try:
+            result = await _run_chat_via_execution_bus(
+                agent=agent,
+                message=message,
+                session_id=session_id,
+                user_name=effective_user_name,
+                portal_user_id=portal_user_id,
+                portal_user_name=portal_user_name,
+                reasoning_replay=reasoning_replay,
+                attached_images=attached_images if attached_images else None,
+                attachments=None,
+                request_path="/api/chat",
+                execution_metadata=execution_metadata,
+                agent_id=runtime_agent_id,
+                request_id=request_id,
+            )
+        finally:
+            await _cleanup_one_shot_attachments(session_id, attachment_ids)
         execution_result = result.get("_execution_result")
         if runtime_agent_id and execution_result is not None:
             publish_metadata = await _enrich_publish_metadata_with_context_preview(
@@ -1056,7 +1095,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         data = await request.json()
         message = (data.get('message') or '').strip()
         session_id = _resolve_webchat_session_id(data)
-        attachments = data.get('attachments')
+        attachment_ids = _normalize_attachment_ids(data.get("attachments", []))
         portal_user_id, portal_user_name = _extract_portal_identity(request, data)
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
         client_request_id = _extract_trusted_client_request_id(request, data)
@@ -1066,7 +1105,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         attached_images = await _collect_attached_images(
             session_id=session_id,
             message=message,
-            attachments=attachments if isinstance(attachments, list) else None,
+            attachments=attachment_ids,
         )
         if attached_images and not message.strip():
             message = "[image]"
@@ -1074,6 +1113,16 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         if not message.strip() and not attached_images:
             response = web.json_response({'error': 'Empty message'}, status=400)
             return response
+        if attachment_ids:
+            enhanced_message, _budget_status, _citations = inject_context(
+                session_id=session_id,
+                message=message,
+                top_k=5,
+                max_tokens=4000,
+                file_ids=attachment_ids,
+            )
+            if enhanced_message:
+                message = enhanced_message
 
         # Create streaming response
         response = web.StreamResponse(
@@ -1133,7 +1182,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 portal_user_name=portal_user_name,
                 stream_callback=event_queue,
                 attached_images=attached_images if attached_images else None,
-                attachments=attachments if attachments else None,
+                attachments=None,
                 request_path="/api/chat/stream",
                 execution_metadata=execution_metadata,
                 agent_id=runtime_agent_id,
@@ -1150,6 +1199,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 continue
 
         result = await run_task
+        await _cleanup_one_shot_attachments(session_id, attachment_ids)
         execution_result = result.get("_execution_result")
         if runtime_agent_id and execution_result is not None:
             publish_metadata = await _enrich_publish_metadata_with_context_preview(
@@ -2806,28 +2856,6 @@ async def api_files_upload(request: web.Request) -> web.Response:
         )
         logger.info(f"[api_files_upload] saved metadata.session_id={metadata.session_id}")
 
-        if session_id:
-            from src.hooks.file_context.models import SessionFileMeta
-            from src.hooks.file_context.storage import storage as file_context_storage
-
-            file_context_storage.add_file_to_session(
-                session_id,
-                SessionFileMeta(
-                    file_id=metadata.file_id,
-                    session_id=session_id,
-                    filename=metadata.original_filename,
-                    content_type=metadata.content_type,
-                    parse_status="pending",
-                ),
-            )
-            register_existing_file_as_artifact(
-                metadata.file_id,
-                source_type="chat",
-                source_kind="uploaded_file",
-                session_id=session_id,
-            )
-            bind_artifact_to_session(metadata.file_id, session_id, role="attachment")
-        
         return web.json_response({
             'success': True,
             'file_id': metadata.file_id,
@@ -2902,17 +2930,7 @@ async def api_files_parse(request: web.Request) -> web.Response:
                         parse_status="pending",
                     ),
                 )
-            if not register_existing_file_as_artifact(
-                file_id,
-                source_type="chat",
-                source_kind="uploaded_file",
-                session_id=session_id,
-            ):
-                pass
-            bind_artifact_to_session(file_id, session_id, role="attachment")
             file_context_storage.update_file_status(session_id, file_id, status="processing")
-        from src.file_artifacts.storage import storage as artifact_storage
-        artifact_storage.update_artifact_status(file_id, parse_status="processing")
 
         options = data.get('options', {})
         result = await parse_file(file_id, options)
@@ -2920,7 +2938,6 @@ async def api_files_parse(request: web.Request) -> web.Response:
         if not result.success:
             if session_id:
                 file_context_storage.update_file_status(session_id, file_id, status="failed", error=result.error)
-            artifact_storage.update_artifact_status(file_id, parse_status="failed", parse_error=result.error)
             return web.json_response({'success': False, 'error': result.error}, status=400)
 
         total_chars = 0
@@ -2948,22 +2965,6 @@ async def api_files_parse(request: web.Request) -> web.Response:
             file_context_storage.save_chunk(chunk)
             total_chars += len(content)
             saved_chunks += 1
-
-        preview = (result.markdown or '')[:2000]
-        update_projection_from_parse_result(
-            file_id,
-            result,
-            preview=preview,
-            persist_text_ref_session_id=session_id,
-            persist_text_ref_kind="chat_uploaded_file_text",
-            persist_text_ref_source_id=file_id,
-            persist_text_ref_title=f"Chat uploaded file {metadata.original_filename}",
-            persist_text_ref_metadata={
-                "file_id": file_id,
-                "filename": metadata.original_filename,
-                "content_type": metadata.content_type,
-            },
-        )
 
         if session_id:
             file_context_storage.update_file_status(
@@ -2995,12 +2996,6 @@ async def api_files_parse(request: web.Request) -> web.Response:
                 file_context_storage.update_file_status(session_id, file_id, status="failed", error=str(e))
         except Exception:
             logger.exception("Failed to persist file_context failure state for %s/%s", session_id, file_id)
-        try:
-            if file_id:
-                from src.file_artifacts.storage import storage as artifact_storage
-                artifact_storage.update_artifact_status(file_id, parse_status="failed", parse_error=str(e))
-        except Exception:
-            logger.exception("Failed to persist artifact failure state for %s", file_id)
         logger.error(f"File parse error: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
@@ -3073,42 +3068,8 @@ async def api_files_preview(request: web.Request) -> web.Response:
 
 
 async def api_files_list(request: web.Request) -> web.Response:
-    """List uploaded files.
-    
-    GET /api/files/list?session_id=xxx
-    
-    Returns:
-        200: {"files": [...]}
-        400: {"success": false, "error": "session_id is required"}
-    """
-    try:
-        from src.utils.file_parser import list_files, init_storage
-        init_storage()
-        
-        # Session_id is optional - if not provided, list all files
-        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
-        
-        files = list_files(session_id) if session_id else list_files()
-        
-        return web.json_response({
-            'files': [
-                {
-                    'file_id': f.file_id,
-                    'filename': f.original_filename,
-                    'content_type': f.content_type,
-                    'size': f.size,
-                    'uploaded_at': f.uploaded_at
-                }
-                for f in files
-            ]
-        })
-        
-    except Exception as e:
-        logger.error(f"File list error: {e}")
-        return web.json_response({
-            'success': False,
-            'error': str(e)
-        }, status=500)
+    """List uploaded files (deprecated for one-shot attachments)."""
+    return web.json_response({'success': True, 'files': []})
 
 
 async def api_context_files(request: web.Request) -> web.Response:

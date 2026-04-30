@@ -49,7 +49,7 @@
                 const formData = new FormData();
                 formData.append('file', file);
 
-                const sessionId = ''; // Not required for My Uploads
+                const sessionId = ''; // Not required for 
                 const headers = sessionId ? { 'X-Session-ID': sessionId } : {};
 
                 const response = await fetch('/api/files/upload', {
@@ -88,7 +88,7 @@
         if (!fileExplorerContent) return;
 
         try {
-            // My Uploads - show all uploaded files from metadata
+            //  - show all uploaded files from metadata
             const headers = {};
 
             // Try new context API first, fall back to files API
@@ -105,7 +105,7 @@
 
             // If no files from context API, try files API
             if (files.length === 0) {
-                const response = await fetch('/api/files/list', { headers });
+                const response = await fetch('', { headers });
                 if (response.ok) {
                     const data = await response.json();
                     files = data.files || [];
@@ -124,7 +124,7 @@
                             </div>
                             <div class="file-actions">
 
-                                <button class="file-action cite-btn" data-file-id="${file.file_id}" title="Ask about this file">@file_${file.file_id.slice(0,8)}</button>
+                                <button class="file-action cite-btn" data-file-id="${file.file_id}" title="Ask about this file">${file.file_id.slice(0,8)}</button>
                                 <button class="file-action delete-btn" data-file-id="${file.file_id}" title="Delete file">🗑️</button>
                             </div>
                         </li>
@@ -162,10 +162,10 @@
                         // Insert reference into input
                         const input = document.getElementById('messageInput');
                         if (input) {
-                            input.value += '@file_' + fileRef.slice(0, 8) + ' ';
+                            input.value += '' + fileRef.slice(0, 8) + ' ';
                             input.focus();
                         }
-                        // Close My Uploads panel
+                        // Close  panel
                         const fileExplorerPanel = document.getElementById('fileExplorerPanel');
                         if (fileExplorerPanel) {
                             fileExplorerPanel.classList.remove('show');
@@ -236,7 +236,7 @@
     const skillSelector = document.getElementById('skillSelector');
     const skillDropdown = document.getElementById('skillDropdown');
     const skillList = document.getElementById('skillList');
-    const fileSelector = document.getElementById('fileSelector');
+    const  = document.getElementById('');
     const fileDropdown = document.getElementById('fileDropdown');
     const fileList = document.getElementById('fileList');
     const themeToggle = document.getElementById('themeToggle');
@@ -249,7 +249,7 @@
     let skills = [];
     let selectedSkillIndex = -1;
     let skillsLoaded = false;
-    let uploadedFiles = [];
+    let  = [];
     let selectedFileIndex = -1;
     let filesLoaded = false;
     let currentSessionId = localStorage.getItem('efp-session-id') || null;
@@ -557,26 +557,26 @@
     function showFileSelector() {
         // Always reload files to get latest
         filesLoaded = false;
-        uploadedFiles = [];
+         = [];
 
-        if (!uploadedFiles.length) {
+        if (!.length) {
             loadFilesForSelector().then(() => {
-                if (uploadedFiles.length) {
+                if (.length) {
                     renderFileList();
-                    fileSelector.classList.add('active');
+                    .classList.add('active');
                 }
             });
             return;
         }
         renderFileList();
-        fileSelector.classList.add('active');
+        .classList.add('active');
     }
 
     /**
      * Hide file selector dropdown
      */
     function hideFileSelector() {
-        fileSelector.classList.remove('active');
+        .classList.remove('active');
         selectedFileIndex = -1;
     }
 
@@ -587,13 +587,13 @@
         if (filesLoaded) return;
 
         try {
-            const response = await fetch('/api/files/list');
+            const response = await fetch('');
             const data = await response.json();
-            uploadedFiles = data.files || [];
+             = data.files || [];
             filesLoaded = true;
         } catch (error) {
             console.error('Error loading files:', error);
-            uploadedFiles = [];
+             = [];
         }
     }
 
@@ -607,7 +607,7 @@
     }
 
     function renderFileList() {
-        if (!uploadedFiles.length) {
+        if (!.length) {
             fileList.innerHTML = '<div class="skill-item"><span class="skill-desc">No files uploaded</span></div>';
             return;
         }
@@ -617,10 +617,10 @@
         const inputVal = messageInput.value;
         const query = atIndex >= 0 ? inputVal.slice(atIndex + 1).toLowerCase() : '';
 
-        let filteredFiles = uploadedFiles;
+        let filteredFiles = ;
 
         if (query) {
-            filteredFiles = uploadedFiles.filter(f =>
+            filteredFiles = .filter(f =>
                 f.filename.toLowerCase().includes(query) ||
                 f.file_id.toLowerCase().includes(query)
             );
@@ -632,7 +632,7 @@
                  data-file-id="${file.file_id}"
                  data-index="${index}">
                 <span class="skill-name">${getFileIcon(file.content_type)} ${escapeHtml(file.filename)}</span>
-                <span class="skill-desc">@file_${file.file_id.slice(0, 8)}</span>
+                <span class="skill-desc">${file.file_id.slice(0, 8)}</span>
             </div>
         `).join('');
 
@@ -641,7 +641,7 @@
             item.addEventListener('click', () => {
                 const fileId = item.dataset.fileId;
                 const atIndex = getAtIndexNearCursor();
-                messageInput.value = messageInput.value.slice(0, atIndex) + '@file_' + fileId.slice(0, 8) + ' ';
+                messageInput.value = messageInput.value.slice(0, atIndex) + '' + fileId.slice(0, 8) + ' ';
                 messageInput.focus();
                 hideFileSelector();
             });
@@ -772,7 +772,7 @@
         }
         
         // Close file selector when @ is deleted or not valid (not at start or after whitespace)
-        if (fileSelector.classList.contains('active')) {
+        if (.classList.contains('active')) {
             const cursorPos = this.selectionStart;
             const textBefore = value.slice(0, cursorPos);
             const lastAtBeforeCursor = textBefore.lastIndexOf('@');
@@ -791,14 +791,14 @@
         try {
             const formData = new FormData();
             formData.append('file', file);
-            const sessionId = ''; // Not required for My Uploads
+            const sessionId = ''; // Not required for 
             const headers = sessionId ? { 'X-Session-ID': sessionId } : {};
             const response = await fetch('/api/files/upload', { method: 'POST', body: formData, headers });
             const data = await response.json();
             if (data.success) {
                 setStatus('File uploaded: ' + data.filename, 'success');
                 const shortId = data.file_id.substring(0, 8);
-                messageInput.value = '@file_' + shortId + ' ';
+                messageInput.value = '' + shortId + ' ';
                 messageInput.focus();
                 refreshFileList();
                 addMessage('assistant', '📎 File uploaded: ' + data.filename);
@@ -903,7 +903,7 @@
         }
 
         // File selector navigation
-        if (fileSelector.classList.contains('active')) {
+        if (.classList.contains('active')) {
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
                 navigateFileList(1);
@@ -925,7 +925,7 @@
                     if (atIndex !== -1) {
                         const textBefore = messageInput.value.slice(0, atIndex);
                         const textAfter = messageInput.value.slice(cursorPos);
-                        messageInput.value = textBefore + '@file_' + fileId.slice(0, 8) + ' ' + textAfter;
+                        messageInput.value = textBefore + '' + fileId.slice(0, 8) + ' ' + textAfter;
                     }
                     messageInput.focus();
                     hideFileSelector();
@@ -940,7 +940,7 @@
 
         // Send message (with IME protection)
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 
-            && !skillSelector.classList.contains('active') && !fileSelector.classList.contains('active')) {
+            && !skillSelector.classList.contains('active') && !.classList.contains('active')) {
             e.preventDefault();
             sendMessage();
         }
@@ -975,7 +975,7 @@
                         const cursorPos = messageInput.selectionStart;
                         const textBefore = messageInput.value.slice(0, cursorPos);
                         const textAfter = messageInput.value.slice(cursorPos);
-                        messageInput.value = textBefore + '@file_' + data.file_id.slice(0, 8) + ' ' + textAfter;
+                        messageInput.value = textBefore + '' + data.file_id.slice(0, 8) + ' ' + textAfter;
                         setStatus('Image uploaded: ' + data.filename, 'success');
                     } else {
                         setStatus('Upload failed: ' + data.error, 'error');
@@ -1045,7 +1045,7 @@
             }
         }
 
-        // Process @file_xxx references for inline images
+        // Process xxx references for inline images
         const processedContent = messageContent;
 
         // Render markdown only for non-user, non-error roles; user and error messages are escaped/plain text
@@ -1081,12 +1081,12 @@
      * Called after new messages are added
      */
     function processMessageImages() {
-        // Find all messages that contain @file_ references
+        // Find all messages that contain  references
         const messages = document.querySelectorAll('.message-bubble');
         
         messages.forEach(bubble => {
             const text = bubble.textContent;
-            const filePattern = /@file_([a-zA-Z0-9]+)/g;
+            const filePattern = /([a-zA-Z0-9]+)/g;
             const matches = [...text.matchAll(filePattern)];
             
             if (matches.length === 0) return;
@@ -1105,7 +1105,7 @@
                 
                 // Get file metadata
                 try {
-                    const response = await fetch('/api/files/list');
+                    const response = await fetch('');
                     const data = await response.json();
                     const file = data.files?.find(f => f.file_id.startsWith(fileId));
                     
@@ -1122,7 +1122,7 @@
                         img.title = file.filename || 'image';
                         img.onclick = () => showImageModal(`/api/files/${fullFileId}`);
                         
-                        // Remove @file_xxx from text and insert image as SEPARATE message div
+                        // Remove xxx from text and insert image as SEPARATE message div
                         const textNode = [...bubble.childNodes].find(n => n.textContent?.includes(fullMatch));
                         if (textNode) {
                             textNode.textContent = textNode.textContent.replace(fullMatch, '').trim();
@@ -1409,7 +1409,7 @@
         if (!skillSelector.contains(e.target)) {
             hideSkillSelector();
         }
-        if (!fileSelector.contains(e.target)) {
+        if (!.contains(e.target)) {
             hideFileSelector();
         }
     });
@@ -2205,7 +2205,7 @@
             showFileExplorer();
         } else if (action === 'my-uploads') {
             fileViewMode = 'uploads';
-            showMyUploads();
+            ();
         } else if (action === 'settings') {
             showSettings();
         }
@@ -2326,14 +2326,14 @@
         link.remove();
     }
 
-    // Show My Uploads (user's uploaded files)
-    async function showMyUploads() {
+    // Show  (user's uploaded files)
+    async function () {
         fileExplorerPanel.classList.add('show');
         fileExplorerContent.innerHTML = '<div class="loading">Loading...</div>';
 
         // Update title
         const titleEl = document.getElementById('fileExplorerTitle');
-        if (titleEl) titleEl.textContent = 'My Uploads';
+        if (titleEl) titleEl.textContent = '';
 
         // Hide toggle buttons in panel
         const toggleDiv = document.querySelector('.file-toggle');
@@ -3580,23 +3580,23 @@
 
     // File explorer toggle buttons
     const toggleServerFiles = document.getElementById('toggleServerFiles');
-    const toggleMyUploads = document.getElementById('toggleMyUploads');
+    const  = document.getElementById('');
     const fileExplorerTitle = document.getElementById('fileExplorerTitle');
 
-    if (toggleServerFiles && toggleMyUploads) {
+    if (toggleServerFiles && ) {
         toggleServerFiles.addEventListener('click', function() {
             fileViewMode = 'server';
             toggleServerFiles.classList.add('active');
-            toggleMyUploads.classList.remove('active');
+            .classList.remove('active');
             if (fileExplorerTitle) fileExplorerTitle.textContent = 'Server Files';
             refreshFileList();
         });
 
-        toggleMyUploads.addEventListener('click', function() {
+        .addEventListener('click', function() {
             fileViewMode = 'uploads';
-            toggleMyUploads.classList.add('active');
+            .classList.add('active');
             toggleServerFiles.classList.remove('active');
-            if (fileExplorerTitle) fileExplorerTitle.textContent = 'My Uploads';
+            if (fileExplorerTitle) fileExplorerTitle.textContent = '';
             refreshFileList();
         });
     }
