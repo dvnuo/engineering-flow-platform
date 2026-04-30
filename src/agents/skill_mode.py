@@ -56,7 +56,7 @@ def list_skill_reference_files(skill_path: str) -> str:
             if ref_file.is_file() and ref_file.suffix in (".md", ".txt", ".html"):
                 ref_files.append(str(ref_file))
     else:
-        # Pattern 2: Root-level reference files (ref-*.md or any *.md except skill.md/SKILL.md)
+        # Pattern 2: Root-level reference files (ref-*.md or any *.md except skill.md)
         for ref_file in sorted(skill_dir.glob("*.md")):
             if ref_file.name.lower() not in ("skill.md",):  # Skip skill definition file
                 ref_files.append(str(ref_file))

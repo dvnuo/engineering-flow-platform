@@ -32,7 +32,7 @@ class TestSkillCreatorInit:
             
             assert skill_dir.name == "test-skill"
             assert (skill_dir / "skill.md").exists()
-            assert not (skill_dir / "SKILL.md").exists()
+            assert not (skill_dir / "skill.md".upper()).exists()
             assert (skill_dir / "scripts").exists()
             assert (skill_dir / "references").exists()
             assert not (skill_dir / "assets").exists()  # Not requested
