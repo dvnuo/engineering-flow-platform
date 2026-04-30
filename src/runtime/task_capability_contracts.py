@@ -247,6 +247,8 @@ def _resolve_involved_capability_ids_for_task(task_type: str, payload: Dict[str,
             if comment_kind and comment_kind not in allowed_comment_kinds:
                 return involved
             reply_mode = str(payload.get("reply_mode") or "same_surface").strip().lower()
+            if reply_mode not in {"same_surface", "timeline"}:
+                return involved
             if comment_kind == "pull_request_review_comment" and reply_mode == "same_surface":
                 involved.append("adapter:github:reply_review_comment")
             else:

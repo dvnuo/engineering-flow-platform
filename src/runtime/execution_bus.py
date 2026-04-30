@@ -901,6 +901,9 @@ def _triggered_event_secondary_action_descriptor(
         if comment_kind and comment_kind not in allowed_comment_kinds:
             raise ValueError(f"Unsupported GitHub mention comment_kind: {comment_kind}")
         reply_mode = str(payload.get("reply_mode") or "same_surface").strip().lower()
+        allowed_reply_modes = {"same_surface", "timeline"}
+        if reply_mode not in allowed_reply_modes:
+            raise ValueError(f"Unsupported GitHub mention reply_mode: {reply_mode}")
         action_id = (
             "adapter:github:reply_review_comment"
             if comment_kind == "pull_request_review_comment" and reply_mode == "same_surface"

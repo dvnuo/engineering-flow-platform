@@ -4168,3 +4168,28 @@ async def test_execution_bus_triggered_event_task_github_unsupported_comment_kin
     result = await build_default_execution_bus().execute(req)
     assert result.status == "error"
     assert "Unsupported GitHub mention comment_kind" in str(result.output_payload.get("error"))
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_triggered_event_task_github_unsupported_reply_mode_fails_cleanly(monkeypatch):
+    async def _fake_process(*, message, session_id, **_kwargs):
+        return {"response": "ok"}
+
+    async def _fake_add(*args, **kwargs):
+        raise AssertionError("unsupported reply_mode must not fallback to add_comment")
+
+    async def _fake_reply(*args, **kwargs):
+        raise AssertionError("unsupported reply_mode must not use reply_review_comment")
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.reply_pr_review_comment", _fake_reply)
+
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={"task_type":"triggered_event_task","source_kind":"github.mention","comment_kind":"issue_comment","reply_mode":"foo","owner":"acme","repo":"demo","issue_number":1,"comment_id":2,"body":"@bot","session_id":"sess"},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert result.status == "error"
+    assert "Unsupported GitHub mention reply_mode" in str(result.output_payload.get("error"))

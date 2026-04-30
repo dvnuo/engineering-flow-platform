@@ -367,3 +367,24 @@ async def test_run_triggered_event_task_github_unsupported_comment_kind_fails(mo
 
     assert called["reply"] == 0
     assert called["add"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_triggered_event_task_github_unsupported_reply_mode_fails(monkeypatch):
+    from src.runtime.triggered_event_task import run_triggered_event_task
+
+    async def _should_not_run_chat(**_kwargs):
+        raise AssertionError("run_chat_execution should not be called for invalid reply_mode")
+
+    async def _should_not_add_comment(*args, **kwargs):
+        raise AssertionError("add_comment should not be called for invalid reply_mode")
+
+    async def _should_not_reply_comment(*args, **kwargs):
+        raise AssertionError("reply_pr_review_comment should not be called for invalid reply_mode")
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _should_not_run_chat)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _should_not_add_comment)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.reply_pr_review_comment", _should_not_reply_comment)
+
+    with pytest.raises(ValueError, match="Unsupported GitHub mention reply_mode"):
+        await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"issue_comment","reply_mode":"foo","owner":"octo","repo":"portal","issue_number":1,"comment_id":100,"body":"@agent check"})
