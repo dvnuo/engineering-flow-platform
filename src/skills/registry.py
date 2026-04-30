@@ -119,7 +119,7 @@ class SkillRegistry:
     """Central registry for all available skills.
     
     Supports two skill directories:
-    1. Project skills: <project>/skills/
+    1. Project skills: EFP_SKILLS_DIR, /app/skills, or local repo skills/ fallback.
     2. User skills: ~/.efp/skills/ (user skills override project skills)
     """
     
@@ -230,59 +230,7 @@ class SkillRegistry:
                 logger.error(f"Failed to load skill {skill_file}: {e}")
         
         return loaded
-        """Load skills from a specific directory.
-        
-        Args:
-            skills_dir: Directory containing skills
-            override: If True, these skills can override existing ones with same name
-            
-        Returns:
-            Number of skills loaded
-        """
-        if not skills_dir.exists():
-            if override:
-                logger.debug(f"User skills directory not found: {skills_dir}")
-            return 0
-        
-        loaded = 0
-        skill_files = []
-        
-        # Pattern 1: Single file skills (e.g., review-pr.md)
-        for f in skills_dir.glob("*.md"):
-            if f.name.lower() != "readme.md":
-                skill_files.append((f, override))
-        
-        # Pattern 2: Directory-based skills (e.g., skill_creator/skill.md)
-        for skill_dir in skills_dir.iterdir():
-            if skill_dir.is_dir():
-                skill_file = skill_dir / "skill.md"
-                if skill_file.exists():
-                    skill_files.append((skill_file, override))
-        
-        for skill_file, can_override in skill_files:
-            try:
-                skill = self._load_skill_file(skill_file)
-                if skill:
-                    skill_name = skill.name
-                    
-                    # Check if skill exists and override is allowed
-                    if skill_name in self.skills:
-                        if can_override:
-                            logger.info(f"Overriding skill '{skill_name}' with user version")
-                        else:
-                            logger.debug(f"Skipping duplicate skill: {skill_name}")
-                            continue
-                    
-                    self.skills[skill_name] = skill
-                    loaded += 1
-                    source = "user" if can_override else "project"
-                    logger.debug(f"Loaded skill: {skill.name} v{skill.version} ({source})")
-                    
-            except Exception as e:
-                logger.error(f"Failed to load skill {skill_file}: {e}")
-        
-        return loaded
-    
+
     def _parse_markdown_frontmatter(self, content: str) -> Tuple[Dict[str, Any], str]:
         lines = content.splitlines(keepends=True)
         if not lines or lines[0].strip() != "---":

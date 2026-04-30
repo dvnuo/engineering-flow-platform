@@ -2,8 +2,8 @@
 """Package a skill into a distributable .skill file.
 
 Usage:
-    python3 scripts/package_skill.py <skill-path>
-    python3 scripts/package_skill.py <skill-path> --output ./dist
+    python3 -m src.skill_creator.package_skill <skill-path>
+    python3 -m src.skill_creator.package_skill <skill-path> --output ./dist
 
 The packaging script validates the skill first:
 - Checks YAML frontmatter format
@@ -48,17 +48,22 @@ def validate_skill(skill_path: Path) -> tuple[bool, list]:
     if not skill_path.is_dir():
         return False, [f"Path is not a directory: {skill_path}"]
     
-    # Check for SKILL.md
-    skill_md = skill_path / "SKILL.md"
+    # Check for skill.md (canonical), with legacy fallback
+    skill_md = skill_path / "skill.md"
     if not skill_md.exists():
-        errors.append("SKILL.md is required")
-        return False, errors
-    
-    # Read and parse SKILL.md
+        legacy_skill_md = skill_path / "SKILL.md"
+        if legacy_skill_md.exists():
+            warnings.append("Found legacy SKILL.md; please migrate to lowercase skill.md")
+            skill_md = legacy_skill_md
+        else:
+            errors.append("skill.md is required")
+            return False, errors
+
+    # Read and parse skill file
     try:
         content = skill_md.read_text(encoding="utf-8")
     except Exception as e:
-        errors.append(f"Failed to read SKILL.md: {e}")
+        errors.append(f"Failed to read {skill_md.name}: {e}")
         return False, errors
     
     # Parse YAML frontmatter
@@ -85,11 +90,13 @@ def validate_skill(skill_path: Path) -> tuple[bool, list]:
             break
     
     # Validate frontmatter
-    if "name" not in frontmatter:
-        errors.append("YAML frontmatter must include 'name' field")
-    
-    if "description" not in frontmatter:
-        errors.append("YAML frontmatter must include 'description' field")
+    for required_field in ["name", "description", "version", "owner"]:
+        if required_field not in frontmatter:
+            errors.append(f"YAML frontmatter must include '{required_field}' field")
+
+    triggers = frontmatter.get("triggers") or frontmatter.get("trigger")
+    if not triggers:
+        errors.append("YAML frontmatter must include 'triggers' or 'trigger' field")
     
     # Validate name
     name = frontmatter.get("name", "")

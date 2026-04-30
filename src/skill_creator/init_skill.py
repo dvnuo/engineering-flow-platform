@@ -2,11 +2,11 @@
 """Initialize a new skill with template structure.
 
 Usage:
-    python3 scripts/init_skill.py <skill-name> --path skills/ [--resources scripts,references,assets]
+    python3 -m src.skill_creator.init_skill <skill-name> --path /app/skills [--resources scripts,references,assets]
 
 Examples:
-    python3 scripts/init_skill.py pdf-editor --path skills/
-    python3 scripts/init_skill.py my-skill --path skills/ --resources scripts,references
+    python3 -m src.skill_creator.init_skill pdf-editor --path /app/skills
+    python3 -m src.skill_creator.init_skill my-skill --path ./skills --resources scripts,references
 """
 
 import argparse
@@ -47,18 +47,19 @@ def create_skill_template(name: str, output_path: Path, resources: list) -> Path
     skill_dir = output_path / skill_name
     skill_dir.mkdir(parents=True, exist_ok=True)
     
-    # Create SKILL.md template
-    skill_md = skill_dir / "SKILL.md"
+    # Create skill.md template
+    skill_md = skill_dir / "skill.md"
     skill_md.write_text(f'''---
 name: {skill_name}
 description: A custom skill for {name}
+version: 1.0.0
+owner: your-name
+triggers:
+  - /{skill_name}
+tools: []
+output_format: markdown
 metadata:
   emoji: 🎯
-  requires:
-    bins: []
-    anyBins: []
-    env: []
-    config: []
 ---
 
 # {skill_name.replace("-", " ").title()}
@@ -67,23 +68,18 @@ Brief description of what this skill does.
 
 ## Quick Start
 
-\`\`\`
-{skill_name} command="help"
-\`\`\`
+```
+/{skill_name}
+```
 
-## Commands
+## Workflow
 
-| Command | Description |
-|---------|-------------|
-| help | Show this help message |
+- Step 1
+- Step 2
 
-## Examples
+## Output contract
 
-Example usage patterns.
-
-## See Also
-
-- Related skills or documentation
+- Describe expected output format.
 ''')
     
     # Create resource directories
@@ -105,8 +101,8 @@ def main():
     )
     parser.add_argument(
         "--path",
-        default="skills/",
-        help="Output path for skill directory (default: skills/)"
+        default="./skills",
+        help="Output path for skill directory (default: ./skills)"
     )
     parser.add_argument(
         "--resources",
@@ -139,9 +135,9 @@ def main():
     
     print(f"\n✅ Skill created: {skill_dir}")
     print(f"\nNext steps:")
-    print(f"  1. Edit {skill_dir / 'SKILL.md'}")
+    print(f"  1. Edit {skill_dir / 'skill.md'}")
     print(f"  2. Add scripts to {skill_dir / 'scripts/'}")
-    print(f"  3. Package: python3 scripts/package_skill.py {skill_dir}")
+    print(f"  3. Package: python3 -m src.skill_creator.package_skill {skill_dir}")
 
 
 if __name__ == "__main__":

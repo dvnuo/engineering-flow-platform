@@ -2622,10 +2622,10 @@ async def api_copilot_auth_check(request: web.Request) -> web.Response:
 
 
 def _parse_skill_from_file(skill_path: Path) -> Optional[Dict[str, Any]]:
-    """Parse a skill from SKILL.md file.
+    """Parse a skill from skill.md file.
     
     Args:
-        skill_path: Path to SKILL.md file
+        skill_path: Path to skill.md file
         
     Returns:
         Skill dict or None if parsing fails

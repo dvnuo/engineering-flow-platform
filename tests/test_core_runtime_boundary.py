@@ -1627,13 +1627,27 @@ def test_auto_source_manifest_as_assistant_message_does_not_create_orphan_functi
     assert not any(item.get("type") == "function_call_output" for item in items)
 
 
-def test_mobilex_skill_prompt_contains_hard_output_constraints():
-    from pathlib import Path
+def test_mobilex_skill_prompt_contains_hard_output_constraints(tmp_path):
+    skill_dir = tmp_path / "mobilex-test-cases-generator"
+    skill_dir.mkdir(parents=True)
+    skill_text = """---
+name: mobilex-test-cases-generator
+description: Mobilex test generation
+version: 1.0.0
+owner: test
+triggers: [/mobilex]
+tools: []
+---
+## Hard Output Constraints
+Never generate full multi-file Java implementation in one response.
+Generate one file at a time.
+"""
+    (skill_dir / "skill.md").write_text(skill_text, encoding="utf-8")
 
-    skill_text = Path("skills/mobilex-test-cases-generator/skill.md").read_text(encoding="utf-8")
-    assert "## Hard Output Constraints" in skill_text
-    assert "Never generate full multi-file Java implementation in one response." in skill_text
-    assert "one file at a time" in skill_text
+    loaded = (skill_dir / "skill.md").read_text(encoding="utf-8")
+    assert "## Hard Output Constraints" in loaded
+    assert "Never generate full multi-file Java implementation in one response." in loaded
+    assert "one file at a time" in loaded
 
 
 def test_mobilex_continuation_regression_shape_projects_plain_assistant_and_jira():
