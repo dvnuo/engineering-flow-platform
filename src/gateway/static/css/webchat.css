@@ -2634,7 +2634,7 @@ input:checked + .slider:before {
     display: inline-block;
 }
 
-/* My Uploads panel - hide thumbnail by default, show on hover */
+/* Uploaded file thumbnail hover preview */
 .file-list .file-item .file-thumbnail {
     display: none;
     width: 40px;
@@ -2717,4 +2717,31 @@ input:checked + .slider:before {
 
 .file-item {
     cursor: pointer;
+}
+
+.pending-attachments {
+  display: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.pending-attachments.active {
+  display: flex;
+}
+
+.pending-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.pending-attachment-remove {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }

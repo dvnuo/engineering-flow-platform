@@ -825,17 +825,13 @@ async def api_chat(request: web.Request) -> web.Response:
             attachments=attachment_ids,
         )
         
-        # Set placeholder message if only images
-        if attached_images and not message.strip():
-            message = "[image]"
-        
-        # Always ensure input field is present for Copilot API downstream
-        if not message:
-            logger.error(f"[api_chat] ERROR: Final message is empty before Copilot API call. Payload: {json.dumps(data, ensure_ascii=False)}")
-            return web.json_response({'error': 'Input field missing for Copilot API.'}, status=400)
+        if not message.strip():
+            if attached_images:
+                message = "[image]"
+            elif attachment_ids:
+                message = "[attachment]"
 
-        # Revalidate: if no message and no attached images, return error
-        if not message.strip() and not attached_images:
+        if not message.strip() and not attached_images and not attachment_ids:
             return web.json_response({'error': 'Empty message'}, status=400)
 
         # Inject file context if user has uploaded files
@@ -896,8 +892,7 @@ async def api_chat(request: web.Request) -> web.Response:
                 )
             except Exception:
                 logger.warning("Best-effort session metadata publish failed for chat.started", exc_info=True)
-        try:
-            result = await _run_chat_via_execution_bus(
+        result = await _run_chat_via_execution_bus(
                 agent=agent,
                 message=message,
                 session_id=session_id,
@@ -912,8 +907,6 @@ async def api_chat(request: web.Request) -> web.Response:
                 agent_id=runtime_agent_id,
                 request_id=request_id,
             )
-        finally:
-            await _cleanup_one_shot_attachments(session_id, attachment_ids)
         execution_result = result.get("_execution_result")
         if runtime_agent_id and execution_result is not None:
             publish_metadata = await _enrich_publish_metadata_with_context_preview(
@@ -1074,6 +1067,9 @@ async def api_chat(request: web.Request) -> web.Response:
         if request_id:
             error_response['request_id'] = request_id
         return web.json_response(error_response, status=status_code)
+    finally:
+        if session_id and attachment_ids:
+            await _cleanup_one_shot_attachments(session_id, attachment_ids)
 
 
 async def api_chat_stream(request: web.Request) -> web.StreamResponse:
@@ -1107,22 +1103,28 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             message=message,
             attachments=attachment_ids,
         )
-        if attached_images and not message.strip():
-            message = "[image]"
+        if not message.strip():
+            if attached_images:
+                message = "[image]"
+            elif attachment_ids:
+                message = "[attachment]"
 
-        if not message.strip() and not attached_images:
+        if not message.strip() and not attached_images and not attachment_ids:
             response = web.json_response({'error': 'Empty message'}, status=400)
             return response
-        if attachment_ids:
-            enhanced_message, _budget_status, _citations = inject_context(
-                session_id=session_id,
-                message=message,
-                top_k=5,
-                max_tokens=4000,
-                file_ids=attachment_ids,
-            )
-            if enhanced_message:
-                message = enhanced_message
+        try:
+            if attachment_ids:
+                enhanced_message, _budget_status, _citations = inject_context(
+                    session_id=session_id,
+                    message=message,
+                    top_k=5,
+                    max_tokens=4000,
+                    file_ids=attachment_ids,
+                )
+                if enhanced_message:
+                    message = enhanced_message
+        except Exception as e:
+            logger.warning(f"[api_chat_stream] File context injection failed: {sanitize_exception_message(e)}")
 
         # Create streaming response
         response = web.StreamResponse(
@@ -1199,7 +1201,6 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 continue
 
         result = await run_task
-        await _cleanup_one_shot_attachments(session_id, attachment_ids)
         execution_result = result.get("_execution_result")
         if runtime_agent_id and execution_result is not None:
             publish_metadata = await _enrich_publish_metadata_with_context_preview(

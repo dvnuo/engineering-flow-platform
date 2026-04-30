@@ -21,3 +21,9 @@ def test_webchat_upload_parse_binding_source_contract():
 
     list_section = source.split("async def api_files_list(", 1)[1].split("async def api_context_files(", 1)[0]
     assert "list_files(" not in list_section
+
+
+def test_chat_paths_use_one_shot_cleanup_and_no_attachment_history_pass_through():
+    source = Path("src/gateway/webchat.py").read_text(encoding="utf-8")
+    assert "attachments=None" in source
+    assert "_cleanup_one_shot_attachments" in source
