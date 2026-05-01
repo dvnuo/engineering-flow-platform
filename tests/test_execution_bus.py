@@ -4247,3 +4247,38 @@ async def test_execution_bus_triggered_event_task_github_discussion_comment_seco
     )
     result = await build_default_execution_bus().execute(req)
     assert "adapter:github:add_discussion_comment" in result.output_payload["blocked_secondary_action_ids"]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_triggered_event_task_github_notification_metadata_does_not_change_secondary_action(monkeypatch):
+    async def _fake_process(*, message, session_id, **_kwargs):
+        return {"response": "ok"}
+
+    async def _fake_add_comment(*args, **kwargs):
+        raise AssertionError("writeback should be blocked by governance gate")
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.agent.process", _fake_process)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_comment", _fake_add_comment)
+    req = make_execution_request(
+        source_type="task",
+        execution_type="task",
+        input_payload={
+            "task_type":"triggered_event_task",
+            "source_kind":"github.mention",
+            "comment_kind":"issue_comment",
+            "owner":"acme",
+            "repo":"demo",
+            "issue_number":1,
+            "comment_id":2,
+            "body":"@bot",
+            "session_id":"sess",
+            "notification_id":"n1",
+            "notification_reason":"mention",
+            "notification_subject_type":"Issue",
+            "notification_url":"https://api.github.com/notifications/threads/1",
+            "notification_updated_at":"2026-01-01T00:00:00Z",
+        },
+        metadata={"denied_adapter_actions":["adapter:github:add_comment"]},
+    )
+    result = await build_default_execution_bus().execute(req)
+    assert "adapter:github:add_comment" in result.output_payload["blocked_secondary_action_ids"]
