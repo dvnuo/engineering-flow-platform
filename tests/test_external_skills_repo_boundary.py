@@ -42,3 +42,20 @@ def test_no_reading_real_repo_root_skills_files_from_tests():
             if any(token in lower for token in ("read_text", "open(", "spec_from_file_location", "import_module", "__import__")):
                 offenders.append(f"{test_file}:{idx}")
     assert offenders == []
+
+
+def test_root_readme_has_no_legacy_top_level_skills_description():
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert "Skill definitions (Markdown + code)" not in readme
+
+
+def test_workspace_agents_example_uses_lowercase_skill_md():
+    text = Path("workspace/AGENTS.md.example").read_text(encoding="utf-8")
+    assert "SKILL.md" not in text
+
+
+def test_refactor_guide_skill_md_mentions_are_marked_historical():
+    text = Path("docs/REFACTOR_GUIDE.md").read_text(encoding="utf-8")
+    if "SKILL.md" in text:
+        lower = text.lower()
+        assert ("historical" in lower) or ("legacy" in lower) or ("predates the external engineering-flow-platform-skills repository" in text)

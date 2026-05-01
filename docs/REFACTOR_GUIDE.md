@@ -2,6 +2,8 @@
 
 > **Note（历史文档）**：本文件主要是历史性重构草图/设计记录。当前已落地实现请以 `src/git/api.py`、`src/github/api.py`、`config.yaml.example` 为准：Git transport 已收口为 HTTPS + `github.api_token`（askpass），runtime 不依赖 `gh` CLI auth，也不依赖 SSH setup。
 
+> **Note**: This is a historical refactor guide. It predates the external engineering-flow-platform-skills repository. Runtime skill metadata now uses lowercase skill.md, and business skill assets are loaded from /app/skills or EFP_SKILLS_DIR.
+
 ## 现状分析
 
 ### 当前问题

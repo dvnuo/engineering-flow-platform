@@ -172,13 +172,15 @@ engineering-flow-platform/
 │   ├── hooks/              # Lifecycle hooks
 │   └── utils/              # Utilities
 │       └── file_parser/     # File upload & storage
-├── skills/                 # Skill definitions (Markdown + code)
+├── src/skills/             # Runtime skill registry/loading infrastructure
 ├── tests/                  # Test suite
 └── workspace/               # Workspace files (for local dev)
     └── .efp/               # Runtime data
 ```
 
 ---
+
+Business skill assets are maintained in **engineering-flow-platform-skills** and are typically checked out/mounted by Portal/K8s at `/app/skills` for runtime discovery.
 
 ## API Endpoints
 
