@@ -1,6 +1,7 @@
 """Agent core implementation following modern agent loop patterns."""
 
 import asyncio
+import copy
 import contextvars
 import hashlib
 import json
@@ -334,6 +335,76 @@ def _build_runtime_event_record(event_type: str, event_data: Dict[str, Any]) -> 
         "detail_payload": dict(event_data),
         "ts": datetime.utcnow().isoformat() + "Z",
     }
+
+
+
+ONE_SHOT_ATTACHMENT_REDACTION = "[redacted: one-shot attachment context]"
+
+
+def _has_one_shot_attachment_context(
+    *,
+    attached_images: Optional[List[str]] = None,
+    attachments: Optional[List[str]] = None,
+    transient_model_message: Optional[str] = None,
+) -> bool:
+    return (
+        bool(attached_images)
+        or bool(attachments)
+        or (isinstance(transient_model_message, str) and bool(transient_model_message.strip()))
+    )
+
+
+def _redact_one_shot_attachment_context_state(context_state: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(context_state, dict):
+        return context_state
+
+    redacted = copy.deepcopy(context_state)
+
+    for key in (
+        "objective",
+        "current_state",
+        "next_step",
+        "summary",
+        "recovery_context_message",
+    ):
+        if key in redacted and redacted.get(key):
+            redacted[key] = ONE_SHOT_ATTACHMENT_REDACTION
+
+    for key in ("constraints", "decisions", "open_loops"):
+        if isinstance(redacted.get(key), list) and redacted.get(key):
+            redacted[key] = [ONE_SHOT_ATTACHMENT_REDACTION]
+
+    redacted["one_shot_attachment_context_redacted"] = True
+    return redacted
+
+
+def _redact_one_shot_attachment_llm_debug(llm_debug: Any) -> Any:
+    if not isinstance(llm_debug, dict):
+        return llm_debug
+
+    redacted = copy.deepcopy(llm_debug)
+
+    def scrub_request_dict(request_info: Any) -> None:
+        if not isinstance(request_info, dict):
+            return
+
+        for key in ("input", "messages"):
+            if key in request_info:
+                request_info[key] = ONE_SHOT_ATTACHMENT_REDACTION
+
+        payload = request_info.get("payload")
+        if isinstance(payload, dict):
+            for key in ("input", "messages"):
+                if key in payload:
+                    payload[key] = ONE_SHOT_ATTACHMENT_REDACTION
+
+    if isinstance(redacted.get("request"), dict):
+        scrub_request_dict(redacted["request"])
+    else:
+        scrub_request_dict(redacted)
+
+    redacted["one_shot_attachment_context_redacted"] = True
+    return redacted
 
 
 def _is_meaningful_context_state(value: Any) -> bool:
@@ -2010,6 +2081,11 @@ You have access to the following tools. When a user asks you to do something tha
                 - usage: Dict - Token usage from LLM API (if track_usage=True)
         """
         usage_data = {}
+        one_shot_attachment_context_active = _has_one_shot_attachment_context(
+            attached_images=attached_images,
+            attachments=attachments,
+            transient_model_message=transient_model_message,
+        )
         
                 # Add user message to history
         extra = self._build_user_author_extra(portal_user_id, portal_user_name, user_name)
@@ -2478,10 +2554,15 @@ You have access to the following tools. When a user asks you to do something tha
         ) -> None:
             if not isinstance(context_state, dict) or not context_state:
                 return
-            budget = context_state.get("budget") if isinstance(context_state.get("budget"), dict) else {}
+            event_context_state = (
+                _redact_one_shot_attachment_context_state(context_state)
+                if one_shot_attachment_context_active
+                else context_state
+            )
+            budget = event_context_state.get("budget") if isinstance(event_context_state.get("budget"), dict) else {}
             payload: Dict[str, Any] = {
                 "stage": stage,
-                "context_state": context_state,
+                "context_state": event_context_state,
                 "budget": budget,
             }
             if iteration is not None:
@@ -2511,9 +2592,9 @@ You have access to the following tools. When a user asks you to do something tha
                         "iteration": iteration,
                         "compaction_level": compaction_level,
                         "budget": budget,
-                        "history_compacted_from_count": context_state.get("history_compacted_from_count"),
-                        "history_compacted_to_count": context_state.get("history_compacted_to_count"),
-                        "summary_source": context_state.get("summary_source"),
+                        "history_compacted_from_count": event_context_state.get("history_compacted_from_count"),
+                        "history_compacted_to_count": event_context_state.get("history_compacted_to_count"),
+                        "summary_source": event_context_state.get("summary_source"),
                     },
                 )
 
@@ -2601,17 +2682,20 @@ You have access to the following tools. When a user asks you to do something tha
             # Build context info for thinking display (without relying on model reasoning)
             context_info = []
             if iteration == 1:
-                # Show user message on first iteration
-                for item in input_items:
-                    # Handle both formats: {'type': 'message', 'role': ...} or {'role': ..., 'content': ...}
-                    role = item.get("role", "")
-                    if role == "user":
-                        content = item.get("content", "")
-                        if isinstance(content, list):
-                            text = " ".join([c.get("text", str(c)) for c in content])
-                        else:
-                            text = str(content)
-                        context_info.append(f"User: {safe_preview(text, 200)}")
+                if one_shot_attachment_context_active:
+                    context_info.append(f"User: {safe_preview(message, 200)}")
+                else:
+                    # Show user message on first iteration
+                    for item in input_items:
+                        # Handle both formats: {'type': 'message', 'role': ...} or {'role': ..., 'content': ...}
+                        role = item.get("role", "")
+                        if role == "user":
+                            content = item.get("content", "")
+                            if isinstance(content, list):
+                                text = " ".join([c.get("text", str(c)) for c in content])
+                            else:
+                                text = str(content)
+                            context_info.append(f"User: {safe_preview(text, 200)}")
             if context_info:
                 send_event("llm_thinking", {"message": " | ".join(context_info), "iteration": iteration})
             else:
@@ -2888,6 +2972,8 @@ You have access to the following tools. When a user asks you to do something tha
                 latest_user_text=latest_user_text,
                 max_chat_output_chars=raw_max_chat,
             )
+            if one_shot_attachment_context_active and isinstance(llm_result, dict) and "_llm_debug" in llm_result:
+                llm_result["_llm_debug"] = _redact_one_shot_attachment_llm_debug(llm_result.get("_llm_debug"))
             if isinstance(loop_context_state, dict) and isinstance(loop_context_state.get("budget"), dict):
                 loop_context_state["budget"]["output_controller_applied"] = True
                 if isinstance(output_diag, dict):
