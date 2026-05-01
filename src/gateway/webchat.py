@@ -471,6 +471,7 @@ async def _run_chat_via_execution_bus(
     portal_user_name: Optional[str],
     attached_images: Optional[List[str]] = None,
     attachments: Optional[List[str]] = None,
+    transient_model_message: Optional[str] = None,
     reasoning_replay: Optional[bool] = None,
     stream_callback: Optional[Any] = None,
     request_path: str = "/api/chat",
@@ -493,6 +494,7 @@ async def _run_chat_via_execution_bus(
             portal_user_name=payload.get("portal_user_name"),
             attached_images=payload.get("attached_images"),
             attachments=payload.get("attachments"),
+            transient_model_message=transient_model_message,
             track_usage=bool(payload.get("track_usage", True)),
             reasoning_replay=payload.get("reasoning_replay"),
             stream_callback=payload.get("stream_callback"),
@@ -838,24 +840,29 @@ async def api_chat(request: web.Request) -> web.Response:
         # Inject file context if user has uploaded files
         original_msg_for_history = message if message.strip() else ("[image]" if attached_images else "")
         logger.info("[api_chat] Message summary: session_id=%s attached_images=%d message_length=%d preview=%s", safe_log_field(session_id, 120), len(attached_images) if attached_images else 0, len(original_msg_for_history), safe_preview(original_msg_for_history, 120))
-        original_message = message
+        history_message = message
+        transient_model_message: Optional[str] = None
         try:
             if attachment_ids:
                 enhanced_message, budget_status, citations = inject_context(
                     session_id=session_id,
-                    message=message,
+                    message=history_message,
                     top_k=5,
                     max_tokens=4000,
                     file_ids=attachment_ids,
                 )
-                if enhanced_message and enhanced_message != message:
-                    logger.info(f"[api_chat] File context injected: status={budget_status}, chunks={len(citations)}")
-                    message = enhanced_message
+                if enhanced_message and enhanced_message != history_message:
+                    logger.info(
+                        "[api_chat] File context prepared transiently: status=%s, chunks=%s",
+                        budget_status,
+                        len(citations),
+                    )
+                    transient_model_message = enhanced_message
                     request['file_citations'] = citations
         except Exception as e:
             logger.warning(f"[api_chat] File context injection failed: {sanitize_exception_message(e)}")
         # Revalidate message is not empty to prevent downstream LLM input from being empty
-        if not message or not message.strip():
+        if not history_message.strip() and not transient_model_message:
             logger.error(f"[api_chat] ERROR: Final message is empty before Copilot API call. Payload: {json.dumps(data, ensure_ascii=False)}")
             return web.json_response({'error': 'Input field missing for Copilot API.'}, status=400)
         
@@ -895,7 +902,7 @@ async def api_chat(request: web.Request) -> web.Response:
                 logger.warning("Best-effort session metadata publish failed for chat.started", exc_info=True)
         result = await _run_chat_via_execution_bus(
                 agent=agent,
-                message=message,
+                message=history_message,
                 session_id=session_id,
                 user_name=effective_user_name,
                 portal_user_id=portal_user_id,
@@ -907,6 +914,7 @@ async def api_chat(request: web.Request) -> web.Response:
                 execution_metadata=execution_metadata,
                 agent_id=runtime_agent_id,
                 request_id=request_id,
+                transient_model_message=transient_model_message,
             )
         execution_result = result.get("_execution_result")
         if runtime_agent_id and execution_result is not None:
@@ -1114,17 +1122,19 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         if not message.strip() and not attached_images and not attachment_ids:
             response = web.json_response({'error': 'Empty message'}, status=400)
             return response
+        history_message = message
+        transient_model_message: Optional[str] = None
         try:
             if attachment_ids:
                 enhanced_message, _budget_status, _citations = inject_context(
                     session_id=session_id,
-                    message=message,
+                    message=history_message,
                     top_k=5,
                     max_tokens=4000,
                     file_ids=attachment_ids,
                 )
-                if enhanced_message:
-                    message = enhanced_message
+                if enhanced_message and enhanced_message != history_message:
+                    transient_model_message = enhanced_message
         except Exception as e:
             logger.warning(f"[api_chat_stream] File context injection failed: {sanitize_exception_message(e)}")
 
@@ -1179,7 +1189,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         run_task = asyncio.create_task(
             _run_chat_via_execution_bus(
                 agent=agent,
-                message=message,
+                message=history_message,
                 session_id=session_id,
                 user_name=effective_user_name,
                 portal_user_id=portal_user_id,
@@ -1191,6 +1201,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 execution_metadata=execution_metadata,
                 agent_id=runtime_agent_id,
                 request_id=request_id,
+                transient_model_message=transient_model_message,
             )
         )
 
