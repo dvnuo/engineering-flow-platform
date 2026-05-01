@@ -71,15 +71,17 @@
     const newChatBtn = document.querySelector('[data-action="new-chat"]');
 
     // State
+    const THEME_KEY = 'efp-theme';
+    const SESSION_ID_KEY = 'efp-session-id';
+
     let isLoading = false;
     let totalTokens = 0;
     let totalCost = 0;
     let skills = [];
     let selectedSkillIndex = -1;
     let skillsLoaded = false;
-    let currentSessionId = localStorage.getItem('efp-session-id') || null;
+    let currentSessionId = localStorage.getItem(SESSION_ID_KEY) || null;
     let pendingAttachments = [];
-    let fileViewMode = 'server'; // 'server' or 'uploads'
     const SKILLS_API_ENDPOINT = '/api/skills';
     console.log('[WebChat] Initial sessionId from localStorage:', currentSessionId);
 
@@ -102,6 +104,152 @@
             localStorage.setItem(SESSION_ID_KEY, currentSessionId);
         }
         return currentSessionId;
+    }
+
+    function getTheme() {
+        return localStorage.getItem(THEME_KEY) || 'light';
+    }
+
+    function setTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem(THEME_KEY, theme);
+    }
+
+    function toggleTheme() {
+        const currentTheme = getTheme();
+        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+        setTheme(newTheme);
+    }
+
+    function initTheme() {
+        setTheme(getTheme());
+    }
+
+    initTheme();
+
+    if (themeToggle) {
+        themeToggle.addEventListener('click', toggleTheme);
+    }
+
+    const sidebar = document.getElementById('sidebar');
+    const layout = document.querySelector('.layout');
+    const toggleSidebarBtn = document.getElementById('toggleSidebar');
+
+    function toggleSidebar() {
+        if (layout && sidebar && window.innerWidth <= 768) {
+            layout.classList.toggle('sidebar-open');
+            sidebar.classList.toggle('open');
+        }
+    }
+
+    if (toggleSidebarBtn) {
+        toggleSidebarBtn.addEventListener('click', toggleSidebar);
+    }
+
+    document.addEventListener('click', function(e) {
+        if (
+            window.innerWidth <= 768 &&
+            layout && layout.classList.contains('sidebar-open') &&
+            sidebar && !sidebar.contains(e.target) &&
+            toggleSidebarBtn && !toggleSidebarBtn.contains(e.target)
+        ) {
+            layout.classList.remove('sidebar-open');
+            sidebar.classList.remove('open');
+        }
+    });
+
+    if (statsButton) {
+        statsButton.addEventListener('click', showStats);
+    }
+    if (closeStatsButton) {
+        closeStatsButton.addEventListener('click', hideStats);
+    }
+
+    async function showStats() {
+        if (!statsPanel || !statsContent) return;
+
+        statsPanel.classList.add('show');
+        statsContent.innerHTML = '<div class="loading">Loading...</div>';
+
+        try {
+            const response = await fetch('/api/usage?days=30');
+            const data = await response.json();
+
+            if (data.error) {
+                statsContent.innerHTML = '<div class="no-data">Error loading stats</div>';
+                return;
+            }
+
+            let html = '';
+            const global = data.global || {};
+            html += `
+      <div class="stats-section">
+        <h3>Global (Last ${data.period_days || 30} days)</h3>
+        <div class="stats-grid">
+          <div class="stat-item">
+            <div class="stat-label">Requests</div>
+            <div class="stat-value">${global.request_count || 0}</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-label">Total Cost</div>
+            <div class="stat-value cost">$${(global.total_cost_usd || global.total_cost || 0).toFixed(4)}</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-label">Input Tokens</div>
+            <div class="stat-value">${global.total_input_tokens || global.total_input || 0}</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-label">Output Tokens</div>
+            <div class="stat-value">${global.total_output_tokens || global.total_output || 0}</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+            const byProvider = data.by_provider || {};
+            if (Object.keys(byProvider).length > 0) {
+                html += '<div class="stats-section"><h3>By Provider</h3><div class="stats-grid">';
+                for (const [provider, stats] of Object.entries(byProvider)) {
+                    html += `
+          <div class="stat-item">
+            <div class="stat-label">${escapeHtml(provider)}</div>
+            <div class="stat-value cost">$${(stats.cost || 0).toFixed(4)}</div>
+            <div class="stat-model">${stats.requests || 0} requests</div>
+          </div>
+        `;
+                }
+                html += '</div></div>';
+            }
+
+            const byModel = data.by_model || {};
+            if (Object.keys(byModel).length > 0) {
+                html += '<div class="stats-section"><h3>By Model</h3>';
+                for (const [model, stats] of Object.entries(byModel)) {
+                    html += `
+          <div class="stat-item">
+            <div class="stat-label">${escapeHtml(model)}</div>
+            <div class="stat-value cost">$${(stats.cost || 0).toFixed(4)}</div>
+            <div class="stat-model">${(stats.input_tokens || 0).toLocaleString()} in / ${(stats.output_tokens || 0).toLocaleString()} out</div>
+          </div>
+        `;
+                }
+                html += '</div>';
+            }
+
+            if (!html) {
+                html = '<div class="no-data">No usage data yet</div>';
+            }
+
+            statsContent.innerHTML = html;
+        } catch (error) {
+            statsContent.innerHTML = '<div class="no-data">Error loading stats</div>';
+        }
+    }
+
+    function hideStats() {
+        if (statsPanel) {
+            statsPanel.classList.remove('show');
+        }
     }
     // ========== Helper Functions ==========
 
@@ -305,7 +453,13 @@
         pendingAttachments = pendingAttachments.filter((a) => a.file_id !== id && a.local_id !== id);
         renderPendingAttachments();
         if (item?.file_id) {
-            try { await fetch(`/api/files/${encodeURIComponent(item.file_id)}`, { method: 'DELETE' }); } catch (_error) {}
+            try {
+                const requestSessionId = ensureCurrentSessionId();
+                await fetch(
+                    `/api/files/${encodeURIComponent(item.file_id)}?session_id=${encodeURIComponent(requestSessionId)}`,
+                    { method: 'DELETE' }
+                );
+            } catch (_error) {}
         }
     });
 
@@ -875,15 +1029,6 @@
      */
     async function sendMessageFallback(content, attachmentIds = []) {
         try {
-            // Generate new session_id if currentSessionId is null/undefined
-            const now = new Date();
-            const timestamp = now.getFullYear() +
-                String(now.getMonth() + 1).padStart(2, '0') +
-                String(now.getDate()).padStart(2, '0') +
-                '_' +
-                String(now.getHours()).padStart(2, '0') +
-                String(now.getMinutes()).padStart(2, '0') +
-                String(now.getSeconds()).padStart(2, '0');
             const requestSessionId = ensureCurrentSessionId();
 
             console.log('[WebChat] Generated session_id:', requestSessionId);
@@ -1555,7 +1700,6 @@
             recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
             if (newChatBtn) newChatBtn.classList.add('active');
         } else if (action === 'files' || action === 'server-files') {
-            fileViewMode = 'server';
             showFileExplorer();
         } else if (action === 'settings') {
             showSettings();

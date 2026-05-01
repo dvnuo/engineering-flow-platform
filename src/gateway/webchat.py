@@ -3318,9 +3318,27 @@ async def api_files_delete(request: web.Request) -> web.Response:
                 'error': 'file_id is required'
             }, status=400)
         
+        session_id = request.query.get('session_id') or request.headers.get('X-Session-ID')
+        context_removed = False
+
+        if session_id:
+            try:
+                from src.hooks.file_context.storage import storage as file_context_storage
+                from src.hooks.file_context.retrieval import retrieval_engine
+                context_removed = file_context_storage.remove_file_from_session(session_id, file_id)
+                if context_removed:
+                    retrieval_engine.rebuild_index(session_id)
+            except Exception:
+                logger.warning(
+                    "Best-effort file_context delete cleanup failed for %s/%s",
+                    session_id,
+                    file_id,
+                    exc_info=True,
+                )
+
         deleted = delete_file(file_id)
-        
-        if not deleted:
+
+        if not deleted and not context_removed:
             return web.json_response({
                 'success': False,
                 'error': 'File not found'
