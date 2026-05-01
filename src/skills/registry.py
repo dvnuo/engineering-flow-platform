@@ -315,7 +315,7 @@ class SkillRegistry:
                     matches.append((skill, 1.0))  # Perfect match
                     continue
             
-            # Check trigger patterns (from skill.yaml)
+            # Check trigger patterns from skill.md frontmatter.
             for pattern in skill.trigger_patterns:
                 if pattern.search(message_lower):
                     # Simple scoring: longer trigger = better match
@@ -398,8 +398,10 @@ if __name__ == "__main__":
     import sys
     logging.basicConfig(level=logging.INFO)
     
-    skills_dir = sys.argv[1] if len(sys.argv) > 1 else "skills"
-    registry = load_all_skills(skills_dir)
+    if len(sys.argv) > 1:
+        registry = load_all_skills(sys.argv[1])
+    else:
+        registry = load_all_skills(None)
     
     print(f"\n=== Skill Registry ===")
     print(f"Loaded {len(registry.list_skills())} skills\n")

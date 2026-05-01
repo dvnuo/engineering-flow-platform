@@ -56,7 +56,10 @@ src/
 - Flat structure within each module
 - Single responsibility per file
 - Clean imports via `from src.<module> import ...`
-- Skills in `skills/` use YAML frontmatter (.md files)
+- Runtime skill infrastructure lives under `src/skills`.
+- Business skill assets are loaded from `EFP_SKILLS_DIR`, `/app/skills`, or local repo-root `skills/` fallback for development.
+- Canonical skill metadata files are lowercase `skill.md` with YAML frontmatter.
+- Business skills should be added to `engineering-flow-platform-skills`, not this EFP runtime repo.
 
 ## Runtime / Portal boundary (important)
 
