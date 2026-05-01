@@ -32,176 +32,6 @@
     const fileInput = document.getElementById('fileInput');
     const uploadButton = document.getElementById('uploadButton');
 
-    // File upload handling
-    if (uploadButton && fileInput) {
-        uploadButton.addEventListener('click', () => {
-            fileInput.click();
-        });
-
-        fileInput.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-
-            // Show uploading status
-            setStatus('Uploading file...', 'uploading');
-
-            try {
-                const formData = new FormData();
-                formData.append('file', file);
-
-                const sessionId = ''; // Not required for My Uploads
-                const headers = sessionId ? { 'X-Session-ID': sessionId } : {};
-
-                const response = await fetch('/api/files/upload', {
-                    method: 'POST',
-                    body: formData,
-                    headers
-                });
-
-                const data = await response.json();
-
-                if (data.success) {
-                    setStatus('File uploaded: ' + data.filename, 'success');
-
-                    // Add to file list
-                    refreshFileList();
-
-                    // Show file info in chat
-                    addMessage('assistant', `📎 File uploaded: **${data.filename}**\n\nYou can now ask me to analyze or discuss this file.`);
-                } else {
-                    setStatus('Upload failed: ' + data.error, 'error');
-                    addMessage('assistant', `❌ File upload failed: ${data.error}`);
-                }
-            } catch (error) {
-                console.error('Upload error:', error);
-                setStatus('Upload failed: ' + error.message, 'error');
-            }
-
-            // Reset file input
-            fileInput.value = '';
-        });
-    }
-
-    // Refresh file list
-    async function refreshFileList() {
-        const fileExplorerContent = document.getElementById('fileExplorerContent');
-        if (!fileExplorerContent) return;
-
-        try {
-            // My Uploads - show all uploaded files from metadata
-            const headers = {};
-
-            // Try new context API first, fall back to files API
-            let files = [];
-            try {
-                const contextResp = await fetch('/api/context/files?session_id=' + sessionId, { headers });
-                if (contextResp.ok) {
-                    const contextData = await contextResp.json();
-                    files = contextData.files || [];
-                }
-            } catch (e) {
-                // Fall back to files API
-            }
-
-            // If no files from context API, try files API
-            if (files.length === 0) {
-                const response = await fetch('/api/files/list', { headers });
-                if (response.ok) {
-                    const data = await response.json();
-                    files = data.files || [];
-                }
-            }
-
-            if (files && files.length > 0) {
-                let html = '<ul class="file-list">';
-                for (const file of files) {
-
-                    html += `
-                        <li class="file-item" data-file-id="${file.file_id}">
-                            <span class="file-icon">${getFileIcon(file.content_type)}</span>
-                            <div class="file-info">
-                                <span class="file-name" title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</span>
-                            </div>
-                            <div class="file-actions">
-
-                                <button class="file-action cite-btn" data-file-id="${file.file_id}" title="Ask about this file">@file_${file.file_id.slice(0,8)}</button>
-                                <button class="file-action delete-btn" data-file-id="${file.file_id}" title="Delete file">🗑️</button>
-                            </div>
-                        </li>
-                    `;
-                }
-                html += '</ul>';
-                fileExplorerContent.innerHTML = html;
-
-                // Add cite button handlers
-
-                // Add click handler for file items to show modal
-                fileExplorerContent.querySelectorAll('.file-item').forEach(item => {
-                    item.addEventListener('click', (e) => {
-                        // Don't trigger if clicking on buttons
-                        if (e.target.tagName === 'BUTTON') return;
-                        
-                        const fileId = item.dataset.fileId;
-                        const file = files.find(f => f.file_id.startsWith(fileId));
-                        if (!file) return;
-                        
-                        if (file.content_type && file.content_type.startsWith('image/')) {
-                            showImageModal(`/api/files/${file.file_id}`);
-                        } else {
-                            fetch(`/api/files/${file.file_id}`)
-                                .then(res => res.text())
-                                .then(text => showTextModal(text, file.filename))
-                                .catch(err => console.error('Failed to load file:', err));
-                        }
-                    });
-                });
-
-                fileExplorerContent.querySelectorAll('.cite-btn').forEach(btn => {
-                    btn.addEventListener('click', (e) => {
-                        const fileRef = e.target.dataset.fileId;
-                        // Insert reference into input
-                        const input = document.getElementById('messageInput');
-                        if (input) {
-                            input.value += '@file_' + fileRef.slice(0, 8) + ' ';
-                            input.focus();
-                        }
-                        // Close My Uploads panel
-                        const fileExplorerPanel = document.getElementById('fileExplorerPanel');
-                        if (fileExplorerPanel) {
-                            fileExplorerPanel.classList.remove('show');
-                        }
-                    });
-                });
-
-                // Add delete button handlers
-                fileExplorerContent.querySelectorAll('.delete-btn').forEach(btn => {
-                    btn.addEventListener('click', async (e) => {
-                        const fileId = e.target.dataset.fileId;
-                        if (!confirm('Delete this file?')) return;
-
-                        try {
-                            const response = await fetch('/api/files/' + fileId, { method: 'DELETE' });
-                            const data = await response.json();
-                            if (data.success || response.ok) {
-                                refreshFileList(); // Reload list
-                            } else {
-                                alert('Delete failed: ' + (data.error || 'Unknown error'));
-                            }
-                        } catch (err) {
-                            console.error('Delete error:', err);
-                            alert('Delete failed');
-                        }
-                    });
-                });
-            } else {
-                fileExplorerContent.innerHTML = '<div class="empty">No files uploaded yet</div>';
-            }
-        } catch (error) {
-            console.error('Error loading files:', error);
-            fileExplorerContent.innerHTML = '<div class="error">Failed to load files</div>';
-        }
-    }
-
     // Parse file
     // Helper functions
     function getFileIcon(contentType) {
@@ -236,187 +66,108 @@
     const skillSelector = document.getElementById('skillSelector');
     const skillDropdown = document.getElementById('skillDropdown');
     const skillList = document.getElementById('skillList');
-    const fileSelector = document.getElementById('fileSelector');
-    const fileDropdown = document.getElementById('fileDropdown');
-    const fileList = document.getElementById('fileList');
+    const pendingAttachmentsEl = document.getElementById('pendingAttachments');
     const themeToggle = document.getElementById('themeToggle');
     const newChatBtn = document.querySelector('[data-action="new-chat"]');
 
     // State
+    const THEME_KEY = 'efp-theme';
+    const SESSION_ID_KEY = 'efp-session-id';
+
     let isLoading = false;
     let totalTokens = 0;
     let totalCost = 0;
     let skills = [];
     let selectedSkillIndex = -1;
     let skillsLoaded = false;
-    let uploadedFiles = [];
-    let selectedFileIndex = -1;
-    let filesLoaded = false;
-    let currentSessionId = localStorage.getItem('efp-session-id') || null;
-    let fileViewMode = 'server'; // 'server' or 'uploads'
+    let currentSessionId = localStorage.getItem(SESSION_ID_KEY) || null;
+    let pendingAttachments = [];
+    const SKILLS_API_ENDPOINT = '/api/skills';
     console.log('[WebChat] Initial sessionId from localStorage:', currentSessionId);
 
-    // ========== Helper Functions ==========
 
-    /**
-     * Format timestamp with smart date display
-     * - Same day: "14:30"
-     * - Yesterday: "Yesterday 14:30"
-     * - Within a week: "Thursday 14:30"
-     * - Within a year: "Jan 15 14:30"
-     * - Over a year ago: "2024-01-15 14:30"
-     */
-    function formatSmartDate(date) {
+    function createWebchatSessionId() {
         const now = new Date();
-        const messageDate = new Date(date);
-        const timeStr = messageDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-        // Same day
-        if (messageDate.toDateString() === now.toDateString()) {
-            return timeStr;
-        }
-
-        // Yesterday
-        const yesterday = new Date(now);
-        yesterday.setDate(yesterday.getDate() - 1);
-        if (messageDate.toDateString() === yesterday.toDateString()) {
-            return `Yesterday ${timeStr}`;
-        }
-
-        // Within the last 7 days
-        const oneWeekAgo = new Date(now);
-        oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-        if (messageDate > oneWeekAgo) {
-            const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-            return `${days[messageDate.getDay()]} ${timeStr}`;
-        }
-
-        // Within the same year
-        if (messageDate.getFullYear() === now.getFullYear()) {
-            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-            const month = months[messageDate.getMonth()];
-            const day = messageDate.getDate();
-            return `${month} ${day} ${timeStr}`;
-        }
-
-        // Over a year ago
-        const year = messageDate.getFullYear();
-        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        const month = months[messageDate.getMonth()];
-        const day = messageDate.getDate();
-        return `${year}-${month}-${day} ${timeStr}`;
+        const timestamp = now.getFullYear() +
+            String(now.getMonth() + 1).padStart(2, '0') +
+            String(now.getDate()).padStart(2, '0') +
+            '_' +
+            String(now.getHours()).padStart(2, '0') +
+            String(now.getMinutes()).padStart(2, '0') +
+            String(now.getSeconds()).padStart(2, '0');
+        return 'webchat_' + timestamp;
     }
 
-    // ========== Theme Management ==========
+    function ensureCurrentSessionId() {
+        if (!currentSessionId) {
+            currentSessionId = createWebchatSessionId();
+            localStorage.setItem(SESSION_ID_KEY, currentSessionId);
+        }
+        return currentSessionId;
+    }
 
-    const THEME_KEY = 'efp-theme';
-    const SESSION_ID_KEY = 'efp-session-id';
-
-    /**
-     * Get saved theme preference
-     */
     function getTheme() {
         return localStorage.getItem(THEME_KEY) || 'light';
     }
 
-    /**
-     * Set theme and save preference
-     */
     function setTheme(theme) {
         document.documentElement.setAttribute('data-theme', theme);
         localStorage.setItem(THEME_KEY, theme);
     }
 
-    /**
-    /**
-     * Toggle between light and dark theme
-     */
     function toggleTheme() {
         const currentTheme = getTheme();
         const newTheme = currentTheme === 'light' ? 'dark' : 'light';
         setTheme(newTheme);
     }
 
-    /**
-     * Initialize theme on page load
-     */
     function initTheme() {
-        const theme = getTheme();
-        setTheme(theme);
+        setTheme(getTheme());
     }
 
-    // Initialize theme
     initTheme();
 
-    // Theme toggle event listener
     if (themeToggle) {
         themeToggle.addEventListener('click', toggleTheme);
     }
-    /**
-     * Toggle between light and dark theme
-     */
-    function toggleTheme() {
-        const currentTheme = getTheme();
-        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-        setTheme(newTheme);
-    }
-
-    /**
-     * Initialize theme on page load
-     */
-    function initTheme() {
-        const theme = getTheme();
-        setTheme(theme);
-    }
-
-    // Initialize theme
-    initTheme();
-
-    // Theme toggle event listener
-    if (themeToggle) {
-        themeToggle.addEventListener('click', toggleTheme);
-    }
-
-    // ========== Sidebar Management ==========
 
     const sidebar = document.getElementById('sidebar');
     const layout = document.querySelector('.layout');
     const toggleSidebarBtn = document.getElementById('toggleSidebar');
 
-    /**
-     * Toggle sidebar on mobile
-     */
     function toggleSidebar() {
-        if (layout && window.innerWidth <= 768) {
+        if (layout && sidebar && window.innerWidth <= 768) {
             layout.classList.toggle('sidebar-open');
             sidebar.classList.toggle('open');
         }
     }
 
-    // Sidebar toggle button
     if (toggleSidebarBtn) {
         toggleSidebarBtn.addEventListener('click', toggleSidebar);
     }
 
-    // Close sidebar when clicking outside on mobile
     document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 768 &&
+        if (
+            window.innerWidth <= 768 &&
             layout && layout.classList.contains('sidebar-open') &&
             sidebar && !sidebar.contains(e.target) &&
-            toggleSidebarBtn && !toggleSidebarBtn.contains(e.target)) {
+            toggleSidebarBtn && !toggleSidebarBtn.contains(e.target)
+        ) {
             layout.classList.remove('sidebar-open');
             sidebar.classList.remove('open');
         }
     });
 
-    // Stats Modal
-    statsButton.addEventListener('click', showStats);
-    closeStatsButton.addEventListener('click', hideStats);
+    if (statsButton) {
+        statsButton.addEventListener('click', showStats);
+    }
+    if (closeStatsButton) {
+        closeStatsButton.addEventListener('click', hideStats);
+    }
 
-    /**
-     * Show usage statistics modal
-     */
     async function showStats() {
+        if (!statsPanel || !statsContent) return;
+
         statsPanel.classList.add('show');
         statsContent.innerHTML = '<div class="loading">Loading...</div>';
 
@@ -430,61 +181,57 @@
             }
 
             let html = '';
-
-            // Global stats
             const global = data.global || {};
             html += `
-                <div class="stats-section">
-                    <h3>Global (Last ${data.period_days || 30} days)</h3>
-                    <div class="stats-grid">
-                        <div class="stat-item">
-                            <div class="stat-label">Requests</div>
-                            <div class="stat-value">${global.request_count || 0}</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-label">Total Cost</div>
-                            <div class="stat-value cost">$${(global.total_cost_usd || global.total_cost || 0).toFixed(4)}</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-label">Input Tokens</div>
-                            <div class="stat-value">${global.total_input_tokens || global.total_input || 0}</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-label">Output Tokens</div>
-                            <div class="stat-value">${global.total_output_tokens || global.total_output || 0}</div>
-                        </div>
-                    </div>
-                </div>
-            `;
+      <div class="stats-section">
+        <h3>Global (Last ${data.period_days || 30} days)</h3>
+        <div class="stats-grid">
+          <div class="stat-item">
+            <div class="stat-label">Requests</div>
+            <div class="stat-value">${global.request_count || 0}</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-label">Total Cost</div>
+            <div class="stat-value cost">$${(global.total_cost_usd || global.total_cost || 0).toFixed(4)}</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-label">Input Tokens</div>
+            <div class="stat-value">${global.total_input_tokens || global.total_input || 0}</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-label">Output Tokens</div>
+            <div class="stat-value">${global.total_output_tokens || global.total_output || 0}</div>
+          </div>
+        </div>
+      </div>
+    `;
 
-            // By Provider
             const byProvider = data.by_provider || {};
             if (Object.keys(byProvider).length > 0) {
                 html += '<div class="stats-section"><h3>By Provider</h3><div class="stats-grid">';
                 for (const [provider, stats] of Object.entries(byProvider)) {
                     html += `
-                        <div class="stat-item">
-                            <div class="stat-label">${provider}</div>
-                            <div class="stat-value cost">$${(stats.cost || 0).toFixed(4)}</div>
-                            <div class="stat-model">${stats.requests || 0} requests</div>
-                        </div>
-                    `;
+          <div class="stat-item">
+            <div class="stat-label">${escapeHtml(provider)}</div>
+            <div class="stat-value cost">$${(stats.cost || 0).toFixed(4)}</div>
+            <div class="stat-model">${stats.requests || 0} requests</div>
+          </div>
+        `;
                 }
                 html += '</div></div>';
             }
 
-            // By Model
             const byModel = data.by_model || {};
             if (Object.keys(byModel).length > 0) {
                 html += '<div class="stats-section"><h3>By Model</h3>';
                 for (const [model, stats] of Object.entries(byModel)) {
                     html += `
-                        <div class="stat-item">
-                            <div class="stat-label">${model}</div>
-                            <div class="stat-value cost">$${(stats.cost || 0).toFixed(4)}</div>
-                            <div class="stat-model">${(stats.input_tokens || 0).toLocaleString()} in / ${(stats.output_tokens || 0).toLocaleString()} out</div>
-                        </div>
-                    `;
+          <div class="stat-item">
+            <div class="stat-label">${escapeHtml(model)}</div>
+            <div class="stat-value cost">$${(stats.cost || 0).toFixed(4)}</div>
+            <div class="stat-model">${(stats.input_tokens || 0).toLocaleString()} in / ${(stats.output_tokens || 0).toLocaleString()} out</div>
+          </div>
+        `;
                 }
                 html += '</div>';
             }
@@ -494,180 +241,17 @@
             }
 
             statsContent.innerHTML = html;
-
         } catch (error) {
             statsContent.innerHTML = '<div class="no-data">Error loading stats</div>';
         }
     }
 
-    /**
-     * Hide usage statistics modal
-     */
     function hideStats() {
-        statsPanel.classList.remove('show');
-    }
-
-    // ========== Skill Selector ==========
-
-    /**
-     * Load skills from API
-     */
-    async function loadSkills() {
-        if (skillsLoaded) return;
-
-        try {
-            const response = await fetch('/api/skills');
-            const data = await response.json();
-            skills = data.skills || [];
-            skillsLoaded = true;
-        } catch (error) {
-            console.error('Failed to load skills:', error);
-            skills = [];
+        if (statsPanel) {
+            statsPanel.classList.remove('show');
         }
     }
-
-    /**
-     * Show skill selector dropdown
-     */
-    function showSkillSelector() {
-        if (!skills.length) {
-            loadSkills().then(() => {
-                if (skills.length) {
-                    renderSkillList();
-                    skillSelector.classList.add('active');
-                }
-            });
-            return;
-        }
-        renderSkillList();
-        skillSelector.classList.add('active');
-    }
-
-    /**
-     * Hide skill selector dropdown
-     */
-    function hideSkillSelector() {
-        skillSelector.classList.remove('active');
-        selectedSkillIndex = -1;
-    }
-
-    /**
-     * Show file selector dropdown
-     */
-    function showFileSelector() {
-        // Always reload files to get latest
-        filesLoaded = false;
-        uploadedFiles = [];
-
-        if (!uploadedFiles.length) {
-            loadFilesForSelector().then(() => {
-                if (uploadedFiles.length) {
-                    renderFileList();
-                    fileSelector.classList.add('active');
-                }
-            });
-            return;
-        }
-        renderFileList();
-        fileSelector.classList.add('active');
-    }
-
-    /**
-     * Hide file selector dropdown
-     */
-    function hideFileSelector() {
-        fileSelector.classList.remove('active');
-        selectedFileIndex = -1;
-    }
-
-    /**
-     * Load files for selector
-     */
-    async function loadFilesForSelector() {
-        if (filesLoaded) return;
-
-        try {
-            const response = await fetch('/api/files/list');
-            const data = await response.json();
-            uploadedFiles = data.files || [];
-            filesLoaded = true;
-        } catch (error) {
-            console.error('Error loading files:', error);
-            uploadedFiles = [];
-        }
-    }
-
-    /**
-     * Render file list in dropdown
-     */
-    // Helper: find nearest @ before cursor position
-    function getAtIndexNearCursor() {
-        const cursorPos = messageInput.selectionStart;
-        return messageInput.value.lastIndexOf('@', cursorPos - 1);
-    }
-
-    function renderFileList() {
-        if (!uploadedFiles.length) {
-            fileList.innerHTML = '<div class="skill-item"><span class="skill-desc">No files uploaded</span></div>';
-            return;
-        }
-
-        // Get query after @ (use cursor position)
-        const atIndex = getAtIndexNearCursor();
-        const inputVal = messageInput.value;
-        const query = atIndex >= 0 ? inputVal.slice(atIndex + 1).toLowerCase() : '';
-
-        let filteredFiles = uploadedFiles;
-
-        if (query) {
-            filteredFiles = uploadedFiles.filter(f =>
-                f.filename.toLowerCase().includes(query) ||
-                f.file_id.toLowerCase().includes(query)
-            );
-        }
-
-        fileList.innerHTML = filteredFiles.map((file, index) => `
-            <div class="skill-item"
-                 role="option"
-                 data-file-id="${file.file_id}"
-                 data-index="${index}">
-                <span class="skill-name">${getFileIcon(file.content_type)} ${escapeHtml(file.filename)}</span>
-                <span class="skill-desc">@file_${file.file_id.slice(0, 8)}</span>
-            </div>
-        `).join('');
-
-        // Add click handlers
-        fileList.querySelectorAll('.skill-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const fileId = item.dataset.fileId;
-                const atIndex = getAtIndexNearCursor();
-                messageInput.value = messageInput.value.slice(0, atIndex) + '@file_' + fileId.slice(0, 8) + ' ';
-                messageInput.focus();
-                hideFileSelector();
-            });
-        });
-
-        selectedFileIndex = -1;
-    }
-
-    /**
-     * Navigate file list
-     */
-    function navigateFileList(direction) {
-        const items = fileList.querySelectorAll('.skill-item');
-        if (!items.length) return;
-
-        if (selectedFileIndex >= 0) {
-            items[selectedFileIndex].classList.remove('selected');
-        }
-
-        selectedFileIndex += direction;
-        if (selectedFileIndex < 0) selectedFileIndex = items.length - 1;
-        if (selectedFileIndex >= items.length) selectedFileIndex = 0;
-
-        items[selectedFileIndex].classList.add('selected');
-        items[selectedFileIndex].scrollIntoView({ block: 'nearest' });
-    }
+    // ========== Helper Functions ==========
 
     /**
      * Render skill list in dropdown
@@ -770,46 +354,114 @@
         if (skillSelector.classList.contains('active') && !value.startsWith('/')) {
             hideSkillSelector();
         }
-        
-        // Close file selector when @ is deleted or not valid (not at start or after whitespace)
-        if (fileSelector.classList.contains('active')) {
-            const cursorPos = this.selectionStart;
-            const textBefore = value.slice(0, cursorPos);
-            const lastAtBeforeCursor = textBefore.lastIndexOf('@');
-            // Check if there's a valid @ trigger before cursor
-            const hasValidAtTrigger = lastAtBeforeCursor >= 0 && 
-                (lastAtBeforeCursor === 0 || /\s$/.test(textBefore.slice(0, lastAtBeforeCursor)));
-            if (!hasValidAtTrigger) {
-                hideFileSelector();
-            }
-        }
-    });
+            });
 
-    // Upload file function
+    function renderPendingAttachments() {
+        if (!pendingAttachmentsEl) return;
+
+        if (!pendingAttachments.length) {
+            pendingAttachmentsEl.innerHTML = '';
+            pendingAttachmentsEl.classList.remove('active');
+            return;
+        }
+
+        pendingAttachmentsEl.classList.add('active');
+        pendingAttachmentsEl.innerHTML = pendingAttachments.map((a) => `
+            <div class="pending-attachment-chip" data-file-id="${escapeHtml(a.file_id || a.local_id)}">
+                <span>${escapeHtml(a.filename || 'attachment')}</span>
+                <span class="pending-attachment-status">${escapeHtml(a.status || '')}</span>
+                ${a.error ? `<span class="pending-attachment-error">${escapeHtml(a.error)}</span>` : ''}
+                <button type="button"
+                        class="pending-attachment-remove"
+                        data-remove-file-id="${escapeHtml(a.file_id || a.local_id)}"
+                        aria-label="Remove attachment">×</button>
+            </div>
+        `).join('');
+    }
+
+    function shouldParseAttachment(file, uploaded) {
+        const name = (file?.name || uploaded?.filename || '').toLowerCase();
+        const type = (uploaded?.content_type || file?.type || '').toLowerCase();
+
+        if (type.startsWith('image/')) return false;
+
+        return (
+            type.includes('pdf') ||
+            type.includes('word') ||
+            type.includes('excel') ||
+            type.includes('spreadsheet') ||
+            type.includes('csv') ||
+            type.includes('text') ||
+            name.endsWith('.pdf') ||
+            name.endsWith('.docx') ||
+            name.endsWith('.xlsx') ||
+            name.endsWith('.csv') ||
+            name.endsWith('.txt')
+        );
+    }
+
     async function uploadFile(file) {
+        const requestSessionId = ensureCurrentSessionId();
+        const localId = 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        const item = { local_id: localId, file_id: '', filename: file.name, content_type: file.type || '', size: file.size || 0, status: 'uploading', error: '' };
+        pendingAttachments.push(item);
+        renderPendingAttachments();
         setStatus('Uploading file...', 'uploading');
+
         try {
             const formData = new FormData();
             formData.append('file', file);
-            const sessionId = ''; // Not required for My Uploads
-            const headers = sessionId ? { 'X-Session-ID': sessionId } : {};
-            const response = await fetch('/api/files/upload', { method: 'POST', body: formData, headers });
+            const response = await fetch(`/api/files/upload?session_id=${encodeURIComponent(requestSessionId)}`, { method: 'POST', body: formData });
             const data = await response.json();
-            if (data.success) {
-                setStatus('File uploaded: ' + data.filename, 'success');
-                const shortId = data.file_id.substring(0, 8);
-                messageInput.value = '@file_' + shortId + ' ';
-                messageInput.focus();
-                refreshFileList();
-                addMessage('assistant', '📎 File uploaded: ' + data.filename);
-            } else {
-                setStatus('Upload failed: ' + data.error, 'error');
+            if (!response.ok || !data.success) throw new Error(data.error || 'Upload failed');
+            item.file_id = data.file_id;
+            item.filename = data.filename || file.name;
+            item.content_type = data.content_type || file.type || '';
+            item.size = data.size || file.size || 0;
+            const needsParse = shouldParseAttachment(file, data);
+            item.status = needsParse ? 'parsing' : 'ready';
+            renderPendingAttachments();
+            if (needsParse) {
+                const parseResp = await fetch(`/api/files/parse?session_id=${encodeURIComponent(requestSessionId)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_id: data.file_id, options: {} }) });
+                const parseData = await parseResp.json();
+                if (!parseResp.ok || !parseData.success) throw new Error(parseData.error || 'Parse failed');
+                item.status = 'ready';
+                renderPendingAttachments();
             }
+            setStatus('File ready: ' + item.filename, 'success');
         } catch (error) {
-            console.error('Upload error:', error);
-            setStatus('Upload failed', 'error');
+            item.status = 'error';
+            item.error = error.message || String(error);
+            setStatus('Upload failed: ' + item.error, 'error');
+            renderPendingAttachments();
         }
     }
+
+    uploadButton?.addEventListener('click', () => fileInput?.click());
+
+    fileInput?.addEventListener('change', async (e) => {
+        const files = Array.from(e.target.files || []);
+        for (const file of files) await uploadFile(file);
+        fileInput.value = '';
+    });
+
+    pendingAttachmentsEl?.addEventListener('click', async (event) => {
+        const btn = event.target.closest('[data-remove-file-id]');
+        if (!btn) return;
+        const id = btn.dataset.removeFileId;
+        const item = pendingAttachments.find((a) => a.file_id === id || a.local_id === id);
+        pendingAttachments = pendingAttachments.filter((a) => a.file_id !== id && a.local_id !== id);
+        renderPendingAttachments();
+        if (item?.file_id) {
+            try {
+                const requestSessionId = ensureCurrentSessionId();
+                await fetch(
+                    `/api/files/${encodeURIComponent(item.file_id)}?session_id=${encodeURIComponent(requestSessionId)}`,
+                    { method: 'DELETE' }
+                );
+            } catch (_error) {}
+        }
+    });
 
     // Drag and drop file upload - works on entire chat container
     const chatContainer = document.querySelector('.chat-container');
@@ -887,60 +539,9 @@
             return;
         }
 
-        // Show file selector on @ (insert @ first)
-        if (e.key === '@') {
-            const cursorPos = messageInput.selectionStart;
-            const textBefore = messageInput.value.slice(0, cursorPos);
-            // Only show if @ is at start or after space
-            if (cursorPos === 0 || textBefore.endsWith(' ') || textBefore.endsWith('\n')) {
-                e.preventDefault();
-                // Insert @ first
-                messageInput.value = messageInput.value.slice(0, cursorPos) + '@' + messageInput.value.slice(cursorPos);
-                messageInput.setSelectionRange(cursorPos + 1, cursorPos + 1);
-                showFileSelector();
-                return;
-            }
-        }
-
-        // File selector navigation
-        if (fileSelector.classList.contains('active')) {
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                navigateFileList(1);
-                return;
-            }
-            if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                navigateFileList(-1);
-                return;
-            }
-            if (e.key === 'Enter' || e.key === 'Tab') {
-                e.preventDefault();
-                const selected = fileList.querySelector('.skill-item.selected');
-                if (selected) {
-                    const fileId = selected.dataset.fileId;
-                    // Fix: use cursor position to find nearest @
-                    const cursorPos = messageInput.selectionStart;
-                    const atIndex = messageInput.value.lastIndexOf('@', cursorPos - 1);
-                    if (atIndex !== -1) {
-                        const textBefore = messageInput.value.slice(0, atIndex);
-                        const textAfter = messageInput.value.slice(cursorPos);
-                        messageInput.value = textBefore + '@file_' + fileId.slice(0, 8) + ' ' + textAfter;
-                    }
-                    messageInput.focus();
-                    hideFileSelector();
-                }
-                return;
-            }
-            if (e.key === 'Escape') {
-                hideFileSelector();
-                return;
-            }
-        }
-
         // Send message (with IME protection)
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 
-            && !skillSelector.classList.contains('active') && !fileSelector.classList.contains('active')) {
+            && !skillSelector.classList.contains('active')) {
             e.preventDefault();
             sendMessage();
         }
@@ -955,34 +556,7 @@
             if (item.type.startsWith('image/')) {
                 e.preventDefault();
                 const file = item.getAsFile();
-                if (!file) continue;
-
-                setStatus('Uploading image...', 'uploading');
-
-                const formData = new FormData();
-                formData.append('file', file, 'pasted-image.png');
-
-                const sessionId = currentSessionId || 'default';
-                try {
-                    const response = await fetch(`/api/files/upload?session_id=${sessionId}`, {
-                        method: 'POST',
-                        body: formData
-                    });
-                    const data = await response.json();
-
-                    if (data.success) {
-                        // Insert file reference at cursor position
-                        const cursorPos = messageInput.selectionStart;
-                        const textBefore = messageInput.value.slice(0, cursorPos);
-                        const textAfter = messageInput.value.slice(cursorPos);
-                        messageInput.value = textBefore + '@file_' + data.file_id.slice(0, 8) + ' ' + textAfter;
-                        setStatus('Image uploaded: ' + data.filename, 'success');
-                    } else {
-                        setStatus('Upload failed: ' + data.error, 'error');
-                    }
-                } catch (err) {
-                    setStatus('Upload failed: ' + err.message, 'error');
-                }
+                if (file) await uploadFile(file);
                 return;
             }
         }
@@ -1045,7 +619,6 @@
             }
         }
 
-        // Process @file_xxx references for inline images
         const processedContent = messageContent;
 
         // Render markdown only for non-user, non-error roles; user and error messages are escaped/plain text
@@ -1072,80 +645,8 @@
 
         enhanceRenderedMessage(div);
 
-        // Process file references for inline images
-        processMessageImages();
     }
 
-    /**
-     * Process file references in all messages and render images inline
-     * Called after new messages are added
-     */
-    function processMessageImages() {
-        // Find all messages that contain @file_ references
-        const messages = document.querySelectorAll('.message-bubble');
-        
-        messages.forEach(bubble => {
-            const text = bubble.textContent;
-            const filePattern = /@file_([a-zA-Z0-9]+)/g;
-            const matches = [...text.matchAll(filePattern)];
-            
-            if (matches.length === 0) return;
-            
-            // Check if already processed
-            if (bubble.dataset.processed) return;
-            bubble.dataset.processed = 'true';
-            
-            matches.forEach((match) => {
-                (async () => {
-                const fileId = match[1];
-                const fullMatch = match[0];
-                
-                // Check if already has an image
-                if (bubble.querySelector(`[data-file-id="${fileId}"]`)) return;
-                
-                // Get file metadata
-                try {
-                    const response = await fetch('/api/files/list');
-                    const data = await response.json();
-                    const file = data.files?.find(f => f.file_id.startsWith(fileId));
-                    
-                    if (file && file.content_type?.startsWith('image/')) {
-                        // Create image element - use FULL file_id from file object
-                        const fullFileId = file.file_id;
-                        const img = document.createElement('img');
-                        img.src = `/api/files/${fullFileId}`;
-                        img.alt = file.filename || 'image';
-                        img.className = 'message-image';
-                        img.dataset.fileId = fullFileId;
-                        img.loading = 'lazy';
-                        img.style.cssText = 'max-width: 300px; max-height: 200px; border-radius: 8px; margin: 8px 0; cursor: pointer;';
-                        img.title = file.filename || 'image';
-                        img.onclick = () => showImageModal(`/api/files/${fullFileId}`);
-                        
-                        // Remove @file_xxx from text and insert image as SEPARATE message div
-                        const textNode = [...bubble.childNodes].find(n => n.textContent?.includes(fullMatch));
-                        if (textNode) {
-                            textNode.textContent = textNode.textContent.replace(fullMatch, '').trim();
-                            
-                            // Create a new message div for the image (separate from user message)
-                            const imageDiv = document.createElement('div');
-                            imageDiv.className = 'message user message-image-container';
-                            imageDiv.appendChild(img);
-                            
-                            // Insert before the current message div
-                            const messageDiv = bubble.closest('.message');
-                            if (messageDiv && messageDiv.parentNode) {
-                                messageDiv.parentNode.insertBefore(imageDiv, messageDiv);
-                            }
-                        }
-                    }
-                } catch (e) {
-                    console.warn('Failed to load image:', e);
-                }
-                })();
-            });
-        });
-    }
 
     /**
      * Render markdown text to HTML
@@ -1409,9 +910,6 @@
         if (!skillSelector.contains(e.target)) {
             hideSkillSelector();
         }
-        if (!fileSelector.contains(e.target)) {
-            hideFileSelector();
-        }
     });
 
     // Handle spoiler click-to-reveal
@@ -1489,28 +987,37 @@
         if (isLoading) return;
 
         const content = messageInput.value.trim();
-        if (!content) return;
+
+        const busyAttachments = pendingAttachments.filter((a) => a.status === 'uploading' || a.status === 'parsing');
+        if (busyAttachments.length) {
+            setStatus(`Waiting for ${busyAttachments.length} attachment(s)...`, 'uploading');
+            return;
+        }
+
+        const readyAttachments = pendingAttachments.filter((a) => a.file_id && a.status !== 'error');
+        const attachmentIds = readyAttachments.map((a) => a.file_id);
+
+        if (!content && attachmentIds.length === 0) return;
 
         isLoading = true;
         sendButton.disabled = true;
 
-        // Clear input first (before addMessage to avoid any race conditions)
         messageInput.value = '';
         messageInput.style.height = 'auto';
-        // Force browser to update (fix for autocomplete/ cached values)
         messageInput.blur();
         messageInput.focus();
 
-        addMessage('user', content);
+        const displayContent = content || readyAttachments.map((a) => `📎 ${a.filename}`).join('\n') || '📎 Attachment';
+        addMessage('user', displayContent);
+
+        pendingAttachments = [];
+        renderPendingAttachments();
 
         statusSpan.textContent = 'Thinking...';
         typingIndicator.classList.remove('show');
-
-        // Reset events for new request
         resetEvents();
 
-        // Use regular API directly (SSE streaming not yet implemented)
-        await sendMessageFallback(content);
+        await sendMessageFallback(content, attachmentIds);
 
         isLoading = false;
         sendButton.disabled = false;
@@ -1520,18 +1027,9 @@
     /**
      * Fallback: Send message using regular API
      */
-    async function sendMessageFallback(content) {
+    async function sendMessageFallback(content, attachmentIds = []) {
         try {
-            // Generate new session_id if currentSessionId is null/undefined
-            const now = new Date();
-            const timestamp = now.getFullYear() +
-                String(now.getMonth() + 1).padStart(2, '0') +
-                String(now.getDate()).padStart(2, '0') +
-                '_' +
-                String(now.getHours()).padStart(2, '0') +
-                String(now.getMinutes()).padStart(2, '0') +
-                String(now.getSeconds()).padStart(2, '0');
-            const requestSessionId = currentSessionId || 'webchat_' + timestamp;
+            const requestSessionId = ensureCurrentSessionId();
 
             console.log('[WebChat] Generated session_id:', requestSessionId);
 
@@ -1541,8 +1039,9 @@
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    message: content,
-                    session_id: requestSessionId
+                    message: content || (attachmentIds.length ? '[attachment]' : ''),
+                    session_id: requestSessionId,
+                    attachments: attachmentIds
                 })
             });
 
@@ -2201,11 +1700,7 @@
             recentSessionsList.querySelectorAll('.recent-session-item').forEach(i => i.classList.remove('active'));
             if (newChatBtn) newChatBtn.classList.add('active');
         } else if (action === 'files' || action === 'server-files') {
-            fileViewMode = 'server';
             showFileExplorer();
-        } else if (action === 'my-uploads') {
-            fileViewMode = 'uploads';
-            showMyUploads();
         } else if (action === 'settings') {
             showSettings();
         }
@@ -2324,22 +1819,6 @@
         document.body.appendChild(link);
         link.click();
         link.remove();
-    }
-
-    // Show My Uploads (user's uploaded files)
-    async function showMyUploads() {
-        fileExplorerPanel.classList.add('show');
-        fileExplorerContent.innerHTML = '<div class="loading">Loading...</div>';
-
-        // Update title
-        const titleEl = document.getElementById('fileExplorerTitle');
-        if (titleEl) titleEl.textContent = 'My Uploads';
-
-        // Hide toggle buttons in panel
-        const toggleDiv = document.querySelector('.file-toggle');
-        if (toggleDiv) toggleDiv.style.display = 'none';
-
-        await refreshFileList();
     }
 
     async function showFileExplorer(path = '') {
@@ -2642,28 +2121,21 @@
     // Provider to Model mapping
     const providerModels = {
         github_copilot: [
-            { value: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
-            { value: 'gpt-5.4', label: 'GPT-5.4' },
-            { value: 'gpt-5.3-codex', label: 'GPT-5.3-Codex' },
+            { value: 'gpt-4o', label: 'GPT-4o' },
             { value: 'gpt-5-mini', label: 'GPT-5 mini' },
             { value: 'gpt-5', label: 'GPT-5' },
-            { value: 'gpt-4.1', label: 'GPT-4.1' },
-            { value: 'gpt-4o', label: 'GPT-4o' },
             { value: 'gpt-5.1-codex', label: 'GPT-5.1-Codex' },
             { value: 'gpt-5.1-codex-max', label: 'GPT-5.1-Codex-Max' },
             { value: 'gpt-5.2', label: 'GPT-5.2' },
             { value: 'gpt-5.3-codex-max', label: 'GPT-5.3-Codex-Max' },
+            { value: 'gpt-5.4', label: 'GPT-5.4' },
             { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
         ],
         openai: [
-            { value: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
-            { value: 'gpt-5', label: 'GPT-5' },
-            { value: 'gpt-5-mini', label: 'GPT-5 mini' },
-            { value: 'gpt-4.1', label: 'GPT-4.1' },
+            { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
+            { value: 'gpt-4', label: 'GPT-4' },
             { value: 'gpt-4o', label: 'GPT-4o' },
             { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
-            { value: 'gpt-4', label: 'GPT-4' },
-            { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
         ],
         anthropic: [
             { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
@@ -2980,7 +2452,7 @@
                 // LLM settings
                 if (config.llm) {
                     const provider = config.llm.provider || 'github_copilot';
-                    const model = config.llm.model || 'gpt-5.4-mini';
+                    const model = config.llm.model || 'gpt-5-mini';
                     llmProvider.value = provider;
                     // Update model dropdown with current provider and model
                     updateModelDropdown(provider, model);
@@ -2991,9 +2463,9 @@
                         copilotAuthSection.style.display = 'block';
                     }
                 } else {
-                    // Default to github_copilot with gpt-5.4-mini
+                    // Default to github_copilot with gpt-4o
                     llmProvider.value = 'github_copilot';
-                    updateModelDropdown('github_copilot', 'gpt-5.4-mini');
+                    updateModelDropdown('github_copilot', 'gpt-5-mini');
                     if (copilotAuthSection) copilotAuthSection.style.display = 'block';
                 }
 
@@ -3580,24 +3052,13 @@
 
     // File explorer toggle buttons
     const toggleServerFiles = document.getElementById('toggleServerFiles');
-    const toggleMyUploads = document.getElementById('toggleMyUploads');
     const fileExplorerTitle = document.getElementById('fileExplorerTitle');
 
-    if (toggleServerFiles && toggleMyUploads) {
+    if (toggleServerFiles) {
         toggleServerFiles.addEventListener('click', function() {
-            fileViewMode = 'server';
             toggleServerFiles.classList.add('active');
-            toggleMyUploads.classList.remove('active');
             if (fileExplorerTitle) fileExplorerTitle.textContent = 'Server Files';
-            refreshFileList();
-        });
-
-        toggleMyUploads.addEventListener('click', function() {
-            fileViewMode = 'uploads';
-            toggleMyUploads.classList.add('active');
-            toggleServerFiles.classList.remove('active');
-            if (fileExplorerTitle) fileExplorerTitle.textContent = 'My Uploads';
-            refreshFileList();
+            showFileExplorer(serverFilesCurrentPath || '');
         });
     }
 

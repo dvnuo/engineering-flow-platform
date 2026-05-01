@@ -43,8 +43,7 @@ async def test_upload_and_parse_binds_session_and_rebuilds(monkeypatch):
     fid = payload["file_id"]
 
     meta = storage.get_file_meta("s-bind", fid)
-    assert meta is not None
-    assert meta.parse_status == "pending"
+    assert meta is None
 
     called = {"n": 0}
     monkeypatch.setattr("src.hooks.file_context.retrieval.retrieval_engine.rebuild_index", lambda sid: called.__setitem__("n", called["n"] + 1))
@@ -64,7 +63,7 @@ async def test_upload_and_parse_binds_session_and_rebuilds(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_parse_exception_marks_file_and_artifact_failed(monkeypatch):
+async def test_parse_exception_marks_file_failed(monkeypatch):
     req = make_mocked_request("POST", "/api/files/upload?session_id=s-bind-err", headers=CIMultiDict())
 
     async def _multipart():
@@ -92,7 +91,44 @@ async def test_parse_exception_marks_file_and_artifact_failed(monkeypatch):
     assert meta is not None
     assert meta.parse_status == "failed"
 
-    from src.file_artifacts.storage import storage as artifact_storage
-    artifact = artifact_storage.get_artifact(file_id)
-    assert artifact is not None
-    assert artifact.parse_status == "failed"
+
+@pytest.mark.asyncio
+async def test_delete_file_best_effort_cleans_context_even_when_storage_missing(monkeypatch):
+    session_id = "s-delete-bind"
+    file_id = "fid-delete-bind"
+
+    class _DummyContextStorage:
+        def __init__(self):
+            self.calls = []
+
+        def remove_file_from_session(self, sid, fid):
+            self.calls.append((sid, fid))
+            return True
+
+    class _DummyRetrieval:
+        def __init__(self):
+            self.calls = []
+
+        def rebuild_index(self, sid):
+            self.calls.append(sid)
+
+    dummy_context_storage = _DummyContextStorage()
+    dummy_retrieval = _DummyRetrieval()
+
+    monkeypatch.setattr("src.hooks.file_context.storage.storage", dummy_context_storage)
+    monkeypatch.setattr("src.hooks.file_context.retrieval.retrieval_engine", dummy_retrieval)
+    monkeypatch.setattr("src.utils.file_parser.storage.delete_file", lambda _fid: False)
+
+    req = make_mocked_request(
+        "DELETE",
+        f"/api/files/{file_id}?session_id={session_id}",
+        headers=CIMultiDict(),
+        match_info={"file_id": file_id},
+    )
+    resp = await webchat.api_files_delete(req)
+    payload = json.loads(resp.text)
+
+    assert resp.status == 200
+    assert payload == {"success": True}
+    assert dummy_context_storage.calls == [(session_id, file_id)]
+    assert dummy_retrieval.calls == [session_id]

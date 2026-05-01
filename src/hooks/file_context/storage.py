@@ -167,6 +167,18 @@ class FileContextStorage:
             pass
         
         return count
+
+    def remove_file_from_session(self, session_id: str, file_id: str) -> bool:
+        """Remove one file from a session and delete its chunks. Returns True if session context changed or chunks were deleted."""
+        context = self.get_session_context(session_id)
+        before = len(context.files)
+        context.files = [f for f in context.files if f.file_id != file_id]
+        deleted_chunks = self.delete_file_chunks(file_id)
+        changed = len(context.files) != before or deleted_chunks > 0
+        if changed:
+            context.updated_at = datetime.utcnow().isoformat() + "Z"
+            self.save_session_context(context)
+        return changed
     
     def delete_session(self, session_id: str) -> int:
         """Delete all files and chunks for a session. Returns count deleted."""

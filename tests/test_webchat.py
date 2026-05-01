@@ -1374,7 +1374,7 @@ async def test_api_chat_stream_forwards_all_attached_images(monkeypatch, tmp_pat
     assert len(captured["attached_images"]) == 2
     assert captured["attached_images"][0].endswith("b25l")
     assert captured["attached_images"][1].endswith("dHdv")
-    assert captured["attachments"] == ["f1", "f2"]
+    assert captured["attachments"] is None
 
 
 @pytest.mark.asyncio

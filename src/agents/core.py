@@ -1,6 +1,7 @@
 """Agent core implementation following modern agent loop patterns."""
 
 import asyncio
+import copy
 import contextvars
 import hashlib
 import json
@@ -334,6 +335,108 @@ def _build_runtime_event_record(event_type: str, event_data: Dict[str, Any]) -> 
         "detail_payload": dict(event_data),
         "ts": datetime.utcnow().isoformat() + "Z",
     }
+
+
+
+ONE_SHOT_ATTACHMENT_REDACTION = "[redacted: one-shot attachment context]"
+
+
+def _has_one_shot_attachment_context(
+    *,
+    attached_images: Optional[List[str]] = None,
+    attachments: Optional[List[str]] = None,
+    transient_model_message: Optional[str] = None,
+) -> bool:
+    return (
+        bool(attached_images)
+        or bool(attachments)
+        or (isinstance(transient_model_message, str) and bool(transient_model_message.strip()))
+    )
+
+
+def _redact_one_shot_attachment_context_state(context_state: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(context_state, dict):
+        return context_state
+
+    budget = context_state.get("budget") if isinstance(context_state.get("budget"), dict) else {}
+    safe_budget = copy.deepcopy(budget)
+
+    redacted: Dict[str, Any] = {
+        "version": context_state.get("version"),
+        "compaction_level": context_state.get("compaction_level"),
+        "summary_source": context_state.get("summary_source"),
+        "history_compacted_from_count": context_state.get("history_compacted_from_count"),
+        "history_compacted_to_count": context_state.get("history_compacted_to_count"),
+        "budget": safe_budget,
+        "objective": ONE_SHOT_ATTACHMENT_REDACTION,
+        "current_state": ONE_SHOT_ATTACHMENT_REDACTION,
+        "next_step": ONE_SHOT_ATTACHMENT_REDACTION,
+        "summary": ONE_SHOT_ATTACHMENT_REDACTION,
+        "recovery_context_message": ONE_SHOT_ATTACHMENT_REDACTION,
+        "constraints": [ONE_SHOT_ATTACHMENT_REDACTION],
+        "decisions": [ONE_SHOT_ATTACHMENT_REDACTION],
+        "open_loops": [ONE_SHOT_ATTACHMENT_REDACTION],
+        "one_shot_attachment_context_redacted": True,
+    }
+
+    return {k: v for k, v in redacted.items() if v is not None}
+
+
+def _redact_one_shot_runtime_event_data(
+    event_type: str,
+    data: Dict[str, Any],
+    *,
+    persisted_user_message: str,
+) -> Dict[str, Any]:
+    """Remove one-shot attachment-derived content from runtime/thinking events."""
+    if not isinstance(data, dict):
+        return data
+
+    redacted = copy.deepcopy(data)
+
+    if event_type == "llm_thinking":
+        redacted.pop("thinking", None)
+        redacted["message"] = ONE_SHOT_ATTACHMENT_REDACTION
+        redacted["one_shot_attachment_context_redacted"] = True
+        return redacted
+
+    if event_type == "context_snapshot":
+        context_state = redacted.get("context_state")
+        if isinstance(context_state, dict):
+            redacted["context_state"] = _redact_one_shot_attachment_context_state(context_state)
+            redacted["one_shot_attachment_context_redacted"] = True
+        return redacted
+
+    return redacted
+
+
+def _redact_one_shot_attachment_llm_debug(llm_debug: Any) -> Any:
+    if not isinstance(llm_debug, dict):
+        return llm_debug
+
+    redacted = copy.deepcopy(llm_debug)
+
+    def scrub_request_dict(request_info: Any) -> None:
+        if not isinstance(request_info, dict):
+            return
+
+        for key in ("input", "messages"):
+            if key in request_info:
+                request_info[key] = ONE_SHOT_ATTACHMENT_REDACTION
+
+        payload = request_info.get("payload")
+        if isinstance(payload, dict):
+            for key in ("input", "messages"):
+                if key in payload:
+                    payload[key] = ONE_SHOT_ATTACHMENT_REDACTION
+
+    if isinstance(redacted.get("request"), dict):
+        scrub_request_dict(redacted["request"])
+    else:
+        scrub_request_dict(redacted)
+
+    redacted["one_shot_attachment_context_redacted"] = True
+    return redacted
 
 
 def _is_meaningful_context_state(value: Any) -> bool:
@@ -1983,6 +2086,7 @@ You have access to the following tools. When a user asks you to do something tha
         stream_callback: Optional[Callable[[str], None]] = None,
         attached_images: Optional[List[str]] = None,
         attachments: Optional[List[str]] = None,
+        transient_model_message: Optional[str] = None,
         portal_user_id: Optional[str] = None,
         portal_user_name: Optional[str] = None,
         request_id: Optional[str] = None,
@@ -2009,11 +2113,14 @@ You have access to the following tools. When a user asks you to do something tha
                 - usage: Dict - Token usage from LLM API (if track_usage=True)
         """
         usage_data = {}
+        one_shot_attachment_context_active = _has_one_shot_attachment_context(
+            attached_images=attached_images,
+            attachments=attachments,
+            transient_model_message=transient_model_message,
+        )
         
-        # Add user message to history (with attachments if any)
+                # Add user message to history
         extra = self._build_user_author_extra(portal_user_id, portal_user_name, user_name)
-        if attachments:
-            extra["attachments"] = attachments  # Save file IDs, not base64
         user_message_id = await session_manager.add_message(
             session_id, "user", message,
             extra=extra
@@ -2283,6 +2390,19 @@ You have access to the following tools. When a user asks you to do something tha
             set_skill_workdir(None)
         # ===== END SKILL MATCHING =====
 
+        # Apply one-shot attachment context only to the current model request.
+        # Do NOT persist this content into session history.
+        if isinstance(transient_model_message, str) and transient_model_message.strip():
+            for idx in range(len(messages) - 1, -1, -1):
+                if messages[idx].get("role") == "user":
+                    replaced = dict(messages[idx])
+                    replaced["content"] = transient_model_message
+                    messages[idx] = replaced
+                    logger.info(
+                        "[Agent] Applied transient model-only message for current request; persisted user history remains original"
+                    )
+                    break
+
         # ===== MESSAGE COMPACTION =====
         model = self.model or config.llm.get("model", DEFAULT_LLM_MODEL)
         messages, pre_request_context_state = await prepare_progressive_messages(
@@ -2362,14 +2482,22 @@ You have access to the following tools. When a user asks you to do something tha
         # Supports both simple callbacks and asyncio.Queue
         def send_event(event_type: str, data: dict):
             """Send event via stream_callback and event bus."""
+            event_payload = data or {}
+            if one_shot_attachment_context_active:
+                event_payload = _redact_one_shot_runtime_event_data(
+                    event_type,
+                    event_payload,
+                    persisted_user_message=message,
+                )
+
             event_data = _enrich_runtime_event_context(
-                data,
+                event_payload,
                 session_id=session_id,
                 agent_id=self.agent_id,
                 request_id=request_id,
-                task_id=data.get("task_id"),
-                group_id=data.get("group_id") or data.get("portal_group_id"),
-                coordination_run_id=data.get("coordination_run_id") or data.get("portal_coordination_run_id"),
+                task_id=event_payload.get("task_id"),
+                group_id=event_payload.get("group_id") or event_payload.get("portal_group_id"),
+                coordination_run_id=event_payload.get("coordination_run_id") or event_payload.get("portal_coordination_run_id"),
             )
             runtime_events_for_result.append(_build_runtime_event_record(event_type, event_data))
             # Also log to tracer for persistence
@@ -2377,9 +2505,9 @@ You have access to the following tools. When a user asks you to do something tha
                 try:
                     from src.skills import get_tracer
                     tracer_instance = get_tracer()
-                    message = event_data.get('message', '')
-                    if message:
-                        tracer_instance.log_thinking(message)
+                    message_for_tracer = event_data.get('message', '')
+                    if message_for_tracer:
+                        tracer_instance.log_thinking(message_for_tracer)
                 except Exception:
                     pass  # Tracer may not be initialized
 
@@ -2466,10 +2594,15 @@ You have access to the following tools. When a user asks you to do something tha
         ) -> None:
             if not isinstance(context_state, dict) or not context_state:
                 return
-            budget = context_state.get("budget") if isinstance(context_state.get("budget"), dict) else {}
+            event_context_state = (
+                _redact_one_shot_attachment_context_state(context_state)
+                if one_shot_attachment_context_active
+                else context_state
+            )
+            budget = event_context_state.get("budget") if isinstance(event_context_state.get("budget"), dict) else {}
             payload: Dict[str, Any] = {
                 "stage": stage,
-                "context_state": context_state,
+                "context_state": event_context_state,
                 "budget": budget,
             }
             if iteration is not None:
@@ -2499,9 +2632,9 @@ You have access to the following tools. When a user asks you to do something tha
                         "iteration": iteration,
                         "compaction_level": compaction_level,
                         "budget": budget,
-                        "history_compacted_from_count": context_state.get("history_compacted_from_count"),
-                        "history_compacted_to_count": context_state.get("history_compacted_to_count"),
-                        "summary_source": context_state.get("summary_source"),
+                        "history_compacted_from_count": event_context_state.get("history_compacted_from_count"),
+                        "history_compacted_to_count": event_context_state.get("history_compacted_to_count"),
+                        "summary_source": event_context_state.get("summary_source"),
                     },
                 )
 
@@ -2589,17 +2722,20 @@ You have access to the following tools. When a user asks you to do something tha
             # Build context info for thinking display (without relying on model reasoning)
             context_info = []
             if iteration == 1:
-                # Show user message on first iteration
-                for item in input_items:
-                    # Handle both formats: {'type': 'message', 'role': ...} or {'role': ..., 'content': ...}
-                    role = item.get("role", "")
-                    if role == "user":
-                        content = item.get("content", "")
-                        if isinstance(content, list):
-                            text = " ".join([c.get("text", str(c)) for c in content])
-                        else:
-                            text = str(content)
-                        context_info.append(f"User: {safe_preview(text, 200)}")
+                if one_shot_attachment_context_active:
+                    context_info.append(f"User: {safe_preview(message, 200)}")
+                else:
+                    # Show user message on first iteration
+                    for item in input_items:
+                        # Handle both formats: {'type': 'message', 'role': ...} or {'role': ..., 'content': ...}
+                        role = item.get("role", "")
+                        if role == "user":
+                            content = item.get("content", "")
+                            if isinstance(content, list):
+                                text = " ".join([c.get("text", str(c)) for c in content])
+                            else:
+                                text = str(content)
+                            context_info.append(f"User: {safe_preview(text, 200)}")
             if context_info:
                 send_event("llm_thinking", {"message": " | ".join(context_info), "iteration": iteration})
             else:
@@ -2876,6 +3012,8 @@ You have access to the following tools. When a user asks you to do something tha
                 latest_user_text=latest_user_text,
                 max_chat_output_chars=raw_max_chat,
             )
+            if one_shot_attachment_context_active and isinstance(llm_result, dict) and "_llm_debug" in llm_result:
+                llm_result["_llm_debug"] = _redact_one_shot_attachment_llm_debug(llm_result.get("_llm_debug"))
             if isinstance(loop_context_state, dict) and isinstance(loop_context_state.get("budget"), dict):
                 loop_context_state["budget"]["output_controller_applied"] = True
                 if isinstance(output_diag, dict):
@@ -3021,28 +3159,33 @@ You have access to the following tools. When a user asks you to do something tha
                 )
                 if enable_reasoning:
                     reasoning_content = llm_result.get("reasoning", "")
-                    result["reasoning"] = reasoning_content
-                    # Send actual thinking content if reasoning is available
+                    if one_shot_attachment_context_active:
+                        result["reasoning"] = ONE_SHOT_ATTACHMENT_REDACTION if reasoning_content else ""
+                    else:
+                        result["reasoning"] = reasoning_content
                     if reasoning_content:
-                        send_event("llm_thinking", {
-                            "message": safe_preview(reasoning_content, 500),  # Truncate for display
-                            "thinking": reasoning_content,  # Full thinking for storage
-                            "iteration": iteration
-                        })
-                        # Also log to tracer for persistence
-                        try:
-                            from src.skills import get_tracer
-                            tracer_instance = get_tracer()
-                            tracer_instance.log_thinking(reasoning_content)
-                        except Exception:
-                            pass
+                        if one_shot_attachment_context_active:
+                            send_event("llm_thinking", {
+                                "message": ONE_SHOT_ATTACHMENT_REDACTION,
+                                "iteration": iteration,
+                                "one_shot_attachment_context_redacted": True,
+                            })
+                        else:
+                            send_event("llm_thinking", {
+                                "message": safe_preview(reasoning_content, 500),
+                                "thinking": reasoning_content,
+                                "iteration": iteration
+                            })
                 else:
                     # No reasoning_replay: show context info instead
-                    user_msg = ""
-                    for item in input_items:
-                        if item.get("type") == "message" and item.get("role") == "user":
-                            user_msg = safe_preview(item.get("content", ""), 200)
-                            break
+                    if one_shot_attachment_context_active:
+                        user_msg = safe_preview(message, 200)
+                    else:
+                        user_msg = ""
+                        for item in input_items:
+                            if item.get("type") == "message" and item.get("role") == "user":
+                                user_msg = safe_preview(item.get("content", ""), 200)
+                                break
                     if user_msg:
                         send_event("llm_thinking", {
                             "message": f"User: {user_msg}",
@@ -3100,18 +3243,18 @@ You have access to the following tools. When a user asks you to do something tha
             if enable_reasoning:
                 reasoning_content = llm_result.get("reasoning", "")
                 if reasoning_content:
-                    send_event("llm_thinking", {
-                        "message": reasoning_content[:500],
-                        "thinking": reasoning_content,
-                        "iteration": iteration
-                    })
-                    # Also log to tracer for persistence
-                    try:
-                        from src.skills import get_tracer
-                        tracer_instance = get_tracer()
-                        tracer_instance.log_thinking(reasoning_content)
-                    except Exception:
-                        pass
+                    if one_shot_attachment_context_active:
+                        send_event("llm_thinking", {
+                            "message": ONE_SHOT_ATTACHMENT_REDACTION,
+                            "iteration": iteration,
+                            "one_shot_attachment_context_redacted": True,
+                        })
+                    else:
+                        send_event("llm_thinking", {
+                            "message": reasoning_content[:500],
+                            "thinking": reasoning_content,
+                            "iteration": iteration
+                        })
             
             # Check if LLM wants to call tools
             if not tool_calls:
@@ -3119,11 +3262,18 @@ You have access to the following tools. When a user asks you to do something tha
                 if enable_reasoning:
                     reasoning_content = llm_result.get("reasoning", "")
                     if reasoning_content:
-                        send_event("llm_thinking", {
-                            "message": reasoning_content[:500],
-                            "thinking": reasoning_content,
-                            "iteration": iteration
-                        })
+                        if one_shot_attachment_context_active:
+                            send_event("llm_thinking", {
+                                "message": ONE_SHOT_ATTACHMENT_REDACTION,
+                                "iteration": iteration,
+                                "one_shot_attachment_context_redacted": True,
+                            })
+                        else:
+                            send_event("llm_thinking", {
+                                "message": reasoning_content[:500],
+                                "thinking": reasoning_content,
+                                "iteration": iteration
+                            })
                 
                 # Build final result
                 await self._persist_assistant_message(session_id, content)
@@ -4593,6 +4743,7 @@ async def run_chat_execution(
     stream_callback: Optional[Any] = None,
     attached_images: Optional[List[str]] = None,
     attachments: Optional[List[str]] = None,
+    transient_model_message: Optional[str] = None,
     portal_user_id: Optional[str] = None,
     portal_user_name: Optional[str] = None,
     request_id: Optional[str] = None,
@@ -4608,6 +4759,7 @@ async def run_chat_execution(
         "stream_callback": stream_callback,
         "attached_images": attached_images,
         "attachments": attachments,
+        "transient_model_message": transient_model_message,
         "portal_user_id": portal_user_id,
         "portal_user_name": portal_user_name,
         "request_id": request_id,
