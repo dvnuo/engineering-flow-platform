@@ -3095,97 +3095,18 @@ async def api_files_list(request: web.Request) -> web.Response:
 
 
 async def api_context_files(request: web.Request) -> web.Response:
-    """List files in session context.
-    
-    GET /api/context/files?session_id=xxx
-    
-    Returns:
-        200: {"files": [...]}
-    """
-    try:
-        session_id = request.query.get('session_id')
-        if not session_id:
-            return web.json_response({
-                'success': False,
-                'error': 'session_id is required'
-            }, status=400)
-        
-        from src.hooks.file_context import storage
-        files = storage.get_session_files(session_id)
-        
-        return web.json_response({
-            'success': True,
-            'files': [
-                {
-                    'file_id': f.file_id,
-                    'filename': f.filename,
-                    'content_type': f.content_type,
-                    'parse_status': f.parse_status,
-                    'chunk_count': f.chunk_count,
-                    'total_chars': f.total_chars,
-                    'parsed_at': f.parsed_at
-                }
-                for f in files
-            ]
-        })
-    except Exception as e:
-        logger.error(f"Error listing context files: {e}")
-        return web.json_response({
-            'success': False,
-            'error': str(e)
-        }, status=500)
+    """Deprecated for one-shot attachments. Do not expose transient upload context."""
+    return web.json_response({'success': True, 'files': []})
 
 
 async def api_chunks_search(request: web.Request) -> web.Response:
-    """Search chunks in session.
-    
-    GET /api/chunks/search?session_id=xxx&query=revenue&top_k=5
-    
-    Returns:
-        200: {"chunks": [...], "total": N}
-    """
-    try:
-        session_id = request.query.get('session_id')
-        if not session_id:
-            return web.json_response({
-                'success': False,
-                'error': 'session_id is required'
-            }, status=400)
-        
-        query = request.query.get('query', '')
-        top_k = int(request.query.get('top_k', 5))
-        
-        from src.hooks.file_context import retrieval_engine
-        from src.hooks.file_context.models import RetrievalRequest
-        
-        result = retrieval_engine.retrieve(RetrievalRequest(
-            session_id=session_id,
-            query=query,
-            top_k=top_k
-        ))
-        
-        return web.json_response({
-            'success': True,
-            'chunks': [
-                {
-                    'chunk_id': c.chunk_id,
-                    'file_id': c.file_id,
-                    'type': c.type,
-                    'content': c.content[:500],  # Truncate for preview
-                    'page': c.page,
-                    'confidence': c.confidence
-                }
-                for c in result.chunks
-            ],
-            'total': result.total_chunks,
-            'estimated_tokens': result.estimated_tokens
-        })
-    except Exception as e:
-        logger.error(f"Error searching chunks: {e}")
-        return web.json_response({
-            'success': False,
-            'error': str(e)
-        }, status=500)
+    """Deprecated for one-shot attachments. Do not expose transient upload chunks."""
+    return web.json_response({
+        'success': True,
+        'chunks': [],
+        'total': 0,
+        'estimated_tokens': 0,
+    })
 
 
 async def api_files_get(request: web.Request) -> web.Response:
