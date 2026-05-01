@@ -39,6 +39,15 @@ def _runtime_workspace_root() -> Path:
 
 
 
+def _clean_repo_url(url: str) -> str:
+    """Remove username, password, and port from a git repo URL."""
+    if not url:
+        return url
+    url = re.sub(r"^https?://[^@]+@", "https://", url)
+    url = re.sub(r"(https?://[^/:]+):\d+", r"\1", url)
+    return url
+
+
 def get_traceback_str() -> str:
     """Get current exception traceback as string."""
     exc_info = sys.exc_info()
@@ -101,6 +110,7 @@ class Gateway:
         self.app.router.add_get("/health", self.handle_health)
         self.app.router.add_get("/actuator/health", self.handle_health)
         self.app.router.add_get("/api/git-info", self.handle_git_info)
+        self.app.router.add_get("/api/skill-git-info", self.handle_skill_git_info)
         self.app.router.add_get("/api/sessions", self.handle_list_sessions)
         self.app.router.add_post("/api/sessions/{session_id}/clear", self.handle_clear_session)
         self.app.router.add_post("/api/test", self.handle_test_message)
@@ -220,19 +230,46 @@ class Gateway:
             except Exception:
                 pass
 
-        def clean_repo_url(url: str) -> str:
-            """Remove username, password, and port from a git repo URL."""
-            if not url: return url
-            url = re.sub(r"^https?://[^@]+@", "https://", url)
-            url = re.sub(r"(https?://[^/:]+):\d+", r"\1", url)
-            return url  # clean repo_url repo_url = clean_repo_url(repo_url)
-
-        # clean repo url
-        repo_url = clean_repo_url(repo_url)
+        repo_url = _clean_repo_url(repo_url)
         return web.json_response({
             "commit_id": commit_id,
             "repo_url": repo_url,
         })
+
+
+    async def handle_skill_git_info(self, request: Request) -> web.Response:
+        """Get git commit info for the mounted skills repository."""
+        commit_id = None
+        repo_url = None
+
+        skills_dir_env = os.getenv("EFP_SKILLS_DIR")
+        skills_dir = Path(skills_dir_env).expanduser() if skills_dir_env and skills_dir_env.strip() else Path("/app/skills")
+
+        if skills_dir.exists() and (skills_dir / ".git").exists():
+            try:
+                import subprocess
+
+                result = subprocess.run(
+                    ["git", "-C", str(skills_dir), "rev-parse", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0:
+                    commit_id = result.stdout.strip()
+
+                result = subprocess.run(
+                    ["git", "-C", str(skills_dir), "remote", "get-url", "origin"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0:
+                    repo_url = result.stdout.strip()
+            except Exception:
+                pass
+
+        return web.json_response({"commit_id": commit_id, "repo_url": _clean_repo_url(repo_url)})
 
     async def handle_list_sessions(self, request: Request) -> web.Response:
         """List all active sessions with details.

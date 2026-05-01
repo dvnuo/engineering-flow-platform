@@ -25,7 +25,7 @@ def _load_shared_loader_module_with_github_stubs():
     sys.modules.update(modules)
     src_pkg.runtime = runtime_pkg
     runtime_pkg.requirement_bundle_assets = rb_assets
-    spec = importlib.util.spec_from_file_location("skills.shared_bundle_source_loaders", Path("skills/shared_bundle_source_loaders.py"))
+    spec = importlib.util.spec_from_file_location("skills.shared_bundle_source_loaders", Path("tests/fixtures/skills/shared_bundle_source_loaders.py"))
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)

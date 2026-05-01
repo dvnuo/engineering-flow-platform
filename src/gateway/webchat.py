@@ -2622,10 +2622,10 @@ async def api_copilot_auth_check(request: web.Request) -> web.Response:
 
 
 def _parse_skill_from_file(skill_path: Path) -> Optional[Dict[str, Any]]:
-    """Parse a skill from SKILL.md file.
+    """Parse a skill from skill.md file.
     
     Args:
-        skill_path: Path to SKILL.md file
+        skill_path: Path to skill.md file
         
     Returns:
         Skill dict or None if parsing fails
@@ -2687,33 +2687,13 @@ def _parse_skill_from_file(skill_path: Path) -> Optional[Dict[str, Any]]:
 
 
 def _get_skills_list() -> List[Dict[str, Any]]:
-    """Get list of all available skills.
-    
-    Returns:
-        List of skill dictionaries
-    """
-    skills = []
-    project_root = Path(__file__).resolve().parent.parent.parent
-    
-    # Check multiple locations for skills
-    skill_dirs = [
-        project_root / "skills",
-        project_root / "src" / "skills",
-    ]
-    
-    for skill_dir in skill_dirs:
-        if not skill_dir.exists():
-            continue
-            
-        for skill_path in skill_dir.iterdir():
-            if skill_path.is_dir():
-                skill_file = skill_path / "SKILL.md"
-                if skill_file.exists():
-                    skill = _parse_skill_from_file(skill_file)
-                    if skill and skill["name"]:
-                        skills.append(skill)
-    
-    return skills
+    """Get list of all available skills from the centralized skill registry."""
+    from src.skills import skill_registry
+
+    if not skill_registry._initialized:
+        skill_registry.load_skills()
+
+    return skill_registry.get_all_skill_summaries()
 
 
 async def api_skills(request: web.Request) -> web.Response:

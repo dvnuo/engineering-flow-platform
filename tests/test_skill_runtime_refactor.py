@@ -24,7 +24,14 @@ from src.agents.skill_mode import generate_initial_skill_plan
 from src.runtime.contracts import make_execution_result
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CREATE_PULL_REQUEST_SKILL_PATH = REPO_ROOT / "skills" / "create-pull-request" / "skill.md"
+
+
+def _write_skill(skill_root: Path, skill_name: str, body: str) -> Path:
+    skill_dir = skill_root / skill_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_file = skill_dir / "skill.md"
+    skill_file.write_text(body, encoding="utf-8")
+    return skill_file
 
 
 class _Tracer:
@@ -216,9 +223,23 @@ Body
     assert "Failed to parse skill markdown frontmatter" in caplog.text
 
 
-def test_create_pull_request_skill_frontmatter_shape():
-    registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
-    skill = registry._load_skill_file(CREATE_PULL_REQUEST_SKILL_PATH)
+def test_create_pull_request_skill_frontmatter_shape(tmp_path):
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir="/nonexistent/user/skills")
+    skill_file = _write_skill(
+        tmp_path,
+        "create-pull-request",
+        """---
+name: create-pull-request
+description: Create pull request
+tools: [run_command, github_get_default_branch, github_create_pull_request]
+task_tools: [run_command]
+references: [ref-template.md]
+---
+# Phase 1
+Prepare PR.
+""",
+    )
+    skill = registry._load_skill_file(skill_file)
     assert skill is not None
     assert skill.name == "create-pull-request"
     assert set(skill.tools) == {
@@ -230,9 +251,23 @@ def test_create_pull_request_skill_frontmatter_shape():
     assert "ref-template.md" in skill.references
 
 
-def test_create_pull_request_runtime_config_contains_expected_blocks():
-    registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
-    skill = registry._load_skill_file(CREATE_PULL_REQUEST_SKILL_PATH)
+def test_create_pull_request_runtime_config_contains_expected_blocks(tmp_path):
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir="/nonexistent/user/skills")
+    skill_file = _write_skill(
+        tmp_path,
+        "create-pull-request",
+        """---
+name: create-pull-request
+description: Create pull request
+tools: [run_command, github_get_default_branch, github_create_pull_request]
+task_tools: [run_command]
+references: [ref-template.md]
+---
+# STEP 1
+Gather information.
+""",
+    )
+    skill = registry._load_skill_file(skill_file)
     runtime_config = build_skill_runtime_config(skill)
 
     assert runtime_config.allowed_tools_set == {
@@ -1910,18 +1945,44 @@ def test_get_skill_prompt_includes_resolved_reference_summary(tmp_path):
     assert "Available references: playbook.md" in prompt
 
 
-def test_review_pull_request_skill_loads_from_directory_structure():
-    registry = SkillRegistry(project_skills_dir=str(REPO_ROOT / "skills"), user_skills_dir="/nonexistent/user/skills")
+def test_review_pull_request_skill_loads_from_directory_structure(tmp_path):
+    _write_skill(
+        tmp_path,
+        "review-pull-request",
+        """---
+name: review-pull-request
+description: Review pull request
+triggers: [/review-pr, /review-pull-request]
+tools: [github_get_pr, github_get_pr_file_patch]
+---
+Review body.
+""",
+    )
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir="/nonexistent/user/skills")
     registry.load_skills()
     skill = registry.get_skill("review-pull-request")
     assert skill is not None
-    assert Path(skill.source_file).as_posix().endswith("skills/review-pull-request/skill.md")
+    assert Path(skill.source_file).name == "skill.md"
     assert "github_get_pr" in skill.tools
     assert "github_get_pr_file_patch" in skill.tools
 
 
-def test_review_pull_request_skill_references_are_discovered():
-    registry = SkillRegistry(project_skills_dir="skills", user_skills_dir="/nonexistent/user/skills")
+def test_review_pull_request_skill_references_are_discovered(tmp_path):
+    _write_skill(
+        tmp_path,
+        "review-pull-request",
+        """---
+name: review-pull-request
+description: Review pull request
+references:
+  - references/review-pull-request-guidelines.md
+  - references/lang-typescript-javascript.md
+  - references/lang-python.md
+---
+Review body.
+""",
+    )
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir="/nonexistent/user/skills")
     registry.load_skills()
     skill = registry.get_skill("review-pull-request")
     refs = summarize_skill_references(skill)
@@ -1930,18 +1991,40 @@ def test_review_pull_request_skill_references_are_discovered():
     assert any(path.endswith("lang-python.md") for path in refs)
 
 
-def test_review_pull_request_backward_compatible_trigger_invocation():
-    registry = SkillRegistry(project_skills_dir=str(REPO_ROOT / "skills"), user_skills_dir="/nonexistent/user/skills")
+def test_review_pull_request_backward_compatible_trigger_invocation(tmp_path):
+    _write_skill(
+        tmp_path,
+        "review-pull-request",
+        """---
+name: review-pull-request
+description: Review pull request
+triggers: [/review-pr]
+---
+Review body.
+""",
+    )
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir="/nonexistent/user/skills")
     registry.load_skills()
     matches = registry.match_skill("/review-pr 123")
     assert matches
     assert matches[0].name == "review-pull-request"
 
 
-def test_review_pull_request_backward_compatible_skill_command_invocation():
-    registry = SkillRegistry(project_skills_dir=str(REPO_ROOT / "skills"), user_skills_dir="/nonexistent/user/skills")
+def test_review_pull_request_backward_compatible_skill_command_invocation(tmp_path):
+    _write_skill(
+        tmp_path,
+        "review-pull-request",
+        """---
+name: review-pull-request
+description: Review pull request
+triggers: [/review-pr]
+---
+Review body.
+""",
+    )
+    registry = SkillRegistry(project_skills_dir=str(tmp_path), user_skills_dir="/nonexistent/user/skills")
     registry.load_skills()
-    matches = registry.match_skill("/skill review-pr")
+    matches = registry.match_skill("/skill review-pull-request")
     assert matches
     assert matches[0].name == "review-pull-request"
 

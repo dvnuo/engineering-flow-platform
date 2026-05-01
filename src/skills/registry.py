@@ -19,6 +19,36 @@ from ruamel.yaml import YAML
 
 logger = logging.getLogger(__name__)
 
+
+def _repo_root() -> Path:
+    """Resolve repository root for local fallback discovery."""
+    return Path(__file__).resolve().parents[2]
+
+
+def resolve_project_skills_dir() -> Path:
+    """Resolve project skills directory from env, mounted path, or repo fallback."""
+    env = os.getenv("EFP_SKILLS_DIR")
+    if env and env.strip():
+        return Path(env).expanduser()
+
+    app_skills = Path("/app/skills")
+    if app_skills.exists():
+        return app_skills
+
+    repo_skills = _repo_root() / "skills"
+    if repo_skills.exists():
+        return repo_skills
+
+    return Path("skills")
+
+
+def resolve_user_skills_dir() -> Path:
+    """Resolve user skill override directory from env or ~/.efp/skills."""
+    env = os.getenv("EFP_USER_SKILLS_DIR")
+    if env and env.strip():
+        return Path(env).expanduser()
+    return Path.home() / ".efp" / "skills"
+
 # Module-level YAML instance
 _yaml = YAML()
 
@@ -89,13 +119,15 @@ class SkillRegistry:
     """Central registry for all available skills.
     
     Supports two skill directories:
-    1. Project skills: <project>/skills/
+    1. Project skills: EFP_SKILLS_DIR, /app/skills, or local repo skills/ fallback.
     2. User skills: ~/.efp/skills/ (user skills override project skills)
     """
     
-    def __init__(self, project_skills_dir: str = "skills", user_skills_dir: str = "~/.efp/skills"):
-        self.project_skills_dir = Path(project_skills_dir)
-        self.user_skills_dir = Path(user_skills_dir).expanduser()
+    def __init__(self, project_skills_dir: str | Path | None = None, user_skills_dir: str | Path | None = None):
+        project_dir = resolve_project_skills_dir() if project_skills_dir is None else Path(project_skills_dir)
+        user_dir = resolve_user_skills_dir() if user_skills_dir is None else Path(user_skills_dir)
+        self.project_skills_dir = Path(project_dir).expanduser()
+        self.user_skills_dir = Path(user_dir).expanduser()
         self.skills: Dict[str, Skill] = {}
         self._initialized = False
     
@@ -198,59 +230,7 @@ class SkillRegistry:
                 logger.error(f"Failed to load skill {skill_file}: {e}")
         
         return loaded
-        """Load skills from a specific directory.
-        
-        Args:
-            skills_dir: Directory containing skills
-            override: If True, these skills can override existing ones with same name
-            
-        Returns:
-            Number of skills loaded
-        """
-        if not skills_dir.exists():
-            if override:
-                logger.debug(f"User skills directory not found: {skills_dir}")
-            return 0
-        
-        loaded = 0
-        skill_files = []
-        
-        # Pattern 1: Single file skills (e.g., review-pr.md)
-        for f in skills_dir.glob("*.md"):
-            if f.name.lower() != "readme.md":
-                skill_files.append((f, override))
-        
-        # Pattern 2: Directory-based skills (e.g., skill_creator/skill.md)
-        for skill_dir in skills_dir.iterdir():
-            if skill_dir.is_dir():
-                skill_file = skill_dir / "skill.md"
-                if skill_file.exists():
-                    skill_files.append((skill_file, override))
-        
-        for skill_file, can_override in skill_files:
-            try:
-                skill = self._load_skill_file(skill_file)
-                if skill:
-                    skill_name = skill.name
-                    
-                    # Check if skill exists and override is allowed
-                    if skill_name in self.skills:
-                        if can_override:
-                            logger.info(f"Overriding skill '{skill_name}' with user version")
-                        else:
-                            logger.debug(f"Skipping duplicate skill: {skill_name}")
-                            continue
-                    
-                    self.skills[skill_name] = skill
-                    loaded += 1
-                    source = "user" if can_override else "project"
-                    logger.debug(f"Loaded skill: {skill.name} v{skill.version} ({source})")
-                    
-            except Exception as e:
-                logger.error(f"Failed to load skill {skill_file}: {e}")
-        
-        return loaded
-    
+
     def _parse_markdown_frontmatter(self, content: str) -> Tuple[Dict[str, Any], str]:
         lines = content.splitlines(keepends=True)
         if not lines or lines[0].strip() != "---":
@@ -335,7 +315,7 @@ class SkillRegistry:
                     matches.append((skill, 1.0))  # Perfect match
                     continue
             
-            # Check trigger patterns (from skill.yaml)
+            # Check trigger patterns from skill.md frontmatter.
             for pattern in skill.trigger_patterns:
                 if pattern.search(message_lower):
                     # Simple scoring: longer trigger = better match
@@ -397,12 +377,12 @@ class SkillRegistry:
 
 # Global registry instance (loads both project and user skills)
 skill_registry = SkillRegistry(
-    project_skills_dir="skills",
-    user_skills_dir=str(Path.home() / ".efp" / "skills")
+    project_skills_dir=None,
+    user_skills_dir=None,
 )
 
 
-def load_all_skills(skills_dir: str = "skills") -> SkillRegistry:
+def load_all_skills(skills_dir: str | Path | None = None) -> SkillRegistry:
     """Convenience function to load skills from a single directory.
     
     Note: For loading both project and user skills with override,
@@ -418,8 +398,10 @@ if __name__ == "__main__":
     import sys
     logging.basicConfig(level=logging.INFO)
     
-    skills_dir = sys.argv[1] if len(sys.argv) > 1 else "skills"
-    registry = load_all_skills(skills_dir)
+    if len(sys.argv) > 1:
+        registry = load_all_skills(sys.argv[1])
+    else:
+        registry = load_all_skills(None)
     
     print(f"\n=== Skill Registry ===")
     print(f"Loaded {len(registry.list_skills())} skills\n")
