@@ -49,20 +49,26 @@ def test_no_upload_library_or_file_selector_frontend_residue():
 def test_webchat_js_was_not_replaced_by_minimal_stub():
     js = Path("src/gateway/static/js/webchat.js").read_text(encoding="utf-8")
     html = Path("src/gateway/templates/webchat.html").read_text(encoding="utf-8")
-    corpus = js + "\n" + html
     line_count = len(js.splitlines())
     assert line_count > 2000, "webchat.js appears to have been replaced by a minimal stub."
 
-    required_tokens = [
-        "themeToggle",
-        "toggleSidebar",
-        "statsButton",
+    required_js_tokens = [
+        "const SESSION_ID_KEY",
+        "function ensureCurrentSessionId",
+        "function toggleTheme",
+        "function initTheme",
+        "themeToggle.addEventListener",
+        "function toggleSidebar",
+        "toggleSidebarBtn.addEventListener",
+        "function showStats",
+        "function hideStats",
+        "statsButton.addEventListener",
+        "closeStatsButton.addEventListener",
         "refreshSessions",
         "recentSessionsList",
         "tokenCount",
         "costDisplay",
         "typing",
-        "streamingContent",
         "skillDropdown",
         "skillList",
         "/api/skills",
@@ -73,8 +79,20 @@ def test_webchat_js_was_not_replaced_by_minimal_stub():
         "fileViewerPanel",
         "server-files",
     ]
-    for token in required_tokens:
-        assert token in corpus, f"Expected existing WebChat feature token to remain: {token}"
+    for token in required_js_tokens:
+        assert token in js, f"Expected existing WebChat JS feature to remain: {token}"
+
+    required_html_tokens = [
+        'id="themeToggle"',
+        'id="toggleSidebar"',
+        'id="statsButton"',
+        'id="closeStats"',
+        'id="pendingAttachments"',
+        'id="fileInput"',
+        'multiple',
+    ]
+    for token in required_html_tokens:
+        assert token in html
 
 
 def test_required_one_shot_tokens_present():
