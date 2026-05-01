@@ -1983,6 +1983,7 @@ You have access to the following tools. When a user asks you to do something tha
         stream_callback: Optional[Callable[[str], None]] = None,
         attached_images: Optional[List[str]] = None,
         attachments: Optional[List[str]] = None,
+        transient_model_message: Optional[str] = None,
         portal_user_id: Optional[str] = None,
         portal_user_name: Optional[str] = None,
         request_id: Optional[str] = None,
@@ -2280,6 +2281,19 @@ You have access to the following tools. When a user asks you to do something tha
         else:
             set_skill_workdir(None)
         # ===== END SKILL MATCHING =====
+
+        # Apply one-shot attachment context only to the current model request.
+        # Do NOT persist this content into session history.
+        if isinstance(transient_model_message, str) and transient_model_message.strip():
+            for idx in range(len(messages) - 1, -1, -1):
+                if messages[idx].get("role") == "user":
+                    replaced = dict(messages[idx])
+                    replaced["content"] = transient_model_message
+                    messages[idx] = replaced
+                    logger.info(
+                        "[Agent] Applied transient model-only message for current request; persisted user history remains original"
+                    )
+                    break
 
         # ===== MESSAGE COMPACTION =====
         model = self.model or config.llm.get("model", DEFAULT_LLM_MODEL)
@@ -4591,6 +4605,7 @@ async def run_chat_execution(
     stream_callback: Optional[Any] = None,
     attached_images: Optional[List[str]] = None,
     attachments: Optional[List[str]] = None,
+    transient_model_message: Optional[str] = None,
     portal_user_id: Optional[str] = None,
     portal_user_name: Optional[str] = None,
     request_id: Optional[str] = None,
@@ -4606,6 +4621,7 @@ async def run_chat_execution(
         "stream_callback": stream_callback,
         "attached_images": attached_images,
         "attachments": attachments,
+        "transient_model_message": transient_model_message,
         "portal_user_id": portal_user_id,
         "portal_user_name": portal_user_name,
         "request_id": request_id,
