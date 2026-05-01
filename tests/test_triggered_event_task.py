@@ -496,3 +496,24 @@ async def test_run_triggered_event_task_github_discussion_comment_prefers_reply_
     result = await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"discussion_comment","reply_mode":"same_surface","owner":"octo","repo":"portal","discussion_id":"D_123","reply_to_id":"DC_root","discussion_comment_id":"DC_child","comment_id":"DC_child","body":"@agent check"})
     assert result["secondary_action_id"] == "adapter:github:add_discussion_comment"
     assert captured["reply_to_id"] == "DC_root"
+
+
+@pytest.mark.asyncio
+async def test_run_triggered_event_task_github_discussion_comment_missing_discussion_id_fails(monkeypatch):
+    from src.runtime.triggered_event_task import run_triggered_event_task
+
+    called = {"discussion": 0}
+
+    async def _fake_run_chat_execution(**_kwargs):
+        return {"response": "ok"}
+
+    async def _fake_add_discussion_comment(*_args, **_kwargs):
+        called["discussion"] += 1
+
+    monkeypatch.setattr("src.runtime.triggered_event_task.run_chat_execution", _fake_run_chat_execution)
+    monkeypatch.setattr("src.runtime.triggered_event_task.github_channel.add_discussion_comment", _fake_add_discussion_comment)
+
+    with pytest.raises(ValueError, match="Missing required field: discussion_id"):
+        await run_triggered_event_task({"source_kind":"github.mention","session_id":"s1","comment_kind":"discussion_comment","reply_mode":"same_surface","owner":"octo","repo":"portal","discussion_comment_id":"DC_1","comment_id":"DC_1","body":"@agent check"})
+
+    assert called["discussion"] == 0

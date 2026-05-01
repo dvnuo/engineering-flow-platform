@@ -549,3 +549,17 @@ async def test_execute_github_add_discussion_comment_prefers_reply_to_id(monkeyp
     )
     assert result["success"] is True
     assert captured["reply_to_id"] == "DC_root"
+
+
+@pytest.mark.asyncio
+async def test_execute_github_add_discussion_comment_failure_is_not_success(monkeypatch):
+    async def _fake_add_discussion_comment(**_kwargs):
+        return "Error adding discussion comment: boom"
+
+    monkeypatch.setattr("src.github.github_add_discussion_comment", _fake_add_discussion_comment)
+    result = await execute_adapter_action(
+        "adapter:github:add_discussion_comment",
+        {"discussion_id": "D1", "comment": "hi", "reply_to_id": "DC1"},
+    )
+    assert result["success"] is False
+    assert "Error adding discussion comment" in str(result["error"])

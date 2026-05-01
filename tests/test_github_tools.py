@@ -724,3 +724,15 @@ async def test_channel_add_discussion_comment_raises_on_missing_comment(monkeypa
     monkeypatch.setattr(github_api.github_channel, "graphql_request", _fake_graphql_request)
     with pytest.raises(ValueError, match="returned no comment"):
         await github_api.github_channel.add_discussion_comment("D_1", "hi", reply_to_id="DC_1")
+
+
+@pytest.mark.asyncio
+async def test_github_add_discussion_comment_wrapper_returns_error_string_on_failure(monkeypatch, github_modules):
+    github_module, github_api = github_modules
+
+    async def _fake_add_discussion_comment(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(github_api.github_channel, "add_discussion_comment", _fake_add_discussion_comment)
+    result = await github_module.github_add_discussion_comment("D_1", "hi", reply_to_id="DC_1")
+    assert result.startswith("Error adding discussion comment:")
