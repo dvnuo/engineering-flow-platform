@@ -17,9 +17,12 @@ get_safe_extension = _validators.get_safe_extension
 is_image_file = _validators.is_image_file
 FILENAME_PATTERN = _validators.FILENAME_PATTERN
 
+_file_parser_cleanup()
+_file_parser_cleanup = None
+
 
 def teardown_module(_module):
-    _file_parser_cleanup()
+    pass
 
 
 class TestValidateFileSize:
