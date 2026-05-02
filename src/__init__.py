@@ -124,7 +124,7 @@ def _merge_legacy_and_external_tools(
         if not name:
             continue
         by_name[name] = schema
-    return list(by_name.values())
+    return [by_name[name] for name in sorted(by_name.keys())]
 
 
 def get_tool_names() -> List[str]:

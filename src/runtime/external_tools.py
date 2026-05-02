@@ -5,7 +5,7 @@ import inspect
 import logging
 import os
 import sys
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -20,6 +20,7 @@ class ExternalToolsState:
     error: Optional[str] = None
     registry: Any = None
     runner: Any = None
+    validation_errors: list[str] = field(default_factory=list)
 
 
 _cached_state: Optional[ExternalToolsState] = None
@@ -43,6 +44,18 @@ def clear_external_tools_cache() -> None:
 
 def _strict_mode() -> bool:
     return os.environ.get("EFP_EXTERNAL_TOOLS_STRICT", "false").strip().lower() == "true"
+
+
+def _runtime_root_dir() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _workspace_dir() -> str:
+    return os.environ.get("EFP_WORKSPACE_DIR") or str(Path.home() / ".efp" / "workspace")
+
+
+def _context_blob_dir(workspace_dir: str) -> str:
+    return os.environ.get("EFP_CONTEXT_BLOB_DIR") or str(Path(workspace_dir) / "context_blobs")
 
 
 def load_external_tools_state() -> ExternalToolsState:
@@ -72,7 +85,32 @@ def load_external_tools_state() -> ExternalToolsState:
             registry = registry_mod.load_registry(str(tools_dir))
         elif hasattr(registry_mod, "ToolRegistry"):
             registry = registry_mod.ToolRegistry(str(tools_dir))
-        _cached_state = ExternalToolsState(tools_dir=tools_dir, available=True, registry=registry, runner=runner_mod)
+        validation_errors: list[str] = []
+        validate = getattr(registry, "validate", None)
+        if callable(validate):
+            raw_errors = validate()
+            validation_errors = list(raw_errors or [])
+        if validation_errors:
+            error_message = f"external tools validation failed: {validation_errors}"
+            if _strict_mode():
+                raise RuntimeError(error_message)
+            logger.warning(error_message)
+            _cached_state = ExternalToolsState(
+                tools_dir=tools_dir,
+                available=False,
+                error=error_message,
+                registry=registry,
+                runner=runner_mod,
+                validation_errors=validation_errors,
+            )
+            return _cached_state
+        _cached_state = ExternalToolsState(
+            tools_dir=tools_dir,
+            available=True,
+            registry=registry,
+            runner=runner_mod,
+            validation_errors=validation_errors,
+        )
         return _cached_state
     except Exception as exc:
         if _strict_mode():
@@ -234,12 +272,17 @@ async def execute_external_tool(
     if descriptor.get("enabled", True) is False:
         return {"success": False, "content": "", "error": f"Tool '{name}' is disabled by external descriptor"}
 
+    workspace_dir = _workspace_dir()
     context = {
         "runtime_type": runtime_type,
         "session_id": session_id or kwargs.get("_session_id"),
-        "workspace_dir": os.environ.get("EFP_WORKSPACE_DIR") or str(Path.home() / ".efp" / "workspace"),
-        "portal_metadata": {},
+        "workspace_dir": workspace_dir,
+        "portal_metadata": {
+            "legacy_runtime_src_dir": str(_runtime_root_dir()),
+            "context_blob_dir": _context_blob_dir(workspace_dir),
+        },
     }
+    runner_args = {k: v for k, v in kwargs.items() if k not in {"_session_id"}}
 
     runner = state.runner
     execute_async = getattr(runner, "execute_tool_async", None)
@@ -247,7 +290,7 @@ async def execute_external_tool(
         result = execute_async(
             tools_dir=str(state.tools_dir),
             tool=name,
-            args=kwargs,
+            args=runner_args,
             context=context,
         )
     else:
@@ -258,11 +301,11 @@ async def execute_external_tool(
             result = execute_fn(
                 tools_dir=str(state.tools_dir),
                 tool=name,
-                args=kwargs,
+                args=runner_args,
                 context=context,
             )
         except TypeError:
-            result = execute_fn(name, kwargs, context=context)
+            result = execute_fn(name, runner_args, context=context)
     if inspect.isawaitable(result):
         return await result
     return result
