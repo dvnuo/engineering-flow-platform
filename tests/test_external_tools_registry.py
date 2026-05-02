@@ -22,9 +22,12 @@ def _write_tools_repo(
     domain="context",
     manifest_subpath="manifest.yaml",
     entrypoint_body=None,
+    extra_fields=None,
 ):
     runtime_compat = runtime_compat or ["native", "opencode"]
     metadata = metadata or {}
+    extra_fields = extra_fields or {}
+    extra_yaml = "".join(f"{key}: {json.dumps(value)}\n" for key, value in extra_fields.items())
 
     tools_dir = tmp_path / "tools_repo"
     (tools_dir / "python" / "test_tools").mkdir(parents=True)
@@ -54,12 +57,14 @@ runtime_compat: {runtime_compat}
 policy_tags: [read_only]
 domain: {domain}
 metadata: {metadata}
+{extra_yaml}
 """.format(
             name=name,
             description=description,
             runtime_compat=json.dumps(runtime_compat),
             domain=domain,
             metadata=json.dumps(metadata),
+            extra_yaml=extra_yaml,
         ),
         encoding="utf-8",
     )
@@ -251,3 +256,65 @@ def test_allow_override_marks_capability_external(monkeypatch, tmp_path):
     cap = next(item for item in registry.list_by_type("tool") if item.name == "run_command")
     assert cap.metadata["external_tool"] is True
     assert cap.metadata["allow_override"] is True
+
+
+def test_top_level_requires_identity_binding_is_preserved_in_descriptor_and_capability(monkeypatch, tmp_path):
+    from src.runtime.capability_registry import build_default_capability_registry
+    from src.tools_external import get_external_tool_registry, reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(
+        tmp_path,
+        name="github_external_lookup",
+        domain="github",
+        extra_fields={
+            "requires_identity_binding": True,
+            "opencode_name": "efp_github_external_lookup",
+        },
+    )
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+
+    external_registry = get_external_tool_registry(force_reload=True)
+    descriptor = external_registry.get_descriptor("github_external_lookup")
+    assert descriptor is not None
+    assert descriptor.requires_identity_binding is True
+    assert descriptor.metadata["requires_identity_binding"] is True
+    assert descriptor.metadata["opencode_name"] == "efp_github_external_lookup"
+
+    registry = build_default_capability_registry()
+    cap = next(item for item in registry.list_by_type("tool") if item.name == "github_external_lookup")
+    assert cap.requires_identity_binding is True
+    assert cap.metadata["requires_identity_binding"] is True
+    assert cap.metadata["opencode_name"] == "efp_github_external_lookup"
+
+
+def test_external_capability_id_preserves_tool_id(monkeypatch, tmp_path):
+    from src.runtime.capability_registry import build_default_capability_registry
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(tmp_path)
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+
+    registry = build_default_capability_registry()
+    cap = next(item for item in registry.list_by_type("tool") if item.name == "context_echo")
+    assert cap.capability_id == "efp.tool.context.echo"
+    assert registry.exists("efp.tool.context.echo") is True
+
+
+@pytest.mark.asyncio
+async def test_tool_result_like_dict_preserves_failure(monkeypatch, tmp_path):
+    from src import execute_tool
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(
+        tmp_path,
+        name="context_failure",
+        entrypoint_body="def execute(**kwargs):\n    return {'success': False, 'content': '', 'error': 'boom'}\n",
+    )
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+
+    result = await execute_tool("context_failure")
+    assert result.success is False
+    assert result.error == "boom"

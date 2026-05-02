@@ -2,6 +2,20 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 DEFAULT_INPUT_SCHEMA = {"type": "object", "properties": {}}
+KNOWN_DESCRIPTOR_KEYS = {
+    "tool_id",
+    "name",
+    "description",
+    "input_schema",
+    "output_schema",
+    "domain",
+    "type",
+    "policy_tags",
+    "runtime_compat",
+    "python_entrypoint",
+    "metadata",
+    "requires_identity_binding",
+}
 
 
 @dataclass(frozen=True)
@@ -15,6 +29,7 @@ class ToolDescriptor:
     type: str = "tool"
     policy_tags: List[str] = field(default_factory=list)
     runtime_compat: List[str] = field(default_factory=list)
+    requires_identity_binding: bool = False
     python_entrypoint: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -72,11 +87,19 @@ def descriptor_from_mapping(data: dict, source_file: str | None = None) -> ToolD
     if not isinstance(output_schema, dict):
         output_schema = None
 
+    requires_identity_binding = bool(data.get("requires_identity_binding", False))
+
     metadata = data.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
     else:
         metadata = dict(metadata)
+
+    for key, value in data.items():
+        if key not in KNOWN_DESCRIPTOR_KEYS and key not in metadata:
+            metadata[key] = value
+    if "requires_identity_binding" in data:
+        metadata.setdefault("requires_identity_binding", requires_identity_binding)
     if source_file:
         metadata["_source_file"] = source_file
 
@@ -93,6 +116,7 @@ def descriptor_from_mapping(data: dict, source_file: str | None = None) -> ToolD
         type=_as_optional_string(data.get("type")) or "tool",
         policy_tags=policy_tags,
         runtime_compat=runtime_compat,
+        requires_identity_binding=requires_identity_binding,
         python_entrypoint=_as_optional_string(data.get("python_entrypoint")),
         metadata=metadata,
     )

@@ -26,7 +26,19 @@ def _normalize_result(value: Any) -> ExternalToolExecutionResult:
         return value
     if isinstance(value, str):
         return ExternalToolExecutionResult(success=True, content=value)
-    if isinstance(value, (dict, list, int, float, bool)):
+    if isinstance(value, dict):
+        if "success" in value and ("content" in value or "output" in value or "error" in value):
+            content = value.get("content", value.get("output", ""))
+            if content is None:
+                content = ""
+            error = value.get("error")
+            return ExternalToolExecutionResult(
+                success=bool(value.get("success")),
+                content=str(content),
+                error=None if error is None else str(error),
+            )
+        return ExternalToolExecutionResult(success=True, content=json.dumps(value, ensure_ascii=False, default=str))
+    if isinstance(value, (list, int, float, bool)):
         return ExternalToolExecutionResult(success=True, content=json.dumps(value, ensure_ascii=False, default=str))
     if hasattr(value, "to_dict") and callable(getattr(value, "to_dict")):
         data = value.to_dict()

@@ -304,10 +304,15 @@ class _CapabilityBuilder:
                 )
 
                 if external_descriptor:
+                    external_metadata = dict(external_descriptor.metadata or {})
                     capability_id = external_descriptor.tool_id or _format_capability_id("tool", tool_name)
                     input_schema = dict(external_descriptor.input_schema or _extract_tool_parameters(tool_schema))
                     output_schema = dict(external_descriptor.output_schema or {"type": "object"})
                     policy_tags = ["tool", *list(external_descriptor.policy_tags or [])]
+                    requires_identity_binding = bool(
+                        getattr(external_descriptor, "requires_identity_binding", False)
+                        or external_metadata.get("requires_identity_binding", False)
+                    )
                     metadata = {
                         "tool_name": tool_name,
                         "description": external_descriptor.description or _extract_tool_description(tool_schema),
@@ -316,12 +321,9 @@ class _CapabilityBuilder:
                         "domain": external_descriptor.domain,
                         "external_type": external_descriptor.type,
                         "runtime_compat": list(external_descriptor.runtime_compat or []),
-                        **dict(external_descriptor.metadata or {}),
+                        **external_metadata,
                     }
                     source_ref = "src.tools_external"
-                    requires_identity_binding = bool(
-                        dict(external_descriptor.metadata or {}).get("requires_identity_binding", False)
-                    )
                 else:
                     capability_id = _format_capability_id("tool", tool_name)
                     input_schema = _extract_tool_parameters(tool_schema)
@@ -353,8 +355,13 @@ class _CapabilityBuilder:
 
 
 def _dedupe_capability_id(capability_id: str) -> str:
-    normalized = str(capability_id or "").strip().lower()
-    parts = [_normalize_component(item) for item in normalized.split(":")]
+    raw = str(capability_id or "").strip().lower()
+    if not raw:
+        return "capability:unknown"
+    if ":" not in raw and raw.startswith("efp.tool."):
+        return raw
+
+    parts = [_normalize_component(item) for item in raw.split(":")]
     parts = [part for part in parts if part]
     if not parts:
         return "capability:unknown"
