@@ -83,7 +83,7 @@ class GitHubChannel:
         self.client = httpx.AsyncClient(timeout=30.0)
         self._headers = {
             "Accept": "application/vnd.github.v3+json",
-            "User-Agent": "Engineering Flow Platform-Mini",
+            "User-Agent": "Engineering Flow Platform",
         }
         if self.token:
             self._headers["Authorization"] = f"Bearer {self.token}"
@@ -101,7 +101,7 @@ class GitHubChannel:
         
         self._headers = {
             "Accept": "application/vnd.github.v3+json",
-            "User-Agent": "Engineering Flow Platform-Mini",
+            "User-Agent": "Engineering Flow Platform",
         }
         if self.token:
             self._headers["Authorization"] = f"Bearer {self.token}"
@@ -216,7 +216,7 @@ class GitHubChannel:
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Accept": "application/vnd.github+json",
-                "User-Agent": self._headers.get("User-Agent", "Engineering Flow Platform-Mini"),
+                "User-Agent": self._headers.get("User-Agent", "Engineering Flow Platform"),
             },
             json=payload,
         )
