@@ -70,6 +70,21 @@ from . import context_tools
 
 def get_all_tools() -> list:
     """Get all tool schemas."""
+    legacy_tools = _get_legacy_tools()
+    try:
+        from .runtime.external_tools import get_external_disabled_tool_names, get_external_tool_schemas
+
+        external_tools = get_external_tool_schemas(runtime_type="native")
+        external_disabled_names = get_external_disabled_tool_names(runtime_type="native")
+    except Exception:
+        external_tools = []
+        external_disabled_names = set()
+    if not external_tools and not external_disabled_names:
+        return legacy_tools
+    return _merge_legacy_and_external_tools(legacy_tools, external_tools, external_disabled_names)
+
+
+def _get_legacy_tools() -> list:
     tools = []
     tools.extend(get_bash_tools())   # Bash/Shell tools: exec only (simplified)
     tools.extend(get_github_tools())
@@ -80,15 +95,48 @@ def get_all_tools() -> list:
     return tools
 
 
+def _extract_tool_schema_name(tool_schema: Dict[str, Any]) -> Optional[str]:
+    function_obj = tool_schema.get("function") if isinstance(tool_schema, dict) else None
+    if isinstance(function_obj, dict) and isinstance(function_obj.get("name"), str):
+        return function_obj["name"].strip()
+    if isinstance(tool_schema, dict) and isinstance(tool_schema.get("name"), str):
+        return tool_schema["name"].strip()
+    return None
+
+
+def _merge_legacy_and_external_tools(
+    legacy_tools: List[Dict[str, Any]],
+    external_tools: List[Dict[str, Any]],
+    external_disabled_names: set[str],
+) -> List[Dict[str, Any]]:
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for schema in legacy_tools:
+        name = _extract_tool_schema_name(schema)
+        if not name or name in external_disabled_names:
+            continue
+        by_name[name] = schema
+    for schema in external_tools:
+        name = _extract_tool_schema_name(schema)
+        if not name:
+            continue
+        by_name[name] = schema
+    return list(by_name.values())
+
+
 def get_tool_names() -> List[str]:
     """Get all tool names."""
-    return [t["name"] for t in get_all_tools()]
+    names: List[str] = []
+    for tool in get_all_tools():
+        name = _extract_tool_schema_name(tool)
+        if name:
+            names.append(name)
+    return names
 
 
 def get_tool(name: str) -> Optional[Dict]:
     """Get tool schema by name."""
     for tool in get_all_tools():
-        if tool.get("name") == name:
+        if _extract_tool_schema_name(tool) == name:
             return tool
     return None
 
@@ -103,6 +151,25 @@ def _strip_none_values(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in kwargs.items() if v is not None}
 
 
+def _coerce_external_tool_result(raw: Any) -> ToolResult:
+    if isinstance(raw, ToolResult):
+        return raw
+    if hasattr(raw, "to_dict"):
+        raw = raw.to_dict()
+    if isinstance(raw, dict):
+        success = bool(raw.get("success"))
+        content = raw.get("content")
+        if content is None and raw.get("data") is not None:
+            content = json.dumps(raw.get("data"), ensure_ascii=False, indent=2)
+        if content is None:
+            content = ""
+        error = raw.get("error")
+        return ToolResult(success=success, content=str(content), error=error)
+    if isinstance(raw, str):
+        return ToolResult(success=True, content=raw)
+    return ToolResult(success=True, content=str(raw))
+
+
 async def execute_tool(name: str, **kwargs) -> ToolResult:
     """Execute a tool by name."""
     from . import bash_tools as bash_tools_module
@@ -112,7 +179,29 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     from . import confluence as confluence_module
     from . import context_tools as context_tools_module
     kwargs = _strip_none_values(kwargs)
-    
+
+    # Backward compatibility: map exec to run_command before external dispatch.
+    if name == "exec":
+        name = "run_command"
+        if "command" in kwargs:
+            kwargs["cmd"] = kwargs.pop("command")
+        if "timeout" in kwargs:
+            kwargs["timeout_ms"] = kwargs.pop("timeout") * 1000
+
+    try:
+        from .runtime.external_tools import execute_external_tool
+
+        external_result = await execute_external_tool(
+            name,
+            kwargs,
+            session_id=kwargs.get("_session_id"),
+            runtime_type="native",
+        )
+        if external_result is not None:
+            return _coerce_external_tool_result(external_result)
+    except Exception:
+        pass
+
     # Bash/Shell tools
     if name == "read":
         file_path = kwargs.get("file_path", "")
@@ -138,15 +227,6 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         path = kwargs.get("path", ".")
         result = bash_tools_module.list_dir(path)
         return ToolResult(success="Error" not in result, content=result)
-    
-    # Backward compatibility: map exec to run_command
-    if name == "exec":
-        name = "run_command"
-        # Map old exec args to new format
-        if "command" in kwargs:
-            kwargs["cmd"] = kwargs.pop("command")
-        if "timeout" in kwargs:
-            kwargs["timeout_ms"] = kwargs.pop("timeout") * 1000
     
     elif name == "run_command":
         cmd = kwargs.get("cmd", "")

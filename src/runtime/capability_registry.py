@@ -300,14 +300,24 @@ class _CapabilityBuilder:
                         capability_id=_format_capability_id("tool", tool_name),
                         type="tool",
                         name=tool_name,
-                        input_schema=dict(tool_schema.get("parameters") or {}),
+                        input_schema=dict(
+                            (
+                                (tool_schema.get("function") if isinstance(tool_schema.get("function"), dict) else {}).get("parameters")
+                                or tool_schema.get("parameters")
+                                or {"type": "object"}
+                            )
+                        ),
                         output_schema={"type": "object"},
                         policy_tags=["tool", *(["read"] if _looks_read_only_tool(tool_name) else [])],
                         source_ref="src.__init__.get_tools_schema",
                         metadata={
                             "tool_name": tool_name,
-                            "description": tool_schema.get("description"),
+                            "description": (
+                                (tool_schema.get("function") if isinstance(tool_schema.get("function"), dict) else {}).get("description")
+                                or tool_schema.get("description")
+                            ),
                             "declaration_only": True,
+                            **dict(tool_schema.get("metadata") or {}),
                         },
                     )
                 )
