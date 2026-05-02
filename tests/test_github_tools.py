@@ -662,3 +662,77 @@ async def test_channel_reply_pr_review_comment_calls_reply_endpoint(monkeypatch,
     assert captured["method"] == "POST"
     assert captured["endpoint"] == "/repos/o/r/pulls/1/comments/2/replies"
     assert captured["json"] == {"body": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_channel_add_commit_comment_calls_commit_comment_endpoint(monkeypatch, github_modules):
+    _, github_api = github_modules
+    captured = {}
+
+    async def _fake_request(method, endpoint, **kwargs):
+        captured["method"] = method
+        captured["endpoint"] = endpoint
+        captured["json"] = kwargs.get("json")
+        return {"id": 101}
+
+    monkeypatch.setattr(github_api.github_channel, "_request", _fake_request)
+    result = await github_api.github_channel.add_commit_comment("o", "r", "abc", "hi", path="a.py", line=1, position=2)
+    assert result["id"] == 101
+    assert captured["method"] == "POST"
+    assert captured["endpoint"] == "/repos/o/r/commits/abc/comments"
+    assert captured["json"] == {"body": "hi", "path": "a.py", "line": 1, "position": 2}
+
+
+@pytest.mark.asyncio
+async def test_channel_add_discussion_comment_calls_graphql_mutation(monkeypatch, github_modules):
+    _, github_api = github_modules
+    captured = {}
+
+    async def _fake_graphql_request(query, variables=None):
+        captured["query"] = query
+        captured["variables"] = variables
+        return {"addDiscussionComment": {"comment": {"id": "DC_2"}}}
+
+    monkeypatch.setattr(github_api.github_channel, "graphql_request", _fake_graphql_request)
+    result = await github_api.github_channel.add_discussion_comment("D_1", "hi", reply_to_id="DC_1")
+    assert result["id"] == "DC_2"
+    assert "addDiscussionComment" in captured["query"]
+    assert captured["variables"]["discussionId"] == "D_1"
+    assert captured["variables"]["body"] == "hi"
+    assert captured["variables"]["replyToId"] == "DC_1"
+
+
+def test_github_graphql_url_public_github(github_modules):
+    _, github_api = github_modules
+    github_api.github_channel.base_url = "https://api.github.com"
+    assert github_api.github_channel._graphql_url() == "https://api.github.com/graphql"
+
+
+def test_github_graphql_url_enterprise(github_modules):
+    _, github_api = github_modules
+    github_api.github_channel.base_url = "https://github.example.com/api/v3"
+    assert github_api.github_channel._graphql_url() == "https://github.example.com/api/graphql"
+
+
+@pytest.mark.asyncio
+async def test_channel_add_discussion_comment_raises_on_missing_comment(monkeypatch, github_modules):
+    _, github_api = github_modules
+
+    async def _fake_graphql_request(_query, _variables=None):
+        return {}
+
+    monkeypatch.setattr(github_api.github_channel, "graphql_request", _fake_graphql_request)
+    with pytest.raises(ValueError, match="returned no comment"):
+        await github_api.github_channel.add_discussion_comment("D_1", "hi", reply_to_id="DC_1")
+
+
+@pytest.mark.asyncio
+async def test_github_add_discussion_comment_wrapper_returns_error_string_on_failure(monkeypatch, github_modules):
+    github_module, github_api = github_modules
+
+    async def _fake_add_discussion_comment(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(github_api.github_channel, "add_discussion_comment", _fake_add_discussion_comment)
+    result = await github_module.github_add_discussion_comment("D_1", "hi", reply_to_id="DC_1")
+    assert result.startswith("Error adding discussion comment:")

@@ -10,6 +10,8 @@ from src.github import (
     github_get_issue,
     github_search_issues,
     github_add_comment,
+    github_add_commit_comment,
+    github_add_discussion_comment,
     github_reply_pr_review_comment,
 )
 
@@ -19,5 +21,7 @@ __all__ = [
     "github_get_issue",
     "github_search_issues",
     "github_add_comment",
+    "github_add_commit_comment",
+    "github_add_discussion_comment",
     "github_reply_pr_review_comment",
 ]

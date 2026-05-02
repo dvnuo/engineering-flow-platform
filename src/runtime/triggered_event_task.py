@@ -36,12 +36,23 @@ async def _run_agent_response(
     return response_text
 
 
+ALLOWED_GITHUB_MENTION_COMMENT_KINDS = {"issue_comment", "pull_request_review_comment", "commit_comment", "discussion_comment"}
+ALLOWED_GITHUB_MENTION_REPLY_MODES = {"same_surface", "timeline"}
+
 def _resolve_secondary_action(source_kind: str, payload: Dict[str, Any] | None = None) -> tuple[str, str]:
     normalized_source_kind = str(source_kind or "").strip().lower()
     payload = payload if isinstance(payload, dict) else {}
     if normalized_source_kind == "github.mention":
         comment_kind = str(payload.get("comment_kind") or "").strip().lower()
+        if comment_kind and comment_kind not in ALLOWED_GITHUB_MENTION_COMMENT_KINDS:
+            raise ValueError(f"Unsupported GitHub mention comment_kind: {comment_kind}")
         reply_mode = str(payload.get("reply_mode") or "same_surface").strip().lower()
+        if reply_mode not in ALLOWED_GITHUB_MENTION_REPLY_MODES:
+            raise ValueError(f"Unsupported GitHub mention reply_mode: {reply_mode}")
+        if comment_kind == "commit_comment":
+            return ("adapter:github:add_commit_comment", "adapter_action")
+        if comment_kind == "discussion_comment":
+            return ("adapter:github:add_discussion_comment", "adapter_action")
         if comment_kind == "pull_request_review_comment" and reply_mode == "same_surface":
             return ("adapter:github:reply_review_comment", "adapter_action")
         return ("adapter:github:add_comment", "adapter_action")
@@ -92,7 +103,12 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     if source_kind == "github.mention":
         owner = str(_require(payload, "owner"))
         repo = str(_require(payload, "repo"))
-        comment_kind = str(payload.get("comment_kind") or "issue_comment")
+        comment_kind = str(payload.get("comment_kind") or "issue_comment").strip().lower()
+        if comment_kind not in ALLOWED_GITHUB_MENTION_COMMENT_KINDS:
+            raise ValueError(f"Unsupported GitHub mention comment_kind: {comment_kind}")
+        reply_mode = str(payload.get("reply_mode") or "same_surface").strip().lower()
+        if reply_mode not in ALLOWED_GITHUB_MENTION_REPLY_MODES:
+            raise ValueError(f"Unsupported GitHub mention reply_mode: {reply_mode}")
         context_type = str(payload.get("context_type") or "")
         issue_number = payload.get("issue_number")
         pull_number = payload.get("pull_number")
@@ -115,6 +131,15 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"Pull number: {pull_number}\n"
             f"Comment id: {comment_id}\n"
             f"Review comment id: {review_comment_id}\n"
+            f"Commit SHA: {payload.get('commit_sha') or payload.get('commit_id')}\n"
+            f"Discussion number: {payload.get('discussion_number')}\n"
+            f"Discussion id: {payload.get('discussion_id')}\n"
+            f"Discussion comment id: {payload.get('discussion_comment_id')}\n"
+            f"Notification id: {payload.get('notification_id')}\n"
+            f"Notification reason: {payload.get('notification_reason')}\n"
+            f"Notification subject type: {payload.get('notification_subject_type')}\n"
+            f"Notification URL: {payload.get('notification_url')}\n"
+            f"Notification updated at: {payload.get('notification_updated_at')}\n"
             f"作者: {author}\n"
             f"Author association: {author_association}\n"
             f"评论链接: {comment_url}\n"
@@ -154,7 +179,31 @@ async def run_triggered_event_task(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "blocked_reason": blocked_reason,
             }
         response_to_post = _append_github_auto_reply_marker(response_text, payload)
-        if secondary_action_id == "adapter:github:reply_review_comment":
+        if secondary_action_id == "adapter:github:add_commit_comment":
+            commit_sha = str(payload.get("commit_sha") or payload.get("commit_id") or "").strip()
+            if not commit_sha:
+                raise ValueError("Missing required field: commit_sha")
+            position = payload.get("position")
+            await github_channel.add_commit_comment(
+                owner,
+                repo,
+                commit_sha,
+                response_to_post,
+                path=str(path).strip() if isinstance(path, str) and path.strip() else None,
+                line=int(line) if isinstance(line, int) or (isinstance(line, str) and str(line).strip().isdigit()) else None,
+                position=int(position) if isinstance(position, int) or (isinstance(position, str) and str(position).strip().isdigit()) else None,
+            )
+        elif secondary_action_id == "adapter:github:add_discussion_comment":
+            discussion_id = str(payload.get("discussion_id") or "").strip()
+            if not discussion_id:
+                raise ValueError("Missing required field: discussion_id")
+            reply_to_id = payload.get("reply_to_id") or payload.get("discussion_comment_id") or payload.get("comment_id")
+            await github_channel.add_discussion_comment(
+                discussion_id,
+                response_to_post,
+                reply_to_id=str(reply_to_id) if reply_to_id else None,
+            )
+        elif secondary_action_id == "adapter:github:reply_review_comment":
             pull_number_value = int(_require(payload, "pull_number"))
             source_comment_id = int(
                 payload.get("in_reply_to_id") or payload.get("review_comment_id") or payload.get("comment_id") or 0

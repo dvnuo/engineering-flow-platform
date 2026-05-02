@@ -252,3 +252,35 @@ def test_resolve_task_capability_contract_triggered_event_task_github_review_com
 def test_resolve_task_capability_contract_triggered_event_task_github_review_comment_timeline_fallback():
     plan = resolve_task_capability_contract("triggered_event_task", {"source_kind": "github.mention", "comment_kind": "pull_request_review_comment", "reply_mode": "timeline"})
     assert "adapter:github:add_comment" in plan["involved_capability_ids"]
+
+
+def test_resolve_task_capability_contract_triggered_event_task_github_unsupported_comment_kind_no_add_comment():
+    plan = resolve_task_capability_plan(
+        "triggered_event_task",
+        {"source_kind": "github.mention", "comment_kind": "commit_comment"},
+    )
+    assert "skill:handle-triggered-event" in plan["involved_capability_ids"]
+    assert "adapter:github:add_comment" not in plan["involved_capability_ids"]
+    assert "adapter:github:reply_review_comment" not in plan["involved_capability_ids"]
+
+
+def test_resolve_task_capability_contract_triggered_event_task_github_unsupported_reply_mode_no_write_adapter():
+    plan = resolve_task_capability_plan(
+        "triggered_event_task",
+        {"source_kind": "github.mention", "comment_kind": "issue_comment", "reply_mode": "foo"},
+    )
+    assert "skill:handle-triggered-event" in plan["involved_capability_ids"]
+    assert "adapter:github:add_comment" not in plan["involved_capability_ids"]
+    assert "adapter:github:reply_review_comment" not in plan["involved_capability_ids"]
+
+
+def test_resolve_task_capability_contract_triggered_event_task_github_commit_comment():
+    plan = resolve_task_capability_contract("triggered_event_task", {"source_kind":"github.mention","comment_kind":"commit_comment"})
+    assert "adapter:github:add_commit_comment" in plan["involved_capability_ids"]
+    assert "adapter:github:add_comment" not in plan["involved_capability_ids"]
+    assert "adapter:github:reply_review_comment" not in plan["involved_capability_ids"]
+
+
+def test_resolve_task_capability_contract_triggered_event_task_github_discussion_comment():
+    plan = resolve_task_capability_contract("triggered_event_task", {"source_kind":"github.mention","comment_kind":"discussion_comment"})
+    assert "adapter:github:add_discussion_comment" in plan["involved_capability_ids"]

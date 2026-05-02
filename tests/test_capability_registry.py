@@ -170,3 +170,13 @@ def test_default_registry_includes_triggered_event_skill_and_github_reply_review
     registry = build_default_capability_registry()
     assert registry.exists("skill:handle-triggered-event") is True
     assert registry.exists("adapter:github:reply_review_comment") is True
+
+
+def test_default_registry_includes_github_add_commit_comment_adapter():
+    registry = build_default_capability_registry()
+    assert registry.exists("adapter:github:add_commit_comment") is True
+
+
+def test_default_registry_includes_github_add_discussion_comment_adapter():
+    registry = build_default_capability_registry()
+    assert registry.exists("adapter:github:add_discussion_comment") is True

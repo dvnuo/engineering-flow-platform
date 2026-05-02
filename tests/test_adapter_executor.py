@@ -495,3 +495,71 @@ async def test_execute_github_reply_review_comment_action_prefers_in_reply_to_id
     )
     assert result["success"] is True
     assert captured["comment_id"] == 100
+
+
+@pytest.mark.asyncio
+async def test_execute_github_add_commit_comment_action(monkeypatch):
+    captured = {}
+
+    async def _fake_add_commit_comment(**kwargs):
+        captured.update(kwargs)
+        return "Commit comment added"
+
+    monkeypatch.setattr("src.github.github_add_commit_comment", _fake_add_commit_comment)
+    result = await execute_adapter_action("adapter:github:add_commit_comment", {"owner":"o","repo":"r","commit_sha":"abc","comment":"hi","path":"a.py","line":1,"position":2})
+    assert result["success"] is True
+    assert captured["commit_sha"] == "abc"
+    assert captured["path"] == "a.py"
+    assert captured["line"] == 1
+    assert captured["position"] == 2
+
+
+def test_validate_enabled_adapter_actions_have_executors_includes_add_commit_comment():
+    assert validate_enabled_adapter_actions_have_executors() == []
+
+
+@pytest.mark.asyncio
+async def test_execute_github_add_discussion_comment_action(monkeypatch):
+    captured = {}
+
+    async def _fake_add_discussion_comment(**kwargs):
+        captured.update(kwargs)
+        return "Discussion comment added"
+
+    monkeypatch.setattr("src.github.github_add_discussion_comment", _fake_add_discussion_comment)
+    result = await execute_adapter_action("adapter:github:add_discussion_comment", {"discussion_id":"D1","comment":"hi","reply_to_id":"DC1"})
+    assert result["success"] is True
+    assert captured["discussion_id"] == "D1"
+    assert captured["comment"] == "hi"
+    assert captured["reply_to_id"] == "DC1"
+
+
+@pytest.mark.asyncio
+async def test_execute_github_add_discussion_comment_prefers_reply_to_id(monkeypatch):
+    captured = {}
+
+    async def _fake_add_discussion_comment(**kwargs):
+        captured.update(kwargs)
+        return "Discussion comment added"
+
+    monkeypatch.setattr("src.github.github_add_discussion_comment", _fake_add_discussion_comment)
+    result = await execute_adapter_action(
+        "adapter:github:add_discussion_comment",
+        {"discussion_id": "D1", "comment": "hi", "reply_to_id": "DC_root", "discussion_comment_id": "DC_child", "comment_id": "DC_child"},
+    )
+    assert result["success"] is True
+    assert captured["reply_to_id"] == "DC_root"
+
+
+@pytest.mark.asyncio
+async def test_execute_github_add_discussion_comment_failure_is_not_success(monkeypatch):
+    async def _fake_add_discussion_comment(**_kwargs):
+        return "Error adding discussion comment: boom"
+
+    monkeypatch.setattr("src.github.github_add_discussion_comment", _fake_add_discussion_comment)
+    result = await execute_adapter_action(
+        "adapter:github:add_discussion_comment",
+        {"discussion_id": "D1", "comment": "hi", "reply_to_id": "DC1"},
+    )
+    assert result["success"] is False
+    assert "Error adding discussion comment" in str(result["error"])

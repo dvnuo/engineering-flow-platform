@@ -198,6 +198,36 @@ class GitHubChannel:
                     raise
         
         raise Exception(f"GitHub API request failed: {last_error}")
+
+    def _graphql_url(self) -> str:
+        base_url = normalize_github_api_base_url(self.base_url).rstrip("/")
+        if base_url.endswith("/api/v3"):
+            return f"{base_url[:-7]}/api/graphql"
+        return "https://api.github.com/graphql"
+
+    async def graphql_request(self, query: str, variables: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        if not self.enabled:
+            raise RuntimeError("GitHub integration is disabled")
+        if not self.token:
+            raise RuntimeError("GitHub token is not configured")
+        payload = {"query": query, "variables": variables or {}}
+        response = await self.client.post(
+            self._graphql_url(),
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": self._headers.get("User-Agent", "Engineering Flow Platform-Mini"),
+            },
+            json=payload,
+        )
+        if response.status_code >= 400:
+            raise Exception(f"GitHub GraphQL API error: {response.status_code} - {response.text}")
+        body = response.json()
+        errors = body.get("errors")
+        if isinstance(errors, list) and errors:
+            first = errors[0] if isinstance(errors[0], dict) else {"message": str(errors[0])}
+            raise ValueError(f"GitHub GraphQL error: {first.get('message', 'unknown error')}")
+        return body.get("data") or {}
     
     async def get_issue_comments(
         self, 
@@ -646,6 +676,57 @@ class GitHubChannel:
             f"/repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies",
             json={"body": body},
         )
+
+    async def add_commit_comment(
+        self,
+        owner: str,
+        repo: str,
+        commit_sha: str,
+        body: str,
+        path: str | None = None,
+        line: int | None = None,
+        position: int | None = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"body": body}
+        if path:
+            payload["path"] = path
+        if line is not None:
+            payload["line"] = line
+        if position is not None:
+            payload["position"] = position
+        return await self._request(
+            "POST",
+            f"/repos/{owner}/{repo}/commits/{commit_sha}/comments",
+            json=payload,
+        )
+
+    async def add_discussion_comment(
+        self,
+        discussion_id: str,
+        body: str,
+        reply_to_id: str | None = None,
+    ) -> Dict[str, Any]:
+        mutation = """
+        mutation AddDiscussionComment($discussionId: ID!, $body: String!, $replyToId: ID) {
+          addDiscussionComment(input: {discussionId: $discussionId, body: $body, replyToId: $replyToId}) {
+            comment {
+              id
+              url
+              body
+              createdAt
+            }
+          }
+        }
+        """
+        data = await self.graphql_request(
+            mutation,
+            {"discussionId": discussion_id, "body": body, "replyToId": reply_to_id},
+        )
+        payload = data.get("addDiscussionComment") if isinstance(data, dict) else None
+        comment = payload.get("comment") if isinstance(payload, dict) else None
+        if not isinstance(comment, dict):
+            raise ValueError("GitHub GraphQL addDiscussionComment returned no comment")
+        return comment
     
     async def list_pr_reviews(self, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
         """List all reviews on a pull request."""
@@ -789,6 +870,44 @@ async def github_reply_pr_review_comment(owner: str, repo: str, pull_number: int
         return f"Review comment reply added: {owner}/{repo}#{pull_number} (ID: {reply_id})"
     except Exception as e:
         return f"Error replying to PR review comment: {e}"
+
+
+async def github_add_commit_comment(
+    owner: str,
+    repo: str,
+    commit_sha: str,
+    comment: str,
+    path: str | None = None,
+    line: int | None = None,
+    position: int | None = None,
+) -> str:
+    try:
+        result = await github_channel.add_commit_comment(
+            owner,
+            repo,
+            commit_sha,
+            comment,
+            path=path,
+            line=line,
+            position=position,
+        )
+        comment_id = result.get("id", "unknown")
+        return f"Commit comment added: {owner}/{repo}@{commit_sha} (ID: {comment_id})"
+    except Exception as e:
+        return f"Error adding commit comment: {e}"
+
+
+async def github_add_discussion_comment(
+    discussion_id: str,
+    comment: str,
+    reply_to_id: str | None = None,
+) -> str:
+    try:
+        result = await github_channel.add_discussion_comment(discussion_id, comment, reply_to_id=reply_to_id)
+        comment_id = result.get("id", "unknown")
+        return f"Discussion comment added: {discussion_id} (ID: {comment_id})"
+    except Exception as e:
+        return f"Error adding discussion comment: {e}"
 
 
 async def github_get_pr_files(owner: str, repo: str, pull_number: int) -> str:

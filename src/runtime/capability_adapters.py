@@ -70,6 +70,46 @@ def build_github_adapter_capabilities() -> List[AdapterActionDescriptor]:
             requires_identity_binding=True,
             source_ref="src.github",
         ),
+        AdapterActionDescriptor(
+            action_id="adapter:github:add_commit_comment",
+            adapter="github",
+            name="add_commit_comment",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "owner": {"type": "string"},
+                    "repo": {"type": "string"},
+                    "commit_sha": {"type": "string"},
+                    "comment": {"type": "string"},
+                    "path": {"type": "string"},
+                    "line": {"type": "integer"},
+                    "position": {"type": "integer"},
+                },
+                "required": ["owner", "repo", "commit_sha", "comment"],
+            },
+            output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
+            policy_tags=["github", "write", "comment", "commit_comment"],
+            requires_identity_binding=True,
+            source_ref="src.github",
+        ),
+        AdapterActionDescriptor(
+            action_id="adapter:github:add_discussion_comment",
+            adapter="github",
+            name="add_discussion_comment",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "discussion_id": {"type": "string"},
+                    "comment": {"type": "string"},
+                    "reply_to_id": {"type": "string"},
+                },
+                "required": ["discussion_id", "comment"],
+            },
+            output_schema={"type": "object", "properties": {"status": {"type": "string"}}},
+            policy_tags=["github", "write", "comment", "discussion_comment"],
+            requires_identity_binding=True,
+            source_ref="src.github",
+        ),
     ])
 
 
