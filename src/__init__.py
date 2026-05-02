@@ -6,6 +6,9 @@ Bash tools with security controls.
 
 from typing import Any, Dict, List, Optional
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ToolResult:
@@ -77,6 +80,7 @@ def get_all_tools() -> list:
         external_tools = get_external_tool_schemas(runtime_type="native")
         external_disabled_names = get_external_disabled_tool_names(runtime_type="native")
     except Exception:
+        logger.warning("Failed to load external tool schemas; falling back to legacy tools", exc_info=True)
         external_tools = []
         external_disabled_names = set()
     if not external_tools and not external_disabled_names:
@@ -189,8 +193,9 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
             kwargs["timeout_ms"] = kwargs.pop("timeout") * 1000
 
     try:
-        from .runtime.external_tools import execute_external_tool
+        from .runtime.external_tools import execute_external_tool, has_external_tool
 
+        external_known = has_external_tool(name, runtime_type="native", include_disabled=True)
         external_result = await execute_external_tool(
             name,
             kwargs,
@@ -199,8 +204,16 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         )
         if external_result is not None:
             return _coerce_external_tool_result(external_result)
-    except Exception:
-        pass
+        if external_known:
+            return ToolResult(success=False, error=f"External tool '{name}' did not return a result")
+    except Exception as exc:
+        try:
+            from .runtime.external_tools import has_external_tool
+
+            if has_external_tool(name, runtime_type="native", include_disabled=True):
+                return ToolResult(success=False, error=f"External tool '{name}' execution failed: {exc}")
+        except Exception:
+            pass
 
     # Bash/Shell tools
     if name == "read":
