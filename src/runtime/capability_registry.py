@@ -287,7 +287,10 @@ class _CapabilityBuilder:
 
     def _register_tools(self) -> None:
         try:
-            from src import get_tools_schema
+            from src import get_tools_schema, is_external_tool_exposed
+            from src.tools_external import get_external_tool_registry
+
+            external_registry = get_external_tool_registry()
 
             for tool_schema in list(get_tools_schema() or []):
                 if not isinstance(tool_schema, dict):
@@ -295,20 +298,56 @@ class _CapabilityBuilder:
                 tool_name = _extract_tool_name(tool_schema)
                 if not tool_name:
                     continue
+
+                external_descriptor = (
+                    external_registry.get_descriptor(tool_name) if is_external_tool_exposed(tool_name) else None
+                )
+
+                if external_descriptor:
+                    external_metadata = dict(external_descriptor.metadata or {})
+                    capability_id = external_descriptor.tool_id or _format_capability_id("tool", tool_name)
+                    input_schema = dict(external_descriptor.input_schema or _extract_tool_parameters(tool_schema))
+                    output_schema = dict(external_descriptor.output_schema or {"type": "object"})
+                    policy_tags = ["tool", *list(external_descriptor.policy_tags or [])]
+                    requires_identity_binding = bool(
+                        getattr(external_descriptor, "requires_identity_binding", False)
+                        or external_metadata.get("requires_identity_binding", False)
+                    )
+                    metadata = {
+                        "tool_name": tool_name,
+                        "description": external_descriptor.description or _extract_tool_description(tool_schema),
+                        "declaration_only": True,
+                        "external_tool": True,
+                        "domain": external_descriptor.domain,
+                        "external_type": external_descriptor.type,
+                        "runtime_compat": list(external_descriptor.runtime_compat or []),
+                        **external_metadata,
+                    }
+                    source_ref = "src.tools_external"
+                else:
+                    capability_id = _format_capability_id("tool", tool_name)
+                    input_schema = _extract_tool_parameters(tool_schema)
+                    output_schema = {"type": "object"}
+                    policy_tags = ["tool", *(["read"] if _looks_read_only_tool(tool_name) else [])]
+                    metadata = {
+                        "tool_name": tool_name,
+                        "description": _extract_tool_description(tool_schema),
+                        "declaration_only": True,
+                    }
+                    source_ref = "src.__init__.get_tools_schema"
+                    requires_identity_binding = False
+
                 self.registry.register(
                     CapabilityDescriptor(
-                        capability_id=_format_capability_id("tool", tool_name),
+                        capability_id=capability_id,
                         type="tool",
                         name=tool_name,
-                        input_schema=dict(tool_schema.get("parameters") or {}),
-                        output_schema={"type": "object"},
-                        policy_tags=["tool", *(["read"] if _looks_read_only_tool(tool_name) else [])],
-                        source_ref="src.__init__.get_tools_schema",
-                        metadata={
-                            "tool_name": tool_name,
-                            "description": tool_schema.get("description"),
-                            "declaration_only": True,
-                        },
+                        input_schema=input_schema,
+                        output_schema=output_schema,
+                        policy_tags=policy_tags,
+                        requires_identity_binding=requires_identity_binding,
+                        source_ref=source_ref,
+                        metadata=metadata,
                     )
                 )
         except Exception:
@@ -316,8 +355,13 @@ class _CapabilityBuilder:
 
 
 def _dedupe_capability_id(capability_id: str) -> str:
-    normalized = str(capability_id or "").strip().lower()
-    parts = [_normalize_component(item) for item in normalized.split(":")]
+    raw = str(capability_id or "").strip().lower()
+    if not raw:
+        return "capability:unknown"
+    if ":" not in raw and raw.startswith("efp.tool."):
+        return raw
+
+    parts = [_normalize_component(item) for item in raw.split(":")]
     parts = [part for part in parts if part]
     if not parts:
         return "capability:unknown"
@@ -349,6 +393,24 @@ def _extract_tool_name(tool_schema: Dict[str, Any]) -> str:
         function_name = function_obj.get("name")
         if isinstance(function_name, str) and function_name.strip():
             return function_name.strip()
+    return ""
+
+
+def _extract_tool_parameters(tool_schema: Dict[str, Any]) -> Dict[str, Any]:
+    if isinstance(tool_schema.get("parameters"), dict):
+        return dict(tool_schema.get("parameters") or {})
+    function_obj = tool_schema.get("function")
+    if isinstance(function_obj, dict) and isinstance(function_obj.get("parameters"), dict):
+        return dict(function_obj.get("parameters") or {})
+    return {}
+
+
+def _extract_tool_description(tool_schema: Dict[str, Any]) -> str:
+    if isinstance(tool_schema.get("description"), str):
+        return tool_schema.get("description") or ""
+    function_obj = tool_schema.get("function")
+    if isinstance(function_obj, dict) and isinstance(function_obj.get("description"), str):
+        return function_obj.get("description") or ""
     return ""
 
 

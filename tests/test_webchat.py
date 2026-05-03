@@ -2680,6 +2680,13 @@ async def test_api_tasks_execute_github_review_task_portal_automation_payload_tr
                     "review_event": "COMMENT",
                     "dedupe_key": "github:pr_review_requested:rule-1:Acme/Portal:42:sha:team:Acme/Reviewers",
                 },
+                "metadata": {
+                    "identity_binding": {
+                        "id": "binding-gh-1",
+                        "system_type": "github",
+                        "external_account_id": "reviewer-bot",
+                    }
+                },
             }
 
     response = await webchat.api_tasks_execute(_Request())

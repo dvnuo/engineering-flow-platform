@@ -77,7 +77,7 @@ def load_webchat_lightweight():
         "src.hooks.session_memory": _module("src.hooks.session_memory", save_session_summary=_noop_async),
         "src.agents.errors": _module("src.agents.errors", extract_error_details=lambda *_a, **_k: {}, LLMError=RuntimeError),
         "src.hooks.file_context": _module("src.hooks.file_context", inject_context=lambda *_a, **_k: None),
-        "src.config": _module("src.config", config=cfg),
+        "src.config": _module("src.config", config=cfg, DEFAULT_LLM_MODEL="gpt-5.4-mini"),
         "src.runtime.chat_orchestration_adapter": _module(
             "src.runtime.chat_orchestration_adapter",
             execute_chat_orchestration=_noop_async,

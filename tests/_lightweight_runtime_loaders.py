@@ -30,7 +30,13 @@ def _load_module_with_stubs(module_name: str, module_path: Path, modules: dict[s
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = old
-        sys.modules.pop(module_name, None)
+        # Only remove the dynamically loaded module when it wasn't one of the
+        # stubbed entries restored above. For load_root_execute_tool_lightweight(),
+        # module_name is "src" and "src" is also restored from prev; popping it
+        # here would remove the real package and break parent attrs like
+        # src.runtime for later tests.
+        if module_name not in modules:
+            sys.modules.pop(module_name, None)
 
     return module, _cleanup
 

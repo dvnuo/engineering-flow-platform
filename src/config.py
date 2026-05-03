@@ -113,6 +113,7 @@ class Config:
             "model": True,
             "api_key": True,
             "temperature": True,
+            "reasoning_replay": True,
             "max_tokens": True,
             "tools": True,
             "context_budget": True,
@@ -279,6 +280,9 @@ class Config:
 
     def _rebuild_effective_config(self) -> None:
         self._config = copy.deepcopy(self._base_config)
+        llm_cfg = self._config.get("llm")
+        if isinstance(llm_cfg, dict):
+            llm_cfg.setdefault("reasoning_replay", False)
 
     def load_managed_overlay(self) -> Dict[str, Any]:
         """Legacy compatibility no-op.

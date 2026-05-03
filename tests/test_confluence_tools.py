@@ -144,3 +144,24 @@ async def test_execute_tool_confluence_dispatch_passes_session_id(monkeypatch):
         assert captured["children_session"] == "s1"
     finally:
         cleanup()
+
+
+def test_root_execute_tool_lightweight_cleanup_preserves_src_runtime_parent_attr():
+    import sys
+    import src
+    import src.runtime.execution_bus  # noqa: F401
+
+    assert hasattr(src, "runtime")
+    original_src = sys.modules.get("src")
+    original_runtime = sys.modules.get("src.runtime")
+
+    root, cleanup = load_root_execute_tool_lightweight()
+    try:
+        assert root is not original_src
+    finally:
+        cleanup()
+
+    restored_src = sys.modules.get("src")
+    assert restored_src is original_src
+    assert sys.modules.get("src.runtime") is original_runtime
+    assert getattr(restored_src, "runtime", None) is original_runtime

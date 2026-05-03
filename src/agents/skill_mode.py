@@ -269,10 +269,14 @@ def _build_skill_mode_system_prompt(
         ]
     )
 
+    skill_name = getattr(skill, "name", "") or "skill"
+    skill_description = getattr(skill, "description", None) or skill_name
+    skill_goal = skill_session.goal or skill_description
+
     return (
         "You are running an active skill-mode session.\n"
-        f"Skill: {skill.name}\n"
-        f"Goal: {skill_session.goal or skill.description}\n"
+        f"Skill: {skill_name}\n"
+        f"Goal: {skill_goal}\n"
         f"Plan:\n{plan}\n\n"
         f"Completed summary:\n{completed}\n\n"
         f"Memory summary:\n{skill_session.memory_summary or '(empty)'}\n\n"
