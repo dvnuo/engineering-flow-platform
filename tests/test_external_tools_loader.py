@@ -132,10 +132,20 @@ async def test_context_payload_and_reserved_arg_filtering(monkeypatch, tmp_path,
             """
             async def execute_tool_async(*, tools_dir, tool, args=None, context=None):
                 assert context['session_id'] == 'sess-1'
+                if tool == 'context_read_ref':
+                    assert context['message_id'] == 'm1'
+                    assert context['task_id'] == 't1'
                 assert context['workspace_dir'].endswith('/workspace')
                 assert context['portal_metadata']['legacy_runtime_src_dir']
                 assert context['portal_metadata']['context_blob_dir'].endswith('/context_blobs')
+                if tool == 'context_read_ref':
+                    assert context['portal_metadata']['x'] == 'y'
+                    assert context['portal_metadata']['context_blob_dir'] != '/bad'
                 assert '_session_id' not in args
+                assert '_message_id' not in args
+                assert '_task_id' not in args
+                assert '_runtime_type' not in args
+                assert '_portal_metadata' not in args
                 return {'success': True, 'content': f"ok:{tool}:{tools_dir}"}
             """
         ),
@@ -146,7 +156,13 @@ async def test_context_payload_and_reserved_arg_filtering(monkeypatch, tmp_path,
     _reload_external_loader()
 
     result = await src_module.execute_tool(
-        "context_read_ref", ref="ctx://context/sess-1/jira/abcdef123456", _session_id="sess-1"
+        "context_read_ref",
+        ref="ctx://context/sess-1/jira/abcdef123456",
+        _session_id="sess-1",
+        _message_id="m1",
+        _task_id="t1",
+        _portal_metadata={"x": "y", "context_blob_dir": "/bad"},
+        _runtime_type="native",
     )
     assert result.success is True
     git_result = await src_module.execute_tool("git_status", workspace=".", _session_id="sess-1")
@@ -242,6 +258,61 @@ async def test_execute_external_tool_direct_returns_error_on_runner_exception(mo
     assert isinstance(result, dict)
     assert result.get("success") is False
     assert "execution failed" in (result.get("error") or "")
+
+
+def test_strict_mode_schema_load_does_not_fallback(monkeypatch, tmp_path, src_module):
+    repo = tmp_path / "repo"
+    _create_tools_repo(repo, validate_errors="['bad descriptor']")
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
+    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
+    _reload_external_loader()
+    with pytest.raises(RuntimeError):
+        src_module.get_tools_schema()
+
+
+@pytest.mark.asyncio
+async def test_strict_mode_execute_does_not_fallback_to_legacy(monkeypatch, tmp_path, src_module):
+    repo = tmp_path / "repo"
+    _create_tools_repo(repo, validate_errors="['bad descriptor']")
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
+    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
+    _reload_external_loader()
+    result = await src_module.execute_tool("run_command", cmd="echo hi")
+    assert result.success is False
+    assert "strict mode failed" in (result.error or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_execute_external_tool_known_enabled_unavailable_returns_structured_error(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    _create_tools_repo(repo, validate_errors="['bad descriptor']")
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
+    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "false")
+    ext = _reload_external_loader()
+    result = await ext.execute_external_tool(
+        "context_read_ref",
+        {"ref": "ctx://context/sess-1/jira/abcdef123456", "_session_id": "sess-1"},
+        session_id="sess-1",
+        runtime_type="native",
+    )
+    assert result["success"] is False
+    assert "External tools unavailable" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_execute_external_tool_runner_none_returns_structured_error(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    _create_tools_repo(repo, runner_body="async def execute_tool_async(**kwargs):\n    return None\n")
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
+    ext = _reload_external_loader()
+    result = await ext.execute_external_tool(
+        "context_read_ref",
+        {"ref": "ctx://context/sess-1/jira/abcdef123456", "_session_id": "sess-1"},
+        session_id="sess-1",
+        runtime_type="native",
+    )
+    assert result["success"] is False
+    assert "returned no result" in result["error"]
 
 
 def test_optional_real_tools_repo_fixture(monkeypatch):

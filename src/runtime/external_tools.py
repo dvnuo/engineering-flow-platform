@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Set
 
 DEFAULT_TOOLS_DIR = "/app/tools"
 logger = logging.getLogger(__name__)
+_FRAMEWORK_ARG_KEYS = {"_session_id", "_message_id", "_task_id", "_runtime_type", "_portal_metadata"}
 
 
 @dataclass
@@ -265,7 +266,11 @@ async def execute_external_tool(
                 if _descriptor_name(item) == name and _descriptor_runtime_compatible(item, runtime_type):
                     if item.get("enabled", True) is False:
                         return {"success": False, "content": "", "error": f"Tool '{name}' is disabled by external descriptor"}
-                    break
+                    return {
+                        "success": False,
+                        "content": "",
+                        "error": f"External tools unavailable for '{name}': {state.error or 'unknown error'}",
+                    }
         return None
 
     descriptor: Optional[Dict[str, Any]] = None
@@ -283,13 +288,21 @@ async def execute_external_tool(
     context = {
         "runtime_type": runtime_type,
         "session_id": session_id or kwargs.get("_session_id"),
+        "message_id": kwargs.get("_message_id"),
+        "task_id": kwargs.get("_task_id"),
         "workspace_dir": workspace_dir,
-        "portal_metadata": {
+        "portal_metadata": {},
+    }
+    user_portal_metadata = kwargs.get("_portal_metadata")
+    if isinstance(user_portal_metadata, dict):
+        context["portal_metadata"].update(user_portal_metadata)
+    context["portal_metadata"].update(
+        {
             "legacy_runtime_src_dir": str(_runtime_root_dir()),
             "context_blob_dir": _context_blob_dir(workspace_dir),
-        },
-    }
-    runner_args = {k: v for k, v in kwargs.items() if k not in {"_session_id"}}
+        }
+    )
+    runner_args = {k: v for k, v in kwargs.items() if k not in _FRAMEWORK_ARG_KEYS}
 
     runner = state.runner
     execute_async = getattr(runner, "execute_tool_async", None)
@@ -319,7 +332,9 @@ async def execute_external_tool(
         return {"success": False, "content": "", "error": f"External tool '{name}' execution failed: {exc}"}
     try:
         if inspect.isawaitable(result):
-            return await result
+            result = await result
+        if result is None:
+            return {"success": False, "content": "", "error": f"External tool '{name}' returned no result"}
         return result
     except Exception as exc:
         logger.warning("External tool execution failed for %s: %s", name, exc, exc_info=True)

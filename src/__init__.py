@@ -7,8 +7,13 @@ Bash tools with security controls.
 from typing import Any, Dict, List, Optional
 import json
 import logging
+import os
 
 logger = logging.getLogger(__name__)
+
+
+def _external_tools_strict_mode() -> bool:
+    return os.environ.get("EFP_EXTERNAL_TOOLS_STRICT", "false").strip().lower() == "true"
 
 
 class ToolResult:
@@ -80,6 +85,8 @@ def get_all_tools() -> list:
         external_tools = get_external_tool_schemas(runtime_type="native")
         external_disabled_names = get_external_disabled_tool_names(runtime_type="native")
     except Exception:
+        if _external_tools_strict_mode():
+            raise
         logger.warning("Failed to load external tool schemas; falling back to legacy tools", exc_info=True)
         external_tools = []
         external_disabled_names = set()
@@ -207,6 +214,8 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         if external_known:
             return ToolResult(success=False, error=f"External tool '{name}' did not return a result")
     except Exception as exc:
+        if _external_tools_strict_mode():
+            return ToolResult(success=False, error=f"External tools strict mode failed for '{name}': {exc}")
         try:
             from .runtime.external_tools import has_external_tool
 
