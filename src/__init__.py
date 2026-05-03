@@ -74,30 +74,25 @@ from . import confluence
 from . import git
 from . import bash_tools
 from . import context_tools
+from .tools_external import get_external_tool_registry
 
 
-def get_all_tools() -> list:
-    """Get all tool schemas."""
-    legacy_tools = _get_legacy_tools()
-    try:
-        from .runtime.external_tools import get_external_disabled_tool_names, get_external_tool_schemas
-
-        external_tools = get_external_tool_schemas(runtime_type="native")
-        external_disabled_names = get_external_disabled_tool_names(runtime_type="native")
-    except Exception:
-        if _external_tools_strict_mode():
-            raise
-        logger.warning("Failed to load external tool schemas; falling back to legacy tools", exc_info=True)
-        external_tools = []
-        external_disabled_names = set()
-    if not external_tools and not external_disabled_names:
-        return legacy_tools
-    return _merge_legacy_and_external_tools(legacy_tools, external_tools, external_disabled_names)
+def _extract_tool_schema_name(tool_schema: Dict[str, Any]) -> str:
+    if not isinstance(tool_schema, dict):
+        return ""
+    if isinstance(tool_schema.get("name"), str) and tool_schema.get("name").strip():
+        return tool_schema["name"].strip()
+    function_obj = tool_schema.get("function")
+    if isinstance(function_obj, dict):
+        name = function_obj.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return ""
 
 
-def _get_legacy_tools() -> list:
+def _get_legacy_tools_schema() -> list:
     tools = []
-    tools.extend(get_bash_tools())   # Bash/Shell tools: exec only (simplified)
+    tools.extend(get_bash_tools())
     tools.extend(get_github_tools())
     tools.extend(get_jira_tools())
     tools.extend(get_confluence_tools())
@@ -106,42 +101,46 @@ def _get_legacy_tools() -> list:
     return tools
 
 
-def _extract_tool_schema_name(tool_schema: Dict[str, Any]) -> Optional[str]:
-    function_obj = tool_schema.get("function") if isinstance(tool_schema, dict) else None
-    if isinstance(function_obj, dict) and isinstance(function_obj.get("name"), str):
-        return function_obj["name"].strip()
-    if isinstance(tool_schema, dict) and isinstance(tool_schema.get("name"), str):
-        return tool_schema["name"].strip()
-    return None
+def _get_legacy_tool_names_set() -> set[str]:
+    return {
+        name
+        for name in (_extract_tool_schema_name(item) for item in _get_legacy_tools_schema())
+        if name
+    }
 
 
-def _merge_legacy_and_external_tools(
-    legacy_tools: List[Dict[str, Any]],
-    external_tools: List[Dict[str, Any]],
-    external_disabled_names: set[str],
-) -> List[Dict[str, Any]]:
-    by_name: Dict[str, Dict[str, Any]] = {}
-    for schema in legacy_tools:
-        name = _extract_tool_schema_name(schema)
-        if not name or name in external_disabled_names:
-            continue
-        by_name[name] = schema
-    for schema in external_tools:
+def is_external_tool_exposed(name: str) -> bool:
+    """Return True when an external tool is visible in the merged tool surface."""
+    registry = get_external_tool_registry()
+    legacy_names = _get_legacy_tool_names_set()
+    return registry.has_tool(name) and (name not in legacy_names or registry.is_override_enabled(name))
+
+
+def get_all_tools() -> list:
+    """Get all tool schemas, merging legacy built-ins with external tools."""
+    legacy_tools = _get_legacy_tools_schema()
+    legacy_names = {name for name in (_extract_tool_schema_name(item) for item in legacy_tools) if name}
+    result = list(legacy_tools)
+
+    registry = get_external_tool_registry()
+    for schema in registry.get_tools_schema():
         name = _extract_tool_schema_name(schema)
         if not name:
             continue
-        by_name[name] = schema
-    return [by_name[name] for name in sorted(by_name.keys())]
+        if name in legacy_names:
+            if registry.is_override_enabled(name):
+                result = [item for item in result if _extract_tool_schema_name(item) != name]
+                result.append(schema)
+            else:
+                continue
+        else:
+            result.append(schema)
+    return result
 
 
 def get_tool_names() -> List[str]:
     """Get all tool names."""
-    names: List[str] = []
-    for tool in get_all_tools():
-        name = _extract_tool_schema_name(tool)
-        if name:
-            names.append(name)
-    return names
+    return [name for name in (_extract_tool_schema_name(t) for t in get_all_tools()) if name]
 
 
 def get_tool(name: str) -> Optional[Dict]:
@@ -150,6 +149,11 @@ def get_tool(name: str) -> Optional[Dict]:
         if _extract_tool_schema_name(tool) == name:
             return tool
     return None
+
+
+def get_tool_map() -> Dict[str, Dict[str, Any]]:
+    """Get tool schema map by tool name."""
+    return {name: tool for tool in get_all_tools() if (name := _extract_tool_schema_name(tool))}
 
 
 def get_tools_schema() -> List[Dict]:
@@ -191,7 +195,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     from . import context_tools as context_tools_module
     kwargs = _strip_none_values(kwargs)
 
-    # Backward compatibility: map exec to run_command before external dispatch.
+    # Backward compatibility: map exec to run_command before external/legacy dispatch.
     if name == "exec":
         name = "run_command"
         if "command" in kwargs:
@@ -199,30 +203,16 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         if "timeout" in kwargs:
             kwargs["timeout_ms"] = kwargs.pop("timeout") * 1000
 
-    try:
-        from .runtime.external_tools import execute_external_tool, has_external_tool
+    registry = get_external_tool_registry()
+    legacy_names = _get_legacy_tool_names_set()
 
-        external_known = has_external_tool(name, runtime_type="native", include_disabled=True)
-        external_result = await execute_external_tool(
-            name,
-            kwargs,
-            session_id=kwargs.get("_session_id"),
-            runtime_type="native",
+    if registry.has_tool(name) and registry.is_override_enabled(name):
+        external_result = await registry.execute_tool(name, **kwargs)
+        return ToolResult(
+            success=external_result.success,
+            content=external_result.content,
+            error=external_result.error,
         )
-        if external_result is not None:
-            return _coerce_external_tool_result(external_result)
-        if external_known:
-            return ToolResult(success=False, error=f"External tool '{name}' did not return a result")
-    except Exception as exc:
-        if _external_tools_strict_mode():
-            return ToolResult(success=False, error=f"External tools strict mode failed for '{name}': {exc}")
-        try:
-            from .runtime.external_tools import has_external_tool
-
-            if has_external_tool(name, runtime_type="native", include_disabled=True):
-                return ToolResult(success=False, error=f"External tool '{name}' execution failed: {exc}")
-        except Exception:
-            pass
 
     # Bash/Shell tools
     if name == "read":
@@ -803,6 +793,14 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await confluence_module.confluence_search_by_title(title, space_key)
         return ToolResult(success="Error" not in result, content=result)
     
+    if registry.has_tool(name) and name not in legacy_names:
+        external_result = await registry.execute_tool(name, **kwargs)
+        return ToolResult(
+            success=external_result.success,
+            content=external_result.content,
+            error=external_result.error,
+        )
+
     return ToolResult(success=False, error=f"Tool {name} not implemented")
 
 
@@ -810,7 +808,9 @@ __all__ = [
     "get_all_tools",
     "get_tool_names",
     "get_tool",
+    "get_tool_map",
     "get_tools_schema",
+    "is_external_tool_exposed",
     "execute_tool",
     "get_github_tools",
     "get_jira_tools",

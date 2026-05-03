@@ -1,4 +1,5 @@
 import io
+import importlib
 import json
 
 import pytest
@@ -115,9 +116,13 @@ async def test_delete_file_best_effort_cleans_context_even_when_storage_missing(
     dummy_context_storage = _DummyContextStorage()
     dummy_retrieval = _DummyRetrieval()
 
-    monkeypatch.setattr("src.hooks.file_context.storage.storage", dummy_context_storage)
-    monkeypatch.setattr("src.hooks.file_context.retrieval.retrieval_engine", dummy_retrieval)
-    monkeypatch.setattr("src.utils.file_parser.storage.delete_file", lambda _fid: False)
+    file_context_storage_module = importlib.import_module("src.hooks.file_context.storage")
+    file_context_retrieval_module = importlib.import_module("src.hooks.file_context.retrieval")
+    file_parser_storage_module = importlib.import_module("src.utils.file_parser.storage")
+
+    monkeypatch.setattr(file_context_storage_module, "storage", dummy_context_storage)
+    monkeypatch.setattr(file_context_retrieval_module, "retrieval_engine", dummy_retrieval)
+    monkeypatch.setattr(file_parser_storage_module, "delete_file", lambda _fid: False)
 
     req = make_mocked_request(
         "DELETE",
