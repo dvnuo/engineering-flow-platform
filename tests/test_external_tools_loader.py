@@ -62,6 +62,7 @@ DESCRIPTORS = [
     ToolDescriptor('efp.tool.context.context_read_ref','context_read_ref','context_read_ref','Read context ref','context','read',['native'],['read'],False,False,'low','x',{{'type':'object','properties':{{'ref':{{'type':'string'}}}},'required':['ref']}},{{'type':'object'}},{{'model_facing': True}}, True),
     ToolDescriptor('efp.tool.git.git_status','git_status','git_status','Get git status','git','read',['native'],['read'],False,False,'low','x',{{'type':'object','properties':{{'workspace':{{'type':'string'}}}}}},{{'type':'object'}},{{'model_facing': True}}, True),
     ToolDescriptor('efp.tool.bash.run_command','run_command','run_command','Run command','bash','write',['native'],['exec'],False,True,'high','x',{{'type':'object','properties':{{'cmd':{{'type':'string'}}}}}},{{'type':'object'}},{{'model_facing': True}}, False),
+    ToolDescriptor('efp.tool.bash.discover_commands','discover_commands','efp_discover_commands','Discover installed shell commands. Disabled pending bash governance.','bash','adapter_action',['native', 'opencode'],['bash', 'discovery', 'read_only'],False,False,'medium','x',{{'type':'object','properties':{{'prefix':{{'type':'string'}}}}}},{{'type':'object'}},{{'model_facing': True}}, False),
 ]
 
 class Registry:
@@ -118,9 +119,11 @@ def test_t04_dataclass_registry_semantics(monkeypatch, tmp_path):
     assert "context_read_ref" in names
     assert "git_status" in names
     assert "run_command" not in names
-    assert ext.get_external_disabled_tool_names("native") == {"run_command"}
+    assert ext.get_external_disabled_tool_names("native") == {"run_command", "discover_commands"}
     assert ext.has_external_tool("run_command", include_disabled=True) is True
     assert ext.has_external_tool("run_command", include_disabled=False) is False
+    assert ext.has_external_tool("discover_commands", include_disabled=True) is True
+    assert ext.has_external_tool("discover_commands", include_disabled=False) is False
 
 
 @pytest.mark.asyncio
@@ -135,7 +138,9 @@ async def test_context_payload_and_reserved_arg_filtering(monkeypatch, tmp_path,
                 if tool == 'context_read_ref':
                     assert context['message_id'] == 'm1'
                     assert context['task_id'] == 't1'
-                assert context['workspace_dir'].endswith('/workspace')
+                if tool == 'context_read_ref':
+                    assert context['workspace_dir'].endswith('/workspace-override')
+                    assert context['opencode_context'] == {'provider': 'opencode-test'}
                 assert context['portal_metadata']['legacy_runtime_src_dir']
                 assert context['portal_metadata']['context_blob_dir'].endswith('/context_blobs')
                 if tool == 'context_read_ref':
@@ -146,6 +151,8 @@ async def test_context_payload_and_reserved_arg_filtering(monkeypatch, tmp_path,
                 assert '_task_id' not in args
                 assert '_runtime_type' not in args
                 assert '_portal_metadata' not in args
+                assert '_workspace_dir' not in args
+                assert '_opencode_context' not in args
                 return {'success': True, 'content': f"ok:{tool}:{tools_dir}"}
             """
         ),
@@ -163,6 +170,8 @@ async def test_context_payload_and_reserved_arg_filtering(monkeypatch, tmp_path,
         _task_id="t1",
         _portal_metadata={"x": "y", "context_blob_dir": "/bad"},
         _runtime_type="native",
+        _workspace_dir=str(tmp_path / "workspace-override"),
+        _opencode_context={"provider": "opencode-test"},
     )
     assert result.success is True
     git_result = await src_module.execute_tool("git_status", workspace=".", _session_id="sess-1")
@@ -182,6 +191,9 @@ async def test_disabled_descriptor_blocks_legacy_and_exec_alias(monkeypatch, tmp
     alias_result = await src_module.execute_tool("exec", command="ls")
     assert alias_result.success is False
     assert "disabled" in (alias_result.error or "").lower()
+    discovery_result = await src_module.execute_tool("discover_commands")
+    assert discovery_result.success is False
+    assert "disabled" in (discovery_result.error or "").lower()
 
 
 def test_validation_errors_non_strict_disable_external(monkeypatch, tmp_path):
@@ -194,9 +206,11 @@ def test_validation_errors_non_strict_disable_external(monkeypatch, tmp_path):
     state = ext.load_external_tools_state()
     assert state.available is False
     assert state.validation_errors == ["bad descriptor"]
-    assert ext.get_external_disabled_tool_names("native") == {"run_command"}
+    assert ext.get_external_disabled_tool_names("native") == {"run_command", "discover_commands"}
     assert ext.has_external_tool("run_command", include_disabled=True) is True
     assert ext.has_external_tool("run_command", include_disabled=False) is False
+    assert ext.has_external_tool("discover_commands", include_disabled=True) is True
+    assert ext.has_external_tool("discover_commands", include_disabled=False) is False
     assert ext.get_external_tool_schemas("native") == []
 
 
@@ -231,9 +245,13 @@ async def test_invalid_registry_still_blocks_disabled_legacy_tools(monkeypatch, 
 
     names = {(s.get("function", {}) or {}).get("name") or s.get("name") for s in src_module.get_tools_schema()}
     assert "run_command" not in names
+    assert "discover_commands" not in names
     result = await src_module.execute_tool("run_command", cmd="echo hi")
     assert result.success is False
     assert "disabled" in (result.error or "").lower()
+    discovery_result = await src_module.execute_tool("discover_commands")
+    assert discovery_result.success is False
+    assert "disabled" in (discovery_result.error or "").lower()
     alias_result = await src_module.execute_tool("exec", command="ls")
     assert alias_result.success is False
     assert "disabled" in (alias_result.error or "").lower()
@@ -349,11 +367,14 @@ def test_optional_real_tools_repo_fixture(monkeypatch):
     disabled = ext.get_external_disabled_tool_names("native")
     assert "run_command" in disabled
     assert "write" in disabled
+    assert "discover_commands" in disabled
     schema_names = {(s.get("function", {}) or {}).get("name") or s.get("name") for s in ext.get_external_tool_schemas("native")}
     assert "context_read_ref" in schema_names
     assert "git_status" in schema_names
     assert ext.has_external_tool("write", include_disabled=True) is True
     assert ext.has_external_tool("write", include_disabled=False) is False
+    assert ext.has_external_tool("discover_commands", include_disabled=True) is True
+    assert ext.has_external_tool("discover_commands", include_disabled=False) is False
 
 
 def test_strip_none_values_behavior(src_module):

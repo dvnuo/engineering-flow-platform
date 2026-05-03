@@ -11,7 +11,15 @@ from typing import Any, Dict, List, Optional, Set
 
 DEFAULT_TOOLS_DIR = "/app/tools"
 logger = logging.getLogger(__name__)
-_FRAMEWORK_ARG_KEYS = {"_session_id", "_message_id", "_task_id", "_runtime_type", "_portal_metadata"}
+_FRAMEWORK_ARG_KEYS = {
+    "_session_id",
+    "_message_id",
+    "_task_id",
+    "_runtime_type",
+    "_workspace_dir",
+    "_portal_metadata",
+    "_opencode_context",
+}
 
 
 @dataclass
@@ -293,7 +301,11 @@ async def execute_external_tool(
     if descriptor.get("enabled", True) is False:
         return {"success": False, "content": "", "error": f"Tool '{name}' is disabled by external descriptor"}
 
-    workspace_dir = _workspace_dir()
+    workspace_override = kwargs.get("_workspace_dir")
+    workspace_dir = workspace_override if isinstance(workspace_override, str) and workspace_override.strip() else _workspace_dir()
+    opencode_context = kwargs.get("_opencode_context")
+    if not isinstance(opencode_context, dict):
+        opencode_context = {}
     context = {
         "runtime_type": runtime_type,
         "session_id": session_id or kwargs.get("_session_id"),
@@ -301,6 +313,7 @@ async def execute_external_tool(
         "task_id": kwargs.get("_task_id"),
         "workspace_dir": workspace_dir,
         "portal_metadata": {},
+        "opencode_context": opencode_context,
     }
     user_portal_metadata = kwargs.get("_portal_metadata")
     if isinstance(user_portal_metadata, dict):
