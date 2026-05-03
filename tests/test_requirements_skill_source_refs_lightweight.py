@@ -96,9 +96,9 @@ async def test_skill_source_loaders_return_source_refs_lightweight(monkeypatch):
                 "content_text": "hello",
             }
 
-        monkeypatch.setattr("src.jira.source_service.prepare_jira_issue_source", _fake_prepare_jira)
-        monkeypatch.setattr("src.confluence.source_service.prepare_confluence_page_source", _fake_prepare_conf)
-        monkeypatch.setattr("src.runtime.requirement_bundle_assets.prepare_github_doc_source", _fake_prepare_github)
+        monkeypatch.setattr(module, "prepare_jira_issue_source", _fake_prepare_jira)
+        monkeypatch.setattr(module, "prepare_confluence_page_source", _fake_prepare_conf)
+        monkeypatch.setattr(module, "prepare_github_doc_source", _fake_prepare_github)
 
         jira_items = await module._load_jira_sources(["P-1"], session_id="s1")
         conf_items = await module._load_confluence_sources(["42"], session_id="s1")

@@ -1493,15 +1493,44 @@ def _normalize_tool_args(args_str: str) -> Dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {"raw": str(parsed)}
 
 
+def _canonicalize_tool_feedback_for_progress(text: Any) -> str:
+    raw = str(text or "")
+    if not raw.lstrip().startswith("[tool_result]"):
+        return raw
+    marker = "\n---\n"
+    if marker in raw:
+        return raw.split(marker, 1)[1].strip()
+
+    lines = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if stripped in {"[tool_result]", "---"}:
+            continue
+        if stripped.startswith((
+            "tool_name:",
+            "success:",
+            "error:",
+            "content_chars:",
+            "truncated:",
+            "context_ref:",
+            "guidance:",
+        )):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
 def _build_progress_signature(
     skill_session: SkillSession,
     normalized_args: Dict[str, Any],
     output_text: str,
 ) -> Dict[str, str]:
     last_step = skill_session.completed_steps[-1] if skill_session.completed_steps else {}
-    last_step_summary = f"{last_step.get('type', '')}:{str(last_step.get('result', ''))[:240]}"
+    canonical_output = _canonicalize_tool_feedback_for_progress(output_text)
+    last_step_result = _canonicalize_tool_feedback_for_progress(last_step.get("result", ""))
+    last_step_summary = f"{last_step.get('type', '')}:{last_step_result[:240]}"
     args_sig = _hash_text(json.dumps(normalized_args, sort_keys=True, ensure_ascii=False), max_len=500)
-    output_sig = _hash_text(output_text, max_len=1000)
+    output_sig = _hash_text(canonical_output, max_len=1000)
     artifacts_sig = _hash_text(json.dumps(skill_session.artifacts or {}, sort_keys=True, ensure_ascii=False), max_len=1000)
     step_sig = _hash_text(last_step_summary, max_len=400)
     state_signature = "|".join([output_sig, artifacts_sig, step_sig])
