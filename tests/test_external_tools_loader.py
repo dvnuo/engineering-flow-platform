@@ -271,6 +271,25 @@ def test_strict_mode_schema_load_does_not_fallback(monkeypatch, tmp_path, src_mo
 
 
 @pytest.mark.asyncio
+async def test_strict_mode_missing_tools_dir_execute_does_not_fallback_to_legacy(monkeypatch, tmp_path, src_module):
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tmp_path / "missing-tools"))
+    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
+    _reload_external_loader()
+
+    result = await src_module.execute_tool("run_command", cmd="echo hi")
+    assert result.success is False
+    assert "strict mode failed" in (result.error or "").lower()
+
+
+def test_strict_mode_missing_tools_dir_schema_does_not_fallback(monkeypatch, tmp_path, src_module):
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tmp_path / "missing-tools"))
+    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
+    _reload_external_loader()
+    with pytest.raises(RuntimeError):
+        src_module.get_tools_schema()
+
+
+@pytest.mark.asyncio
 async def test_strict_mode_execute_does_not_fallback_to_legacy(monkeypatch, tmp_path, src_module):
     repo = tmp_path / "repo"
     _create_tools_repo(repo, validate_errors="['bad descriptor']")

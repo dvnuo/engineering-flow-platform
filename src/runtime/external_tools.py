@@ -63,6 +63,12 @@ def _context_blob_dir(workspace_dir: str) -> str:
     return os.environ.get("EFP_CONTEXT_BLOB_DIR") or str(Path(workspace_dir) / "context_blobs")
 
 
+def _unavailable_state_or_raise(tools_dir: Path, error: str) -> ExternalToolsState:
+    if _strict_mode():
+        raise RuntimeError(error)
+    return ExternalToolsState(tools_dir=tools_dir, available=False, error=error)
+
+
 def load_external_tools_state() -> ExternalToolsState:
     global _cached_state
     if _cached_state is not None:
@@ -75,7 +81,10 @@ def load_external_tools_state() -> ExternalToolsState:
 
     python_dir = tools_dir / "python"
     if not python_dir.exists():
-        _cached_state = ExternalToolsState(tools_dir=tools_dir, available=False, error=f"missing tools python dir: {python_dir}")
+        _cached_state = _unavailable_state_or_raise(
+            tools_dir,
+            f"missing tools python dir: {python_dir}",
+        )
         return _cached_state
 
     try:
