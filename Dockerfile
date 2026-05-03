@@ -17,7 +17,7 @@ COPY . .
 # Create the workspace directory for this container image's default runtime user (root).
 # Note: the canonical runtime workspace model is user-home-based (`~/.efp/workspace`);
 # in this image, `~` resolves to `/root`.
-RUN mkdir -p /app/skills /root/.efp/workspace /root/.efp/skills
+RUN mkdir -p /app/skills /app/tools /root/.efp/workspace /root/.efp/skills
 
 # Expose port
 EXPOSE 8000

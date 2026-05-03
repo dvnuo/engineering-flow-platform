@@ -333,6 +333,7 @@ class _CapabilityBuilder:
                         "tool_name": tool_name,
                         "description": _extract_tool_description(tool_schema),
                         "declaration_only": True,
+                        **dict(tool_schema.get("metadata") or {}),
                     }
                     source_ref = "src.__init__.get_tools_schema"
                     requires_identity_binding = False

@@ -1,6 +1,7 @@
 from src.runtime.capability_registry import (
     CapabilityDescriptor,
     DefaultCapabilityRegistry,
+    _CapabilityBuilder,
     build_default_capability_registry,
 )
 from src.config import config
@@ -180,3 +181,23 @@ def test_default_registry_includes_github_add_commit_comment_adapter():
 def test_default_registry_includes_github_add_discussion_comment_adapter():
     registry = build_default_capability_registry()
     assert registry.exists("adapter:github:add_discussion_comment") is True
+
+
+def test_capability_registry_tool_schema_supports_function_nested_parameters(monkeypatch):
+    tool_schema = {
+        "type": "function",
+        "function": {
+            "name": "github_get_pr",
+            "description": "x",
+            "parameters": {"type": "object", "properties": {"owner": {"type": "string"}}},
+        },
+        "metadata": {"tool_id": "efp.tool.github.get_pull_request"},
+    }
+
+    monkeypatch.setattr("src.get_tools_schema", lambda: [tool_schema])
+    builder = _CapabilityBuilder(DefaultCapabilityRegistry())
+    builder._register_tools()
+    descriptor = builder.registry.get("tool:github_get_pr")
+    assert descriptor is not None
+    assert descriptor.input_schema.get("properties", {}).get("owner", {}).get("type") == "string"
+    assert descriptor.metadata.get("tool_id") == "efp.tool.github.get_pull_request"

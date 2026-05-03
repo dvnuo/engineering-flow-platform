@@ -6,6 +6,14 @@ Bash tools with security controls.
 
 from typing import Any, Dict, List, Optional
 import json
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+
+def _external_tools_strict_mode() -> bool:
+    return os.environ.get("EFP_EXTERNAL_TOOLS_STRICT", "false").strip().lower() == "true"
 
 
 class ToolResult:
@@ -156,6 +164,25 @@ def get_tools_schema() -> List[Dict]:
 def _strip_none_values(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     """Remove keys explicitly set to None so Python defaults can apply."""
     return {k: v for k, v in kwargs.items() if v is not None}
+
+
+def _coerce_external_tool_result(raw: Any) -> ToolResult:
+    if isinstance(raw, ToolResult):
+        return raw
+    if hasattr(raw, "to_dict"):
+        raw = raw.to_dict()
+    if isinstance(raw, dict):
+        success = bool(raw.get("success"))
+        content = raw.get("content")
+        if content is None and raw.get("data") is not None:
+            content = json.dumps(raw.get("data"), ensure_ascii=False, indent=2)
+        if content is None:
+            content = ""
+        error = raw.get("error")
+        return ToolResult(success=success, content=str(content), error=error)
+    if isinstance(raw, str):
+        return ToolResult(success=True, content=raw)
+    return ToolResult(success=True, content=str(raw))
 
 
 async def execute_tool(name: str, **kwargs) -> ToolResult:
