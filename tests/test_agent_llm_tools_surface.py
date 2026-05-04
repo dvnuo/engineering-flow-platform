@@ -146,3 +146,83 @@ async def test_skill_mode_tool_schema_list_intersect_with_global_surface(monkeyp
     )
 
     assert any([item["function"]["name"] for item in tools] == ["git_clone"] for tools in captured)
+
+def _write_external_tool_fixture(tmp_path, *, enabled=True):
+    tools_dir = tmp_path / "tools_repo"
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    (tools_dir / "manifest.yaml").write_text(
+        f"""
+name: context_echo
+description: echo
+python_entrypoint: test_tools.echo:execute
+input_schema: {{type: object, properties: {{text: {{type: string}}}}}}
+runtime_compat: [native]
+enabled: {str(enabled).lower()}
+""",
+        encoding="utf-8",
+    )
+    (tools_dir / "python" / "test_tools").mkdir(parents=True)
+    (tools_dir / "python" / "test_tools" / "__init__.py").write_text("", encoding="utf-8")
+    (tools_dir / "python" / "test_tools" / "echo.py").write_text("async def execute(text='', **kwargs):\n    return {'success': True, 'content': text}\n", encoding="utf-8")
+    return tools_dir
+
+
+def test_external_tools_respect_llm_tools_filter(monkeypatch, tmp_path):
+    from src.agents import core as core_mod
+    from src.tools_external import reset_external_tool_registry_cache
+    tools_dir = _write_external_tool_fixture(tmp_path, enabled=True)
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+    monkeypatch.setitem(core_mod.config._config, "llm", {"tools": ["context_echo"]})
+    monkeypatch.setattr(core_mod, "memory_system", SimpleNamespace(workspace="/tmp", build_system_prompt=lambda include_memory: ""))
+    agent = Agent(session_id="external-surface-test")
+    names = [t["function"]["name"] for t in agent.tools]
+    assert "context_echo" in names
+    assert "context_echo" in agent.allowed_tool_names
+
+
+def test_disabled_external_tool_not_available_even_when_llm_tools_matches(monkeypatch, tmp_path):
+    from src.agents import core as core_mod
+    from src.tools_external import reset_external_tool_registry_cache
+    tools_dir = _write_external_tool_fixture(tmp_path, enabled=False)
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+    monkeypatch.setitem(core_mod.config._config, "llm", {"tools": ["context_echo"]})
+    monkeypatch.setattr(core_mod, "memory_system", SimpleNamespace(workspace="/tmp", build_system_prompt=lambda include_memory: ""))
+    agent = Agent(session_id="external-disabled-test")
+    names = [t["function"]["name"] for t in agent.tools]
+    assert "context_echo" not in names
+    assert "context_echo" not in agent.allowed_tool_names
+
+
+def test_model_facing_false_external_tool_not_available_even_when_llm_tools_matches(monkeypatch, tmp_path):
+    from src.agents import core as core_mod
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = tmp_path / "tools_repo_hidden"
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    (tools_dir / "manifest.yaml").write_text(
+        """
+name: context_hidden
+description: hidden
+python_entrypoint: test_tools.echo:execute
+input_schema: {type: object, properties: {text: {type: string}}}
+runtime_compat: [native]
+enabled: true
+metadata: {model_facing: false}
+""",
+        encoding="utf-8",
+    )
+    (tools_dir / "python" / "test_tools").mkdir(parents=True)
+    (tools_dir / "python" / "test_tools" / "__init__.py").write_text("", encoding="utf-8")
+    (tools_dir / "python" / "test_tools" / "echo.py").write_text("async def execute(text='', **kwargs):\n    return {'success': True, 'content': text}\n", encoding="utf-8")
+
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+    monkeypatch.setitem(core_mod.config._config, "llm", {"tools": ["context_hidden"]})
+    monkeypatch.setattr(core_mod, "memory_system", SimpleNamespace(workspace="/tmp", build_system_prompt=lambda include_memory: ""))
+
+    agent = Agent(session_id="external-hidden-test")
+    names = [t["function"]["name"] for t in agent.tools]
+    assert "context_hidden" not in names
+    assert "context_hidden" not in agent.allowed_tool_names

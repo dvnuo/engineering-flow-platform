@@ -23,7 +23,21 @@ class ExternalToolRegistry:
                 continue
             self._descriptors_by_name[descriptor.name] = descriptor
 
-    def list_descriptors(self) -> list[ToolDescriptor]:
+    def list_descriptors(self, *, runtime_type: str | None = None, enabled_only: bool = False, model_facing_only: bool = False) -> list[ToolDescriptor]:
+        descriptors = list(self._descriptors_by_name.values())
+        if runtime_type:
+            target = runtime_type.strip().lower()
+            descriptors = [
+                d for d in descriptors
+                if target in {item.lower() for item in (d.runtime_compat or ["native"])}
+            ]
+        if enabled_only:
+            descriptors = [d for d in descriptors if d.enabled]
+        if model_facing_only:
+            descriptors = [d for d in descriptors if self.is_model_facing(d.name)]
+        return descriptors
+
+    def list_all_descriptors(self) -> list[ToolDescriptor]:
         return list(self._descriptors_by_name.values())
 
     def get_descriptor(self, name: str) -> ToolDescriptor | None:
@@ -33,25 +47,45 @@ class ExternalToolRegistry:
         return [
             descriptor_to_tool_schema(descriptor)
             for descriptor in self._descriptors_by_name.values()
-            if is_descriptor_native_compatible(descriptor)
+            if is_descriptor_native_compatible(descriptor) and descriptor.enabled and self.is_model_facing(descriptor.name)
         ]
 
     def get_tool_names(self) -> list[str]:
-        return [item.name for item in self.list_descriptors()]
+        return [item.name for item in self.list_descriptors(runtime_type="native", enabled_only=True, model_facing_only=True)]
 
-    def has_tool(self, name: str) -> bool:
-        return name in self._descriptors_by_name
+    def has_tool(self, name: str, *, include_disabled: bool = True) -> bool:
+        descriptor = self._descriptors_by_name.get(name)
+        if descriptor is None:
+            return False
+        return include_disabled or descriptor.enabled
+
+    def is_tool_enabled(self, name: str) -> bool:
+        descriptor = self.get_descriptor(name)
+        return bool(descriptor and descriptor.enabled)
+
+    def is_model_facing(self, name: str) -> bool:
+        descriptor = self.get_descriptor(name)
+        if not descriptor:
+            return False
+        return descriptor.metadata.get("model_facing", True) is not False
 
     def is_override_enabled(self, name: str) -> bool:
         descriptor = self.get_descriptor(name)
         if not descriptor:
             return False
-        return bool(descriptor.metadata.get("allow_override")) is True
+        return bool(
+            descriptor.enabled
+            and is_descriptor_native_compatible(descriptor)
+            and self.is_model_facing(name)
+            and descriptor.metadata.get("allow_override") is True
+        )
 
     async def execute_tool(self, name: str, **kwargs) -> ExternalToolExecutionResult:
         descriptor = self.get_descriptor(name)
         if not descriptor:
             return ExternalToolExecutionResult(success=False, error=f"External tool '{name}' not found")
+        if not descriptor.enabled:
+            return ExternalToolExecutionResult(success=False, error=f"Tool '{name}' is disabled by external descriptor")
         return await execute_python_entrypoint(descriptor, self.tools_dir, **kwargs)
 
 

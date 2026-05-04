@@ -75,6 +75,7 @@ from . import git
 from . import bash_tools
 from . import context_tools
 from .tools_external import get_external_tool_registry
+from .tools_external.contracts import is_descriptor_native_compatible
 
 
 def _extract_tool_schema_name(tool_schema: Dict[str, Any]) -> str:
@@ -113,7 +114,18 @@ def is_external_tool_exposed(name: str) -> bool:
     """Return True when an external tool is visible in the merged tool surface."""
     registry = get_external_tool_registry()
     legacy_names = _get_legacy_tool_names_set()
-    return registry.has_tool(name) and (name not in legacy_names or registry.is_override_enabled(name))
+    if not registry.has_tool(name, include_disabled=True):
+        return False
+    descriptor = registry.get_descriptor(name)
+    if descriptor is None or not descriptor.enabled:
+        return False
+    if not is_descriptor_native_compatible(descriptor):
+        return False
+    if not registry.is_model_facing(name):
+        return False
+    if name in legacy_names:
+        return registry.is_override_enabled(name)
+    return True
 
 
 def get_all_tools() -> list:
@@ -172,7 +184,8 @@ def _coerce_external_tool_result(raw: Any) -> ToolResult:
     if hasattr(raw, "to_dict"):
         raw = raw.to_dict()
     if isinstance(raw, dict):
-        success = bool(raw.get("success"))
+        success = raw.get("success")
+        success = bool(success) if success is not None else False
         content = raw.get("content")
         if content is None and raw.get("data") is not None:
             content = json.dumps(raw.get("data"), ensure_ascii=False, indent=2)
@@ -206,7 +219,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     registry = get_external_tool_registry()
     legacy_names = _get_legacy_tool_names_set()
 
-    if registry.has_tool(name) and registry.is_override_enabled(name):
+    if registry.has_tool(name, include_disabled=True) and registry.is_override_enabled(name):
         external_result = await registry.execute_tool(name, **kwargs)
         return ToolResult(
             success=external_result.success,
@@ -793,7 +806,10 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         result = await confluence_module.confluence_search_by_title(title, space_key)
         return ToolResult(success="Error" not in result, content=result)
     
-    if registry.has_tool(name) and name not in legacy_names:
+    if registry.has_tool(name, include_disabled=True):
+        if not registry.is_tool_enabled(name):
+            return ToolResult(success=False, error=f"Tool '{name}' is disabled by external descriptor")
+    if registry.has_tool(name, include_disabled=True) and name not in legacy_names:
         external_result = await registry.execute_tool(name, **kwargs)
         return ToolResult(
             success=external_result.success,

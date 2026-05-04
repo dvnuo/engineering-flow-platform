@@ -318,3 +318,240 @@ async def test_tool_result_like_dict_preserves_failure(monkeypatch, tmp_path):
     result = await execute_tool("context_failure")
     assert result.success is False
     assert result.error == "boom"
+
+def test_t04_root_manifest_is_not_treated_as_descriptor(monkeypatch, tmp_path):
+    from src.tools_external import get_external_tool_registry
+
+    tools_dir = _write_tools_repo(tmp_path, manifest_subpath="tools/context/context_echo.yaml")
+    (tools_dir / "manifest.yaml").write_text('repo: engineering-flow-platform-tools\nversion: 0.1.0\nschema_version: t04\n', encoding="utf-8")
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    registry = get_external_tool_registry(force_reload=True)
+    assert [d.name for d in registry.list_descriptors()] == ["context_echo"]
+
+
+@pytest.mark.asyncio
+async def test_disabled_external_only_tool_is_hidden_and_blocked(monkeypatch, tmp_path):
+    from src import execute_tool, get_tools_schema
+    from src.runtime.capability_registry import build_default_capability_registry
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(tmp_path, name="external_disabled_write", extra_fields={"enabled": False})
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+    assert "external_disabled_write" not in {_schema_name(s) for s in get_tools_schema() if isinstance(s, dict)}
+    result = await execute_tool("external_disabled_write")
+    assert result.success is False and "disabled" in (result.error or "")
+    cap_names = {c.name for c in build_default_capability_registry().list_by_type("tool")}
+    assert "external_disabled_write" not in cap_names
+
+
+def test_real_t04_like_disabled_exec_not_exposed(monkeypatch, tmp_path):
+    from src import get_tools_schema
+    from src.tools_external import get_external_tool_registry
+    tools_dir = _write_tools_repo(tmp_path, name="exec", extra_fields={"enabled": False, "policy_tags": ["bash", "mutation", "disabled_until_safety_review"]})
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    registry = get_external_tool_registry(force_reload=True)
+    assert "exec" not in registry.get_tool_names()
+    assert "exec" not in {_schema_name(s) for s in get_tools_schema() if isinstance(s, dict)}
+
+
+def test_model_facing_false_is_hidden_from_llm_schema(monkeypatch, tmp_path):
+    from src import get_tools_schema
+    from src.tools_external import get_external_tool_registry
+
+    tools_dir = _write_tools_repo(tmp_path, name="context_hidden", metadata={"model_facing": False})
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    registry = get_external_tool_registry(force_reload=True)
+    assert registry.get_descriptor("context_hidden") is not None
+    assert "context_hidden" not in registry.get_tool_names()
+    assert "context_hidden" not in {_schema_name(s) for s in get_tools_schema() if isinstance(s, dict)}
+
+
+@pytest.mark.asyncio
+async def test_model_facing_false_allow_override_does_not_override_legacy_schema_or_execution(monkeypatch, tmp_path):
+    from src import execute_tool, get_tools_schema
+    from src.tools_external import get_external_tool_registry, reset_external_tool_registry_cache
+    import src.bash_tools as bash_tools_module
+
+    tools_dir = _write_tools_repo(
+        tmp_path,
+        name="run_command",
+        description="external run_command hidden",
+        metadata={"allow_override": True, "model_facing": False},
+        entrypoint_body="def execute(**kwargs):\n    return {'success': True, 'content': 'external override ran'}\n",
+    )
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+
+    schemas = [s for s in get_tools_schema() if _schema_name(s) == "run_command"]
+    assert len(schemas) == 1
+    assert schemas[0]["function"]["description"] != "external run_command hidden"
+
+    async def _fake_run_command(cmd, args=None, cwd=None, timeout_ms=15000):
+        return {"ok": True, "exit_code": 0, "stdout": "legacy run_command ran", "stderr": "", "truncated": {}}
+
+    monkeypatch.setattr(bash_tools_module, "run_command", _fake_run_command)
+    result = await execute_tool("run_command", cmd="anything")
+    assert "external override ran" not in result.content
+    assert "legacy run_command ran" in result.content
+
+    registry = get_external_tool_registry(force_reload=True)
+    assert registry.is_override_enabled("run_command") is False
+
+
+@pytest.mark.asyncio
+async def test_t04_runner_receives_context_and_reserved_args_are_filtered(monkeypatch, tmp_path):
+    from src.tools_external import get_external_tool_registry, reset_external_tool_registry_cache
+
+    tools_dir = tmp_path / "tools_repo"
+    (tools_dir / "tools" / "context").mkdir(parents=True)
+    (tools_dir / "python" / "efp_tools").mkdir(parents=True)
+    (tools_dir / "python" / "efp_tools" / "__init__.py").write_text("", encoding="utf-8")
+    (tools_dir / "manifest.yaml").write_text('repo: engineering-flow-platform-tools\nversion: "0.1.0"\nschema_version: t04\n', encoding="utf-8")
+    (tools_dir / "tools" / "context" / "context_echo.yaml").write_text(
+        """
+name: context_echo
+tool_id: efp.tool.context.echo
+opencode_name: efp_context_echo
+description: Echo via T04 runner
+domain: context
+type: adapter_action
+runtime_compat: [native, opencode]
+policy_tags: [context, read_only]
+requires_identity_binding: false
+mutation: false
+risk_level: low
+python_entrypoint: ignored.module:ignored
+input_schema:
+  type: object
+  properties:
+    text: {type: string}
+  required: [text]
+output_schema:
+  type: object
+metadata:
+  source: fixture
+enabled: true
+""",
+        encoding="utf-8",
+    )
+    (tools_dir / "python" / "efp_tools" / "runner.py").write_text(
+        """
+async def execute_tool_async(*, tools_dir, tool, args=None, context=None):
+    assert tool == 'context_echo'
+    assert args == {'text': 'hello'}
+    assert context['runtime_type'] == 'native'
+    assert context['session_id'] == 'sess-1'
+    assert context['message_id'] == 'msg-1'
+    assert context['task_id'] == 'task-1'
+    assert context['workspace_dir'].endswith('workspace-override')
+    assert context['portal_metadata']['x'] == 'y'
+    assert context['portal_metadata']['legacy_runtime_src_dir']
+    assert context['portal_metadata']['context_blob_dir'].endswith('context_blobs')
+    assert context['opencode_context'] == {'ignored': 'but preserved'}
+    return {'success': True, 'content': 'hello'}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+    registry = get_external_tool_registry(force_reload=True)
+    result = await registry.execute_tool(
+        "context_echo",
+        text="hello",
+        _session_id="sess-1",
+        _message_id="msg-1",
+        _task_id="task-1",
+        _runtime_type="native",
+        _workspace_dir=str(tmp_path / "workspace-override"),
+        _portal_metadata={"x": "y"},
+        _opencode_context={"ignored": "but preserved"},
+    )
+    assert result.success is True
+    assert result.content == "hello"
+
+
+def test_real_t04_enabled_tool_schema_has_metadata(monkeypatch, tmp_path):
+    from src import get_tools_schema
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = tmp_path / "tools_repo_meta"
+    (tools_dir / "python" / "test_tools").mkdir(parents=True)
+    (tools_dir / "python" / "test_tools" / "__init__.py").write_text("", encoding="utf-8")
+    (tools_dir / "python" / "test_tools" / "echo.py").write_text("def execute(**kwargs):\n    return {'success': True, 'content': 'ok'}\n", encoding="utf-8")
+    (tools_dir / "manifest.yaml").write_text(
+        json.dumps({
+            "tool_id": "efp.tool.context.echo",
+            "name": "context_echo",
+            "description": "Echo",
+            "python_entrypoint": "test_tools.echo:execute",
+            "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}},
+            "output_schema": {"type": "object"},
+            "runtime_compat": ["native", "opencode"],
+            "policy_tags": ["context", "read_only"],
+            "domain": "context",
+            "opencode_name": "efp_context_echo",
+            "mutation": False,
+            "risk_level": "low",
+            "metadata": {"source": "legacy_efp"},
+            "enabled": True,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+    schema = next(s for s in get_tools_schema() if _schema_name(s) == "context_echo")
+    md = schema["metadata"]
+    assert md["source"] == "external_tools_repo"
+    assert md["descriptor_source"] == "legacy_efp"
+    assert md["tool_id"] == "efp.tool.context.echo"
+    assert md["domain"] == "context"
+    assert md["policy_tags"] == ["context", "read_only"]
+    assert md["requires_identity_binding"] is False
+    assert md["mutation"] is False
+    assert md["risk_level"] == "low"
+    assert "native" in md["runtime_compat"]
+    assert md["opencode_name"] == "efp_context_echo"
+    assert md["enabled"] is True
+
+
+def test_external_capability_metadata_preserves_contract_fields(monkeypatch, tmp_path):
+    from src.runtime.capability_registry import build_default_capability_registry
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = tmp_path / "tools_repo_capmeta"
+    (tools_dir / "python" / "test_tools").mkdir(parents=True)
+    (tools_dir / "python" / "test_tools" / "__init__.py").write_text("", encoding="utf-8")
+    (tools_dir / "python" / "test_tools" / "echo.py").write_text("def execute(**kwargs):\n    return {'success': True, 'content': 'ok'}\n", encoding="utf-8")
+    (tools_dir / "manifest.yaml").write_text(
+        json.dumps({
+            "tool_id": "efp.tool.context.echo",
+            "name": "context_echo",
+            "description": "Echo",
+            "python_entrypoint": "test_tools.echo:execute",
+            "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}},
+            "output_schema": {"type": "object"},
+            "runtime_compat": ["native", "opencode"],
+            "policy_tags": ["context", "read_only"],
+            "domain": "context",
+            "opencode_name": "efp_context_echo",
+            "mutation": False,
+            "risk_level": "low",
+            "metadata": {"source": "legacy_efp"},
+            "enabled": True,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+    cap = next(c for c in build_default_capability_registry().list_by_type("tool") if c.name == "context_echo")
+    assert cap.capability_id == "efp.tool.context.echo"
+    assert cap.metadata["external_tool"] is True
+    assert cap.metadata["tool_id"] == "efp.tool.context.echo"
+    assert cap.metadata["policy_tags"] == ["context", "read_only"]
+    assert cap.metadata["requires_identity_binding"] is False
+    assert cap.metadata["domain"] == "context"
+    assert "native" in cap.metadata["runtime_compat"]
+    assert cap.metadata["opencode_name"] == "efp_context_echo"
+    assert cap.metadata["mutation"] is False
+    assert cap.metadata["risk_level"] == "low"

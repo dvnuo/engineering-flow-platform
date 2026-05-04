@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 from pathlib import Path
 from typing import Any, Optional
 
@@ -44,11 +45,25 @@ def discover_manifest_files(tools_dir: Path) -> list[Path]:
 
 
 def _load_yaml_file(path: Path) -> Any:
-    from ruamel.yaml import YAML
-
-    yaml = YAML(typ="safe")
     with path.open("r", encoding="utf-8") as fh:
-        return yaml.load(fh)
+        text = fh.read()
+    last_exc: Exception | None = None
+    try:
+        from ruamel.yaml import YAML
+        yaml = YAML(typ="safe")
+        return yaml.load(text)
+    except Exception as exc:
+        last_exc = exc
+    try:
+        import yaml
+        return yaml.safe_load(text)
+    except Exception as exc:
+        last_exc = exc
+    try:
+        return json.loads(text)
+    except Exception as exc:
+        last_exc = exc
+    raise last_exc or ValueError(f"Unable to parse manifest: {path}")
 
 
 def _iter_descriptor_mappings(raw: Any) -> list[Any]:
@@ -61,7 +76,9 @@ def _iter_descriptor_mappings(raw: Any) -> list[Any]:
             return raw["tools"]
         if isinstance(raw.get("descriptors"), list):
             return raw["descriptors"]
-        return [raw]
+        if "name" in raw:
+            return [raw]
+        return []
     return []
 
 
