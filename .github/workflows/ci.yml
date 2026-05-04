@@ -25,7 +25,8 @@ jobs:
             tests/test_external_tools_loader.py \
             tests/test_agent_llm_tools_surface.py \
             tests/test_capability_registry.py \
-            tests/test_runtime_capability_contract.py
+            tests/test_runtime_capability_contract.py \
+            tests/test_docker_runtime_contract.py
 
   native-runtime-docker-smoke:
     runs-on: ubuntu-latest
@@ -33,3 +34,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t efp-native-runtime-ci .
+      - run: |
+          set -euo pipefail
+          trap 'docker logs efp-native-runtime-ci || true; docker rm -f efp-native-runtime-ci || true' EXIT
+          docker run -d \
+            --name efp-native-runtime-ci \
+            -p 8000:8000 \
+            -e EFP_EXTERNAL_TOOLS_STRICT=false \
+            -e PYTHONUNBUFFERED=1 \
+            efp-native-runtime-ci
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8000/health; then
+              exit 0
+            fi
+            docker logs efp-native-runtime-ci || true
+            sleep 2
+          done
+          docker logs efp-native-runtime-ci || true
+          exit 1

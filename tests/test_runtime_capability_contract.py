@@ -90,6 +90,7 @@ def test_runtime_gateway_routes_include_t13_native_contract():
     got = {(r.method, r.resource.canonical) for r in app.router.routes()}
     required = {
         ("GET", "/health"), ("GET", "/actuator/health"), ("GET", "/api/queue/status"),
+        ("GET", "/api/events"),
         ("POST", "/api/chat"), ("POST", "/api/chat/stream"), ("POST", "/api/tasks/execute"),
         ("GET", "/api/tasks/{task_id}"), ("GET", "/api/capabilities"), ("POST", "/api/internal/runtime-profile/apply"),
         ("GET", "/api/skills"), ("GET", "/api/usage"), ("GET", "/api/sessions"),
