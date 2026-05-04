@@ -15,6 +15,10 @@ KNOWN_DESCRIPTOR_KEYS = {
     "python_entrypoint",
     "metadata",
     "requires_identity_binding",
+    "opencode_name",
+    "mutation",
+    "risk_level",
+    "enabled",
 }
 
 
@@ -32,6 +36,10 @@ class ToolDescriptor:
     requires_identity_binding: bool = False
     python_entrypoint: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    opencode_name: Optional[str] = None
+    mutation: bool = False
+    risk_level: Optional[str] = None
+    enabled: bool = True
 
 
 @dataclass
@@ -88,6 +96,8 @@ def descriptor_from_mapping(data: dict, source_file: str | None = None) -> ToolD
         output_schema = None
 
     requires_identity_binding = bool(data.get("requires_identity_binding", False))
+    enabled = bool(data.get("enabled", True))
+    mutation = bool(data.get("mutation", False))
 
     metadata = data.get("metadata")
     if not isinstance(metadata, dict):
@@ -100,6 +110,8 @@ def descriptor_from_mapping(data: dict, source_file: str | None = None) -> ToolD
             metadata[key] = value
     if "requires_identity_binding" in data:
         metadata.setdefault("requires_identity_binding", requires_identity_binding)
+    if "opencode_name" in data:
+        metadata.setdefault("opencode_name", _as_optional_string(data.get("opencode_name")))
     if source_file:
         metadata["_source_file"] = source_file
 
@@ -119,6 +131,10 @@ def descriptor_from_mapping(data: dict, source_file: str | None = None) -> ToolD
         requires_identity_binding=requires_identity_binding,
         python_entrypoint=_as_optional_string(data.get("python_entrypoint")),
         metadata=metadata,
+        opencode_name=_as_optional_string(data.get("opencode_name")),
+        mutation=mutation,
+        risk_level=_as_optional_string(data.get("risk_level")),
+        enabled=enabled,
     )
 
 
@@ -129,6 +145,18 @@ def descriptor_to_tool_schema(descriptor: ToolDescriptor) -> dict:
             "name": descriptor.name,
             "description": descriptor.description,
             "parameters": descriptor.input_schema or dict(DEFAULT_INPUT_SCHEMA),
+        },
+        "metadata": {
+            "source": "external_tools_repo",
+            "tool_id": descriptor.tool_id,
+            "domain": descriptor.domain,
+            "policy_tags": list(descriptor.policy_tags or []),
+            "requires_identity_binding": descriptor.requires_identity_binding,
+            "mutation": descriptor.mutation,
+            "risk_level": descriptor.risk_level,
+            "runtime_compat": list(descriptor.runtime_compat or []),
+            "opencode_name": descriptor.opencode_name,
+            **dict(descriptor.metadata or {}),
         },
     }
 

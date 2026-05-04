@@ -318,3 +318,38 @@ async def test_tool_result_like_dict_preserves_failure(monkeypatch, tmp_path):
     result = await execute_tool("context_failure")
     assert result.success is False
     assert result.error == "boom"
+
+def test_t04_root_manifest_is_not_treated_as_descriptor(monkeypatch, tmp_path):
+    from src.tools_external import get_external_tool_registry
+
+    tools_dir = _write_tools_repo(tmp_path, manifest_subpath="tools/context/context_echo.yaml")
+    (tools_dir / "manifest.yaml").write_text('repo: engineering-flow-platform-tools\nversion: 0.1.0\nschema_version: t04\n', encoding="utf-8")
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    registry = get_external_tool_registry(force_reload=True)
+    assert [d.name for d in registry.list_descriptors()] == ["context_echo"]
+
+
+@pytest.mark.asyncio
+async def test_disabled_external_only_tool_is_hidden_and_blocked(monkeypatch, tmp_path):
+    from src import execute_tool, get_tools_schema
+    from src.runtime.capability_registry import build_default_capability_registry
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(tmp_path, name="external_disabled_write", extra_fields={"enabled": False})
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+    assert "external_disabled_write" not in {_schema_name(s) for s in get_tools_schema() if isinstance(s, dict)}
+    result = await execute_tool("external_disabled_write")
+    assert result.success is False and "disabled" in (result.error or "")
+    cap_names = {c.name for c in build_default_capability_registry().list_by_type("tool")}
+    assert "external_disabled_write" not in cap_names
+
+
+def test_real_t04_like_disabled_exec_not_exposed(monkeypatch, tmp_path):
+    from src import get_tools_schema
+    from src.tools_external import get_external_tool_registry
+    tools_dir = _write_tools_repo(tmp_path, name="exec", extra_fields={"enabled": False, "policy_tags": ["bash", "mutation", "disabled_until_safety_review"]})
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    registry = get_external_tool_registry(force_reload=True)
+    assert "exec" not in registry.get_tool_names()
+    assert "exec" not in {_schema_name(s) for s in get_tools_schema() if isinstance(s, dict)}

@@ -321,6 +321,9 @@ class _CapabilityBuilder:
                         "domain": external_descriptor.domain,
                         "external_type": external_descriptor.type,
                         "runtime_compat": list(external_descriptor.runtime_compat or []),
+                        "opencode_name": external_descriptor.opencode_name,
+                        "mutation": external_descriptor.mutation,
+                        "risk_level": external_descriptor.risk_level,
                         **external_metadata,
                     }
                     source_ref = "src.tools_external"

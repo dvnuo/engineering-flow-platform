@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 from pathlib import Path
 from typing import Any, Optional
 
@@ -44,11 +45,14 @@ def discover_manifest_files(tools_dir: Path) -> list[Path]:
 
 
 def _load_yaml_file(path: Path) -> Any:
-    from ruamel.yaml import YAML
-
-    yaml = YAML(typ="safe")
     with path.open("r", encoding="utf-8") as fh:
-        return yaml.load(fh)
+        text = fh.read()
+    try:
+        from ruamel.yaml import YAML
+        yaml = YAML(typ="safe")
+        return yaml.load(text)
+    except Exception:
+        return json.loads(text)
 
 
 def _iter_descriptor_mappings(raw: Any) -> list[Any]:
@@ -61,7 +65,9 @@ def _iter_descriptor_mappings(raw: Any) -> list[Any]:
             return raw["tools"]
         if isinstance(raw.get("descriptors"), list):
             return raw["descriptors"]
-        return [raw]
+        if "name" in raw:
+            return [raw]
+        return []
     return []
 
 
