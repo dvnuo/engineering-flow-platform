@@ -66,6 +66,16 @@ def _as_optional_string(value: Any) -> Optional[str]:
     return text or None
 
 
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def descriptor_from_mapping(data: dict, source_file: str | None = None) -> ToolDescriptor:
     if not isinstance(data, dict):
         raise ValueError("tool descriptor must be a mapping")
@@ -95,9 +105,9 @@ def descriptor_from_mapping(data: dict, source_file: str | None = None) -> ToolD
     if not isinstance(output_schema, dict):
         output_schema = None
 
-    requires_identity_binding = bool(data.get("requires_identity_binding", False))
-    enabled = bool(data.get("enabled", True))
-    mutation = bool(data.get("mutation", False))
+    requires_identity_binding = _as_bool(data.get("requires_identity_binding"), default=False)
+    enabled = _as_bool(data.get("enabled"), default=True)
+    mutation = _as_bool(data.get("mutation"), default=False)
 
     metadata = data.get("metadata")
     if not isinstance(metadata, dict):
@@ -139,6 +149,22 @@ def descriptor_from_mapping(data: dict, source_file: str | None = None) -> ToolD
 
 
 def descriptor_to_tool_schema(descriptor: ToolDescriptor) -> dict:
+    raw_metadata = dict(descriptor.metadata or {})
+    metadata = {
+        **raw_metadata,
+        "source": "external_tools_repo",
+        "tool_id": descriptor.tool_id,
+        "domain": descriptor.domain,
+        "policy_tags": list(descriptor.policy_tags or []),
+        "requires_identity_binding": descriptor.requires_identity_binding,
+        "mutation": descriptor.mutation,
+        "risk_level": descriptor.risk_level,
+        "runtime_compat": list(descriptor.runtime_compat or []),
+        "opencode_name": descriptor.opencode_name,
+        "enabled": descriptor.enabled,
+    }
+    if "source" in raw_metadata and raw_metadata["source"] != "external_tools_repo":
+        metadata["descriptor_source"] = raw_metadata["source"]
     return {
         "type": "function",
         "function": {
@@ -146,18 +172,7 @@ def descriptor_to_tool_schema(descriptor: ToolDescriptor) -> dict:
             "description": descriptor.description,
             "parameters": descriptor.input_schema or dict(DEFAULT_INPUT_SCHEMA),
         },
-        "metadata": {
-            "source": "external_tools_repo",
-            "tool_id": descriptor.tool_id,
-            "domain": descriptor.domain,
-            "policy_tags": list(descriptor.policy_tags or []),
-            "requires_identity_binding": descriptor.requires_identity_binding,
-            "mutation": descriptor.mutation,
-            "risk_level": descriptor.risk_level,
-            "runtime_compat": list(descriptor.runtime_compat or []),
-            "opencode_name": descriptor.opencode_name,
-            **dict(descriptor.metadata or {}),
-        },
+        "metadata": metadata,
     }
 
 

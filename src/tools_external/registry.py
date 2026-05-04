@@ -73,7 +73,12 @@ class ExternalToolRegistry:
         descriptor = self.get_descriptor(name)
         if not descriptor:
             return False
-        return bool(descriptor.enabled and is_descriptor_native_compatible(descriptor) and descriptor.metadata.get("allow_override")) is True
+        return bool(
+            descriptor.enabled
+            and is_descriptor_native_compatible(descriptor)
+            and self.is_model_facing(name)
+            and descriptor.metadata.get("allow_override") is True
+        )
 
     async def execute_tool(self, name: str, **kwargs) -> ExternalToolExecutionResult:
         descriptor = self.get_descriptor(name)

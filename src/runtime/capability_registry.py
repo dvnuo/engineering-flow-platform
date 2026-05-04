@@ -314,18 +314,23 @@ class _CapabilityBuilder:
                         or external_metadata.get("requires_identity_binding", False)
                     )
                     metadata = {
-                        "tool_name": tool_name,
-                        "description": external_descriptor.description or _extract_tool_description(tool_schema),
-                        "declaration_only": True,
+                        **external_metadata,
                         "external_tool": True,
+                        "tool_name": tool_name,
+                        "tool_id": external_descriptor.tool_id,
+                        "description": external_descriptor.description or _extract_tool_description(tool_schema),
                         "domain": external_descriptor.domain,
                         "external_type": external_descriptor.type,
+                        "policy_tags": list(external_descriptor.policy_tags or []),
+                        "requires_identity_binding": requires_identity_binding,
                         "runtime_compat": list(external_descriptor.runtime_compat or []),
                         "opencode_name": external_descriptor.opencode_name,
                         "mutation": external_descriptor.mutation,
                         "risk_level": external_descriptor.risk_level,
-                        **external_metadata,
+                        "declaration_only": True,
                     }
+                    if "source" in external_metadata:
+                        metadata.setdefault("descriptor_source", external_metadata["source"])
                     source_ref = "src.tools_external"
                 else:
                     capability_id = _format_capability_id("tool", tool_name)

@@ -75,6 +75,7 @@ from . import git
 from . import bash_tools
 from . import context_tools
 from .tools_external import get_external_tool_registry
+from .tools_external.contracts import is_descriptor_native_compatible
 
 
 def _extract_tool_schema_name(tool_schema: Dict[str, Any]) -> str:
@@ -118,7 +119,9 @@ def is_external_tool_exposed(name: str) -> bool:
     descriptor = registry.get_descriptor(name)
     if descriptor is None or not descriptor.enabled:
         return False
-    if descriptor.metadata.get("model_facing", True) is False:
+    if not is_descriptor_native_compatible(descriptor):
+        return False
+    if not registry.is_model_facing(name):
         return False
     if name in legacy_names:
         return registry.is_override_enabled(name)

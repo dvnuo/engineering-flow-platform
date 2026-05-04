@@ -47,12 +47,23 @@ def discover_manifest_files(tools_dir: Path) -> list[Path]:
 def _load_yaml_file(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as fh:
         text = fh.read()
+    last_exc: Exception | None = None
     try:
         from ruamel.yaml import YAML
         yaml = YAML(typ="safe")
         return yaml.load(text)
-    except Exception:
+    except Exception as exc:
+        last_exc = exc
+    try:
+        import yaml
+        return yaml.safe_load(text)
+    except Exception as exc:
+        last_exc = exc
+    try:
         return json.loads(text)
+    except Exception as exc:
+        last_exc = exc
+    raise last_exc or ValueError(f"Unable to parse manifest: {path}")
 
 
 def _iter_descriptor_mappings(raw: Any) -> list[Any]:
