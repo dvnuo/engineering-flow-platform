@@ -4300,8 +4300,40 @@ async def test_execution_bus_pre_governance_blocked_external_mutation_emits_tool
     result = await bus.execute(req)
     assert result.status == "blocked"
     assert result.output_payload.get("tool_metadata", {}).get("blocked_by_governance") is True
+    assert result.artifacts.get("tool_metadata", {}).get("blocked_by_governance") is True
     events = [e.get("event_type") for e in result.runtime_events if isinstance(e, dict)]
     assert "governance.audit" in events and "tool.governance.audit" in events
     tool_event = next(e for e in result.runtime_events if isinstance(e, dict) and e.get("event_type") == "tool.governance.audit")
     assert tool_event.get("detail_payload", {}).get("tool_id") == "efp.tool.external.write"
     assert tool_event.get("detail_payload", {}).get("capability_id") == "efp.tool.external.write"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_passes_governance_metadata_to_tool_kwargs(monkeypatch):
+    captured = {}
+    async def _fake(tool_name, **kwargs):
+        captured.update(kwargs)
+        return {"success": True, "content": "ok"}
+
+    bus = build_default_execution_bus(execute_tool_func=_fake)
+    req = make_execution_request(request_id="r", source_type="api", execution_type="tool", input_payload={"tool_name":"context_echo", "kwargs": {}}, metadata={"governance_allow_mutation": True, "permission_decision": "approved", "approval_ref": "approval-1", "audit_ref": "audit-1", "governance_context": {"source": "test"}})
+    await bus.execute(req)
+    assert captured["_governance_allow_mutation"] is True
+    assert captured["_permission_decision"] == "approved"
+    assert captured["_approval_ref"] == "approval-1"
+    assert captured["_audit_ref"] == "audit-1"
+    assert captured["_governance_context"] == {"source": "test"}
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_preserves_tool_metadata_and_emits_governance_event(monkeypatch):
+    async def _fake(*args, **kwargs):
+        return ToolResult(success=False, error="blocked", metadata={"external_tool": True, "blocked_by_governance": True, "mutation": True, "risk_level": "high", "policy_tags": ["write"], "tool_source": "external_tools_repo", "governance_checked": True, "governance_rule": "external_mutation_requires_explicit_allow", "tool_id": "efp.tool.external.write"})
+    bus = build_default_execution_bus(execute_tool_func=_fake)
+    req = make_execution_request(request_id="r", source_type="api", execution_type="tool", input_payload={"tool_name": "external_write", "kwargs": {}})
+    result = await bus.execute(req)
+    assert result.output_payload.get("tool_metadata", {}).get("capability_id")
+    assert result.artifacts.get("tool_metadata", {}).get("capability_id")
+    ev = next(e for e in result.runtime_events if isinstance(e, dict) and e.get("event_type")=="tool.governance.audit")
+    assert ev.get("state") == "blocked"
+    assert ev.get("detail_payload", {}).get("capability_id")

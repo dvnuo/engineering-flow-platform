@@ -19,6 +19,11 @@ def _write_tools_repo(
     description="Echo input for tests.",
     runtime_compat=None,
     metadata=None,
+    tool_id="efp.tool.context.echo",
+    mutation=False,
+    risk_level="low",
+    policy_tags=None,
+    enabled=True,
     domain="context",
     manifest_subpath="manifest.yaml",
     entrypoint_body=None,
@@ -27,6 +32,7 @@ def _write_tools_repo(
     runtime_compat = runtime_compat or ["native", "opencode"]
     metadata = metadata or {}
     extra_fields = extra_fields or {}
+    policy_tags = policy_tags or ["read_only"]
     extra_yaml = "".join(f"{key}: {json.dumps(value)}\n" for key, value in extra_fields.items())
 
     tools_dir = tmp_path / "tools_repo"
@@ -41,7 +47,7 @@ def _write_tools_repo(
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
         """
-tool_id: efp.tool.context.echo
+tool_id: {tool_id}
 name: {name}
 description: {description}
 python_entrypoint: test_tools.echo:execute
@@ -54,8 +60,11 @@ input_schema:
 output_schema:
   type: object
 runtime_compat: {runtime_compat}
-policy_tags: [read_only]
+policy_tags: {policy_tags}
 domain: {domain}
+mutation: {mutation}
+risk_level: {risk_level}
+enabled: {enabled}
 metadata: {metadata}
 {extra_yaml}
 """.format(
@@ -64,6 +73,11 @@ metadata: {metadata}
             runtime_compat=json.dumps(runtime_compat),
             domain=domain,
             metadata=json.dumps(metadata),
+            tool_id=tool_id,
+            mutation=json.dumps(mutation),
+            risk_level=risk_level,
+            policy_tags=json.dumps(policy_tags),
+            enabled=json.dumps(enabled),
             extra_yaml=extra_yaml,
         ),
         encoding="utf-8",
@@ -457,7 +471,7 @@ async def test_t04_runner_receives_context_and_reserved_args_are_filtered(monkey
     (tools_dir / "tools" / "context" / "context_echo.yaml").write_text(
         """
 name: context_echo
-tool_id: efp.tool.context.echo
+tool_id: {tool_id}
 opencode_name: efp_context_echo
 description: Echo via T04 runner
 domain: context
@@ -706,3 +720,122 @@ def test_model_facing_false_legacy_duplicate_capability_diagnostics(monkeypatch,
     assert cap.source_ref == "src.__init__.get_tools_schema"
     assert cap.metadata["external_shadowed_by_legacy"] is True
     assert cap.metadata["external_shadow_reason"] == "model_facing_false"
+
+
+def test_external_tool_visibility_includes_policy_and_metadata(monkeypatch, tmp_path):
+    from src.tools_external import get_external_tool_registry
+
+    tools_dir = _write_tools_repo(tmp_path, name="external_write", tool_id="efp.tool.external.write", mutation=True, risk_level="high", policy_tags=["write", "jira"], extra_fields={"requires_identity_binding": True}, metadata={"model_facing": True, "custom_key": "custom_value"})
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    registry = get_external_tool_registry(force_reload=True)
+    visibility = registry.get_visibility("external_write", legacy_names=set())
+    assert "write" in visibility["policy_tags"] and "jira" in visibility["policy_tags"]
+    assert visibility["requires_identity_binding"] is True
+    assert visibility["metadata"]["custom_key"] == "custom_value"
+    assert visibility["mutation"] is True
+    assert visibility["risk_level"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_external_mutation_tool_requires_explicit_governance_allow(monkeypatch, tmp_path):
+    import src
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(tmp_path, name="external_write", tool_id="efp.tool.external.write", mutation=True, risk_level="high", policy_tags=["write"])
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+    result = await src.execute_tool("external_write")
+    assert result.success is False
+    assert result.metadata["blocked_by_governance"] is True
+    assert result.metadata["governance_rule"] == "external_mutation_requires_explicit_allow"
+
+
+@pytest.mark.asyncio
+async def test_external_mutation_tool_runs_when_explicitly_allowed_and_metadata_preserved(monkeypatch, tmp_path):
+    import src
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(tmp_path, name="external_write", tool_id="efp.tool.external.write", mutation=True, risk_level="high", policy_tags=["write"])
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+    result = await src.execute_tool("external_write", _governance_allow_mutation=True, _permission_decision="approved", _approval_ref="approval-1")
+    assert result.success is True
+    assert result.metadata["governance_checked"] is True
+    assert result.metadata["mutation"] is True
+    assert result.metadata["approval_ref"] == "approval-1"
+    assert result.metadata["permission_decision"] == "approved"
+
+
+def test_strict_mode_hides_legacy_only_tools_from_schema(monkeypatch, tmp_path):
+    import src
+    from src.tools_external import reset_external_tool_registry_cache
+
+    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tmp_path / "empty_tools"))
+    reset_external_tool_registry_cache()
+    names = set(src.get_tool_names())
+    assert "run_command" not in names
+    assert "git_clone" not in names
+
+
+@pytest.mark.asyncio
+async def test_strict_mode_blocks_legacy_only_execution(monkeypatch, tmp_path):
+    import src
+    from src.tools_external import reset_external_tool_registry_cache
+
+    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tmp_path / "empty_tools"))
+    reset_external_tool_registry_cache()
+    result = await src.execute_tool("git_status", workspace=str(tmp_path))
+    assert result.success is False
+    assert "strict mode blocks legacy-only tool" in (result.error or "")
+    assert result.metadata["blocked_by_strict_mode"] is True
+    assert result.metadata["tool_source"] == "legacy_builtin"
+
+
+@pytest.mark.asyncio
+async def test_strict_mode_allows_external_append_only_tool(monkeypatch, tmp_path):
+    import src
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(tmp_path, name="context_echo")
+    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+    result = await src.execute_tool("context_echo", text="hello")
+    assert result.success is True
+    assert result.metadata["external_tool"] is True
+    assert result.metadata["tool_source"] == "external_tools_repo"
+
+
+@pytest.mark.asyncio
+async def test_strict_mode_legacy_descriptor_without_allow_override_is_blocked(monkeypatch, tmp_path):
+    import src
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(tmp_path, name="run_command")
+    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+    names = {_schema_name(s) for s in src.get_tools_schema() if isinstance(s, dict)}
+    assert "run_command" not in names
+    result = await src.execute_tool("run_command", cmd="echo hi")
+    assert result.success is False
+    assert result.metadata["blocked_by_strict_mode"] is True
+    assert result.metadata["external_shadow_reason"] == "allow_override_not_enabled"
+
+
+@pytest.mark.asyncio
+async def test_strict_mode_legacy_descriptor_with_allow_override_runs_external(monkeypatch, tmp_path):
+    import src
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(tmp_path, name="run_command", metadata={"allow_override": True}, entrypoint_body="def execute(**kwargs):\n    return {'success': True, 'content': 'external override ran'}\n")
+    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+    result = await src.execute_tool("run_command", cmd="not-a-real-command")
+    assert result.success is True
+    assert "external override ran" in result.content
+    assert result.metadata["external_override"] is True
+    assert result.metadata["tool_source"] == "external_tools_repo"

@@ -2128,6 +2128,7 @@ def test_routes_include_tasks_execute_and_existing_chat_route():
 
     routes = [r.resource.canonical for r in app.router.routes() if r.resource]
     assert "/api/tasks/execute" in routes
+    assert "/api/tasks/{task_id}/cancel" in routes
     assert "/api/tasks/{task_id}" in routes
     assert "/api/capabilities" in routes
     assert "/api/chat" in routes
@@ -3780,6 +3781,116 @@ async def test_assistant_persist_and_result_payload_share_display_blocks(monkeyp
     assert persisted_extra["display_blocks"] == payload["display_blocks"]
 
 
+
+@pytest.mark.asyncio
+async def test_api_task_cancel_missing_returns_404():
+    import json
+
+    from src.gateway import webchat
+
+    webchat.runtime_task_tracker.reset()
+
+    class _Req:
+        headers = {}
+        match_info = {"task_id": "missing"}
+
+    response = await webchat.api_task_cancel(_Req())
+    assert response.status == 404
+    payload = json.loads(response.body)
+    assert payload["error"] == "Task not found"
+
+
+@pytest.mark.asyncio
+async def test_api_task_cancel_cancels_running_background_task():
+    from src.gateway import webchat
+
+    webchat.runtime_task_tracker.reset()
+    webchat.runtime_task_tracker.create_pending(task_id="t-cancel", request_id="r", task_type="x", source="portal", session_id="s", agent_id="a", trace_id="tr", portal_dispatch_id="pd", portal_task_id="pt")
+    bg = asyncio.create_task(asyncio.sleep(999))
+    webchat.runtime_task_tracker.set_background_task("t-cancel", bg)
+
+    class _Req:
+        headers = {}
+        match_info = {"task_id": "t-cancel"}
+
+    response = await webchat.api_task_cancel(_Req())
+    assert response.status == 200
+    record = webchat.runtime_task_tracker.get("t-cancel")
+    assert record is not None and record.status == "cancelled"
+    assert record.finished_at is not None
+    assert (record.payload or {}).get("status") == "cancelled"
+    assert record.finished_at is not None
+    await asyncio.sleep(0)
+    assert bg.cancelled() or bg.done()
+    if not bg.done():
+        bg.cancel()
+
+
+@pytest.mark.asyncio
+async def test_api_task_cancel_terminal_task_returns_existing_payload():
+    import json
+
+    from src.gateway import webchat
+
+    webchat.runtime_task_tracker.reset()
+    webchat.runtime_task_tracker.create_pending(task_id="t-done", request_id="r", task_type="x", source="portal", session_id="s", agent_id="a", trace_id="tr", portal_dispatch_id="pd", portal_task_id="pt")
+    webchat.runtime_task_tracker.mark_terminal("t-done", status="success", payload={"ok": True, "status": "success"})
+
+    class _Req:
+        headers = {}
+        match_info = {"task_id": "t-done"}
+
+    response = await webchat.api_task_cancel(_Req())
+    assert response.status == 200
+    payload = json.loads(response.body)
+    assert payload["status"] == "success"
+    assert payload["cancel_requested"] is True
+    assert webchat.runtime_task_tracker.get("t-done").status == "success"
+
+
+def test_cancelled_task_is_not_overwritten_by_late_completion():
+    from src.gateway import webchat
+
+    webchat.runtime_task_tracker.reset()
+    webchat.runtime_task_tracker.create_pending(task_id="t-late", request_id="r", task_type="x", source="portal", session_id="s", agent_id="a", trace_id="tr", portal_dispatch_id="pd", portal_task_id="pt")
+    webchat.runtime_task_tracker.cancel("t-late", payload={"ok": False, "status": "cancelled"})
+    webchat.runtime_task_tracker.mark_terminal("t-late", status="success", payload={"ok": True, "status": "success"})
+
+    record = webchat.runtime_task_tracker.get("t-late")
+    assert record is not None and record.status == "cancelled"
+    assert record.finished_at is not None
+    assert (record.payload or {}).get("status") == "cancelled"
+    assert (record.payload or {}).get("status") == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_run_task_execution_background_cancelled_error_marks_cancelled_and_emits_event(monkeypatch):
+    from src.gateway import webchat
+
+    webchat.runtime_task_tracker.reset()
+    webchat.runtime_task_tracker.create_pending(task_id="t-bg-cancel", request_id="r", task_type="x", source="portal", session_id="s", agent_id="a", trace_id="tr", portal_dispatch_id="pd", portal_task_id="pt")
+
+    async def _cancelled(**kwargs):
+        raise asyncio.CancelledError()
+
+    emitted = []
+
+    async def _emit(*args, **kwargs):
+        emitted.append(kwargs.get("event_type") or (args[0] if args else None))
+
+    monkeypatch.setattr(webchat, "execute_runtime_task_request", _cancelled)
+    monkeypatch.setattr(webchat, "_emit_task_lifecycle_event", _emit)
+
+    await webchat._run_task_execution_in_background(task_id="t-bg-cancel", request_id="r", task_type="x", session_id="s", source="portal", runtime_agent_id="a", context_ref=None, merged_input_payload={}, metadata={"portal_task_id":"pt"}, trace_headers={"trace_id":"tr", "portal_dispatch_id":"pd"})
+    record = webchat.runtime_task_tracker.get("t-bg-cancel")
+    assert record is not None and record.status == "cancelled"
+    assert record.finished_at is not None
+    assert (record.payload or {}).get("status") == "cancelled"
+    assert "task.cancelled" in emitted
+    assert "task.failed" not in emitted
+    assert "task.failed" not in emitted
+
+
 @pytest.mark.asyncio
 async def test_run_task_execution_cancelled_during_started_event_marks_cancelled(monkeypatch):
     import src.gateway.webchat as webchat
@@ -3795,4 +3906,6 @@ async def test_run_task_execution_cancelled_during_started_event_marks_cancelled
     await webchat._run_task_execution_in_background(task_id="t-cancel-early", request_id="r", task_type="x", session_id="s", source="portal", runtime_agent_id="a", context_ref=None, merged_input_payload={}, metadata={"portal_task_id":"pt"}, trace_headers={"trace_id":"tr", "portal_dispatch_id":"pd"})
     record = webchat.runtime_task_tracker.get("t-cancel-early")
     assert record is not None and record.status == "cancelled"
+    assert record.finished_at is not None
+    assert (record.payload or {}).get("status") == "cancelled"
     assert "task.failed" not in emitted

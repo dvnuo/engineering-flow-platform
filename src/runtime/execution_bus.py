@@ -682,6 +682,14 @@ def _normalize_tool_execution_outcome(
         payload["task_type"] = task_type or "tool_task"
         payload["task_boundary"] = True
     if tool_metadata:
+        if capability.get("capability_id"):
+            tool_metadata.setdefault("capability_id", capability.get("capability_id"))
+        if capability.get("capability_type"):
+            tool_metadata.setdefault("capability_type", capability.get("capability_type"))
+        if not tool_metadata.get("tool_id") and capability.get("capability_id"):
+            tool_metadata["tool_id"] = capability.get("capability_id")
+        if not tool_metadata.get("policy_tags") and capability.get("policy_tags"):
+            tool_metadata["policy_tags"] = capability.get("policy_tags")
         payload["tool_metadata"] = tool_metadata
         payload["tool_source"] = tool_metadata.get("tool_source")
         payload["external_tool"] = tool_metadata.get("external_tool")
@@ -690,7 +698,7 @@ def _normalize_tool_execution_outcome(
         payload["governance_checked"] = tool_metadata.get("governance_checked")
         payload["blocked_by_governance"] = tool_metadata.get("blocked_by_governance")
         artifacts = dict(artifacts)
-        artifacts.setdefault("tool_metadata", tool_metadata)
+        artifacts["tool_metadata"] = tool_metadata
 
     return {
         "success": bool(normalized["success"]),
