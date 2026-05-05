@@ -469,6 +469,8 @@ def _coerce_task_tool_result(raw_result: Any) -> Dict[str, Any]:
         success_value = bool(getattr(raw_result, "success"))
         content_value = getattr(raw_result, "content")
         error_value = getattr(raw_result, "error")
+        metadata_value = getattr(raw_result, "metadata", None)
+        metadata = dict(metadata_value) if isinstance(metadata_value, dict) else {}
         return {
             "success": success_value,
             "content": content_value,
@@ -477,8 +479,9 @@ def _coerce_task_tool_result(raw_result: Any) -> Dict[str, Any]:
                 "success": success_value,
                 "content": content_value,
                 "error": error_value,
+                "metadata": metadata,
             },
-            "artifacts": {},
+            "artifacts": {"tool_metadata": metadata} if metadata else {},
             "runtime_events": [],
             "next_action_hint": None,
             "audit_ref": None,
@@ -488,12 +491,16 @@ def _coerce_task_tool_result(raw_result: Any) -> Dict[str, Any]:
         payload = raw_result.output_payload if isinstance(raw_result.output_payload, dict) else {"value": raw_result.output_payload}
         content = payload.get("content", payload.get("output", payload.get("response", payload.get("value"))))
         success = raw_result.status not in {"error", "blocked"}
+        artifacts = raw_result.artifacts if isinstance(raw_result.artifacts, dict) else {}
+        if isinstance(payload.get("tool_metadata"), dict):
+            artifacts = dict(artifacts)
+            artifacts.setdefault("tool_metadata", payload["tool_metadata"])
         return {
             "success": success,
             "content": content,
             "error": payload.get("error"),
             "result": payload,
-            "artifacts": raw_result.artifacts if isinstance(raw_result.artifacts, dict) else {},
+            "artifacts": artifacts,
             "runtime_events": raw_result.runtime_events if isinstance(raw_result.runtime_events, list) else [],
             "next_action_hint": raw_result.next_action_hint,
             "audit_ref": raw_result.audit_ref,
@@ -515,12 +522,17 @@ def _coerce_task_tool_result(raw_result: Any) -> Dict[str, Any]:
                 error_value = content.strip()
             elif isinstance(explicit_status, str) and explicit_status.strip():
                 error_value = f"Task tool result reported status={explicit_status.strip()}"
+        metadata = raw_result.get("metadata") if isinstance(raw_result.get("metadata"), dict) else {}
+        artifacts = raw_result.get("artifacts") if isinstance(raw_result.get("artifacts"), dict) else {}
+        if metadata:
+            artifacts = dict(artifacts)
+            artifacts.setdefault("tool_metadata", metadata)
         return {
             "success": success,
             "content": content,
             "error": error_value,
             "result": raw_result,
-            "artifacts": {},
+            "artifacts": artifacts,
             "runtime_events": [],
             "next_action_hint": None,
             "audit_ref": None,
@@ -588,6 +600,13 @@ def _normalize_tool_execution_outcome(
     task_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     normalized = _coerce_task_tool_result(raw_result)
+    result_payload = normalized["result"] if isinstance(normalized["result"], dict) else {}
+    artifacts = normalized["artifacts"] if isinstance(normalized["artifacts"], dict) else {}
+    tool_metadata: Dict[str, Any] = {}
+    if isinstance(result_payload.get("metadata"), dict):
+        tool_metadata.update(result_payload.get("metadata") or {})
+    if isinstance(artifacts.get("tool_metadata"), dict):
+        tool_metadata.update(artifacts.get("tool_metadata") or {})
     capability = _resolve_tool_capability(tool_name)
     payload: Dict[str, Any] = {
         "tool_name": tool_name,
@@ -605,15 +624,84 @@ def _normalize_tool_execution_outcome(
     if task_boundary:
         payload["task_type"] = task_type or "tool_task"
         payload["task_boundary"] = True
+    if tool_metadata:
+        payload["tool_metadata"] = tool_metadata
+        payload["tool_source"] = tool_metadata.get("tool_source")
+        payload["external_tool"] = tool_metadata.get("external_tool")
+        payload["mutation"] = tool_metadata.get("mutation")
+        payload["risk_level"] = tool_metadata.get("risk_level")
+        payload["governance_checked"] = tool_metadata.get("governance_checked")
+        payload["blocked_by_governance"] = tool_metadata.get("blocked_by_governance")
+        artifacts = dict(artifacts)
+        artifacts.setdefault("tool_metadata", tool_metadata)
 
     return {
         "success": bool(normalized["success"]),
         "output_payload": payload,
-        "artifacts": normalized["artifacts"],
+        "artifacts": artifacts,
         "runtime_events": normalized["runtime_events"],
         "next_action_hint": normalized["next_action_hint"],
         "audit_ref": normalized["audit_ref"],
-    }
+}
+
+
+def _apply_governance_metadata_to_tool_kwargs(kwargs: Dict[str, Any], request: ExecutionRequest) -> Dict[str, Any]:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    forwarded = dict(kwargs or {})
+    if metadata.get("governance_allow_mutation") is True:
+        forwarded["_governance_allow_mutation"] = True
+    decision = metadata.get("permission_decision") or metadata.get("tool_permission_decision")
+    if decision:
+        forwarded["_permission_decision"] = decision
+    if metadata.get("approval_ref"):
+        forwarded["_approval_ref"] = metadata.get("approval_ref")
+    if metadata.get("audit_ref"):
+        forwarded["_audit_ref"] = metadata.get("audit_ref")
+    governance_context = metadata.get("governance_context")
+    if isinstance(governance_context, dict):
+        forwarded["_governance_context"] = governance_context
+    return forwarded
+
+
+def _build_tool_governance_runtime_event(*, request: ExecutionRequest, task_id: Optional[str], tool_name: str, output_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    tool_metadata = output_payload.get("tool_metadata")
+    if not isinstance(tool_metadata, dict):
+        return None
+    interesting = any(
+        tool_metadata.get(k) is not None
+        for k in ("external_tool", "mutation", "risk_level", "governance_checked", "blocked_by_governance", "governance_rule")
+    )
+    if not interesting:
+        return None
+    blocked = bool(tool_metadata.get("blocked_by_governance"))
+    checked = bool(tool_metadata.get("governance_checked"))
+    state = "blocked" if blocked else "allowed" if checked else "checked"
+    return build_runtime_event(
+        event_type="tool.governance.audit",
+        execution_type=request.execution_type,
+        state=state,
+        session_id=request.session_id,
+        request_id=request.request_id,
+        agent_id=request.agent_id,
+        summary=f"tool governance {state}: {tool_name}",
+        task_id=task_id,
+        detail_payload={
+            "tool_name": tool_name,
+            "tool_id": tool_metadata.get("tool_id"),
+            "tool_source": tool_metadata.get("tool_source"),
+            "external_tool": tool_metadata.get("external_tool"),
+            "mutation": tool_metadata.get("mutation"),
+            "risk_level": tool_metadata.get("risk_level"),
+            "policy_tags": tool_metadata.get("policy_tags") or [],
+            "permission_decision": tool_metadata.get("permission_decision"),
+            "approval_ref": tool_metadata.get("approval_ref"),
+            "audit_ref": tool_metadata.get("audit_ref"),
+            "blocked_by_governance": blocked,
+            "governance_checked": checked,
+            "governance_rule": tool_metadata.get("governance_rule"),
+        },
+        legacy_payload={"legacy_type": "tool_governance_audit"},
+    )
 
 
 def _as_list_of_dicts(value: Any) -> list[dict]:
@@ -1148,6 +1236,7 @@ def build_default_execution_bus(
     async def tool_handler(request: ExecutionRequest) -> ExecutionResult:
         tool_name = _get_required(request.input_payload, "tool_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
+        kwargs = _apply_governance_metadata_to_tool_kwargs(kwargs, request)
         kwargs.setdefault("_session_id", request.session_id)
         raw_tool_result = await execute_tool_callable(tool_name, **kwargs)
         normalized = _normalize_tool_execution_outcome(
@@ -1155,12 +1244,18 @@ def build_default_execution_bus(
             raw_result=raw_tool_result,
             task_boundary=False,
         )
+        runtime_events = list(normalized["runtime_events"]) if isinstance(normalized["runtime_events"], list) else []
+        governance_event = _build_tool_governance_runtime_event(
+            request=request, task_id=None, tool_name=tool_name, output_payload=normalized["output_payload"]
+        )
+        if governance_event:
+            runtime_events.append(governance_event)
         return make_execution_result(
             request_id=request.request_id,
             status="success" if normalized["success"] else "error",
             output_payload=normalized["output_payload"],
             artifacts=normalized["artifacts"],
-            runtime_events=normalized["runtime_events"],
+            runtime_events=runtime_events,
             next_action_hint=normalized["next_action_hint"],
             audit_ref=normalized["audit_ref"],
         )
@@ -2561,6 +2656,7 @@ def build_default_execution_bus(
             )
         tool_name = _get_required(request.input_payload, "tool_name")
         kwargs = dict(request.input_payload.get("kwargs") or {})
+        kwargs = _apply_governance_metadata_to_tool_kwargs(kwargs, request)
         kwargs.setdefault("_session_id", request.session_id)
         event_callback = request.input_payload.get("event_callback")
         raw_task_result = await task_manager.run_tool_task(
@@ -2577,6 +2673,11 @@ def build_default_execution_bus(
         )
         runtime_events = list(normalized["runtime_events"]) if isinstance(normalized["runtime_events"], list) else []
         runtime_events = bus._attach_task_id_to_runtime_events(runtime_events, task_id)
+        governance_event = _build_tool_governance_runtime_event(
+            request=request, task_id=task_id, tool_name=tool_name, output_payload=normalized["output_payload"]
+        )
+        if governance_event:
+            runtime_events.append(governance_event)
         runtime_events.append(
             build_runtime_event(
                 event_type="task.tool.completed" if normalized["success"] else "task.tool.failed",

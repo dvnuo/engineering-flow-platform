@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 
-_TASK_TERMINAL_STATUSES = {"success", "error", "blocked"}
+_TASK_TERMINAL_STATUSES = {"success", "error", "blocked", "cancelled", "stale"}
 
 
 def _utc_now_iso() -> str:
@@ -89,6 +89,8 @@ class RuntimeTaskTracker:
         record = self._records.get(task_id)
         if record is None:
             return None
+        if record.status in _TASK_TERMINAL_STATUSES:
+            return record
         record.status = "running"
         if not record.started_at:
             record.started_at = _utc_now_iso()
@@ -100,6 +102,8 @@ class RuntimeTaskTracker:
             return None
         if status not in _TASK_TERMINAL_STATUSES:
             status = "error"
+        if record.status == "cancelled" and status != "cancelled":
+            return record
         record.status = status
         record.payload = dict(payload)
         record.error_message = error_message
@@ -111,6 +115,27 @@ class RuntimeTaskTracker:
 
     def mark_internal_failure(self, task_id: str, *, payload: Dict[str, Any], error_message: Optional[str]) -> Optional[RuntimeTaskRecord]:
         return self.mark_terminal(task_id, status="error", payload=payload, error_message=error_message)
+
+    def is_terminal(self, task_id: str) -> bool:
+        record = self._records.get(task_id)
+        return bool(record and record.status in _TASK_TERMINAL_STATUSES)
+
+    def cancel(self, task_id: str, *, reason: str = "Task cancelled", payload: Optional[Dict[str, Any]] = None) -> Optional[RuntimeTaskRecord]:
+        record = self._records.get(task_id)
+        if record is None:
+            return None
+        if record.status in _TASK_TERMINAL_STATUSES:
+            return record
+        if record.background_task is not None and not record.background_task.done():
+            record.background_task.cancel()
+        record.status = "cancelled"
+        record.finished_at = _utc_now_iso()
+        record.error_message = reason
+        record.payload = dict(payload or {"ok": False, "task_id": task_id, "execution_type": "task", "request_id": record.request_id, "status": "cancelled", "error": reason})
+        return record
+
+    def mark_stale(self, task_id: str, *, reason: str = "Task stale", payload: Optional[Dict[str, Any]] = None) -> Optional[RuntimeTaskRecord]:
+        return self.mark_terminal(task_id, status="stale", payload=dict(payload or {"ok": False, "task_id": task_id, "execution_type": "task", "request_id": (self._records.get(task_id).request_id if self._records.get(task_id) else None), "status": "stale", "error": reason}), error_message=reason)
 
     def get(self, task_id: str) -> Optional[RuntimeTaskRecord]:
         return self._records.get(task_id)

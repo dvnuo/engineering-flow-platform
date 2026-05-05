@@ -139,7 +139,8 @@ def get_all_tools() -> list:
     """Get all tool schemas, merging legacy built-ins with external tools."""
     legacy_tools = _get_legacy_tools_schema()
     legacy_names = {name for name in (_extract_tool_schema_name(item) for item in legacy_tools) if name}
-    result = list(legacy_tools)
+    strict = _external_tools_strict_mode()
+    result = [] if strict else list(legacy_tools)
 
     registry = get_external_tool_registry()
     for schema in registry.get_tools_schema():
@@ -229,6 +230,47 @@ def _coerce_external_tool_result(raw: Any) -> ToolResult:
     return ToolResult(success=True, content=str(raw))
 
 
+
+
+def _is_external_mutation_tool(visibility: Dict[str, Any]) -> bool:
+    risk = str(visibility.get("risk_level") or "").lower()
+    tags = {str(x).lower() for x in (visibility.get("policy_tags") or [])}
+    return bool(visibility.get("mutation")) or risk in {"high", "critical"} or "mutation" in tags or "write" in tags
+
+
+def _external_mutation_explicitly_allowed(kwargs: Dict[str, Any]) -> bool:
+    decision = str(kwargs.get("_permission_decision") or "").lower()
+    return kwargs.get("_governance_allow_mutation") is True or decision in {"allow", "approved", "allow_once", "allow_always"}
+
+
+def _build_external_tool_result_metadata(name: str, visibility: Dict[str, Any], kwargs: Dict[str, Any], **extra: Any) -> Dict[str, Any]:
+    md = {
+        "tool_source": "external_tools_repo", "schema_source": visibility.get("schema_source"), "execution_source": "external_tools_repo",
+        "external_tool": True, "external_override": bool(visibility.get("override_enabled") and visibility.get("legacy_name")),
+        "allow_override": visibility.get("allow_override"), "tool_id": visibility.get("tool_id"),
+        "descriptor_source_file": visibility.get("descriptor_source_file"), "mutation": visibility.get("mutation"),
+        "risk_level": visibility.get("risk_level"), "policy_tags": visibility.get("policy_tags") or [],
+        "permission_decision": kwargs.get("_permission_decision"), "approval_ref": kwargs.get("_approval_ref"), "audit_ref": kwargs.get("_audit_ref"),
+    }
+    md.update(extra)
+    return md
+
+
+async def _execute_external_tool_as_tool_result(name: str, registry: Any, visibility: Dict[str, Any], kwargs: Dict[str, Any]) -> ToolResult:
+    is_mutation = _is_external_mutation_tool(visibility)
+    if is_mutation and not _external_mutation_explicitly_allowed(kwargs):
+        return ToolResult(False, error=f"External mutation tool '{name}' requires explicit governance allow", metadata=_build_external_tool_result_metadata(name, visibility, kwargs, blocked_by_governance=True, governance_checked=True, governance_rule="external_mutation_requires_explicit_allow"))
+    ext = await registry.execute_tool(name, **kwargs)
+    return ToolResult(ext.success, content=ext.content, error=ext.error, metadata=_build_external_tool_result_metadata(name, visibility, kwargs, governance_checked=True, governance_rule="external_mutation_requires_explicit_allow" if is_mutation else None))
+
+
+async def _execute_tool_under_external_strict_mode(name: str, registry: Any, visibility: Dict[str, Any], kwargs: Dict[str, Any]) -> ToolResult:
+    if visibility.get("exposed"):
+        return await _execute_external_tool_as_tool_result(name, registry, visibility, kwargs)
+    if registry.has_tool(name, include_disabled=True):
+        reason = visibility.get("shadow_reason") or "not_exposed"
+        return ToolResult(False, error=f"External tools strict mode blocks tool '{name}': {reason}", metadata={"strict_mode": True, "blocked_by_strict_mode": True, "external_shadow_reason": reason, "external_descriptor_present": True, "tool_source": "external_tools_repo"})
+    return ToolResult(False, error=f"External tools strict mode blocks legacy-only tool '{name}'", metadata={"strict_mode": True, "blocked_by_strict_mode": True, "tool_source": "legacy_builtin", "schema_source": "legacy_builtin", "execution_source": "blocked_by_strict_mode", "external_descriptor_present": False})
 async def execute_tool(name: str, **kwargs) -> ToolResult:
     """Execute a tool by name."""
     from . import bash_tools as bash_tools_module
@@ -251,24 +293,11 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
     legacy_names = _get_legacy_tool_names_set()
     visibility = registry.get_visibility(name, legacy_names=legacy_names)
 
+    if _external_tools_strict_mode():
+        return await _execute_tool_under_external_strict_mode(name, registry, visibility, kwargs)
+
     if visibility.get("exposed") and visibility.get("legacy_name") and visibility.get("override_enabled"):
-        external_result = await registry.execute_tool(name, **kwargs)
-        return ToolResult(
-            success=external_result.success,
-            content=external_result.content,
-            error=external_result.error,
-            metadata={
-                "tool_source": "external_tools_repo",
-                "schema_source": visibility["schema_source"],
-                "execution_source": "external_tools_repo",
-                "external_tool": True,
-                "external_override": bool(visibility["override_enabled"] and visibility["legacy_name"]),
-                "external_shadowed_by_legacy": False,
-                "allow_override": visibility["allow_override"],
-                "tool_id": visibility["tool_id"],
-                "descriptor_source_file": visibility["descriptor_source_file"],
-            },
-        )
+        return await _execute_external_tool_as_tool_result(name, registry, visibility, kwargs)
 
     # Bash/Shell tools
     if name == "read":
@@ -886,23 +915,7 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
                         "descriptor_source_file": visibility.get("descriptor_source_file"),
                     },
                 )
-            external_result = await registry.execute_tool(name, **kwargs)
-            return ToolResult(
-                success=external_result.success,
-                content=external_result.content,
-                error=external_result.error,
-                metadata={
-                    "tool_source": "external_tools_repo",
-                    "schema_source": visibility["schema_source"],
-                    "execution_source": "external_tools_repo",
-                    "external_tool": True,
-                    "external_override": bool(visibility["override_enabled"] and visibility["legacy_name"]),
-                    "external_shadowed_by_legacy": False,
-                    "allow_override": visibility["allow_override"],
-                    "tool_id": visibility["tool_id"],
-                    "descriptor_source_file": visibility["descriptor_source_file"],
-                },
-            )
+            return await _execute_external_tool_as_tool_result(name, registry, visibility, kwargs)
 
     return ToolResult(success=False, error=f"Tool {name} not implemented")
 

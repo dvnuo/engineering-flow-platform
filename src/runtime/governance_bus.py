@@ -159,6 +159,25 @@ class DefaultGovernanceBus(GovernanceBus):
             )
             return GovernanceDecision(allowed=False, reason=deny_reason, audit_record=audit)
 
+        mutation_decision = _evaluate_mutation_tool_constraints(
+            metadata=metadata,
+            capability_context=capability_context,
+        )
+        if mutation_decision is not None:
+            deny_reason = mutation_decision.get("reason") or "mutation_tool_requires_explicit_allow"
+            audit = make_governance_audit_record(
+                request=request,
+                stage="before_execute",
+                message=mutation_decision.get("message") or "Blocked mutation tool without explicit allow",
+                metadata={
+                    "policy_profile_id": policy_profile,
+                    "execution_type": request.execution_type,
+                    **(mutation_decision.get("metadata") or {}),
+                    "deny_reason": deny_reason,
+                },
+            )
+            return GovernanceDecision(allowed=False, reason=deny_reason, audit_record=audit)
+
         if metadata.get("auto_run") is True and metadata.get("governance_require_explicit_allow") is True:
             if metadata.get("governance_allow_auto_run") is not True:
                 audit = make_governance_audit_record(
@@ -411,6 +430,16 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
         capability_id = f"skill:{skill_name}" if skill_name else None
 
     descriptor = get_capability_registry().get(capability_id) if capability_id else None
+    descriptor_metadata = descriptor.metadata if descriptor is not None and isinstance(descriptor.metadata, dict) else {}
+    policy_tags = list(descriptor.policy_tags or []) if descriptor is not None else []
+    if isinstance(descriptor_metadata.get("policy_tags"), list):
+        for tag in descriptor_metadata.get("policy_tags") or []:
+            if tag not in policy_tags:
+                policy_tags.append(tag)
+    mutation = bool(descriptor_metadata.get("mutation"))
+    risk_level = descriptor_metadata.get("risk_level")
+    tool_source = descriptor_metadata.get("tool_source")
+    external_tool = bool(descriptor_metadata.get("external_tool")) or tool_source == "external_tools_repo"
     capability_type = descriptor.type if descriptor is not None else _infer_capability_type_from_id(capability_id)
     if request.execution_type == "task" and task_type == "github_review_task":
         capability_type = "adapter_action"
@@ -418,7 +447,47 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
         "capability_id": capability_id,
         "capability_type": capability_type,
         "action_id": action_id,
+        "tool_name": str(payload.get("tool_name") or metadata.get("tool_name") or "").strip() or None,
+        "policy_tags": policy_tags,
+        "mutation": mutation,
+        "risk_level": risk_level,
+        "external_tool": external_tool,
+        "tool_source": tool_source,
         "requires_identity_binding": bool(descriptor.requires_identity_binding) if descriptor is not None else False,
+    }
+
+
+def _permission_decision_allows_mutation(metadata: Dict[str, Any]) -> bool:
+    decision = str(metadata.get("permission_decision") or metadata.get("tool_permission_decision") or "").strip().lower()
+    return metadata.get("governance_allow_mutation") is True or decision in {"allow", "approved", "allow_once", "allow_always"}
+
+
+def _evaluate_mutation_tool_constraints(*, metadata: Dict[str, Any], capability_context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if str(capability_context.get("capability_type") or "").lower() != "tool":
+        return None
+    if not capability_context.get("external_tool"):
+        return None
+    tags = {str(x).lower() for x in capability_context.get("policy_tags") or []}
+    risk = str(capability_context.get("risk_level") or "").lower()
+    mutation = bool(capability_context.get("mutation")) or risk in {"high", "critical"} or "mutation" in tags or "write" in tags
+    if not mutation:
+        return None
+    if _permission_decision_allows_mutation(metadata):
+        return None
+    return {
+        "reason": "mutation_tool_requires_explicit_allow",
+        "message": "External mutation tool requires explicit governance allow",
+        "metadata": {
+            "rule": "mutation_tool_requires_explicit_allow",
+            "capability_id": capability_context.get("capability_id"),
+            "capability_type": capability_context.get("capability_type"),
+            "tool_name": capability_context.get("tool_name"),
+            "mutation": capability_context.get("mutation"),
+            "risk_level": capability_context.get("risk_level"),
+            "policy_tags": capability_context.get("policy_tags") or [],
+            "tool_source": capability_context.get("tool_source"),
+            "external_tool": capability_context.get("external_tool"),
+        },
     }
 
 
