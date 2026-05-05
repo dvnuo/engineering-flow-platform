@@ -1429,35 +1429,6 @@ async def api_tasks_execute(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON"}, status=400)
     except ValueError as exc:
         return web.json_response({"error": str(exc)}, status=400)
-    except asyncio.CancelledError:
-        current = runtime_task_tracker.get(task_id)
-        if current is None or current.status != "cancelled":
-            cancelled_payload = {
-                "ok": False,
-                "task_id": task_id,
-                "execution_type": "task",
-                "request_id": request_id,
-                "status": "cancelled",
-                "trace_id": trace_headers.get("trace_id"),
-                "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
-                "error": "Task cancelled",
-            }
-            runtime_task_tracker.cancel(
-                task_id,
-                reason="Task cancelled",
-                payload=cancelled_payload,
-            )
-            await _emit_task_lifecycle_event(
-                "task.cancelled",
-                task_id=task_id,
-                portal_task_id=metadata.get("portal_task_id"),
-                agent_id=runtime_agent_id,
-                session_id=session_id,
-                trace_id=trace_headers.get("trace_id"),
-                portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
-            )
-        logger.info("Task execution background cancelled | task_id=%s", task_id)
-        return
     except Exception as exc:
         logger.error("Task execution API error: %s", sanitize_exception_message(exc), exc_info=True)
         return web.json_response({"error": "Internal server error"}, status=500)
@@ -1613,6 +1584,35 @@ async def _run_task_execution_in_background(
             bool(execution_result.next_action_hint),
             int((time.perf_counter() - execution_started_at) * 1000),
         )
+    except asyncio.CancelledError:
+        current = runtime_task_tracker.get(task_id)
+        if current is None or current.status != "cancelled":
+            cancelled_payload = {
+                "ok": False,
+                "task_id": task_id,
+                "execution_type": "task",
+                "request_id": request_id,
+                "status": "cancelled",
+                "trace_id": trace_headers.get("trace_id"),
+                "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
+                "error": "Task cancelled",
+            }
+            runtime_task_tracker.cancel(
+                task_id,
+                reason="Task cancelled",
+                payload=cancelled_payload,
+            )
+            await _emit_task_lifecycle_event(
+                "task.cancelled",
+                task_id=task_id,
+                portal_task_id=metadata.get("portal_task_id"),
+                agent_id=runtime_agent_id,
+                session_id=session_id,
+                trace_id=trace_headers.get("trace_id"),
+                portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+            )
+        logger.info("Task execution background cancelled | task_id=%s", task_id)
+        return
     except Exception as exc:
         sanitized_message = sanitize_exception_message(exc)
         logger.error("Task execution background error: %s", sanitized_message, exc_info=True)
