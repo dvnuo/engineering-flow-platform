@@ -257,7 +257,8 @@ class ExecutionBus:
                 "external_tool": bool(audit_metadata.get("external_tool")),
                 "tool_source": audit_metadata.get("tool_source"),
                 "tool_name": tool_name,
-                "tool_id": audit_metadata.get("tool_id"),
+                "tool_id": audit_metadata.get("tool_id") or audit_metadata.get("capability_id"),
+                "capability_id": audit_metadata.get("capability_id"),
                 "mutation": audit_metadata.get("mutation"),
                 "risk_level": audit_metadata.get("risk_level"),
                 "policy_tags": audit_metadata.get("policy_tags") or [],
@@ -744,6 +745,7 @@ def _build_tool_governance_runtime_event(*, request: ExecutionRequest, task_id: 
         detail_payload={
             "tool_name": tool_name,
             "tool_id": tool_metadata.get("tool_id"),
+            "capability_id": tool_metadata.get("capability_id"),
             "tool_source": tool_metadata.get("tool_source"),
             "external_tool": tool_metadata.get("external_tool"),
             "mutation": tool_metadata.get("mutation"),

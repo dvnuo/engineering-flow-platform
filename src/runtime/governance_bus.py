@@ -457,6 +457,7 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
         "capability_type": capability_type,
         "action_id": action_id,
         "tool_name": str(payload.get("tool_name") or metadata.get("tool_name") or "").strip() or None,
+        "tool_id": descriptor_metadata.get("tool_id") or capability_id,
         "policy_tags": policy_tags,
         "mutation": mutation,
         "risk_level": risk_level,
@@ -514,6 +515,7 @@ def _evaluate_mutation_tool_constraints(*, metadata: Dict[str, Any], capability_
             "capability_id": capability_context.get("capability_id"),
             "capability_type": capability_context.get("capability_type"),
             "tool_name": capability_context.get("tool_name"),
+            "tool_id": capability_context.get("tool_id"),
             "mutation": capability_context.get("mutation"),
             "risk_level": capability_context.get("risk_level"),
             "policy_tags": capability_context.get("policy_tags") or [],
@@ -656,9 +658,9 @@ def _normalize_constraint_capability_ids(value: Any, *, capability_type: Optiona
     entries = _as_lower_str_list(value)
     normalized: list[str] = []
     for entry in entries:
-        if ":" in entry:
-            normalized.append(entry)
+        if not entry:
             continue
+        normalized.append(entry)
         expanded = _expand_capability_name_candidates(
             entry,
             capability_type=capability_type,

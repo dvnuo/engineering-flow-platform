@@ -4282,3 +4282,26 @@ async def test_execution_bus_triggered_event_task_github_notification_metadata_d
     )
     result = await build_default_execution_bus().execute(req)
     assert "adapter:github:add_comment" in result.output_payload["blocked_secondary_action_ids"]
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_pre_governance_blocked_external_mutation_emits_tool_governance_event(monkeypatch):
+    from src.runtime.capability_registry import CapabilityDescriptor
+
+    descriptor = CapabilityDescriptor(capability_id="efp.tool.external.write", type="tool", name="external_write", policy_tags=["write"], metadata={"external_tool": True, "tool_source": "external_tools_repo", "tool_name": "external_write", "mutation": True, "risk_level": "high", "tool_id": "efp.tool.external.write"})
+    class _R:
+        def get(self, capability_id): return descriptor if capability_id == "efp.tool.external.write" else None
+        def list_by_type(self, t): return [descriptor]
+    monkeypatch.setattr("src.runtime.governance_bus.get_capability_registry", lambda: _R())
+    monkeypatch.setattr("src.runtime.execution_bus.get_capability_registry", lambda: _R())
+
+    bus = build_default_execution_bus(execute_tool_func=lambda *a, **k: None)
+    req = make_execution_request(request_id="r", source_type="api", execution_type="tool", input_payload={"tool_name": "external_write", "kwargs": {}}, metadata={})
+    result = await bus.execute(req)
+    assert result.status == "blocked"
+    assert result.output_payload.get("tool_metadata", {}).get("blocked_by_governance") is True
+    events = [e.get("event_type") for e in result.runtime_events if isinstance(e, dict)]
+    assert "governance.audit" in events and "tool.governance.audit" in events
+    tool_event = next(e for e in result.runtime_events if isinstance(e, dict) and e.get("event_type") == "tool.governance.audit")
+    assert tool_event.get("detail_payload", {}).get("tool_id") == "efp.tool.external.write"
+    assert tool_event.get("detail_payload", {}).get("capability_id") == "efp.tool.external.write"

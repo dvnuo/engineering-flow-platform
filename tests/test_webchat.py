@@ -3778,3 +3778,21 @@ async def test_assistant_persist_and_result_payload_share_display_blocks(monkeyp
 
     assert captured["role"] == "assistant"
     assert persisted_extra["display_blocks"] == payload["display_blocks"]
+
+
+@pytest.mark.asyncio
+async def test_run_task_execution_cancelled_during_started_event_marks_cancelled(monkeypatch):
+    import src.gateway.webchat as webchat
+    webchat.runtime_task_tracker.reset()
+    webchat.runtime_task_tracker.create_pending(task_id="t-cancel-early", request_id="r", task_type="x", source="portal", session_id="s", agent_id="a", trace_id="tr", portal_dispatch_id="pd", portal_task_id="pt")
+
+    emitted = []
+    async def _emit(event_type, **kwargs):
+        emitted.append(event_type)
+        if event_type == "task.started":
+            raise asyncio.CancelledError()
+    monkeypatch.setattr(webchat, "_emit_task_lifecycle_event", _emit)
+    await webchat._run_task_execution_in_background(task_id="t-cancel-early", request_id="r", task_type="x", session_id="s", source="portal", runtime_agent_id="a", context_ref=None, merged_input_payload={}, metadata={"portal_task_id":"pt"}, trace_headers={"trace_id":"tr", "portal_dispatch_id":"pd"})
+    record = webchat.runtime_task_tracker.get("t-cancel-early")
+    assert record is not None and record.status == "cancelled"
+    assert "task.failed" not in emitted

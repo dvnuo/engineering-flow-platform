@@ -1507,17 +1507,17 @@ async def _run_task_execution_in_background(
     trace_headers: Dict[str, Optional[str]],
 ) -> None:
     execution_started_at = time.perf_counter()
-    runtime_task_tracker.mark_running(task_id)
-    await _emit_task_lifecycle_event(
-        "task.started",
-        task_id=task_id,
-        portal_task_id=metadata.get("portal_task_id"),
-        agent_id=runtime_agent_id,
-        session_id=session_id,
-        trace_id=trace_headers.get("trace_id"),
-        portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
-    )
     try:
+        runtime_task_tracker.mark_running(task_id)
+        await _emit_task_lifecycle_event(
+            "task.started",
+            task_id=task_id,
+            portal_task_id=metadata.get("portal_task_id"),
+            agent_id=runtime_agent_id,
+            session_id=session_id,
+            trace_id=trace_headers.get("trace_id"),
+            portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+        )
         execution_result = await execute_runtime_task_request(
             request_id=request_id,
             source_type="task",
