@@ -196,9 +196,55 @@ def test_runtime_compat_without_native_is_skipped(monkeypatch, tmp_path):
     reset_external_tool_registry_cache()
 
     registry = get_external_tool_registry(force_reload=True)
+    assert registry.get_descriptor("context_echo") is not None
+    visibility = registry.get_visibility("context_echo", legacy_names=set())
+    assert visibility["exists"] is True
+    assert visibility["native_compatible"] is False
+    assert visibility["exposed"] is False
+    assert visibility["shadow_reason"] == "runtime_incompatible"
     assert "context_echo" not in registry.get_tool_names()
     names = {_schema_name(item) for item in get_tools_schema() if isinstance(item, dict)}
     assert "context_echo" not in names
+
+
+@pytest.mark.asyncio
+async def test_runtime_incompatible_append_only_is_not_directly_executed(monkeypatch, tmp_path):
+    from src import execute_tool
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(tmp_path, runtime_compat=["opencode"])
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+
+    result = await execute_tool("context_echo", text="hello")
+    assert result.success is False
+    assert "runtime_incompatible" in (result.error or "")
+    assert result.to_dict()["metadata"]["external_shadow_reason"] == "runtime_incompatible"
+
+
+@pytest.mark.asyncio
+async def test_model_facing_false_append_only_is_not_directly_executed(monkeypatch, tmp_path):
+    from src import execute_tool, get_tools_schema
+    from src.tools_external import get_external_tool_registry, reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(
+        tmp_path,
+        name="context_hidden",
+        runtime_compat=["native"],
+        metadata={"model_facing": "false"},
+    )
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+
+    names = {_schema_name(item) for item in get_tools_schema() if isinstance(item, dict)}
+    assert "context_hidden" not in names
+    registry = get_external_tool_registry(force_reload=True)
+    visibility = registry.get_visibility("context_hidden", legacy_names=set())
+    assert visibility["shadow_reason"] == "model_facing_false"
+
+    result = await execute_tool("context_hidden", text="hello")
+    assert result.success is False
+    assert "model_facing_false" in (result.error or "")
 
 
 def test_tools_subdir_yaml_is_loaded(monkeypatch, tmp_path):
@@ -624,3 +670,39 @@ def test_shadowed_legacy_capability_reports_diagnostics(monkeypatch, tmp_path):
     assert cap.metadata["external_shadowed_by_legacy"] is True
     assert cap.metadata["external_shadow_reason"] == "allow_override_not_enabled"
     assert cap.metadata["external_allow_override"] is False
+
+
+def test_runtime_incompatible_legacy_duplicate_capability_diagnostics(monkeypatch, tmp_path):
+    from src.runtime.capability_registry import build_default_capability_registry
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(tmp_path, name="git_status", runtime_compat=["opencode"])
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+
+    cap = next(c for c in build_default_capability_registry().list_by_type("tool") if c.name == "git_status")
+    assert cap.source_ref == "src.__init__.get_tools_schema"
+    assert cap.metadata["tool_source"] == "legacy_builtin"
+    assert cap.metadata["external_descriptor_present"] is True
+    assert cap.metadata["external_native_compatible"] is False
+    assert cap.metadata["external_shadowed_by_legacy"] is True
+    assert cap.metadata["external_shadow_reason"] == "runtime_incompatible"
+
+
+def test_model_facing_false_legacy_duplicate_capability_diagnostics(monkeypatch, tmp_path):
+    from src.runtime.capability_registry import build_default_capability_registry
+    from src.tools_external import reset_external_tool_registry_cache
+
+    tools_dir = _write_tools_repo(
+        tmp_path,
+        name="git_status",
+        runtime_compat=["native"],
+        metadata={"model_facing": "false", "allow_override": "true"},
+    )
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tools_dir))
+    reset_external_tool_registry_cache()
+
+    cap = next(c for c in build_default_capability_registry().list_by_type("tool") if c.name == "git_status")
+    assert cap.source_ref == "src.__init__.get_tools_schema"
+    assert cap.metadata["external_shadowed_by_legacy"] is True
+    assert cap.metadata["external_shadow_reason"] == "model_facing_false"

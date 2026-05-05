@@ -132,7 +132,7 @@ class ExternalToolRegistry:
         else:
             schema_source = "legacy_builtin" if legacy_name else "none"
             execution_source = "legacy_builtin" if legacy_name else "none"
-            shadowed = False
+            shadowed = bool(legacy_name and descriptor is not None)
             shadow_reason = None
             if not enabled:
                 shadow_reason = "disabled"
@@ -141,7 +141,6 @@ class ExternalToolRegistry:
             elif not model_facing:
                 shadow_reason = "model_facing_false"
             elif legacy_name and not allow_override:
-                shadowed = True
                 shadow_reason = "allow_override_not_enabled"
 
         base.update(
