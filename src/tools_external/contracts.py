@@ -19,6 +19,8 @@ KNOWN_DESCRIPTOR_KEYS = {
     "mutation",
     "risk_level",
     "enabled",
+    "allow_override",
+    "model_facing",
 }
 
 
@@ -122,6 +124,11 @@ def descriptor_from_mapping(data: dict, source_file: str | None = None) -> ToolD
         metadata.setdefault("requires_identity_binding", requires_identity_binding)
     if "opencode_name" in data:
         metadata.setdefault("opencode_name", _as_optional_string(data.get("opencode_name")))
+    allow_override = _as_bool(data.get("allow_override", metadata.get("allow_override")), default=False)
+    metadata["allow_override"] = allow_override
+    model_facing_raw = data.get("model_facing", metadata.get("model_facing", None))
+    if model_facing_raw is not None:
+        metadata["model_facing"] = _as_bool(model_facing_raw, default=True)
     if source_file:
         metadata["_source_file"] = source_file
 
