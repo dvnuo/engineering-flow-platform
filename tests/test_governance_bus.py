@@ -801,3 +801,42 @@ async def test_default_governance_blocks_tool_when_action_type_allowlist_leaks_i
     assert called["tool"] is False
     assert result.status == "blocked"
     assert result.output_payload["reason"] == "allowed_capability_types"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_external_tool_custom_tool_id_matches_tool_name_alias(monkeypatch):
+    from src.runtime.capability_registry import CapabilityDescriptor
+
+    class _R:
+        def get(self, capability_id):
+            if capability_id == "tool:external_write":
+                return None
+            if capability_id == "efp.tool.external.write":
+                return CapabilityDescriptor(capability_id="efp.tool.external.write", type="tool", name="external_write", policy_tags=["tool", "write"], metadata={"external_tool": True, "tool_source": "external_tools_repo", "tool_name": "external_write", "mutation": True, "risk_level": "high", "tool_id": "efp.tool.external.write"})
+            return None
+        def list_by_type(self, t):
+            return [self.get("efp.tool.external.write")]
+
+    monkeypatch.setattr("src.runtime.governance_bus.get_capability_registry", lambda: _R())
+    bus = build_default_governance_bus()
+    req = make_execution_request(request_id="r1", source_type="api", execution_type="tool", input_payload={"tool_name": "external_write", "kwargs": {}}, metadata={"governance_allow_mutation": True, "allowed_capability_ids": ["tool:external_write"]})
+    assert (await bus.before_execute(req)).allowed is True
+    req2 = make_execution_request(request_id="r2", source_type="api", execution_type="tool", input_payload={"tool_name": "external_write", "kwargs": {}}, metadata={"governance_allow_mutation": True, "allowed_capability_ids": ["efp.tool.external.write"]})
+    assert (await bus.before_execute(req2)).allowed is True
+    req3 = make_execution_request(request_id="r3", source_type="api", execution_type="tool", input_payload={"tool_name": "external_write", "kwargs": {}}, metadata={"governance_allow_mutation": True, "denied_capability_ids": ["efp.tool.external.write"]})
+    decision = await bus.before_execute(req3)
+    assert decision.allowed is False and decision.reason == "denied_capability_ids"
+
+
+@pytest.mark.asyncio
+async def test_default_governance_blocks_external_mutation_tool_without_allow_tool_id(monkeypatch):
+    from src.runtime.capability_registry import CapabilityDescriptor
+
+    descriptor = CapabilityDescriptor(capability_id="efp.tool.external.write", type="tool", name="external_write", policy_tags=["write"], metadata={"external_tool": True, "tool_source": "external_tools_repo", "tool_name": "external_write", "mutation": True, "risk_level": "high", "tool_id": "efp.tool.external.write"})
+    class _R:
+        def get(self, capability_id): return descriptor if capability_id == "efp.tool.external.write" else None
+        def list_by_type(self, t): return [descriptor]
+    monkeypatch.setattr("src.runtime.governance_bus.get_capability_registry", lambda: _R())
+    decision = await build_default_governance_bus().before_execute(make_execution_request(request_id="r", source_type="api", execution_type="tool", input_payload={"tool_name": "external_write", "kwargs": {}}, metadata={}))
+    assert decision.allowed is False
+    assert decision.audit_record.metadata.get("tool_id") == "efp.tool.external.write"

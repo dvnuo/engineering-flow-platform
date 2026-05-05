@@ -228,6 +228,8 @@ class ExecutionBus:
         reason: Optional[str],
         audit: Optional[GovernanceAuditRecord],
     ) -> ExecutionResult:
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        audit_metadata = audit.metadata if audit is not None and isinstance(audit.metadata, dict) else {}
         payload = {
             "error": "Execution blocked by governance policy",
             "reason": reason or "governance_blocked",
@@ -245,18 +247,65 @@ class ExecutionBus:
                     detail_payload={"reason": reason or "governance_blocked"},
                 )
             )
+        is_tool_mutation_block = (
+            audit_metadata.get("rule") == "mutation_tool_requires_explicit_allow"
+            or (reason or "") == "mutation_tool_requires_explicit_allow"
+        )
+        if is_tool_mutation_block:
+            tool_name = audit_metadata.get("tool_name") or (request.input_payload or {}).get("tool_name")
+            tool_metadata = {
+                "external_tool": bool(audit_metadata.get("external_tool")),
+                "tool_source": audit_metadata.get("tool_source"),
+                "tool_name": tool_name,
+                "tool_id": audit_metadata.get("tool_id") or audit_metadata.get("capability_id"),
+                "capability_id": audit_metadata.get("capability_id"),
+                "mutation": audit_metadata.get("mutation"),
+                "risk_level": audit_metadata.get("risk_level"),
+                "policy_tags": audit_metadata.get("policy_tags") or [],
+                "governance_checked": True,
+                "blocked_by_governance": True,
+                "governance_rule": "mutation_tool_requires_explicit_allow",
+                "permission_decision": metadata.get("permission_decision") or metadata.get("tool_permission_decision"),
+                "approval_ref": metadata.get("approval_ref"),
+                "audit_ref": audit.audit_ref if audit else None,
+            }
+            payload.update(
+                {
+                    "tool_name": tool_name,
+                    "tool_metadata": tool_metadata,
+                    "external_tool": tool_metadata["external_tool"],
+                    "mutation": tool_metadata["mutation"],
+                    "risk_level": tool_metadata["risk_level"],
+                    "blocked_by_governance": True,
+                    "governance_checked": True,
+                }
+            )
+            evt = _build_tool_governance_runtime_event(
+                request=request,
+                task_id=self._resolve_task_id(request),
+                tool_name=str(tool_name or ""),
+                output_payload=payload,
+            )
+            if evt:
+                runtime_events.append(evt)
+            artifacts_tool_metadata = tool_metadata
+        else:
+            artifacts_tool_metadata = None
+        artifacts = {
+            "governance": {
+                "blocked": True,
+                "deny_reason": reason or "governance_blocked",
+                "execution_type": request.execution_type,
+                "capability_id": (request.input_payload or {}).get("action_id"),
+            }
+        }
+        if artifacts_tool_metadata:
+            artifacts["tool_metadata"] = artifacts_tool_metadata
         return make_execution_result(
             request_id=request.request_id,
             status="blocked",
             output_payload=payload,
-            artifacts={
-                "governance": {
-                    "blocked": True,
-                    "deny_reason": reason or "governance_blocked",
-                    "execution_type": request.execution_type,
-                    "capability_id": (request.input_payload or {}).get("action_id"),
-                }
-            },
+            artifacts=artifacts,
             runtime_events=runtime_events,
             audit_ref=audit_ref,
         )
@@ -580,6 +629,14 @@ def _resolve_tool_capability(tool_name: str) -> Dict[str, Any]:
     if not capability_id:
         return fallback
     descriptor = get_capability_registry().get(capability_id)
+    if descriptor is None and normalized_tool_name:
+        for candidate in get_capability_registry().list_by_type("tool"):
+            metadata = candidate.metadata if isinstance(getattr(candidate, "metadata", None), dict) else {}
+            candidate_name = str(getattr(candidate, "name", "") or "").strip().lower()
+            metadata_tool_name = str(metadata.get("tool_name") or "").strip().lower()
+            if candidate_name == normalized_tool_name or metadata_tool_name == normalized_tool_name:
+                descriptor = candidate
+                break
     if descriptor is None:
         return fallback
     return {
@@ -688,6 +745,7 @@ def _build_tool_governance_runtime_event(*, request: ExecutionRequest, task_id: 
         detail_payload={
             "tool_name": tool_name,
             "tool_id": tool_metadata.get("tool_id"),
+            "capability_id": tool_metadata.get("capability_id"),
             "tool_source": tool_metadata.get("tool_source"),
             "external_tool": tool_metadata.get("external_tool"),
             "mutation": tool_metadata.get("mutation"),
