@@ -4,31 +4,29 @@ import logging
 import os
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .contracts import ToolDescriptor, descriptor_from_mapping
 
 logger = logging.getLogger(__name__)
 
 
-def resolve_external_tools_dir() -> Optional[Path]:
+def resolve_external_tools_dir() -> Path:
     env_value = os.getenv("EFP_TOOLS_DIR")
     if env_value is not None and env_value.strip():
         path = Path(env_value.strip())
-        if path.exists():
-            return path
-        logger.debug("External tools directory does not exist: %s", path)
-        return None
+    else:
+        if os.getenv("EFP_EXTERNAL_TOOLS_TEST_FIXTURE", "").lower() == "true":
+            fixture = os.getenv("EFP_TOOLS_FIXTURE_DIR")
+            if fixture and Path(fixture).exists():
+                return Path(fixture)
+        path = Path("/app/tools")
 
-    app_tools = Path("/app/tools")
-    if app_tools.exists():
-        return app_tools
-
-    repo_root = Path(__file__).resolve().parents[2]
-    fixture = repo_root / "tools" / "fixture"
-    if fixture.exists():
-        return fixture
-    return None
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        logger.debug("External tools directory mkdir failed for %s: %s", path, exc)
+    return path
 
 
 def discover_manifest_files(tools_dir: Path) -> list[Path]:
@@ -82,12 +80,13 @@ def _iter_descriptor_mappings(raw: Any) -> list[Any]:
     return []
 
 
-def load_tool_descriptors(tools_dir: Optional[Path] = None) -> list[ToolDescriptor]:
+def load_tool_descriptors(tools_dir: Path | None = None) -> list[ToolDescriptor]:
     resolved_dir = tools_dir or resolve_external_tools_dir()
-    if resolved_dir is None:
+    if not resolved_dir.exists() or not resolved_dir.is_dir():
+        logger.debug("External tools directory unavailable: %s", resolved_dir)
         return []
-    if not resolved_dir.exists():
-        logger.debug("External tools directory does not exist: %s", resolved_dir)
+    if not os.access(resolved_dir, os.R_OK):
+        logger.debug("External tools directory unreadable: %s", resolved_dir)
         return []
 
     descriptors: list[ToolDescriptor] = []

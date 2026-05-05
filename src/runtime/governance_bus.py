@@ -112,6 +112,7 @@ class DefaultGovernanceBus(GovernanceBus):
         capability_decision = _evaluate_capability_constraints(
             metadata=metadata,
             capability_id=capability_context.get("capability_id"),
+            capability_aliases=capability_context.get("capability_aliases") or [],
             capability_type=capability_context.get("capability_type"),
             action_id=capability_context.get("action_id"),
             execution_type=request.execution_type,
@@ -155,6 +156,25 @@ class DefaultGovernanceBus(GovernanceBus):
                     "capability_type": capability_context.get("capability_type"),
                     "deny_reason": deny_reason,
                     **(identity_decision.get("metadata") or {}),
+                },
+            )
+            return GovernanceDecision(allowed=False, reason=deny_reason, audit_record=audit)
+
+        mutation_decision = _evaluate_mutation_tool_constraints(
+            metadata=metadata,
+            capability_context=capability_context,
+        )
+        if mutation_decision is not None:
+            deny_reason = mutation_decision.get("reason") or "mutation_tool_requires_explicit_allow"
+            audit = make_governance_audit_record(
+                request=request,
+                stage="before_execute",
+                message=mutation_decision.get("message") or "Blocked mutation tool without explicit allow",
+                metadata={
+                    "policy_profile_id": policy_profile,
+                    "execution_type": request.execution_type,
+                    **(mutation_decision.get("metadata") or {}),
+                    "deny_reason": deny_reason,
                 },
             )
             return GovernanceDecision(allowed=False, reason=deny_reason, audit_record=audit)
@@ -388,6 +408,7 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
     task_type = str(payload.get("task_type") or "").strip().lower()
 
     capability_id: Optional[str] = None
+    capability_aliases: list[str] = []
     action_id: Optional[str] = None
     if request.execution_type == "task":
         if task_type in {"adapter_action_task", "jira_workflow_review_task", "github_review_task", "triggered_event_task", "delegation_task"}:
@@ -402,23 +423,105 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
                 action_id = None
         elif task_type == "tool_task":
             tool_name = str(payload.get("tool_name") or "").strip().lower()
-            capability_id = f"tool:{tool_name}" if tool_name else None
+            descriptor, resolved_capability_id, aliases = _resolve_tool_descriptor_by_name(tool_name)
+            capability_id = resolved_capability_id
+            capability_aliases = aliases
     elif request.execution_type == "tool":
         tool_name = str(payload.get("tool_name") or metadata.get("tool_name") or "").strip().lower()
-        capability_id = f"tool:{tool_name}" if tool_name else None
+        descriptor, resolved_capability_id, aliases = _resolve_tool_descriptor_by_name(tool_name)
+        capability_id = resolved_capability_id
+        capability_aliases = aliases
     elif request.execution_type == "skill":
         skill_name = str(payload.get("skill_name") or "").strip().lower()
         capability_id = f"skill:{skill_name}" if skill_name else None
 
-    descriptor = get_capability_registry().get(capability_id) if capability_id else None
+    descriptor = locals().get("descriptor")
+    if descriptor is None:
+        descriptor = get_capability_registry().get(capability_id) if capability_id else None
+    descriptor_metadata = descriptor.metadata if descriptor is not None and isinstance(descriptor.metadata, dict) else {}
+    policy_tags = list(descriptor.policy_tags or []) if descriptor is not None else []
+    if isinstance(descriptor_metadata.get("policy_tags"), list):
+        for tag in descriptor_metadata.get("policy_tags") or []:
+            if tag not in policy_tags:
+                policy_tags.append(tag)
+    mutation = bool(descriptor_metadata.get("mutation"))
+    risk_level = descriptor_metadata.get("risk_level")
+    tool_source = descriptor_metadata.get("tool_source")
+    external_tool = bool(descriptor_metadata.get("external_tool")) or tool_source == "external_tools_repo"
     capability_type = descriptor.type if descriptor is not None else _infer_capability_type_from_id(capability_id)
     if request.execution_type == "task" and task_type == "github_review_task":
         capability_type = "adapter_action"
     return {
         "capability_id": capability_id,
+        "capability_aliases": capability_aliases,
         "capability_type": capability_type,
         "action_id": action_id,
+        "tool_name": str(payload.get("tool_name") or metadata.get("tool_name") or "").strip() or None,
+        "tool_id": descriptor_metadata.get("tool_id") or capability_id,
+        "policy_tags": policy_tags,
+        "mutation": mutation,
+        "risk_level": risk_level,
+        "external_tool": external_tool,
+        "tool_source": tool_source,
         "requires_identity_binding": bool(descriptor.requires_identity_binding) if descriptor is not None else False,
+    }
+
+
+def _resolve_tool_descriptor_by_name(tool_name: str):
+    registry = get_capability_registry()
+    normalized = str(tool_name or "").strip().lower()
+    if not normalized:
+        return None, None, []
+    canonical_id = f"tool:{normalized}"
+    aliases = [canonical_id]
+    descriptor = registry.get(canonical_id)
+    if descriptor is not None:
+        if descriptor.capability_id not in aliases:
+            aliases.append(descriptor.capability_id)
+        return descriptor, descriptor.capability_id, aliases
+    for candidate in registry.list_by_type("tool"):
+        candidate_name = str(getattr(candidate, "name", "") or "").strip().lower()
+        metadata = getattr(candidate, "metadata", {}) if isinstance(getattr(candidate, "metadata", {}), dict) else {}
+        metadata_tool_name = str(metadata.get("tool_name") or "").strip().lower()
+        if candidate_name == normalized or metadata_tool_name == normalized:
+            if candidate.capability_id not in aliases:
+                aliases.append(candidate.capability_id)
+            return candidate, candidate.capability_id, aliases
+    return None, canonical_id, aliases
+
+
+def _permission_decision_allows_mutation(metadata: Dict[str, Any]) -> bool:
+    decision = str(metadata.get("permission_decision") or metadata.get("tool_permission_decision") or "").strip().lower()
+    return metadata.get("governance_allow_mutation") is True or decision in {"allow", "approved", "allow_once", "allow_always"}
+
+
+def _evaluate_mutation_tool_constraints(*, metadata: Dict[str, Any], capability_context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if str(capability_context.get("capability_type") or "").lower() != "tool":
+        return None
+    if not capability_context.get("external_tool"):
+        return None
+    tags = {str(x).lower() for x in capability_context.get("policy_tags") or []}
+    risk = str(capability_context.get("risk_level") or "").lower()
+    mutation = bool(capability_context.get("mutation")) or risk in {"high", "critical"} or "mutation" in tags or "write" in tags
+    if not mutation:
+        return None
+    if _permission_decision_allows_mutation(metadata):
+        return None
+    return {
+        "reason": "mutation_tool_requires_explicit_allow",
+        "message": "External mutation tool requires explicit governance allow",
+        "metadata": {
+            "rule": "mutation_tool_requires_explicit_allow",
+            "capability_id": capability_context.get("capability_id"),
+            "capability_type": capability_context.get("capability_type"),
+            "tool_name": capability_context.get("tool_name"),
+            "tool_id": capability_context.get("tool_id"),
+            "mutation": capability_context.get("mutation"),
+            "risk_level": capability_context.get("risk_level"),
+            "policy_tags": capability_context.get("policy_tags") or [],
+            "tool_source": capability_context.get("tool_source"),
+            "external_tool": capability_context.get("external_tool"),
+        },
     }
 
 
@@ -439,6 +542,7 @@ def _evaluate_capability_constraints(
     *,
     metadata: Dict[str, Any],
     capability_id: Optional[str],
+    capability_aliases: Optional[list[str]] = None,
     capability_type: Optional[str],
     action_id: Optional[str],
     execution_type: Optional[str] = None,
@@ -465,6 +569,11 @@ def _evaluate_capability_constraints(
     )
 
     normalized_capability_id = str(capability_id or "").strip().lower()
+    candidate_capability_ids = {normalized_capability_id} if normalized_capability_id else set()
+    for alias in capability_aliases or []:
+        alias_id = str(alias or "").strip().lower()
+        if alias_id:
+            candidate_capability_ids.add(alias_id)
     normalized_capability_type = str(capability_type or "").strip().lower()
     normalized_action_id = str(action_id or "").strip().lower()
     normalized_action_name = normalized_action_id.split(":")[-1] if normalized_action_id else ""
@@ -477,11 +586,14 @@ def _evaluate_capability_constraints(
         and not has_capability_type_context
     )
 
-    if _matches_capability_constraint(
-        constraints=denied_capability_ids,
-        capability_id=normalized_capability_id,
-        capability_type=normalized_capability_type,
-        action_name=normalized_action_name,
+    if any(
+        _matches_capability_constraint(
+            constraints=denied_capability_ids,
+            capability_id=candidate_id,
+            capability_type=normalized_capability_type,
+            action_name=normalized_action_name,
+        )
+        for candidate_id in (candidate_capability_ids or {normalized_capability_id})
     ):
         return {"reason": "denied_capability_ids", "message": f"Capability blocked: {normalized_capability_id}"}
     if denied_capability_types and normalized_capability_type and normalized_capability_type in denied_capability_types:
@@ -502,11 +614,14 @@ def _evaluate_capability_constraints(
     if allowed_capability_ids and not is_chat_request_without_capability_context:
         if not has_capability_id_context:
             return {"reason": "allowed_capability_ids", "message": "Capability not in allowlist"}
-        if not _matches_capability_constraint(
-            constraints=allowed_capability_ids,
-            capability_id=normalized_capability_id,
-            capability_type=normalized_capability_type,
-            action_name=normalized_action_name,
+        if not any(
+            _matches_capability_constraint(
+                constraints=allowed_capability_ids,
+                capability_id=candidate_id,
+                capability_type=normalized_capability_type,
+                action_name=normalized_action_name,
+            )
+            for candidate_id in (candidate_capability_ids or {normalized_capability_id})
         ):
             return {"reason": "allowed_capability_ids", "message": "Capability not in allowlist"}
     if allowed_capability_types and not is_chat_request_without_capability_context:
@@ -543,9 +658,9 @@ def _normalize_constraint_capability_ids(value: Any, *, capability_type: Optiona
     entries = _as_lower_str_list(value)
     normalized: list[str] = []
     for entry in entries:
-        if ":" in entry:
-            normalized.append(entry)
+        if not entry:
             continue
+        normalized.append(entry)
         expanded = _expand_capability_name_candidates(
             entry,
             capability_type=capability_type,

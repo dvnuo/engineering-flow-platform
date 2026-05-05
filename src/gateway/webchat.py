@@ -1507,17 +1507,17 @@ async def _run_task_execution_in_background(
     trace_headers: Dict[str, Optional[str]],
 ) -> None:
     execution_started_at = time.perf_counter()
-    runtime_task_tracker.mark_running(task_id)
-    await _emit_task_lifecycle_event(
-        "task.started",
-        task_id=task_id,
-        portal_task_id=metadata.get("portal_task_id"),
-        agent_id=runtime_agent_id,
-        session_id=session_id,
-        trace_id=trace_headers.get("trace_id"),
-        portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
-    )
     try:
+        runtime_task_tracker.mark_running(task_id)
+        await _emit_task_lifecycle_event(
+            "task.started",
+            task_id=task_id,
+            portal_task_id=metadata.get("portal_task_id"),
+            agent_id=runtime_agent_id,
+            session_id=session_id,
+            trace_id=trace_headers.get("trace_id"),
+            portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+        )
         execution_result = await execute_runtime_task_request(
             request_id=request_id,
             source_type="task",
@@ -1549,6 +1549,11 @@ async def _run_task_execution_in_background(
             except Exception:
                 logger.warning("Best-effort session metadata publish failed for task execution path", exc_info=True)
 
+        current = runtime_task_tracker.get(task_id)
+        if current is not None and current.status == "cancelled":
+            logger.info("Task result ignored because task already cancelled | task_id=%s", task_id)
+            return
+
         response_payload = _build_runtime_task_terminal_payload(
             task_id=task_id,
             execution_result=execution_result,
@@ -1579,6 +1584,35 @@ async def _run_task_execution_in_background(
             bool(execution_result.next_action_hint),
             int((time.perf_counter() - execution_started_at) * 1000),
         )
+    except asyncio.CancelledError:
+        current = runtime_task_tracker.get(task_id)
+        if current is None or current.status != "cancelled":
+            cancelled_payload = {
+                "ok": False,
+                "task_id": task_id,
+                "execution_type": "task",
+                "request_id": request_id,
+                "status": "cancelled",
+                "trace_id": trace_headers.get("trace_id"),
+                "portal_dispatch_id": trace_headers.get("portal_dispatch_id"),
+                "error": "Task cancelled",
+            }
+            runtime_task_tracker.cancel(
+                task_id,
+                reason="Task cancelled",
+                payload=cancelled_payload,
+            )
+            await _emit_task_lifecycle_event(
+                "task.cancelled",
+                task_id=task_id,
+                portal_task_id=metadata.get("portal_task_id"),
+                agent_id=runtime_agent_id,
+                session_id=session_id,
+                trace_id=trace_headers.get("trace_id"),
+                portal_dispatch_id=trace_headers.get("portal_dispatch_id"),
+            )
+        logger.info("Task execution background cancelled | task_id=%s", task_id)
+        return
     except Exception as exc:
         sanitized_message = sanitize_exception_message(exc)
         logger.error("Task execution background error: %s", sanitized_message, exc_info=True)
@@ -1649,6 +1683,32 @@ async def api_task_status(request: web.Request) -> web.Response:
         clear_log_context()
 
 
+
+
+async def api_task_cancel(request: web.Request) -> web.Response:
+    clear_log_context()
+    trace_headers = _extract_task_trace_headers(request)
+    set_log_context(path="/api/tasks/{task_id}/cancel", trace_id=trace_headers.get("trace_id"))
+    try:
+        task_id = str(request.match_info.get("task_id") or "").strip()
+        if not task_id:
+            return web.json_response({"error": "task_id is required"}, status=400)
+        record = runtime_task_tracker.get(task_id)
+        if record is None:
+            return web.json_response({"error": "Task not found"}, status=404)
+        if record.status in {"success", "error", "blocked", "cancelled", "stale"}:
+            payload = dict(record.payload or {"task_id": task_id, "status": record.status})
+            payload["cancel_requested"] = True
+            payload["status"] = record.status
+            return web.json_response(payload)
+        payload = {"ok": False, "task_id": task_id, "execution_type": "task", "request_id": record.request_id, "status": "cancelled", "cancel_requested": True, "trace_id": record.trace_id, "portal_dispatch_id": record.portal_dispatch_id, "accepted_at": record.accepted_at, "started_at": record.started_at, "finished_at": None, "error": "Task cancelled by request"}
+        cancelled = runtime_task_tracker.cancel(task_id, reason="Task cancelled by request", payload=payload)
+        if cancelled:
+            payload["finished_at"] = cancelled.finished_at
+        await _emit_task_lifecycle_event("task.cancelled", task_id=task_id, portal_task_id=record.portal_task_id, agent_id=record.agent_id, session_id=record.session_id, trace_id=record.trace_id, portal_dispatch_id=record.portal_dispatch_id)
+        return web.json_response(payload)
+    finally:
+        clear_log_context()
 def _parse_bool_query(value: Optional[str]) -> Optional[bool]:
     if value is None:
         return None
@@ -3277,6 +3337,7 @@ def setup_webchat_routes(app: web.Application):
         POST /api/chat/stream - Send message (streaming SSE)
         POST /api/tasks/execute - Accept and execute structured runtime task
         GET  /api/tasks/{task_id} - Runtime task status for portal polling
+        POST /api/tasks/{task_id}/cancel - Cancel runtime task
         GET  /api/sessions - List recent sessions
         GET  /api/sessions/{session_id} - Load session messages
         POST /api/sessions/{session_id}/rename - Rename existing session
@@ -3295,6 +3356,7 @@ def setup_webchat_routes(app: web.Application):
     app.router.add_post('/api/chat/stream', api_chat_stream)
     app.router.add_post('/api/tasks/execute', api_tasks_execute)
     app.router.add_get('/api/tasks/{task_id}', api_task_status)
+    app.router.add_post('/api/tasks/{task_id}/cancel', api_task_cancel)
     app.router.add_get('/api/capabilities', api_capabilities)
     app.router.add_get('/api/sessions', api_sessions)
     app.router.add_get('/api/sessions/{session_id}', api_load_session)
@@ -3352,6 +3414,7 @@ def setup_webchat_routes(app: web.Application):
     logger.info("  POST /api/chat/stream - Send message (streaming SSE)")
     logger.info("  POST /api/tasks/execute - Accept and execute structured runtime task")
     logger.info("  GET  /api/tasks/{task_id} - Runtime task status for portal polling")
+    logger.info("  POST /api/tasks/{task_id}/cancel - Cancel runtime task")
     logger.info("  GET  /api/sessions - List recent sessions")
     logger.info("  GET  /api/sessions/{id} - Load session messages")
     logger.info("  POST /api/sessions/{id}/rename - Rename existing session")

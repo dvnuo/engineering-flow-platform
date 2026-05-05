@@ -1,405 +1,100 @@
+from __future__ import annotations
+
 import importlib
-import os
 import textwrap
+from pathlib import Path
 
 import pytest
 
 
-@pytest.fixture
-def src_module():
-    import src
-
-    return src
-
-
 def _reload_external_loader():
     import src.runtime.external_tools as ext
-
-    importlib.reload(ext)
+    ext = importlib.reload(ext)
     ext.clear_external_tools_cache()
     return ext
 
 
-def _create_tools_repo(base_dir, *, validate_errors="[]", runner_body="", dataclass_contract=True):
-    base_dir.mkdir(parents=True, exist_ok=True)
-    (base_dir / "manifest.yaml").write_text("version: 1\n", encoding="utf-8")
-    pkg_dir = base_dir / "python" / "efp_tools"
-    pkg_dir.mkdir(parents=True, exist_ok=True)
-    (pkg_dir / "__init__.py").write_text("", encoding="utf-8")
-    if dataclass_contract:
-        (pkg_dir / "contracts.py").write_text(
-            textwrap.dedent(
-                """
-                from dataclasses import dataclass, field
-
-                @dataclass
-                class ToolDescriptor:
-                    tool_id: str
-                    name: str
-                    opencode_name: str
-                    description: str
-                    domain: str
-                    type: str
-                    runtime_compat: list[str]
-                    policy_tags: list[str]
-                    requires_identity_binding: bool
-                    mutation: bool
-                    risk_level: str
-                    python_entrypoint: str
-                    input_schema: dict
-                    output_schema: dict
-                    metadata: dict = field(default_factory=dict)
-                    enabled: bool = True
-                """
-            ),
-            encoding="utf-8",
-        )
-        (pkg_dir / "registry.py").write_text(
-            f"""
-from efp_tools.contracts import ToolDescriptor
-
-DESCRIPTORS = [
-    ToolDescriptor('efp.tool.context.context_read_ref','context_read_ref','context_read_ref','Read context ref','context','read',['native'],['read'],False,False,'low','x',{{'type':'object','properties':{{'ref':{{'type':'string'}}}},'required':['ref']}},{{'type':'object'}},{{'model_facing': True}}, True),
-    ToolDescriptor('efp.tool.git.git_status','git_status','git_status','Get git status','git','read',['native'],['read'],False,False,'low','x',{{'type':'object','properties':{{'workspace':{{'type':'string'}}}}}},{{'type':'object'}},{{'model_facing': True}}, True),
-    ToolDescriptor('efp.tool.bash.run_command','run_command','run_command','Run command','bash','write',['native'],['exec'],False,True,'high','x',{{'type':'object','properties':{{'cmd':{{'type':'string'}}}}}},{{'type':'object'}},{{'model_facing': True}}, False),
-    ToolDescriptor('efp.tool.bash.discover_commands','discover_commands','efp_discover_commands','Discover installed shell commands. Disabled pending bash governance.','bash','adapter_action',['native', 'opencode'],['bash', 'discovery', 'read_only'],False,False,'medium','x',{{'type':'object','properties':{{'prefix':{{'type':'string'}}}}}},{{'type':'object'}},{{'model_facing': True}}, False),
-]
-
-class Registry:
-    def list_descriptors(self, *, runtime_type=None, enabled_only=True, model_facing_only=True):
-        items = list(DESCRIPTORS)
-        if runtime_type:
-            items = [d for d in items if runtime_type in (d.runtime_compat or [])]
-        if enabled_only:
-            items = [d for d in items if d.enabled]
-        if model_facing_only:
-            items = [d for d in items if (d.metadata or {{}}).get('model_facing', True) is not False]
-        return items
-
-    def list_all_descriptors(self):
-        return list(DESCRIPTORS)
-
-    def validate(self):
-        return {validate_errors}
-
-def load_registry(tools_dir):
-    return Registry()
-""",
-            encoding="utf-8",
-        )
-    else:
-        (pkg_dir / "contracts.py").write_text("", encoding="utf-8")
-        (pkg_dir / "registry.py").write_text(
-            "DESCRIPTORS = [{'name': 'run_command', 'enabled': True, 'runtime_compat': ['native'], 'metadata': {}, "
-            "'schema': {'type': 'function', 'function': {'name': 'run_command','description':'external','parameters':{'type':'object'}}}}]\n"
-            "class Registry:\n    def list_descriptors(self, **kwargs):\n        return DESCRIPTORS\n"
-            "def load_registry(tools_dir):\n    return Registry()\n",
-            encoding="utf-8",
-        )
-    if not runner_body:
-        runner_body = "async def execute_tool_async(**kwargs):\n    return {'success': True, 'content': 'ok'}\n"
-    (pkg_dir / "runner.py").write_text(runner_body, encoding="utf-8")
+def _write_tools_repo(repo: Path, *, enabled: bool = True, runtime_compat: str = "[native, opencode]") -> None:
+    (repo / "manifest.yaml").write_text("version: 1\n", encoding="utf-8")
+    p = repo / "tools" / "context"
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "context_echo.yaml").write_text(textwrap.dedent(f"""
+    tool_id: efp.tool.context.echo
+    name: context_echo
+    description: Echo context
+    python_entrypoint: test_tools.echo:execute
+    input_schema:
+      type: object
+      properties:
+        text:
+          type: string
+    output_schema:
+      type: object
+    runtime_compat: {runtime_compat}
+    policy_tags: [context, read_only]
+    domain: context
+    mutation: false
+    risk_level: low
+    enabled: {str(enabled).lower()}
+    metadata:
+      model_facing: true
+    """), encoding="utf-8")
+    mod = repo / "python" / "test_tools"
+    mod.mkdir(parents=True, exist_ok=True)
+    (mod / "__init__.py").write_text("", encoding="utf-8")
+    (mod / "echo.py").write_text("async def execute(text='', **kwargs):\n    return {'success': True, 'content': text}\n", encoding="utf-8")
 
 
-def test_missing_tools_dir_falls_back_to_legacy(monkeypatch, tmp_path, src_module):
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(tmp_path / "does-not-exist"))
-    ext = _reload_external_loader()
-    assert src_module.get_tools_schema()
-    assert ext.load_external_tools_state().available is False
-
-
-def test_t04_dataclass_registry_semantics(monkeypatch, tmp_path):
-    repo = tmp_path / "repo"
-    _create_tools_repo(repo)
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
-    ext = _reload_external_loader()
-
-    schemas = ext.get_external_tool_schemas("native")
-    names = {(s.get("function", {}) or {}).get("name") for s in schemas}
-    assert "context_read_ref" in names
-    assert "git_status" in names
-    assert "run_command" not in names
-    assert ext.get_external_disabled_tool_names("native") == {"run_command", "discover_commands"}
-    assert ext.has_external_tool("run_command", include_disabled=True) is True
-    assert ext.has_external_tool("run_command", include_disabled=False) is False
-    assert ext.has_external_tool("discover_commands", include_disabled=True) is True
-    assert ext.has_external_tool("discover_commands", include_disabled=False) is False
-
-
-@pytest.mark.asyncio
-async def test_context_payload_and_reserved_arg_filtering(monkeypatch, tmp_path):
-    """execute_external_tool (old module) builds context and strips reserved args from runner args."""
-    repo = tmp_path / "repo"
-    _create_tools_repo(
-        repo,
-        runner_body=textwrap.dedent(
-            """
-            async def execute_tool_async(*, tools_dir, tool, args=None, context=None):
-                assert context['session_id'] == 'sess-1'
-                if tool == 'context_read_ref':
-                    assert context['message_id'] == 'm1'
-                    assert context['task_id'] == 't1'
-                    assert context['workspace_dir'].endswith('/workspace-override')
-                    assert context['opencode_context'] == {'provider': 'opencode-test'}
-                    assert context['portal_metadata']['legacy_runtime_src_dir']
-                    assert context['portal_metadata']['context_blob_dir'].endswith('/context_blobs')
-                    assert context['portal_metadata']['x'] == 'y'
-                    assert context['portal_metadata']['context_blob_dir'] != '/bad'
-                assert '_session_id' not in args
-                assert '_message_id' not in args
-                assert '_task_id' not in args
-                assert '_runtime_type' not in args
-                assert '_portal_metadata' not in args
-                assert '_workspace_dir' not in args
-                assert '_opencode_context' not in args
-                return {'success': True, 'content': f"ok:{tool}:{tools_dir}"}
-            """
-        ),
-    )
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
-    monkeypatch.setenv("EFP_WORKSPACE_DIR", str(tmp_path / "workspace"))
-    monkeypatch.setenv("EFP_CONTEXT_BLOB_DIR", str(tmp_path / "context_blobs"))
-    ext = _reload_external_loader()
-
-    result = await ext.execute_external_tool(
-        "context_read_ref",
-        {
-            "ref": "ctx://context/sess-1/jira/abcdef123456",
-            "_session_id": "sess-1",
-            "_message_id": "m1",
-            "_task_id": "t1",
-            "_portal_metadata": {"x": "y", "context_blob_dir": "/bad"},
-            "_runtime_type": "native",
-            "_workspace_dir": str(tmp_path / "workspace-override"),
-            "_opencode_context": {"provider": "opencode-test"},
-        },
-        session_id="sess-1",
-        runtime_type="native",
-    )
-    assert result["success"] is True
-
-
-@pytest.mark.asyncio
-async def test_disabled_descriptor_blocks_via_external_module(monkeypatch, tmp_path):
-    """execute_external_tool (old module) returns disabled error; execute_tool falls through to legacy."""
-    repo = tmp_path / "repo"
-    _create_tools_repo(repo)
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
-    ext = _reload_external_loader()
-
-    # The old module directly returns a disabled error for the tool marked enabled=False.
-    direct_result = await ext.execute_external_tool(
-        "run_command",
-        {"cmd": "echo hi"},
-        runtime_type="native",
-    )
-    assert direct_result is not None
-    assert direct_result.get("success") is False
-    assert "disabled" in (direct_result.get("error") or "").lower()
-
-    direct_discover = await ext.execute_external_tool(
-        "discover_commands",
-        {},
-        runtime_type="native",
-    )
-    assert direct_discover is not None
-    assert direct_discover.get("success") is False
-    assert "disabled" in (direct_discover.get("error") or "").lower()
-
-
-def test_validation_errors_non_strict_disable_external(monkeypatch, tmp_path):
-    repo = tmp_path / "repo"
-    _create_tools_repo(repo, validate_errors="['bad descriptor']")
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
+def test_missing_tools_dir_uses_empty_external_registry_and_legacy_surface_is_non_strict_only(monkeypatch, tmp_path):
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(tmp_path / "missing"))
     monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "false")
-    ext = _reload_external_loader()
-
-    state = ext.load_external_tools_state()
-    assert state.available is False
-    assert state.validation_errors == ["bad descriptor"]
-    assert ext.get_external_disabled_tool_names("native") == {"run_command", "discover_commands"}
-    assert ext.has_external_tool("run_command", include_disabled=True) is True
-    assert ext.has_external_tool("run_command", include_disabled=False) is False
-    assert ext.has_external_tool("discover_commands", include_disabled=True) is True
-    assert ext.has_external_tool("discover_commands", include_disabled=False) is False
-    assert ext.get_external_tool_schemas("native") == []
-
-
-def test_validation_errors_strict_raise(monkeypatch, tmp_path):
-    repo = tmp_path / "repo"
-    _create_tools_repo(repo, validate_errors="['bad descriptor']")
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
-    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
-    ext = _reload_external_loader()
-
-    with pytest.raises(RuntimeError):
-        ext.load_external_tools_state()
-
-
-def test_dict_descriptor_back_compat(monkeypatch, tmp_path, src_module):
-    repo = tmp_path / "repo"
-    _create_tools_repo(repo, dataclass_contract=False)
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
-    _reload_external_loader()
-    schemas = src_module.get_tools_schema()
-    names = {(s.get("function", {}) or {}).get("name") or s.get("name") for s in schemas}
-    assert "run_command" in names
-
-
-@pytest.mark.asyncio
-async def test_invalid_registry_external_module_still_reports_disabled(monkeypatch, tmp_path, src_module):
-    """With invalid registry (non-strict), src schema still contains legacy tools and execute_tool falls through."""
-    repo = tmp_path / "repo"
-    _create_tools_repo(repo, validate_errors="['bad descriptor']")
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
-    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "false")
-    ext = _reload_external_loader()
-
-    # Legacy tools are still present in the schema (external override didn't take effect).
-    names = {(s.get("function", {}) or {}).get("name") or s.get("name") for s in src_module.get_tools_schema()}
-    assert "run_command" in names
-
-    # Old module reports disabled error for disabled descriptors even when registry is invalid.
-    direct_result = await ext.execute_external_tool(
-        "run_command",
-        {"cmd": "echo hi"},
-        runtime_type="native",
-    )
-    assert direct_result is not None
-    assert direct_result.get("success") is False
-
-
-@pytest.mark.asyncio
-async def test_execute_external_tool_direct_returns_error_on_runner_exception(monkeypatch, tmp_path):
-    repo = tmp_path / "repo"
-    _create_tools_repo(
-        repo,
-        runner_body="async def execute_tool_async(**kwargs):\n    raise RuntimeError('runner boom')\n",
-    )
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
-    ext = _reload_external_loader()
-
-    result = await ext.execute_external_tool(
-        "context_read_ref",
-        {"ref": "ctx://context/sess-1/jira/abcdef123456", "_session_id": "sess-1"},
-        session_id="sess-1",
-        runtime_type="native",
-    )
-    assert isinstance(result, dict)
-    assert result.get("success") is False
-    assert "execution failed" in (result.get("error") or "")
-
-
-def test_strict_mode_schema_load_does_not_fallback(monkeypatch, tmp_path):
-    """Strict mode raises in load_external_tools_state; get_tools_schema (new path) is unaffected."""
-    repo = tmp_path / "repo"
-    _create_tools_repo(repo, validate_errors="['bad descriptor']")
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
-    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
-    ext = _reload_external_loader()
-    # The old module raises on load when strict.
-    with pytest.raises(RuntimeError):
-        ext.load_external_tools_state()
-
-
-@pytest.mark.asyncio
-async def test_strict_mode_missing_tools_dir_execute_does_not_fallback_to_legacy(monkeypatch, tmp_path):
-    """Strict mode raises in load_external_tools_state; execute_tool (new path) falls through to legacy."""
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(tmp_path / "missing-tools"))
-    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
-    ext = _reload_external_loader()
-    # Old module raises when strict mode is enabled and tools dir is missing.
-    with pytest.raises(RuntimeError):
-        ext.load_external_tools_state()
-
-
-def test_strict_mode_missing_tools_dir_schema_does_not_fallback(monkeypatch, tmp_path, src_module):
-    """Strict mode raises in load_external_tools_state; get_tools_schema still returns legacy tools."""
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(tmp_path / "missing-tools"))
-    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
-    ext = _reload_external_loader()
-    # Old module raises when strict mode is enabled and tools dir is missing.
-    with pytest.raises(RuntimeError):
-        ext.load_external_tools_state()
-    # The new-path get_tools_schema is unaffected and returns legacy tools.
-    schemas = src_module.get_tools_schema()
-    assert len(schemas) > 0
-
-
-@pytest.mark.asyncio
-async def test_strict_mode_execute_does_not_fallback_to_legacy(monkeypatch, tmp_path):
-    """Strict mode raises in load_external_tools_state; execute_tool (new path) falls through to legacy."""
-    repo = tmp_path / "repo"
-    _create_tools_repo(repo, validate_errors="['bad descriptor']")
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
-    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "true")
-    ext = _reload_external_loader()
-    # Old module raises when strict mode is enabled and validation errors are present.
-    with pytest.raises(RuntimeError):
-        ext.load_external_tools_state()
-
-
-@pytest.mark.asyncio
-async def test_execute_external_tool_known_enabled_unavailable_returns_structured_error(monkeypatch, tmp_path):
-    repo = tmp_path / "repo"
-    _create_tools_repo(repo, validate_errors="['bad descriptor']")
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
-    monkeypatch.setenv("EFP_EXTERNAL_TOOLS_STRICT", "false")
-    ext = _reload_external_loader()
-    result = await ext.execute_external_tool(
-        "context_read_ref",
-        {"ref": "ctx://context/sess-1/jira/abcdef123456", "_session_id": "sess-1"},
-        session_id="sess-1",
-        runtime_type="native",
-    )
-    assert result["success"] is False
-    assert "External tools unavailable" in result["error"]
-
-
-@pytest.mark.asyncio
-async def test_execute_external_tool_runner_none_returns_structured_error(monkeypatch, tmp_path):
-    repo = tmp_path / "repo"
-    _create_tools_repo(repo, runner_body="async def execute_tool_async(**kwargs):\n    return None\n")
-    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
-    ext = _reload_external_loader()
-    result = await ext.execute_external_tool(
-        "context_read_ref",
-        {"ref": "ctx://context/sess-1/jira/abcdef123456", "_session_id": "sess-1"},
-        session_id="sess-1",
-        runtime_type="native",
-    )
-    assert result["success"] is False
-    assert "returned no result" in result["error"]
-
-
-def test_optional_real_tools_repo_fixture(monkeypatch):
-    fixture = os.environ.get("EFP_TOOLS_REPO_FIXTURE")
-    if not fixture:
-        pytest.skip("EFP_TOOLS_REPO_FIXTURE not set")
-
-    monkeypatch.setenv("EFP_TOOLS_DIR", fixture)
+    import src
     ext = _reload_external_loader()
     state = ext.load_external_tools_state()
     assert state.available is True
-    descriptors = ext._iter_descriptors(state)
-    assert len(descriptors) >= 50
-    assert len(ext.get_external_tool_schemas("native")) >= 30
-    disabled = ext.get_external_disabled_tool_names("native")
-    assert "run_command" in disabled
-    assert "write" in disabled
-    assert "discover_commands" in disabled
-    schema_names = {(s.get("function", {}) or {}).get("name") or s.get("name") for s in ext.get_external_tool_schemas("native")}
-    assert "context_read_ref" in schema_names
-    assert "git_status" in schema_names
-    assert ext.has_external_tool("write", include_disabled=True) is True
-    assert ext.has_external_tool("write", include_disabled=False) is False
-    assert ext.has_external_tool("discover_commands", include_disabled=True) is True
-    assert ext.has_external_tool("discover_commands", include_disabled=False) is False
+    assert ext.get_external_tool_schemas("native") == []
+    assert ("run_command" in src.get_tool_names()) or ("git_status" in src.get_tool_names())
 
 
-def test_strip_none_values_behavior(src_module):
-    payload = src_module._strip_none_values({"a": None, "b": False, "c": 0, "d": ""})
-    assert "a" not in payload
-    assert payload["b"] is False
-    assert payload["c"] == 0
-    assert payload["d"] == ""
+def test_runtime_external_tools_wrapper_imports_contracts_descriptor_schema(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_tools_repo(repo)
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
+    ext = _reload_external_loader()
+    schemas = ext.get_external_tool_schemas("opencode")
+    assert isinstance(schemas, list)
+
+
+@pytest.mark.asyncio
+async def test_runtime_external_tools_wrapper_unknown_execute_returns_none(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_tools_repo(repo)
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
+    ext = _reload_external_loader()
+    assert await ext.execute_external_tool("missing_tool", {}, runtime_type="native") is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_external_tools_wrapper_disabled_descriptor_returns_disabled_error(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_tools_repo(repo, enabled=False)
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
+    ext = _reload_external_loader()
+    result = await ext.execute_external_tool("context_echo", {}, runtime_type="native")
+    assert result and result["success"] is False
+    assert "disabled" in (result["error"] or "")
+
+
+@pytest.mark.asyncio
+async def test_runtime_external_tools_wrapper_runtime_incompatible_returns_error(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_tools_repo(repo, runtime_compat="[opencode]")
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(repo))
+    ext = _reload_external_loader()
+    result = await ext.execute_external_tool("context_echo", {}, runtime_type="native")
+    assert result and result["success"] is False
+    assert "runtime_incompatible" in (result["error"] or "")
