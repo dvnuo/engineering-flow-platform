@@ -19,6 +19,11 @@ _RESERVED_ARGS = {
     "_workspace_dir",
     "_portal_metadata",
     "_opencode_context",
+    "_governance_allow_mutation",
+    "_permission_decision",
+    "_approval_ref",
+    "_audit_ref",
+    "_governance_context",
 }
 
 
