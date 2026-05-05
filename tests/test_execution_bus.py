@@ -4337,3 +4337,202 @@ async def test_execution_bus_preserves_tool_metadata_and_emits_governance_event(
     ev = next(e for e in result.runtime_events if isinstance(e, dict) and e.get("event_type")=="tool.governance.audit")
     assert ev.get("state") == "blocked"
     assert ev.get("detail_payload", {}).get("capability_id")
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_allowed_external_tool_metadata_emits_allowed_governance_event(monkeypatch):
+    from src import ToolResult
+    from src.runtime.capability_registry import CapabilityDescriptor
+    from src.runtime.contracts import make_execution_request
+    from src.runtime.execution_bus import build_default_execution_bus
+
+    descriptor = CapabilityDescriptor(
+        capability_id="efp.tool.external.write",
+        type="tool",
+        name="external_write",
+        policy_tags=["write"],
+        metadata={
+            "external_tool": True,
+            "tool_source": "external_tools_repo",
+            "tool_name": "external_write",
+            "mutation": True,
+            "risk_level": "high",
+            "tool_id": "efp.tool.external.write",
+        },
+    )
+
+    class _Registry:
+        def get(self, capability_id):
+            if capability_id in {"tool:external_write", "efp.tool.external.write"}:
+                return descriptor
+            return None
+
+        def list_by_type(self, capability_type):
+            if capability_type == "tool":
+                return [descriptor]
+            return []
+
+    monkeypatch.setattr("src.runtime.execution_bus.get_capability_registry", lambda: _Registry())
+    monkeypatch.setattr("src.runtime.governance_bus.get_capability_registry", lambda: _Registry())
+
+    async def _fake_execute(tool_name, **kwargs):
+        return ToolResult(
+            success=True,
+            content="write completed",
+            metadata={
+                "external_tool": True,
+                "mutation": True,
+                "risk_level": "high",
+                "policy_tags": ["write"],
+                "tool_source": "external_tools_repo",
+                "governance_checked": True,
+                "governance_rule": "external_mutation_requires_explicit_allow",
+                "permission_decision": kwargs.get("_permission_decision"),
+                "approval_ref": kwargs.get("_approval_ref"),
+                "tool_id": "efp.tool.external.write",
+            },
+        )
+
+    bus = build_default_execution_bus(execute_tool_func=_fake_execute)
+    request = make_execution_request(
+        request_id="req-allowed",
+        source_type="api",
+        execution_type="tool",
+        input_payload={"tool_name": "external_write", "kwargs": {}},
+        metadata={
+            "governance_allow_mutation": True,
+            "permission_decision": "approved",
+            "approval_ref": "approval-1",
+        },
+    )
+
+    result = await bus.execute(request)
+
+    assert result.status == "success"
+    tool_metadata = result.output_payload.get("tool_metadata") or {}
+    assert tool_metadata["external_tool"] is True
+    assert tool_metadata["governance_checked"] is True
+    assert tool_metadata.get("blocked_by_governance") is not True
+    assert tool_metadata["capability_id"] == "efp.tool.external.write"
+    assert tool_metadata["tool_id"] == "efp.tool.external.write"
+
+    artifacts_metadata = result.artifacts.get("tool_metadata") or {}
+    assert artifacts_metadata["capability_id"] == "efp.tool.external.write"
+
+    event = next(
+        e for e in result.runtime_events
+        if isinstance(e, dict) and e.get("event_type") == "tool.governance.audit"
+    )
+    assert event["state"] == "allowed"
+    detail = event.get("detail_payload") or {}
+    assert detail["tool_name"] == "external_write"
+    assert detail["tool_id"] == "efp.tool.external.write"
+    assert detail["capability_id"] == "efp.tool.external.write"
+    assert detail["permission_decision"] == "approved"
+    assert detail["approval_ref"] == "approval-1"
+
+
+@pytest.mark.asyncio
+async def test_execution_bus_tool_task_preserves_tool_metadata_and_emits_governance_event(monkeypatch):
+    from src import ToolResult
+    from src.runtime.capability_registry import CapabilityDescriptor
+    from src.runtime.contracts import make_execution_request
+    from src.runtime.execution_bus import build_default_execution_bus
+
+    descriptor = CapabilityDescriptor(
+        capability_id="efp.tool.external.write",
+        type="tool",
+        name="external_write",
+        policy_tags=["write"],
+        metadata={
+            "external_tool": True,
+            "tool_source": "external_tools_repo",
+            "tool_name": "external_write",
+            "mutation": True,
+            "risk_level": "high",
+            "tool_id": "efp.tool.external.write",
+        },
+    )
+
+    class _Registry:
+        def get(self, capability_id):
+            if capability_id in {"tool:external_write", "efp.tool.external.write"}:
+                return descriptor
+            return None
+
+        def list_by_type(self, capability_type):
+            if capability_type == "tool":
+                return [descriptor]
+            return []
+
+    monkeypatch.setattr("src.runtime.execution_bus.get_capability_registry", lambda: _Registry())
+    monkeypatch.setattr("src.runtime.governance_bus.get_capability_registry", lambda: _Registry())
+
+    async def _fake_execute(tool_name, **kwargs):
+        return ToolResult(
+            success=True,
+            content="task write completed",
+            metadata={
+                "external_tool": True,
+                "mutation": True,
+                "risk_level": "high",
+                "policy_tags": ["write"],
+                "tool_source": "external_tools_repo",
+                "governance_checked": True,
+                "governance_rule": "external_mutation_requires_explicit_allow",
+                "permission_decision": kwargs.get("_permission_decision"),
+                "approval_ref": kwargs.get("_approval_ref"),
+                "tool_id": "efp.tool.external.write",
+            },
+        )
+
+    bus = build_default_execution_bus(execute_tool_func=_fake_execute)
+    request = make_execution_request(
+        request_id="req-task-tool",
+        source_type="api",
+        execution_type="task",
+        input_payload={
+            "task_type": "tool_task",
+            "tool_name": "external_write",
+            "kwargs": {},
+        },
+        metadata={
+            "task_id": "task-tool-external-write",
+            "governance_allow_mutation": True,
+            "permission_decision": "approved",
+            "approval_ref": "approval-task-1",
+        },
+    )
+
+    result = await bus.execute(request)
+
+    assert result.status == "success"
+    assert result.output_payload["task_boundary"] is True
+    assert result.output_payload["task_type"] == "tool_task"
+
+    tool_metadata = result.output_payload.get("tool_metadata") or {}
+    assert tool_metadata["external_tool"] is True
+    assert tool_metadata["governance_checked"] is True
+    assert tool_metadata["capability_id"] == "efp.tool.external.write"
+    assert tool_metadata["tool_id"] == "efp.tool.external.write"
+
+    artifacts_metadata = result.artifacts.get("tool_metadata") or {}
+    assert artifacts_metadata["capability_id"] == "efp.tool.external.write"
+
+    event = next(
+        e for e in result.runtime_events
+        if isinstance(e, dict) and e.get("event_type") == "tool.governance.audit"
+    )
+    assert event["state"] == "allowed"
+    assert event["task_id"] == "task-tool-external-write"
+    detail = event.get("detail_payload") or {}
+    assert detail["tool_name"] == "external_write"
+    assert detail["tool_id"] == "efp.tool.external.write"
+    assert detail["capability_id"] == "efp.tool.external.write"
+
+    assert any(
+        isinstance(e, dict)
+        and e.get("event_type") == "task.tool.completed"
+        and e.get("task_id") == "task-tool-external-write"
+        for e in result.runtime_events
+    )
