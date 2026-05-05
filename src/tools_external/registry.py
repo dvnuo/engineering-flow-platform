@@ -113,6 +113,9 @@ class ExternalToolRegistry:
             "risk_level": None,
             "mutation": None,
             "opencode_name": None,
+            "policy_tags": [],
+            "requires_identity_binding": False,
+            "metadata": {},
         }
         if descriptor is None:
             return base
@@ -161,6 +164,9 @@ class ExternalToolRegistry:
                 "risk_level": descriptor.risk_level,
                 "mutation": descriptor.mutation,
                 "opencode_name": descriptor.opencode_name,
+                "policy_tags": list(descriptor.policy_tags or []),
+                "requires_identity_binding": bool(descriptor.requires_identity_binding),
+                "metadata": dict(descriptor.metadata or {}),
             }
         )
         return base

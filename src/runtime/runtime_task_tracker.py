@@ -89,6 +89,8 @@ class RuntimeTaskTracker:
         record = self._records.get(task_id)
         if record is None:
             return None
+        if record.status in _TASK_TERMINAL_STATUSES:
+            return record
         record.status = "running"
         if not record.started_at:
             record.started_at = _utc_now_iso()

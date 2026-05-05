@@ -9,7 +9,7 @@ from typing import Any, Optional, Set
 
 from src.tools_external import get_external_tool_registry, reset_external_tool_registry_cache
 from src.tools_external.manifest_loader import resolve_external_tools_dir as _resolve_tools_dir
-from src.tools_external.schemas import descriptor_to_tool_schema
+from src.tools_external.contracts import descriptor_to_tool_schema
 
 logger = logging.getLogger(__name__)
 
