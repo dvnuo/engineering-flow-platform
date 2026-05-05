@@ -24,17 +24,22 @@ class ToolResult:
         success: bool,
         content: str = "",
         error: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ):
         self.success = success
         self.content = content
         self.error = error
+        self.metadata = metadata or {}
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "success": self.success,
             "content": self.content,
             "error": self.error,
         }
+        if self.metadata:
+            result["metadata"] = self.metadata
+        return result
 
     def __str__(self) -> str:
         if self.success:
@@ -75,7 +80,6 @@ from . import git
 from . import bash_tools
 from . import context_tools
 from .tools_external import get_external_tool_registry
-from .tools_external.contracts import is_descriptor_native_compatible
 
 
 def _extract_tool_schema_name(tool_schema: Dict[str, Any]) -> str:
@@ -110,22 +114,25 @@ def _get_legacy_tool_names_set() -> set[str]:
     }
 
 
-def is_external_tool_exposed(name: str) -> bool:
-    """Return True when an external tool is visible in the merged tool surface."""
+
+
+def get_external_tool_visibility(name: str) -> Dict[str, Any]:
     registry = get_external_tool_registry()
     legacy_names = _get_legacy_tool_names_set()
-    if not registry.has_tool(name, include_disabled=True):
-        return False
-    descriptor = registry.get_descriptor(name)
-    if descriptor is None or not descriptor.enabled:
-        return False
-    if not is_descriptor_native_compatible(descriptor):
-        return False
-    if not registry.is_model_facing(name):
-        return False
-    if name in legacy_names:
-        return registry.is_override_enabled(name)
-    return True
+    return registry.get_visibility(name, legacy_names=legacy_names)
+
+
+def get_external_tools_visibility() -> Dict[str, Dict[str, Any]]:
+    registry = get_external_tool_registry()
+    legacy_names = _get_legacy_tool_names_set()
+    names = set(legacy_names)
+    names.update(d.name for d in registry.list_all_descriptors())
+    return {name: registry.get_visibility(name, legacy_names=legacy_names) for name in sorted(names)}
+
+
+def is_external_tool_exposed(name: str) -> bool:
+    """Return True when an external tool is visible in the merged tool surface."""
+    return bool(get_external_tool_visibility(name).get("exposed"))
 
 
 def get_all_tools() -> list:
@@ -141,11 +148,35 @@ def get_all_tools() -> list:
             continue
         if name in legacy_names:
             if registry.is_override_enabled(name):
+                schema.setdefault("metadata", {})
+                schema["metadata"].update(
+                    {
+                        "source": "external_tools_repo",
+                        "tool_source": "external_tools_repo",
+                        "schema_source": "external_tools_repo",
+                        "execution_source": "external_tools_repo",
+                        "external_tool": True,
+                        "external_override": True,
+                        "external_shadowed_by_legacy": False,
+                    }
+                )
                 result = [item for item in result if _extract_tool_schema_name(item) != name]
                 result.append(schema)
             else:
                 continue
         else:
+            schema.setdefault("metadata", {})
+            schema["metadata"].update(
+                {
+                    "source": "external_tools_repo",
+                    "tool_source": "external_tools_repo",
+                    "schema_source": "external_tools_repo",
+                    "execution_source": "external_tools_repo",
+                    "external_tool": True,
+                    "external_override": False,
+                    "external_shadowed_by_legacy": False,
+                }
+            )
             result.append(schema)
     return result
 
@@ -218,13 +249,25 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
 
     registry = get_external_tool_registry()
     legacy_names = _get_legacy_tool_names_set()
+    visibility = registry.get_visibility(name, legacy_names=legacy_names)
 
-    if registry.has_tool(name, include_disabled=True) and registry.is_override_enabled(name):
+    if visibility.get("exposed") and visibility.get("legacy_name") and visibility.get("override_enabled"):
         external_result = await registry.execute_tool(name, **kwargs)
         return ToolResult(
             success=external_result.success,
             content=external_result.content,
             error=external_result.error,
+            metadata={
+                "tool_source": "external_tools_repo",
+                "schema_source": visibility["schema_source"],
+                "execution_source": "external_tools_repo",
+                "external_tool": True,
+                "external_override": bool(visibility["override_enabled"] and visibility["legacy_name"]),
+                "external_shadowed_by_legacy": False,
+                "allow_override": visibility["allow_override"],
+                "tool_id": visibility["tool_id"],
+                "descriptor_source_file": visibility["descriptor_source_file"],
+            },
         )
 
     # Bash/Shell tools
@@ -807,15 +850,59 @@ async def execute_tool(name: str, **kwargs) -> ToolResult:
         return ToolResult(success="Error" not in result, content=result)
     
     if registry.has_tool(name, include_disabled=True):
-        if not registry.is_tool_enabled(name):
-            return ToolResult(success=False, error=f"Tool '{name}' is disabled by external descriptor")
-    if registry.has_tool(name, include_disabled=True) and name not in legacy_names:
-        external_result = await registry.execute_tool(name, **kwargs)
-        return ToolResult(
-            success=external_result.success,
-            content=external_result.content,
-            error=external_result.error,
-        )
+        visibility = registry.get_visibility(name, legacy_names=legacy_names)
+        if not visibility.get("enabled"):
+            return ToolResult(
+                success=False,
+                error=f"Tool '{name}' is disabled by external descriptor",
+                metadata={
+                    "external_tool": True,
+                    "external_descriptor_present": True,
+                    "tool_source": visibility.get("execution_source"),
+                    "schema_source": visibility.get("schema_source"),
+                    "execution_source": visibility.get("execution_source"),
+                    "external_shadowed_by_legacy": visibility.get("external_shadowed_by_legacy"),
+                    "external_shadow_reason": visibility.get("shadow_reason"),
+                    "tool_id": visibility.get("tool_id"),
+                    "descriptor_source_file": visibility.get("descriptor_source_file"),
+                },
+            )
+        if name not in legacy_names:
+            if not visibility.get("exposed"):
+                reason = visibility.get("shadow_reason") or "not_exposed"
+                return ToolResult(
+                    success=False,
+                    error=f"External tool '{name}' is not exposed for native runtime: {reason}",
+                    metadata={
+                        "external_tool": True,
+                        "external_descriptor_present": True,
+                        "tool_source": visibility.get("execution_source"),
+                        "schema_source": visibility.get("schema_source"),
+                        "execution_source": visibility.get("execution_source"),
+                        "external_shadowed_by_legacy": visibility.get("external_shadowed_by_legacy"),
+                        "external_shadow_reason": reason,
+                        "allow_override": visibility.get("allow_override"),
+                        "tool_id": visibility.get("tool_id"),
+                        "descriptor_source_file": visibility.get("descriptor_source_file"),
+                    },
+                )
+            external_result = await registry.execute_tool(name, **kwargs)
+            return ToolResult(
+                success=external_result.success,
+                content=external_result.content,
+                error=external_result.error,
+                metadata={
+                    "tool_source": "external_tools_repo",
+                    "schema_source": visibility["schema_source"],
+                    "execution_source": "external_tools_repo",
+                    "external_tool": True,
+                    "external_override": bool(visibility["override_enabled"] and visibility["legacy_name"]),
+                    "external_shadowed_by_legacy": False,
+                    "allow_override": visibility["allow_override"],
+                    "tool_id": visibility["tool_id"],
+                    "descriptor_source_file": visibility["descriptor_source_file"],
+                },
+            )
 
     return ToolResult(success=False, error=f"Tool {name} not implemented")
 
@@ -826,6 +913,8 @@ __all__ = [
     "get_tool",
     "get_tool_map",
     "get_tools_schema",
+    "get_external_tool_visibility",
+    "get_external_tools_visibility",
     "is_external_tool_exposed",
     "execute_tool",
     "get_github_tools",

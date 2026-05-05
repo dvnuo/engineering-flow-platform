@@ -287,7 +287,7 @@ class _CapabilityBuilder:
 
     def _register_tools(self) -> None:
         try:
-            from src import get_tools_schema, is_external_tool_exposed
+            from src import get_tools_schema, get_external_tool_visibility
             from src.tools_external import get_external_tool_registry
 
             external_registry = get_external_tool_registry()
@@ -299,8 +299,9 @@ class _CapabilityBuilder:
                 if not tool_name:
                     continue
 
+                visibility = get_external_tool_visibility(tool_name)
                 external_descriptor = (
-                    external_registry.get_descriptor(tool_name) if is_external_tool_exposed(tool_name) else None
+                    external_registry.get_descriptor(tool_name) if visibility.get("exposed") else None
                 )
 
                 if external_descriptor:
@@ -316,6 +317,12 @@ class _CapabilityBuilder:
                     metadata = {
                         **external_metadata,
                         "external_tool": True,
+                        "tool_source": "external_tools_repo",
+                        "schema_source": "external_tools_repo",
+                        "execution_source": "external_tools_repo",
+                        "external_override": bool(visibility["override_enabled"] and visibility["legacy_name"]),
+                        "external_shadowed_by_legacy": False,
+                        "allow_override": visibility["allow_override"],
                         "tool_name": tool_name,
                         "tool_id": external_descriptor.tool_id,
                         "description": external_descriptor.description or _extract_tool_description(tool_schema),
@@ -328,6 +335,7 @@ class _CapabilityBuilder:
                         "mutation": external_descriptor.mutation,
                         "risk_level": external_descriptor.risk_level,
                         "declaration_only": True,
+                        "descriptor_source_file": visibility["descriptor_source_file"],
                     }
                     if "source" in external_metadata:
                         metadata.setdefault("descriptor_source", external_metadata["source"])
@@ -341,8 +349,25 @@ class _CapabilityBuilder:
                         "tool_name": tool_name,
                         "description": _extract_tool_description(tool_schema),
                         "declaration_only": True,
+                        "tool_source": "legacy_builtin",
+                        "schema_source": "legacy_builtin",
+                        "execution_source": "legacy_builtin",
+                        "external_tool": False,
                         **dict(tool_schema.get("metadata") or {}),
                     }
+                    if visibility.get("exists"):
+                        metadata.update(
+                            {
+                                "external_descriptor_present": visibility["exists"],
+                                "external_descriptor_enabled": visibility["enabled"],
+                                "external_allow_override": visibility["allow_override"],
+                                "external_native_compatible": visibility["native_compatible"],
+                                "external_model_facing": visibility["model_facing"],
+                                "external_shadowed_by_legacy": visibility["external_shadowed_by_legacy"],
+                                "external_shadow_reason": visibility["shadow_reason"],
+                                "external_descriptor_source_file": visibility["descriptor_source_file"],
+                            }
+                        )
                     source_ref = "src.__init__.get_tools_schema"
                     requires_identity_binding = False
 

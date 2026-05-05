@@ -10,6 +10,15 @@ from .runner import execute_python_entrypoint
 
 logger = logging.getLogger(__name__)
 
+def _metadata_bool(value, default=False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
 
 class ExternalToolRegistry:
     def __init__(self, tools_dir: Optional[Path] = None, descriptors: Optional[list[ToolDescriptor]] = None):
@@ -67,7 +76,7 @@ class ExternalToolRegistry:
         descriptor = self.get_descriptor(name)
         if not descriptor:
             return False
-        return descriptor.metadata.get("model_facing", True) is not False
+        return _metadata_bool(descriptor.metadata.get("model_facing"), default=True)
 
     def is_override_enabled(self, name: str) -> bool:
         descriptor = self.get_descriptor(name)
@@ -77,8 +86,84 @@ class ExternalToolRegistry:
             descriptor.enabled
             and is_descriptor_native_compatible(descriptor)
             and self.is_model_facing(name)
-            and descriptor.metadata.get("allow_override") is True
+            and _metadata_bool(descriptor.metadata.get("allow_override"), default=False)
         )
+
+    def get_visibility(self, name: str, *, legacy_names: set[str] | None = None) -> dict:
+        legacy_names = legacy_names or set()
+        descriptor = self.get_descriptor(name)
+        legacy_name = name in legacy_names
+        base = {
+            "name": name,
+            "exists": descriptor is not None,
+            "enabled": False,
+            "native_compatible": False,
+            "model_facing": False,
+            "legacy_name": legacy_name,
+            "allow_override": False,
+            "override_enabled": False,
+            "exposed": False,
+            "schema_source": "legacy_builtin" if legacy_name else "none",
+            "execution_source": "legacy_builtin" if legacy_name else "none",
+            "external_shadowed_by_legacy": False,
+            "shadow_reason": None,
+            "descriptor_source_file": None,
+            "tool_id": None,
+            "domain": None,
+            "risk_level": None,
+            "mutation": None,
+            "opencode_name": None,
+        }
+        if descriptor is None:
+            return base
+
+        enabled = bool(descriptor.enabled)
+        native_compatible = is_descriptor_native_compatible(descriptor)
+        model_facing = self.is_model_facing(name)
+        allow_override = _metadata_bool(descriptor.metadata.get("allow_override"), default=False)
+        override_enabled = bool(enabled and native_compatible and model_facing and allow_override)
+        exposed = bool(enabled and native_compatible and model_facing and (not legacy_name or override_enabled))
+
+        if exposed:
+            schema_source = "external_tools_repo"
+            execution_source = "external_tools_repo"
+            shadowed = False
+            shadow_reason = None
+        else:
+            schema_source = "legacy_builtin" if legacy_name else "none"
+            execution_source = "legacy_builtin" if legacy_name else "none"
+            shadowed = bool(legacy_name and descriptor is not None)
+            shadow_reason = None
+            if not enabled:
+                shadow_reason = "disabled"
+            elif not native_compatible:
+                shadow_reason = "runtime_incompatible"
+            elif not model_facing:
+                shadow_reason = "model_facing_false"
+            elif legacy_name and not allow_override:
+                shadow_reason = "allow_override_not_enabled"
+
+        base.update(
+            {
+                "enabled": enabled,
+                "native_compatible": native_compatible,
+                "model_facing": model_facing,
+                "allow_override": allow_override,
+                "override_enabled": override_enabled,
+                "exposed": exposed,
+                "schema_source": schema_source,
+                "execution_source": execution_source,
+                "external_shadowed_by_legacy": shadowed,
+                "shadow_reason": shadow_reason,
+                "descriptor_source_file": descriptor.metadata.get("_source_file"),
+                "tool_id": descriptor.tool_id,
+                "domain": descriptor.domain,
+                "risk_level": descriptor.risk_level,
+                "mutation": descriptor.mutation,
+                "opencode_name": descriptor.opencode_name,
+            }
+        )
+        return base
 
     async def execute_tool(self, name: str, **kwargs) -> ExternalToolExecutionResult:
         descriptor = self.get_descriptor(name)

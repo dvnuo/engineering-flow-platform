@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from .contracts import ToolDescriptor, descriptor_from_mapping, is_descriptor_native_compatible
+from .contracts import ToolDescriptor, descriptor_from_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +103,6 @@ def load_tool_descriptors(tools_dir: Optional[Path] = None) -> list[ToolDescript
                 descriptor = descriptor_from_mapping(item, source_file=str(manifest))
             except Exception as exc:
                 logger.warning("Invalid descriptor in %s: %s", manifest, exc)
-                continue
-            if not is_descriptor_native_compatible(descriptor):
                 continue
             descriptors.append(descriptor)
 
