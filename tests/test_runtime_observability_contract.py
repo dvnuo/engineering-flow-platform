@@ -101,6 +101,7 @@ def test_gateway_session_endpoints_do_not_expose_debug_version_markers():
         assert "FINAL_TEST_" not in text
         assert "[FINAL_TEST]" not in text
         assert "FIXED_2026" not in text
+        assert "UNIQUE_MARKER_" not in text
         assert not re.search(r"[\"']_marker[\"']\\s*:", text)
         assert not re.search(r"\\[\\s*[\"']_marker[\"']\\s*\\]\\s*=", text)
 
