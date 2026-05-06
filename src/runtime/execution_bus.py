@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional, Protocol
 import logging
+import os
 from datetime import datetime
 
 from src.agents.executor import SkillResult, ToolResult, execute_tool_by_name, run_skill_execution
@@ -35,9 +36,54 @@ from src.runtime.jira_workflow_review import run_jira_workflow_review
 from src.runtime.leader_orchestration import dispatch_task_breakdown_as_delegations, run_delegation_cycle
 from src.runtime.task_template_registry import resolve_task_template_from_payload
 from src.runtime.triggered_event_task import run_triggered_event_task
+from src.utils.logger import reset_log_context, set_log_context
 from src.utils.redaction import safe_preview, sanitize_exception_message
 
 logger = logging.getLogger(__name__)
+
+def _first_non_empty(*values: Any) -> Optional[str]:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _build_execution_log_context(request: ExecutionRequest) -> Dict[str, Any]:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    payload = request.input_payload if isinstance(request.input_payload, dict) else {}
+
+    task_id = _first_non_empty(metadata.get("task_id"), payload.get("task_id"))
+    tool_name = _first_non_empty(metadata.get("tool_name"), payload.get("tool_name"))
+    skill_name = _first_non_empty(metadata.get("skill_name"), payload.get("skill_name"))
+    runtime_type = _first_non_empty(metadata.get("runtime_type"), os.getenv("EFP_RUNTIME_TYPE"), "native")
+    profile_version = _first_non_empty(
+        metadata.get("profile_version"),
+        metadata.get("runtime_profile_version"),
+        metadata.get("policy_profile_version"),
+    )
+
+    return {
+        "trace_id": metadata.get("trace_id"),
+        "span_id": metadata.get("span_id"),
+        "parent_span_id": metadata.get("parent_span_id"),
+        "request_id": request.request_id,
+        "session_id": request.session_id,
+        "task_id": task_id,
+        "portal_task_id": metadata.get("portal_task_id"),
+        "portal_dispatch_id": metadata.get("portal_dispatch_id"),
+        "agent_id": request.agent_id,
+        "runtime_type": runtime_type,
+        "execution_type": request.execution_type,
+        "source_type": request.source_type,
+        "tool_name": tool_name,
+        "tool_source": metadata.get("tool_source"),
+        "skill_name": skill_name,
+        "profile_version": profile_version,
+        "path": metadata.get("path"),
+    }
 
 
 class ExecutionHandler(Protocol):
@@ -61,97 +107,110 @@ class ExecutionBus:
         self._handlers[execution_type] = handler
 
     async def execute(self, request: ExecutionRequest) -> ExecutionResult:
-        payload = request.input_payload if isinstance(request.input_payload, dict) else {}
-        logger.info(
-            "ExecutionBus.execute start | execution_type=%s request_id=%s session_id=%s agent_id=%s source_type=%s task_type=%s",
-            request.execution_type,
-            request.request_id,
-            request.session_id or "-",
-            request.agent_id or "-",
-            request.source_type or "-",
-            payload.get("task_type") if isinstance(payload.get("task_type"), str) else "-",
-        )
-        await self._persist_last_execution_id(request)
-        decision = await self._safe_before_governance(request)
-        if decision is not None and not decision.allowed:
-            logger.warning(
-                "ExecutionBus governance blocked | request_id=%s execution_type=%s task_type=%s reason=%s",
-                request.request_id,
-                request.execution_type,
-                payload.get("task_type") if isinstance(payload.get("task_type"), str) else "-",
-                decision.reason or "governance_blocked",
-            )
-            result = self._blocked_result(request, reason=decision.reason, audit=decision.audit_record)
-            final_result = await self._safe_after_governance(request, result)
-            self._emit_terminal_lifecycle_event(request, final_result)
-            logger.info(
-                "ExecutionBus.execute end | request_id=%s final_status=%s runtime_events_count=%s audit_ref=%s",
-                request.request_id,
-                final_result.status,
-                len(final_result.runtime_events or []),
-                final_result.audit_ref or "-",
-            )
-            return final_result
-        self._emit_lifecycle_event("execution.started", request, "started", {"status": "started"})
-        handler = self._handlers.get(request.execution_type)
-        if handler is None:
-            logger.error(
-                "ExecutionBus missing handler | execution_type=%s request_id=%s",
-                request.execution_type,
-                request.request_id,
-            )
-            result = make_execution_result(
-                request_id=request.request_id,
-                status="blocked",
-                output_payload={"error": f"No handler for execution_type={request.execution_type}"},
-            )
-            final_result = await self._safe_after_governance(request, result)
-            self._emit_terminal_lifecycle_event(request, final_result)
-            logger.info(
-                "ExecutionBus.execute end | request_id=%s final_status=%s runtime_events_count=%s audit_ref=%s",
-                request.request_id,
-                final_result.status,
-                len(final_result.runtime_events or []),
-                final_result.audit_ref or "-",
-            )
-            return final_result
-
+        token = set_log_context(**_build_execution_log_context(request))
         try:
-            raw_result = await handler(request)
-            result = self._normalize_result(request, raw_result)
-            logger.debug(
-                "ExecutionBus handler normalized | request_id=%s execution_type=%s status=%s output_summary=%s",
-                request.request_id,
-                request.execution_type,
-                result.status,
-                safe_preview(summarize_output_payload(result.output_payload), 240),
-            )
-        except Exception as exc:
-            error_audit = await self._safe_on_error_governance(request, exc)
-            logger.exception(
-                "ExecutionBus handler failed | execution_type=%s request_id=%s task_type=%s agent_id=%s error_class=%s error=%s",
+            payload = request.input_payload if isinstance(request.input_payload, dict) else {}
+            logger.info(
+                "ExecutionBus.execute start | execution_type=%s request_id=%s session_id=%s agent_id=%s source_type=%s task_type=%s",
                 request.execution_type,
                 request.request_id,
-                payload.get("task_type") if isinstance(payload.get("task_type"), str) else "-",
+                request.session_id or "-",
                 request.agent_id or "-",
-                exc.__class__.__name__,
-                sanitize_exception_message(exc),
+                request.source_type or "-",
+                payload.get("task_type") if isinstance(payload.get("task_type"), str) else "-",
             )
-            error_payload = _build_error_payload(exc, request.execution_type)
-            result = make_execution_result(
-                request_id=request.request_id,
-                status="error",
-                output_payload=error_payload,
-            )
-            if error_audit is not None:
-                result.audit_ref = error_audit.audit_ref
-                result.runtime_events.append(
-                    governance_audit_runtime_event(
-                        request=request,
-                        status=result.status,
-                        audit_record=error_audit,
-                    )
+            await self._persist_last_execution_id(request)
+            decision = await self._safe_before_governance(request)
+            if decision is not None and not decision.allowed:
+                logger.warning(
+                    "ExecutionBus governance blocked | request_id=%s execution_type=%s task_type=%s reason=%s",
+                    request.request_id,
+                    request.execution_type,
+                    payload.get("task_type") if isinstance(payload.get("task_type"), str) else "-",
+                    decision.reason or "governance_blocked",
                 )
+                result = self._blocked_result(request, reason=decision.reason, audit=decision.audit_record)
+                final_result = await self._safe_after_governance(request, result)
+                self._emit_terminal_lifecycle_event(request, final_result)
+                logger.info(
+                    "ExecutionBus.execute end | request_id=%s final_status=%s runtime_events_count=%s audit_ref=%s",
+                    request.request_id,
+                    final_result.status,
+                    len(final_result.runtime_events or []),
+                    final_result.audit_ref or "-",
+                )
+                return final_result
+            self._emit_lifecycle_event("execution.started", request, "started", {"status": "started"})
+            handler = self._handlers.get(request.execution_type)
+            if handler is None:
+                logger.error(
+                    "ExecutionBus missing handler | execution_type=%s request_id=%s",
+                    request.execution_type,
+                    request.request_id,
+                )
+                result = make_execution_result(
+                    request_id=request.request_id,
+                    status="blocked",
+                    output_payload={"error": f"No handler for execution_type={request.execution_type}"},
+                )
+                final_result = await self._safe_after_governance(request, result)
+                self._emit_terminal_lifecycle_event(request, final_result)
+                logger.info(
+                    "ExecutionBus.execute end | request_id=%s final_status=%s runtime_events_count=%s audit_ref=%s",
+                    request.request_id,
+                    final_result.status,
+                    len(final_result.runtime_events or []),
+                    final_result.audit_ref or "-",
+                )
+                return final_result
+
+            try:
+                raw_result = await handler(request)
+                result = self._normalize_result(request, raw_result)
+                logger.debug(
+                    "ExecutionBus handler normalized | request_id=%s execution_type=%s status=%s output_summary=%s",
+                    request.request_id,
+                    request.execution_type,
+                    result.status,
+                    safe_preview(summarize_output_payload(result.output_payload), 240),
+                )
+            except Exception as exc:
+                error_audit = await self._safe_on_error_governance(request, exc)
+                logger.exception(
+                    "ExecutionBus handler failed | execution_type=%s request_id=%s task_type=%s agent_id=%s error_class=%s error=%s",
+                    request.execution_type,
+                    request.request_id,
+                    payload.get("task_type") if isinstance(payload.get("task_type"), str) else "-",
+                    request.agent_id or "-",
+                    exc.__class__.__name__,
+                    sanitize_exception_message(exc),
+                )
+                error_payload = _build_error_payload(exc, request.execution_type)
+                result = make_execution_result(
+                    request_id=request.request_id,
+                    status="error",
+                    output_payload=error_payload,
+                )
+                if error_audit is not None:
+                    result.audit_ref = error_audit.audit_ref
+                    result.runtime_events.append(
+                        governance_audit_runtime_event(
+                            request=request,
+                            status=result.status,
+                            audit_record=error_audit,
+                        )
+                    )
+                final_result = await self._safe_after_governance(request, result)
+                self._emit_terminal_lifecycle_event(request, final_result)
+                logger.info(
+                    "ExecutionBus.execute end | request_id=%s final_status=%s runtime_events_count=%s audit_ref=%s",
+                    request.request_id,
+                    final_result.status,
+                    len(final_result.runtime_events or []),
+                    final_result.audit_ref or "-",
+                )
+                return final_result
+
             final_result = await self._safe_after_governance(request, result)
             self._emit_terminal_lifecycle_event(request, final_result)
             logger.info(
@@ -162,17 +221,8 @@ class ExecutionBus:
                 final_result.audit_ref or "-",
             )
             return final_result
-
-        final_result = await self._safe_after_governance(request, result)
-        self._emit_terminal_lifecycle_event(request, final_result)
-        logger.info(
-            "ExecutionBus.execute end | request_id=%s final_status=%s runtime_events_count=%s audit_ref=%s",
-            request.request_id,
-            final_result.status,
-            len(final_result.runtime_events or []),
-            final_result.audit_ref or "-",
-        )
-        return final_result
+        finally:
+            reset_log_context(token)
 
     async def _persist_last_execution_id(self, request: ExecutionRequest) -> None:
         if not self._should_persist_last_execution_id(request):

@@ -1,8 +1,6 @@
 """WebChat UI and HTTP server for Engineering Flow Platform.
 
 A simple web interface to chat with the agent directly.
-
-UNIQUE_MARKER_12345
 """
 
 import asyncio
@@ -783,6 +781,17 @@ async def api_chat(request: web.Request) -> web.Response:
     runtime_agent_id: Optional[str] = None
     execution_metadata: Dict[str, Any] = {}
     attachment_ids: List[str] = []
+    clear_log_context()
+    trace_headers = _extract_task_trace_headers(request)
+    set_log_context(
+        trace_id=trace_headers.get("trace_id"),
+        span_id=trace_headers.get("span_id"),
+        parent_span_id=trace_headers.get("parent_span_id"),
+        path="/api/chat",
+        runtime_type=os.getenv("EFP_RUNTIME_TYPE", "native"),
+        execution_type="chat",
+        source_type="webchat",
+    )
     try:
         data = await request.json()
         message = (data.get('message') or '').strip()
@@ -799,6 +808,10 @@ async def api_chat(request: web.Request) -> web.Response:
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
         client_request_id = _extract_trusted_client_request_id(request, data)
         request_id = client_request_id or f"chat-{uuid.uuid4()}"
+        set_log_context(
+            request_id=request_id,
+            session_id=session_id,
+        )
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
         logger.debug(
             "[api_chat] Request summary: session_id=%s, has_message=%s, attachment_count=%d, portal_user_id_present=%s",
@@ -880,6 +893,7 @@ async def api_chat(request: web.Request) -> web.Response:
         
         # Run agent (history is managed internally by session_manager)
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
+        set_log_context(agent_id=runtime_agent_id)
         agent = AgentCore(
             model=model,
             session_id=session_id,
@@ -1077,8 +1091,11 @@ async def api_chat(request: web.Request) -> web.Response:
             error_response['request_id'] = request_id
         return web.json_response(error_response, status=status_code)
     finally:
-        if session_id and attachment_ids:
-            await _cleanup_one_shot_attachments(session_id, attachment_ids)
+        try:
+            if session_id and attachment_ids:
+                await _cleanup_one_shot_attachments(session_id, attachment_ids)
+        finally:
+            clear_log_context()
 
 
 async def api_chat_stream(request: web.Request) -> web.StreamResponse:
@@ -1097,6 +1114,17 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
     runtime_agent_id: Optional[str] = None
     execution_metadata: Dict[str, Any] = {}
     attachment_ids: List[str] = []
+    clear_log_context()
+    trace_headers = _extract_task_trace_headers(request)
+    set_log_context(
+        trace_id=trace_headers.get("trace_id"),
+        span_id=trace_headers.get("span_id"),
+        parent_span_id=trace_headers.get("parent_span_id"),
+        path="/api/chat/stream",
+        runtime_type=os.getenv("EFP_RUNTIME_TYPE", "native"),
+        execution_type="chat",
+        source_type="webchat",
+    )
     try:
         data = await request.json()
         message = (data.get('message') or '').strip()
@@ -1106,6 +1134,10 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
         execution_metadata = _extract_trusted_control_plane_metadata(request, data)
         client_request_id = _extract_trusted_client_request_id(request, data)
         request_id = client_request_id or f"chat-{uuid.uuid4()}"
+        set_log_context(
+            request_id=request_id,
+            session_id=session_id,
+        )
         effective_user_name = _resolve_chat_display_user_name(data, portal_user_name)
 
         attached_images = await _collect_attached_images(
@@ -1165,6 +1197,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
 
         # Run agent and stream response
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
+        set_log_context(agent_id=runtime_agent_id)
         agent = AgentCore(
             model=model,
             session_id=session_id,
@@ -1293,13 +1326,16 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             return response
         return web.Response(status=500, text=str(e))
     finally:
-        if run_task is not None and not run_task.done():
-            try:
-                await run_task
-            except Exception:
-                pass
-        if session_id and attachment_ids:
-            await _cleanup_one_shot_attachments(session_id, attachment_ids)
+        try:
+            if run_task is not None and not run_task.done():
+                try:
+                    await run_task
+                except Exception:
+                    pass
+            if session_id and attachment_ids:
+                await _cleanup_one_shot_attachments(session_id, attachment_ids)
+        finally:
+            clear_log_context()
 
 
 async def api_tasks_execute(request: web.Request) -> web.Response:
@@ -1772,12 +1808,10 @@ async def api_sessions(request: web.Request) -> web.Response:
     GET /api/sessions?limit=10
     Returns: List of sessions with name, last message, timestamp
     
-    VERSION: FINAL_TEST_2026_02_10_17_10
     """
     import time
     start_time = time.time()
-    logger.info(f"[api_sessions FINAL_TEST_2026_02_10_17_10] ENTERING - checking version")
-    logger.info(f"[FINAL_TEST] Source file: /root/engineering-flow-platform/src/gateway/webchat.py")
+    logger.info("[api_sessions] Request start")
     try:
         # Initialize session manager if needed
         if not session_manager._initialized:
@@ -1821,7 +1855,6 @@ async def api_sessions(request: web.Request) -> web.Response:
                 'last_message': last_message,
                 'updated_at': session_info.get('updated_at', datetime.utcnow().isoformat()),
                 'message_count': len(user_messages),
-                '_marker': 'FIXED_2026_02_10_16_58',  # Version marker
             })
             logger.info(f"[api_sessions] Added session: {session_id} -> name='{session_name}'")
         
@@ -1838,12 +1871,24 @@ async def api_load_session(request: web.Request) -> web.Response:
     GET /api/sessions/{session_id}
     Returns: Session messages
     """
+    clear_log_context()
+    trace_headers = _extract_task_trace_headers(request)
+    set_log_context(
+        trace_id=trace_headers.get("trace_id"),
+        span_id=trace_headers.get("span_id"),
+        parent_span_id=trace_headers.get("parent_span_id"),
+        path="/api/sessions/{session_id}",
+        runtime_type=os.getenv("EFP_RUNTIME_TYPE", "native"),
+        execution_type="session",
+        source_type="webchat",
+    )
     try:
         # Initialize session manager if needed
         if not session_manager._initialized:
             await session_manager.initialize()
         
         session_id = request.match_info.get('session_id', '')
+        set_log_context(session_id=session_id)
         if not session_id:
             return web.json_response({'error': 'Session ID required'}, status=400)
         
@@ -1854,6 +1899,7 @@ async def api_load_session(request: web.Request) -> web.Response:
         
         portal_user_id, portal_user_name = _extract_portal_identity(request, {})
         runtime_agent_id, runtime_agent_name = _resolve_runtime_agent_identity(request)
+        set_log_context(agent_id=runtime_agent_id)
         trusted_portal_agent_name = _extract_trusted_portal_agent_name(request)
 
         history = session_info.get('history', [])
@@ -1878,8 +1924,10 @@ async def api_load_session(request: web.Request) -> web.Response:
             'metadata': session_info.get('metadata', {}),
         })
     except Exception as e:
-        logger.error(f"Error loading session: {e}")
+        logger.error(f"[api_load_session] ERROR: {e}", exc_info=True)
         return web.json_response({'error': str(e)}, status=500)
+    finally:
+        clear_log_context()
 
 
 async def api_session_chatlog(request: web.Request) -> web.Response:

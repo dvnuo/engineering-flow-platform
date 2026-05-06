@@ -1,0 +1,4 @@
+repo: engineering-flow-platform-tools
+version: "contract-fixture-v1"
+schema_version: t04
+description: Deterministic native runtime contract fixture for EFP tests.

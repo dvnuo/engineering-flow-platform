@@ -217,6 +217,10 @@ Business skill assets are maintained in **engineering-flow-platform-skills** and
 
 For complete control-plane contract details, see `docs/control_plane_contract.md`.
 
+Additional runtime contracts:
+- `docs/runtime_contract.md`
+- `docs/observability_contract.md`
+
 ### Portal Control-Plane Integration (Operator Minimum)
 
 1. **Portal -> EFP trusted chat**  

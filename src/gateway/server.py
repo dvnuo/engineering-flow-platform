@@ -342,7 +342,6 @@ class Gateway:
             has_more = offset + limit < total_count
 
             for s in detailed_sessions:
-                s["_marker"] = "FIXED_2026_02_10_17_20"
                 logger.info(f"[handle_list_sessions] Added session: {s['session_id']} -> name='{s['name']}'")
 
             logger.info(
