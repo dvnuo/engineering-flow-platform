@@ -560,3 +560,73 @@ def test_file_parser_modules_do_not_use_root_logging_calls_for_runtime_messages(
         assert "logger = logging.getLogger(__name__)" in content
         for pattern in forbidden_patterns:
             assert pattern not in content
+
+
+def test_default_format_includes_extended_runtime_context_fields():
+    stream = io.StringIO()
+    logger = logging.getLogger("src.runtime.execution_bus")
+    logger.handlers = []
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(RedactingFormatter(DEFAULT_FORMAT))
+    handler.addFilter(RedactingFilter())
+    logger.addHandler(handler)
+
+    set_log_context(
+        trace_id="trace-1",
+        request_id="req-1",
+        session_id="sess-1",
+        task_id="task-1",
+        agent_id="agent-1",
+        runtime_type="native",
+        execution_type="tool",
+        source_type="chat",
+        tool_name="contract_echo",
+        tool_source="external_tools_repo",
+        skill_name="smoke-skill",
+        profile_version="profile-v1",
+        path="/api/chat",
+    )
+    try:
+        logger.info("hello")
+    finally:
+        clear_log_context()
+
+    output = stream.getvalue()
+    assert "trace=trace-1" in output
+    assert "request=req-1" in output
+    assert "session=sess-1" in output
+    assert "task=task-1" in output
+    assert "agent=agent-1" in output
+    assert "runtime=native" in output
+    assert "exec=tool" in output
+    assert "source=chat" in output
+    assert "tool=contract_echo" in output
+    assert "tool_source=external_tools_repo" in output
+    assert "skill=smoke-skill" in output
+    assert "profile=profile-v1" in output
+    assert "path=/api/chat" in output
+
+
+def test_extended_context_still_skips_third_party_logger():
+    stream = io.StringIO()
+    logger = logging.getLogger("httpcore.connection")
+    logger.handlers = []
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(RedactingFormatter(DEFAULT_FORMAT))
+    handler.addFilter(RedactingFilter())
+    logger.addHandler(handler)
+
+    set_log_context(request_id="req-3", runtime_type="native", tool_name="contract_echo")
+    try:
+        logger.info("hello")
+    finally:
+        clear_log_context()
+
+    output = stream.getvalue()
+    assert "request=req-3" not in output
+    assert "runtime=native" not in output
+    assert "tool=contract_echo" not in output

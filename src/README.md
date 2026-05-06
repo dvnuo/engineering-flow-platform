@@ -67,3 +67,4 @@ src/
 - EFP runtime (execution plane) receives dispatched tasks via `/api/tasks/execute`.
 - `github_review_task` remains a runtime execution path.
 - Do **not** add new runtime-side automation polling in EFP.
+- For native runtime HTTP surface, external tools/skills asset directories, capability snapshot shape, and observability fields, see `../docs/runtime_contract.md` and `../docs/observability_contract.md`.

@@ -26,6 +26,10 @@ jobs:
             tests/test_agent_llm_tools_surface.py \
             tests/test_capability_registry.py \
             tests/test_runtime_capability_contract.py \
+            tests/test_runtime_contract_fixture.py \
+            tests/test_runtime_observability_contract.py \
+            tests/test_p3_docs_contract.py \
+            tests/test_logger.py \
             tests/test_docker_runtime_contract.py
 
   native-runtime-docker-smoke:

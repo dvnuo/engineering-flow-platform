@@ -1,0 +1,24 @@
+tool_id: efp.tool.contract.echo
+name: contract_echo
+description: Deterministic external contract echo tool for native runtime smoke tests.
+python_entrypoint: efp_tools.contract_echo:execute
+enabled: true
+runtime_compat: [native, opencode]
+domain: context
+type: tool
+policy_tags: [context, read_only, contract_fixture]
+requires_identity_binding: false
+opencode_name: efp_contract_echo
+mutation: false
+risk_level: low
+input_schema:
+  type: object
+  properties:
+    text:
+      type: string
+  required: [text]
+output_schema:
+  type: object
+metadata:
+  source: runtime_contract_fixture
+  model_facing: true
