@@ -4,6 +4,15 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def reset_external_tool_registry_for_runtime_contract_tests():
+    from src.tools_external import reset_external_tool_registry_cache
+
+    reset_external_tool_registry_cache()
+    yield
+    reset_external_tool_registry_cache()
+
+
 def test_runtime_contract_fixture_files_exist():
     root = Path("tests/fixtures/runtime_contract")
     assert (root / "tools_repo/manifest.yaml").exists()
@@ -83,17 +92,31 @@ def test_runtime_contract_fixture_capability_snapshot(monkeypatch, tmp_path):
     reset_external_tool_registry_cache()
     from src.skills.registry import skill_registry
 
-    skill_registry.project_skills_dir = Path("tests/fixtures/runtime_contract/skills_repo").resolve()
-    skill_registry.user_skills_dir = tmp_path / "user-skills"
-    skill_registry.skills.clear()
-    skill_registry.load_skills()
-    from src.runtime.capability_registry import build_default_capability_registry
+    original_project_skills_dir = skill_registry.project_skills_dir
+    original_user_skills_dir = skill_registry.user_skills_dir
+    original_skills = dict(skill_registry.skills)
+    original_initialized = getattr(skill_registry, "_initialized", False)
 
-    snapshot = build_default_capability_registry().export_catalog_snapshot()
-    tools = [c for c in snapshot["capabilities"] if c.get("type") == "tool"]
-    skills = [c for c in snapshot["capabilities"] if c.get("type") == "skill"]
-    contract_tool = next(c for c in tools if c.get("name") == "contract_echo")
-    assert contract_tool["capability_id"] == "efp.tool.contract.echo"
-    assert contract_tool["metadata"]["tool_source"] == "external_tools_repo"
-    assert contract_tool["metadata"]["descriptor_source_file"].endswith("contract_echo.yaml")
-    assert any(c.get("name") == "smoke-skill" for c in skills)
+    try:
+        skill_registry.project_skills_dir = Path("tests/fixtures/runtime_contract/skills_repo").resolve()
+        skill_registry.user_skills_dir = tmp_path / "user-skills"
+        skill_registry.skills.clear()
+        skill_registry._initialized = False
+        skill_registry.load_skills()
+
+        from src.runtime.capability_registry import build_default_capability_registry
+
+        snapshot = build_default_capability_registry().export_catalog_snapshot()
+        tools = [c for c in snapshot["capabilities"] if c.get("type") == "tool"]
+        skills = [c for c in snapshot["capabilities"] if c.get("type") == "skill"]
+        contract_tool = next(c for c in tools if c.get("name") == "contract_echo")
+        assert contract_tool["capability_id"] == "efp.tool.contract.echo"
+        assert contract_tool["metadata"]["tool_source"] == "external_tools_repo"
+        assert contract_tool["metadata"]["descriptor_source_file"].endswith("contract_echo.yaml")
+        assert any(c.get("name") == "smoke-skill" for c in skills)
+    finally:
+        skill_registry.project_skills_dir = original_project_skills_dir
+        skill_registry.user_skills_dir = original_user_skills_dir
+        skill_registry.skills.clear()
+        skill_registry.skills.update(original_skills)
+        skill_registry._initialized = original_initialized

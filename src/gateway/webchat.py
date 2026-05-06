@@ -1338,8 +1338,6 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
                 await _cleanup_one_shot_attachments(session_id, attachment_ids)
         finally:
             clear_log_context()
-        if session_id and attachment_ids:
-            await _cleanup_one_shot_attachments(session_id, attachment_ids)
 
 
 async def api_tasks_execute(request: web.Request) -> web.Response:
@@ -1859,7 +1857,6 @@ async def api_sessions(request: web.Request) -> web.Response:
                 'last_message': last_message,
                 'updated_at': session_info.get('updated_at', datetime.utcnow().isoformat()),
                 'message_count': len(user_messages),
-                '_marker': 'FIXED_2026_02_10_16_58',  # Version marker
             })
             logger.info(f"[api_sessions] Added session: {session_id} -> name='{session_name}'")
         
@@ -1876,12 +1873,24 @@ async def api_load_session(request: web.Request) -> web.Response:
     GET /api/sessions/{session_id}
     Returns: Session messages
     """
+    clear_log_context()
+    trace_headers = _extract_task_trace_headers(request)
+    set_log_context(
+        trace_id=trace_headers.get("trace_id"),
+        span_id=trace_headers.get("span_id"),
+        parent_span_id=trace_headers.get("parent_span_id"),
+        path="/api/sessions/{session_id}",
+        runtime_type=os.getenv("EFP_RUNTIME_TYPE", "native"),
+        execution_type="session",
+        source_type="webchat",
+    )
     try:
         # Initialize session manager if needed
         if not session_manager._initialized:
             await session_manager.initialize()
         
         session_id = request.match_info.get('session_id', '')
+        set_log_context(session_id=session_id)
         if not session_id:
             return web.json_response({'error': 'Session ID required'}, status=400)
         
@@ -1917,8 +1926,10 @@ async def api_load_session(request: web.Request) -> web.Response:
             'metadata': session_info.get('metadata', {}),
         })
     except Exception as e:
-        logger.error(f"Error loading session: {e}")
+        logger.error(f"[api_load_session] ERROR: {e}", exc_info=True)
         return web.json_response({'error': str(e)}, status=500)
+    finally:
+        clear_log_context()
 
 
 async def api_session_chatlog(request: web.Request) -> web.Response:

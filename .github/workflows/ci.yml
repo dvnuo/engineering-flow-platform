@@ -23,6 +23,7 @@ jobs:
           python -m pytest -q \
             tests/test_external_tools_registry.py \
             tests/test_external_tools_loader.py \
+            tests/test_native_external_tools_smoke.py \
             tests/test_agent_llm_tools_surface.py \
             tests/test_capability_registry.py \
             tests/test_runtime_capability_contract.py \
