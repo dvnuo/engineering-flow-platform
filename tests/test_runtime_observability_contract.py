@@ -102,8 +102,16 @@ def test_gateway_session_endpoints_do_not_expose_debug_version_markers():
         assert "[FINAL_TEST]" not in text
         assert "FIXED_2026" not in text
         assert "UNIQUE_MARKER_" not in text
-        assert not re.search(r"[\"']_marker[\"']\\s*:", text)
-        assert not re.search(r"\\[\\s*[\"']_marker[\"']\\s*\\]\\s*=", text)
+        assert not re.search(r"""["']_marker["']\s*:""", text)
+        assert not re.search(r"""\[\s*["']_marker["']\s*\]\s*=""", text)
+
+
+def test_gateway_debug_marker_regexes_match_response_marker_shapes():
+    object_marker = "{'_marker': 'bad'}"
+    assignment_marker = 's["_marker"] = "bad"'
+
+    assert re.search(r"""["']_marker["']\s*:""", object_marker)
+    assert re.search(r"""\[\s*["']_marker["']\s*\]\s*=""", assignment_marker)
 
 
 def test_chat_stream_cleanup_is_not_duplicated():
@@ -115,8 +123,9 @@ def test_chat_stream_cleanup_is_not_duplicated():
 def test_load_session_endpoint_binds_and_clears_log_context():
     text = Path("src/gateway/webchat.py").read_text(encoding="utf-8")
     start = text.index("async def api_load_session")
-    next_def = text.find("\\nasync def ", start + 1)
-    chunk = text[start:] if next_def == -1 else text[start:next_def]
+    next_def = text.find("\nasync def ", start + 1)
+    assert next_def != -1, "api_load_session should be followed by another async handler; keep this test bounded"
+    chunk = text[start:next_def]
 
     assert "clear_log_context()" in chunk
     assert 'path="/api/sessions/{session_id}"' in chunk
@@ -124,3 +133,4 @@ def test_load_session_endpoint_binds_and_clears_log_context():
     assert 'execution_type="session"' in chunk
     assert 'source_type="webchat"' in chunk
     assert "finally:" in chunk
+    assert re.search(r"finally:\s+clear_log_context\(\)", chunk)
