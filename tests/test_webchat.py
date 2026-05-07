@@ -1090,7 +1090,7 @@ async def test_api_chat_ignores_model_override_for_untrusted_request(monkeypatch
 
     class _Request:
         app = {}
-        headers = {}
+        headers = {"X-Portal-Author-Source": "portal"}
 
         async def json(self):
             return {"message": "hello", "session_id": "s-model-2", "model_override": "gpt-5-override"}
@@ -1751,6 +1751,103 @@ async def test_api_chat_stream_emits_progress_before_done_while_task_running(mon
     done_index = next(i for i, chunk in enumerate(response.writes) if "event: done" in chunk)
     assert progress_index < done_index
     assert observed["task_running_during_progress"] is True
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_emits_final_payload_before_done(monkeypatch):
+    from src.gateway import webchat
+
+    async def _fake_run_chat_via_execution_bus(**_kwargs):
+        return {
+            "response": "full assistant response",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+            "events": [{"type": "llm_thinking", "message": "thinking"}],
+            "runtime_events": [{"event_type": "execution.completed"}],
+            "context_state": {"summary": "done", "next_step": ""},
+        }
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data.decode())
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-final-payload"}
+
+    response = await webchat.api_chat_stream(_Request())
+
+    final_index = next(i for i, chunk in enumerate(response.writes) if "event: final" in chunk)
+    done_index = next(i for i, chunk in enumerate(response.writes) if "event: done" in chunk)
+    assert final_index < done_index
+
+    final_chunk = response.writes[final_index]
+    final_data = json.loads(final_chunk.split("data: ", 1)[1].strip())
+    assert final_data["response"] == "full assistant response"
+    assert final_data["session_id"] == "s-final-payload"
+    assert final_data["request_id"]
+    start_chunk = next(chunk for chunk in response.writes if "event: start" in chunk)
+    start_data = json.loads(start_chunk.split("data: ", 1)[1].strip())
+    assert final_data["request_id"] == start_data["request_id"]
+    assert final_data["usage"] == {"prompt_tokens": 1, "completion_tokens": 2}
+    assert final_data["events"] == [{"type": "llm_thinking", "message": "thinking"}]
+    assert final_data["runtime_events"] == [{"event_type": "execution.completed"}]
+    assert final_data["context_state"] == {"summary": "done", "next_step": ""}
+
+
+@pytest.mark.asyncio
+async def test_api_chat_stream_done_event_has_json_payload_not_blank(monkeypatch):
+    from src.gateway import webchat
+
+    async def _fake_run_chat_via_execution_bus(**_kwargs):
+        return {"response": "ok", "usage": {}}
+
+    class _FakeStreamResponse:
+        def __init__(self, status=200, headers=None):
+            self.status = status
+            self.headers = headers or {}
+            self.writes = []
+
+        async def prepare(self, request):
+            return self
+
+        async def write(self, data):
+            self.writes.append(data.decode())
+
+    monkeypatch.setattr(webchat, "_run_chat_via_execution_bus", _fake_run_chat_via_execution_bus)
+    monkeypatch.setattr(webchat.web, "StreamResponse", _FakeStreamResponse)
+
+    class _Request:
+        app = {}
+        headers = {}
+
+        async def json(self):
+            return {"message": "hello", "session_id": "s-done-json"}
+
+    response = await webchat.api_chat_stream(_Request())
+
+    done_chunk = next(chunk for chunk in response.writes if "event: done" in chunk)
+    assert "data: \n\n" not in done_chunk
+    done_data = json.loads(done_chunk.split("data: ", 1)[1].strip())
+    assert done_data["ok"] is True
+    assert done_data["session_id"] == "s-done-json"
+    assert done_data["request_id"]
+    start_chunk = next(chunk for chunk in response.writes if "event: start" in chunk)
+    start_data = json.loads(start_chunk.split("data: ", 1)[1].strip())
+    assert done_data["request_id"] == start_data["request_id"]
 @pytest.mark.asyncio
 async def test_api_chat_stream_trusted_portal_metadata_passed_to_execution_bus(monkeypatch):
     from src.gateway import webchat
