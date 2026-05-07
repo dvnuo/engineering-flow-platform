@@ -451,6 +451,15 @@ def _extract_task_trace_headers(request: web.Request) -> Dict[str, Optional[str]
     return trace
 
 
+
+
+def _sse_event_bytes(event_name: str, payload: Any) -> bytes:
+    return (
+        f"event: {event_name}\n"
+        f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+    ).encode("utf-8")
+
+
 def _json_compatible(value: Any) -> Any:
     try:
         json.dumps(value)
@@ -1186,7 +1195,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
 
         # Send start event
         await response.write(
-            f"event: start\ndata: {json.dumps(build_stream_start_event_payload(session_id, request_id))}\n\n".encode()
+            _sse_event_bytes("start", build_stream_start_event_payload(session_id, request_id))
         )
 
         event_queue = asyncio.Queue()
@@ -1287,14 +1296,26 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             )
 
         # Send usage data
-        usage_data = json.dumps({
+        usage_data = {
             'usage': usage,
             'session_id': session_id,
-        })
-        await response.write(f"event: usage\ndata: {usage_data}\n\n".encode())
+            'request_id': request_id,
+        }
+        await response.write(_sse_event_bytes("usage", usage_data))
+
+        response_data = build_webchat_response_payload(
+            result if isinstance(result, dict) else None,
+            session_id,
+        )
+        response_data.setdefault("request_id", request_id)
+        await response.write(_sse_event_bytes("final", response_data))
 
         # Send done event
-        await response.write(f"event: done\ndata: \n\n".encode())
+        await response.write(_sse_event_bytes("done", {
+            "ok": True,
+            "session_id": session_id,
+            "request_id": request_id,
+        }))
 
         return response
 
@@ -1320,7 +1341,7 @@ async def api_chat_stream(request: web.Request) -> web.StreamResponse:
             error_data = json.dumps({'error': str(e)})
             try:
                 await response.write(f"event: error\ndata: {error_data}\n\n".encode())
-                await response.write(f"event: done\ndata: \n\n".encode())
+                await response.write(_sse_event_bytes("done", {"ok": False, "session_id": session_id, "request_id": request_id}))
             except Exception:
                 pass
             return response
