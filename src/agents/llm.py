@@ -255,26 +255,140 @@ def _convert_messages_to_input_items(messages: List[Dict]) -> List[Dict]:
                 items.append({"role": role, "content": str(content)})
     return items
 
-def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
-    """Convert Chat-style tools to Responses API format."""
+
+def _make_nullable_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Allow null for a schema while preserving metadata."""
     import copy
 
-    def _make_nullable_if_optional(prop_schema: Dict[str, Any]) -> Dict[str, Any]:
-        """Allow null for an optional top-level property while preserving metadata."""
-        schema = copy.deepcopy(prop_schema) if isinstance(prop_schema, dict) else {"type": ["null"]}
-        prop_type = schema.get("type")
-        if isinstance(prop_type, list):
-            if "null" not in prop_type:
-                schema["type"] = [*prop_type, "null"]
-        elif isinstance(prop_type, str):
-            if prop_type != "null":
-                schema["type"] = [prop_type, "null"]
-        if isinstance(schema.get("enum"), list) and None not in schema["enum"]:
-            schema["enum"] = [*schema["enum"], None]
-        if "const" in schema:
-            schema["enum"] = [schema["const"], None]
-            schema.pop("const", None)
-        return schema
+    normalized = copy.deepcopy(schema) if isinstance(schema, dict) else {"type": ["null"]}
+    schema_type = normalized.get("type")
+    if isinstance(schema_type, list):
+        if "null" not in schema_type:
+            normalized["type"] = [*schema_type, "null"]
+    elif isinstance(schema_type, str):
+        if schema_type != "null":
+            normalized["type"] = [schema_type, "null"]
+    if isinstance(normalized.get("enum"), list) and None not in normalized["enum"]:
+        normalized["enum"] = [*normalized["enum"], None]
+    if "const" in normalized:
+        normalized["enum"] = [normalized["const"], None]
+        normalized.pop("const", None)
+    return normalized
+
+
+def _make_non_nullable_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove null allowance from a schema while preserving all other constraints."""
+    import copy
+
+    normalized = copy.deepcopy(schema) if isinstance(schema, dict) else {}
+    schema_type = normalized.get("type")
+    if isinstance(schema_type, list):
+        non_null_types = [value for value in schema_type if value != "null"]
+        if len(non_null_types) == 1:
+            normalized["type"] = non_null_types[0]
+        elif non_null_types:
+            normalized["type"] = non_null_types
+    if isinstance(normalized.get("enum"), list):
+        non_null_enum = [value for value in normalized["enum"] if value is not None]
+        normalized["enum"] = non_null_enum
+        if "const" in normalized:
+            normalized.pop("const", None)
+        if len(non_null_enum) == 1:
+            normalized["const"] = non_null_enum[0]
+    return normalized
+
+
+def _normalize_responses_strict_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively normalize function parameters schema for Responses API strict mode."""
+    import copy
+
+    def _is_object_like(node: Dict[str, Any]) -> bool:
+        return node.get("type") == "object" or isinstance(node.get("properties"), dict)
+
+    def _is_required_only_branch(branch: Dict[str, Any], parent_property_keys: set) -> bool:
+        if not isinstance(branch, dict):
+            return False
+        allowed_keys = {"required", "title", "description"}
+        if set(branch.keys()) - allowed_keys:
+            return False
+        required_fields = branch.get("required")
+        if not isinstance(required_fields, list) or not required_fields:
+            return False
+        return all(isinstance(field, str) and field in parent_property_keys for field in required_fields)
+
+    def _normalize(node: Any) -> Any:
+        if not isinstance(node, dict):
+            return node
+
+        normalized = copy.deepcopy(node)
+
+        if _is_object_like(normalized):
+            original_required = normalized.get("required", [])
+            required_set = set(original_required) if isinstance(original_required, list) else set()
+            properties = normalized.get("properties", {})
+            if not isinstance(properties, dict):
+                properties = {}
+
+            property_keys = list(properties.keys())
+            normalized_properties: Dict[str, Any] = {}
+            for property_name, property_schema in properties.items():
+                child = _normalize(property_schema)
+                if property_name in required_set:
+                    normalized_properties[property_name] = child
+                else:
+                    normalized_properties[property_name] = _make_nullable_schema(child)
+
+            normalized["properties"] = normalized_properties
+            normalized["required"] = property_keys
+            normalized["additionalProperties"] = False
+
+            for combinator in ("anyOf", "oneOf", "allOf"):
+                branches = normalized.get(combinator)
+                if not isinstance(branches, list):
+                    continue
+
+                rewritten_branches: List[Any] = []
+                parent_property_keys = set(property_keys)
+                for branch in branches:
+                    if _is_required_only_branch(branch, parent_property_keys):
+                        branch_required = set(branch.get("required", []))
+                        branch_props = copy.deepcopy(normalized_properties)
+                        for required_name in branch_required:
+                            if required_name in branch_props:
+                                branch_props[required_name] = _make_non_nullable_schema(branch_props[required_name])
+
+                        rewritten_branch = {
+                            "type": "object",
+                            "properties": branch_props,
+                            "required": property_keys,
+                            "additionalProperties": False,
+                        }
+                        if "title" in branch:
+                            rewritten_branch["title"] = branch["title"]
+                        if "description" in branch:
+                            rewritten_branch["description"] = branch["description"]
+                        rewritten_branches.append(rewritten_branch)
+                    else:
+                        rewritten_branches.append(_normalize(branch))
+                normalized[combinator] = rewritten_branches
+
+            return normalized
+
+        if normalized.get("type") == "array" and "items" in normalized:
+            normalized["items"] = _normalize(normalized.get("items"))
+
+        for combinator in ("anyOf", "oneOf", "allOf"):
+            branches = normalized.get(combinator)
+            if isinstance(branches, list):
+                normalized[combinator] = [_normalize(branch) for branch in branches]
+
+        return normalized
+
+    return _normalize(copy.deepcopy(schema))
+
+
+def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
+    """Convert Chat-style tools to Responses API format."""
 
     converted = []
     for tool in tools:
@@ -283,28 +397,7 @@ def _convert_tools_schema(tools: List[Dict]) -> List[Dict]:
         tool_type = tool.get("type", "")
         if tool_type == "function":
             func = tool.get("function", {})
-            # Deep copy parameters to avoid mutating the original
-            params = copy.deepcopy(func.get("parameters", {}))
-
-            # Capture the original required fields before any strict-mode mutation.
-            original_required = set(params.get("required", []))
-            properties = params.get("properties", {})
-            if isinstance(properties, dict):
-                property_keys = list(properties.keys())
-                normalized_properties = {}
-                for prop_name, prop_schema in properties.items():
-                    if prop_name in original_required:
-                        normalized_properties[prop_name] = prop_schema
-                    else:
-                        normalized_properties[prop_name] = _make_nullable_if_optional(prop_schema)
-                params["properties"] = normalized_properties
-                # Strict mode requires all top-level properties to be required.
-                params["required"] = property_keys
-            elif "required" not in params or not isinstance(params.get("required"), list):
-                params["required"] = []
-
-            # Responses API strict mode requires closed top-level argument objects.
-            params["additionalProperties"] = False
+            params = _normalize_responses_strict_schema(func.get("parameters", {}))
 
             converted.append({
                 "type": "function",
