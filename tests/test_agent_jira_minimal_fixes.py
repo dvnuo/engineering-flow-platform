@@ -1,4 +1,5 @@
 import pytest
+import copy
 
 
 def test_convert_tools_schema_preserves_optional_semantics_with_nullable():
@@ -218,6 +219,133 @@ def test_convert_tools_schema_forces_additional_properties_false():
 
     params = _convert_tools_schema(tools)[0]["parameters"]
     assert params["additionalProperties"] is False
+
+
+def test_convert_tools_schema_required_only_anyof_branch_is_rewritten_strict():
+    from src.agents.llm import _convert_tools_schema
+
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "confluence_get_user",
+            "description": "Get user details from Confluence",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string", "description": "User ID"},
+                    "username": {"type": "string", "description": "Username"},
+                },
+                "anyOf": [
+                    {"required": ["user_id"]},
+                    {"required": ["username"]},
+                ],
+            },
+        },
+    }]
+
+    converted = _convert_tools_schema(tools)[0]
+    params = converted["parameters"]
+
+    assert converted["strict"] is True
+    assert params["additionalProperties"] is False
+    assert params["required"] == ["user_id", "username"]
+    assert params["properties"]["user_id"]["type"] == ["string", "null"]
+    assert params["properties"]["username"]["type"] == ["string", "null"]
+    assert "anyOf" in params
+    assert len(params["anyOf"]) == 2
+
+    branch0 = params["anyOf"][0]
+    assert branch0["type"] == "object"
+    assert branch0["additionalProperties"] is False
+    assert branch0["required"] == ["user_id", "username"]
+    assert branch0["properties"]["user_id"]["type"] == "string"
+    assert branch0["properties"]["username"]["type"] == ["string", "null"]
+
+    branch1 = params["anyOf"][1]
+    assert branch1["type"] == "object"
+    assert branch1["additionalProperties"] is False
+    assert branch1["required"] == ["user_id", "username"]
+    assert branch1["properties"]["username"]["type"] == "string"
+    assert branch1["properties"]["user_id"]["type"] == ["string", "null"]
+
+
+def test_convert_tools_schema_recursively_closes_nested_objects_and_arrays():
+    from src.agents.llm import _convert_tools_schema
+
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "nested_schema_tool",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filters": {
+                        "type": "object",
+                        "properties": {
+                            "status": {"type": "string"},
+                            "owner": {"type": "string"},
+                        },
+                        "required": ["status"],
+                    },
+                    "entries": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "score": {"type": "number"},
+                            },
+                            "required": ["id"],
+                        },
+                    },
+                },
+                "required": ["filters"],
+            },
+        },
+    }]
+
+    params = _convert_tools_schema(tools)[0]["parameters"]
+    assert params["additionalProperties"] is False
+    assert params["required"] == ["filters", "entries"]
+    assert params["properties"]["entries"]["type"] == ["array", "null"]
+
+    filters = params["properties"]["filters"]
+    assert filters["additionalProperties"] is False
+    assert filters["required"] == ["status", "owner"]
+    assert filters["properties"]["status"]["type"] == "string"
+    assert filters["properties"]["owner"]["type"] == ["string", "null"]
+
+    entry_items = params["properties"]["entries"]["items"]
+    assert entry_items["additionalProperties"] is False
+    assert entry_items["required"] == ["id", "score"]
+    assert entry_items["properties"]["id"]["type"] == "string"
+    assert entry_items["properties"]["score"]["type"] == ["number", "null"]
+
+
+def test_convert_tools_schema_does_not_mutate_original_input_schema():
+    from src.agents.llm import _convert_tools_schema
+
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "immutability_check",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "username": {"type": "string"},
+                },
+                "anyOf": [
+                    {"required": ["user_id"]},
+                    {"required": ["username"]},
+                ],
+            },
+        },
+    }]
+
+    original = copy.deepcopy(tools)
+    _convert_tools_schema(tools)
+    assert tools == original
 
 
 @pytest.mark.parametrize(
