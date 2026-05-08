@@ -969,6 +969,9 @@ class OpenAIProvider(BaseProvider):
         ]
 
 
+GITHUB_COPILOT_INTEGRATION_ID = "vscode-chat"
+
+
 class GitHubCopilotProvider(BaseProvider):
     """GitHub Copilot provider."""
     
@@ -980,14 +983,18 @@ class GitHubCopilotProvider(BaseProvider):
         )
         self.default_model = config.llm.get('model', DEFAULT_LLM_MODEL)
     
+    def _get_api_key(self) -> str:
+        return os.environ.get("GITHUB_COPILOT_TOKEN") or config.llm.get("api_key", "")
+
     def _get_headers(self) -> Dict[str, str]:
         """Override to include Copilot-specific headers."""
-        api_key = os.environ.get('GITHUB_COPILOT_TOKEN') or config.llm.get('api_key', '')
+        api_key = self._get_api_key()
         return {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "X-GitHub-Api-Version": "2023-06-01",
             "Accept": "application/vnd.github.copilot-chat-preview+json",
+            "copilot-integration-id": GITHUB_COPILOT_INTEGRATION_ID,
         }
     
     async def chat(
@@ -1002,7 +1009,7 @@ class GitHubCopilotProvider(BaseProvider):
     ) -> Dict[str, Any]:
         """Call GitHub Copilot Chat API."""
         # Check if API key is configured
-        api_key = os.environ.get('GITHUB_COPILOT_TOKEN') or config.llm.get('api_key', '')
+        api_key = self._get_api_key()
         if not api_key:
             return {
                 "error": {
@@ -1152,7 +1159,7 @@ class GitHubCopilotProvider(BaseProvider):
             )
         
         # Check if API key is configured
-        api_key = os.environ.get('GITHUB_COPILOT_TOKEN') or config.llm.get('api_key', '')
+        api_key = self._get_api_key()
         if not api_key:
             return {
                 "error": {
