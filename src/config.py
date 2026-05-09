@@ -108,6 +108,10 @@ class Config:
         "debug",
     }
     PORTAL_MANAGED_FIELD_TREE = {
+        # Keep hidden/deprecated Portal LLM fields in this field tree.
+        # Portal may stop rendering temperature/tools/response_flow controls, but
+        # set_managed_overlay() must still prune older Portal-managed values from
+        # config.yaml when a newer sparse overlay omits them.
         "llm": {
             "provider": True,
             "model": True,

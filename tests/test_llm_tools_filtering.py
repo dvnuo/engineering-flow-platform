@@ -36,6 +36,39 @@ def test_normalize_explicit_empty_is_none(tools_value):
     assert spec.configured is True
     assert spec.mode == "none"
 
+def test_missing_llm_tools_defaults_to_all():
+    spec = normalize_llm_tools_spec({})
+    assert spec.configured is False
+    assert spec.mode == "all"
+
+
+def test_explicit_wildcard_tools_means_all():
+    spec = normalize_llm_tools_spec({"tools": ["*"]})
+    assert spec.configured is True
+    assert spec.mode == "all"
+
+
+def test_explicit_empty_tools_means_none():
+    spec = normalize_llm_tools_spec({"tools": []})
+    assert spec.configured is True
+    assert spec.mode == "none"
+
+
+def test_filter_tools_defaults_and_explicit_modes_with_regular_tools_only():
+    regular_tools = [
+        {"type": "function", "function": {"name": "git_clone", "description": "clone"}},
+        {"type": "function", "function": {"name": "jira_get_issue", "description": "jira"}},
+    ]
+
+    missing_result = filter_tool_schemas_for_llm(regular_tools, {})
+    wildcard_result = filter_tool_schemas_for_llm(regular_tools, {"tools": ["*"]})
+    none_result = filter_tool_schemas_for_llm(regular_tools, {"tools": []})
+
+    assert _names(missing_result) == ["git_clone", "jira_get_issue"]
+    assert _names(wildcard_result) == ["git_clone", "jira_get_issue"]
+    assert _names(none_result) == []
+
+
 
 @pytest.mark.parametrize("tools_value", ["*", ["*"]])
 def test_normalize_wildcard_all(tools_value):
