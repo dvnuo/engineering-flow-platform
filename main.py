@@ -72,6 +72,63 @@ def check_config() -> tuple[bool, list[str]]:
     return can_start, warnings
 
 
+def initialize_workspace(logger: logging.Logger) -> Path:
+    """Ensure DEFAULT_WORKSPACE exists and copy example markdown files from the
+    repository `workspace/` folder into it (rename *.md.example -> *.md).
+
+    Behavior:
+    - Creates DEFAULT_WORKSPACE if it doesn't exist.
+    - Copies files matching `workspace/*.md.example` from the project root
+      into DEFAULT_WORKSPACE and strips the `.example` suffix.
+    - Does not overwrite existing files (skips if destination exists).
+
+    Returns:
+        Path to the workspace directory.
+    """
+    default_workspace = Path.home() / ".efp" / "workspace"
+    try:
+        # Ensure the directory exists
+        default_workspace.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Workspace directory ready | path={default_workspace}")
+
+        # Source directory inside project (project_root/workspace)
+        source_dir = Path(__file__).parent / "workspace"
+        if not source_dir.exists() or not source_dir.is_dir():
+            logger.debug(f"No source workspace directory found to copy examples from | path={source_dir}")
+            return default_workspace
+
+        # Find *.md.example files and copy them
+        copied = 0
+        for example_file in source_dir.glob("*.md.example"):
+            # Strip the trailing `.example` suffix to produce the target filename
+            if example_file.name.endswith('.example'):
+                target_name = example_file.name[:-8]
+            else:
+                target_name = example_file.name
+
+            dest = default_workspace / target_name
+            if dest.exists():
+                logger.debug(f"Skipping existing workspace file | path={dest}")
+                continue
+
+            try:
+                shutil.copy2(example_file, dest)
+                copied += 1
+                logger.info(f"Copied workspace example -> {dest}")
+            except Exception as e:
+                logger.warning(f"Failed to copy {example_file} -> {dest} | error={e}", exc_info=True)
+
+        if copied == 0:
+            logger.debug("No workspace example files copied (none found or already present)")
+        else:
+            logger.info(f"Workspace initialized with {copied} example file(s)")
+
+    except Exception as e:
+        logger.error(f"Failed to initialize workspace directory | error={e}", exc_info=True)
+
+    return default_workspace
+
+
 async def _shutdown_jira_reconciliation_task(
     jira_reconciliation_task: asyncio.Task | None,
     logger: logging.Logger,
@@ -143,6 +200,9 @@ async def main() -> None:
         return
 
     logger.info("Configuration check passed")
+
+    # Initialize workspace
+    initialize_workspace(logger)
 
     # Initialize session store and usage tracker
     try:
