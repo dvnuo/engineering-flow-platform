@@ -447,7 +447,7 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
     mutation = bool(descriptor_metadata.get("mutation"))
     risk_level = descriptor_metadata.get("risk_level")
     tool_source = descriptor_metadata.get("tool_source")
-    external_tool = bool(descriptor_metadata.get("external_tool")) or tool_source == "external_tools_repo"
+    external_tool = bool(descriptor_metadata.get("external_tool"))
     capability_type = descriptor.type if descriptor is not None else _infer_capability_type_from_id(capability_id)
     if request.execution_type == "task" and task_type == "github_review_task":
         capability_type = "adapter_action"

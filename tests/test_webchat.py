@@ -2374,12 +2374,10 @@ async def test_api_capabilities_ignores_unrecognized_header(monkeypatch):
 @pytest.mark.asyncio
 async def test_api_skills_succeeds_when_external_tools_dir_is_empty(monkeypatch, tmp_path):
     from src.gateway import webchat
-    from src.tools_external import reset_external_tool_registry_cache
 
     empty_tools = tmp_path / "empty-tools"
     empty_tools.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("EFP_TOOLS_DIR", str(empty_tools))
-    reset_external_tool_registry_cache()
 
     class _Request:
         headers = {}

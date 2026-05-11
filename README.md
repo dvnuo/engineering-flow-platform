@@ -182,7 +182,7 @@ engineering-flow-platform/
 
 Business skill assets are maintained in **engineering-flow-platform-skills**. Portal/K8s typically checks out/mounts that skills repository at `/app/skills` (or another path via `EFP_SKILLS_DIR`) for runtime discovery.
 
-External tools in native runtime are loaded from an optional runtime-local directory (`EFP_TOOLS_DIR` first, otherwise `/app/tools`). Missing/empty tools directory is valid and results in an empty external tools surface without blocking startup.
+EFP native runtime no longer supports the External tools subsystem. Runtime tool surface is built-in/native only; Portal provisions skills assets (for example via `/app/skills` or `EFP_SKILLS_DIR`).
 
 ## API Endpoints
 

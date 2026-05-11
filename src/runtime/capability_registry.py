@@ -287,10 +287,7 @@ class _CapabilityBuilder:
 
     def _register_tools(self) -> None:
         try:
-            from src import get_tools_schema, get_external_tool_visibility
-            from src.tools_external import get_external_tool_registry
-
-            external_registry = get_external_tool_registry()
+            from src import get_tools_schema
 
             for tool_schema in list(get_tools_schema() or []):
                 if not isinstance(tool_schema, dict):
@@ -298,78 +295,22 @@ class _CapabilityBuilder:
                 tool_name = _extract_tool_name(tool_schema)
                 if not tool_name:
                     continue
-
-                visibility = get_external_tool_visibility(tool_name)
-                external_descriptor = (
-                    external_registry.get_descriptor(tool_name) if visibility.get("exposed") else None
-                )
-
-                if external_descriptor:
-                    external_metadata = dict(external_descriptor.metadata or {})
-                    capability_id = external_descriptor.tool_id or _format_capability_id("tool", tool_name)
-                    input_schema = dict(external_descriptor.input_schema or _extract_tool_parameters(tool_schema))
-                    output_schema = dict(external_descriptor.output_schema or {"type": "object"})
-                    policy_tags = ["tool", *list(external_descriptor.policy_tags or [])]
-                    requires_identity_binding = bool(
-                        getattr(external_descriptor, "requires_identity_binding", False)
-                        or external_metadata.get("requires_identity_binding", False)
-                    )
-                    metadata = {
-                        **external_metadata,
-                        "external_tool": True,
-                        "tool_source": "external_tools_repo",
-                        "schema_source": "external_tools_repo",
-                        "execution_source": "external_tools_repo",
-                        "external_override": bool(visibility["override_enabled"] and visibility["legacy_name"]),
-                        "external_shadowed_by_legacy": False,
-                        "allow_override": visibility["allow_override"],
-                        "tool_name": tool_name,
-                        "tool_id": external_descriptor.tool_id,
-                        "description": external_descriptor.description or _extract_tool_description(tool_schema),
-                        "domain": external_descriptor.domain,
-                        "external_type": external_descriptor.type,
-                        "policy_tags": list(external_descriptor.policy_tags or []),
-                        "requires_identity_binding": requires_identity_binding,
-                        "runtime_compat": list(external_descriptor.runtime_compat or []),
-                        "opencode_name": external_descriptor.opencode_name,
-                        "mutation": external_descriptor.mutation,
-                        "risk_level": external_descriptor.risk_level,
-                        "declaration_only": True,
-                        "descriptor_source_file": visibility["descriptor_source_file"],
-                    }
-                    if "source" in external_metadata:
-                        metadata.setdefault("descriptor_source", external_metadata["source"])
-                    source_ref = "src.tools_external"
-                else:
-                    capability_id = _format_capability_id("tool", tool_name)
-                    input_schema = _extract_tool_parameters(tool_schema)
-                    output_schema = {"type": "object"}
-                    policy_tags = ["tool", *(["read"] if _looks_read_only_tool(tool_name) else [])]
-                    metadata = {
-                        "tool_name": tool_name,
-                        "description": _extract_tool_description(tool_schema),
-                        "declaration_only": True,
-                        "tool_source": "legacy_builtin",
-                        "schema_source": "legacy_builtin",
-                        "execution_source": "legacy_builtin",
-                        "external_tool": False,
-                        **dict(tool_schema.get("metadata") or {}),
-                    }
-                    if visibility.get("exists"):
-                        metadata.update(
-                            {
-                                "external_descriptor_present": visibility["exists"],
-                                "external_descriptor_enabled": visibility["enabled"],
-                                "external_allow_override": visibility["allow_override"],
-                                "external_native_compatible": visibility["native_compatible"],
-                                "external_model_facing": visibility["model_facing"],
-                                "external_shadowed_by_legacy": visibility["external_shadowed_by_legacy"],
-                                "external_shadow_reason": visibility["shadow_reason"],
-                                "external_descriptor_source_file": visibility["descriptor_source_file"],
-                            }
-                        )
-                    source_ref = "src.__init__.get_tools_schema"
-                    requires_identity_binding = False
+                capability_id = _format_capability_id("tool", tool_name)
+                input_schema = _extract_tool_parameters(tool_schema)
+                output_schema = {"type": "object"}
+                policy_tags = ["tool", *(["read"] if _looks_read_only_tool(tool_name) else [])]
+                metadata = {
+                    "tool_name": tool_name,
+                    "description": _extract_tool_description(tool_schema),
+                    "declaration_only": True,
+                    "tool_source": "legacy_builtin",
+                    "schema_source": "legacy_builtin",
+                    "execution_source": "legacy_builtin",
+                    "external_tool": False,
+                    **dict(tool_schema.get("metadata") or {}),
+                }
+                source_ref = "src.__init__.get_tools_schema"
+                requires_identity_binding = False
 
                 self.registry.register(
                     CapabilityDescriptor(
