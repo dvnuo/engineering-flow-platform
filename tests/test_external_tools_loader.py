@@ -56,6 +56,36 @@ def test_missing_tools_dir_uses_empty_external_registry_and_legacy_surface_is_no
     assert ("run_command" in src.get_tool_names()) or ("git_status" in src.get_tool_names())
 
 
+def test_resolve_external_tools_dir_defaults_to_app_tools_when_env_unset(monkeypatch):
+    from src.tools_external.manifest_loader import resolve_external_tools_dir
+
+    monkeypatch.delenv("EFP_TOOLS_DIR", raising=False)
+    monkeypatch.delenv("EFP_EXTERNAL_TOOLS_TEST_FIXTURE", raising=False)
+    monkeypatch.delenv("EFP_TOOLS_FIXTURE_DIR", raising=False)
+    assert resolve_external_tools_dir() == Path("/app/tools")
+
+
+def test_legacy_tool_repo_envs_are_ignored_for_tools_dir_resolution(monkeypatch, tmp_path):
+    from src.tools_external.manifest_loader import resolve_external_tools_dir
+
+    explicit = tmp_path / "local-tools"
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(explicit))
+    monkeypatch.setenv("DEFAULT_TOOL_REPO_URL", "https://example.com/tools.git")
+    monkeypatch.setenv("DEFAULT_TOOL_BRANCH", "main")
+    monkeypatch.setenv("TOOL_REPO_URL", "https://example.com/legacy-tools.git")
+    monkeypatch.setenv("TOOL_BRANCH", "feature/tools")
+    assert resolve_external_tools_dir() == explicit
+
+
+def test_load_tool_descriptors_empty_dir_returns_empty_list(monkeypatch, tmp_path):
+    from src.tools_external.manifest_loader import load_tool_descriptors
+
+    empty_tools_dir = tmp_path / "empty-tools"
+    empty_tools_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(empty_tools_dir))
+    assert load_tool_descriptors() == []
+
+
 def test_runtime_external_tools_wrapper_imports_contracts_descriptor_schema(monkeypatch, tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

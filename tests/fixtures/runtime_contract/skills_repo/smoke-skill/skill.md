@@ -10,4 +10,4 @@ tools:
 risk_level: low
 ---
 
-Use `contract_echo` to verify that the native runtime can see a mounted external tools repo and a mounted external skills repo.
+Use `contract_echo` to verify native runtime can see optional runtime-local external tools assets and mounted external skills assets.

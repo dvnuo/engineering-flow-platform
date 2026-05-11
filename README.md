@@ -180,7 +180,9 @@ engineering-flow-platform/
 
 ---
 
-Business skill assets are maintained in **engineering-flow-platform-skills** and are typically checked out/mounted by Portal/K8s at `/app/skills` for runtime discovery.
+Business skill assets are maintained in **engineering-flow-platform-skills**. Portal/K8s typically checks out/mounts that skills repository at `/app/skills` (or another path via `EFP_SKILLS_DIR`) for runtime discovery.
+
+External tools in native runtime are loaded from an optional runtime-local directory (`EFP_TOOLS_DIR` first, otherwise `/app/tools`). Missing/empty tools directory is valid and results in an empty external tools surface without blocking startup.
 
 ## API Endpoints
 

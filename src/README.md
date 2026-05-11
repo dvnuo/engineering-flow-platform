@@ -60,6 +60,9 @@ src/
 - Business skill assets are loaded from `EFP_SKILLS_DIR`, `/app/skills`, or local repo-root `skills/` fallback for development.
 - Canonical skill metadata files are lowercase `skill.md` with YAML frontmatter.
 - Business skills should be added to `engineering-flow-platform-skills`, not this EFP runtime repo.
+- Portal provisions skills repository/branch; native runtime external tools do not use Portal repo/branch config.
+- Native runtime external tools load from optional runtime-local directory: `EFP_TOOLS_DIR` first, then `/app/tools`.
+- Missing/empty `/app/tools` is a legal no-op state (external tools = empty).
 
 ## Runtime / Portal boundary (important)
 
