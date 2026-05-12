@@ -447,7 +447,6 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
     mutation = bool(descriptor_metadata.get("mutation"))
     risk_level = descriptor_metadata.get("risk_level")
     tool_source = descriptor_metadata.get("tool_source")
-    external_tool = bool(descriptor_metadata.get("external_tool"))
     capability_type = descriptor.type if descriptor is not None else _infer_capability_type_from_id(capability_id)
     if request.execution_type == "task" and task_type == "github_review_task":
         capability_type = "adapter_action"
@@ -461,7 +460,6 @@ def _resolve_capability_context(request: ExecutionRequest) -> Dict[str, Optional
         "policy_tags": policy_tags,
         "mutation": mutation,
         "risk_level": risk_level,
-        "external_tool": external_tool,
         "tool_source": tool_source,
         "requires_identity_binding": bool(descriptor.requires_identity_binding) if descriptor is not None else False,
     }
@@ -498,8 +496,6 @@ def _permission_decision_allows_mutation(metadata: Dict[str, Any]) -> bool:
 def _evaluate_mutation_tool_constraints(*, metadata: Dict[str, Any], capability_context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if str(capability_context.get("capability_type") or "").lower() != "tool":
         return None
-    if not capability_context.get("external_tool"):
-        return None
     tags = {str(x).lower() for x in capability_context.get("policy_tags") or []}
     risk = str(capability_context.get("risk_level") or "").lower()
     mutation = bool(capability_context.get("mutation")) or risk in {"high", "critical"} or "mutation" in tags or "write" in tags
@@ -509,7 +505,7 @@ def _evaluate_mutation_tool_constraints(*, metadata: Dict[str, Any], capability_
         return None
     return {
         "reason": "mutation_tool_requires_explicit_allow",
-        "message": "External mutation tool requires explicit governance allow",
+        "message": "Mutation tool requires explicit governance allow",
         "metadata": {
             "rule": "mutation_tool_requires_explicit_allow",
             "capability_id": capability_context.get("capability_id"),
@@ -520,7 +516,6 @@ def _evaluate_mutation_tool_constraints(*, metadata: Dict[str, Any], capability_
             "risk_level": capability_context.get("risk_level"),
             "policy_tags": capability_context.get("policy_tags") or [],
             "tool_source": capability_context.get("tool_source"),
-            "external_tool": capability_context.get("external_tool"),
         },
     }
 

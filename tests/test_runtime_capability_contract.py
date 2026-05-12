@@ -13,6 +13,7 @@ def test_capability_snapshot_contract_shape():
 
 
 def test_runtime_tool_snapshot_is_builtin_only(monkeypatch):
+    import src
     from src.runtime.capability_registry import build_default_capability_registry
 
     monkeypatch.setenv("EFP_TOOLS_DIR", "/tmp/ignored-tools")
@@ -23,6 +24,9 @@ def test_runtime_tool_snapshot_is_builtin_only(monkeypatch):
     tools = [c for c in snapshot["capabilities"] if c.get("type") == "tool"]
     assert tools
     assert all((c.get("metadata") or {}).get("tool_source") != "external_tools_repo" for c in tools)
+    assert not hasattr(src, "get_external_tool_visibility")
+    assert not hasattr(src, "get_external_tools_visibility")
+    assert not hasattr(src, "is_external_tool_exposed")
 
 
 def test_runtime_gateway_routes_include_t13_native_contract():

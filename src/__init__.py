@@ -110,18 +110,6 @@ def _get_legacy_tool_names_set() -> set[str]:
 
 
 
-def get_external_tool_visibility(name: str) -> Dict[str, Any]:
-    return {"exists": False, "enabled": False, "exposed": False, "name": name}
-
-
-def get_external_tools_visibility() -> Dict[str, Dict[str, Any]]:
-    return {}
-
-
-def is_external_tool_exposed(name: str) -> bool:
-    return False
-
-
 def get_all_tools() -> list:
     """Get all built-in tool schemas."""
     return list(_get_legacy_tools_schema())
@@ -761,9 +749,6 @@ __all__ = [
     "get_tool",
     "get_tool_map",
     "get_tools_schema",
-    "get_external_tool_visibility",
-    "get_external_tools_visibility",
-    "is_external_tool_exposed",
     "execute_tool",
     "get_github_tools",
     "get_jira_tools",

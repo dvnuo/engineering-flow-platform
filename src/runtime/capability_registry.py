@@ -306,7 +306,6 @@ class _CapabilityBuilder:
                     "tool_source": "legacy_builtin",
                     "schema_source": "legacy_builtin",
                     "execution_source": "legacy_builtin",
-                    "external_tool": False,
                     **dict(tool_schema.get("metadata") or {}),
                 }
                 source_ref = "src.__init__.get_tools_schema"
