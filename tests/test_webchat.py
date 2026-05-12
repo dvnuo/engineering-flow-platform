@@ -2262,6 +2262,8 @@ async def test_api_capabilities_returns_catalog_and_filters(monkeypatch):
     assert body["catalog_version"] == "v-snap"
     assert body["generated_at"] == "2026-04-07T00:00:00Z"
     assert body["supports_snapshot_contract"] is True
+    assert "tool_repo_url" not in body
+    assert "tool_branch" not in body
 
 
 @pytest.mark.asyncio
@@ -2367,6 +2369,24 @@ async def test_api_capabilities_ignores_unrecognized_header(monkeypatch):
 
     response = await webchat.api_capabilities(_Request())
     assert response.status == 200
+
+
+@pytest.mark.asyncio
+async def test_api_skills_succeeds_when_external_tools_dir_is_empty(monkeypatch, tmp_path):
+    from src.gateway import webchat
+
+    empty_tools = tmp_path / "empty-tools"
+    empty_tools.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("EFP_TOOLS_DIR", str(empty_tools))
+
+    class _Request:
+        headers = {}
+        query = {}
+
+    response = await webchat.api_skills(_Request())
+    body = json.loads(response.body)
+    assert response.status == 200
+    assert "skills" in body
 
 
 @pytest.mark.asyncio

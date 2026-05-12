@@ -304,7 +304,6 @@ class ExecutionBus:
         if is_tool_mutation_block:
             tool_name = audit_metadata.get("tool_name") or (request.input_payload or {}).get("tool_name")
             tool_metadata = {
-                "external_tool": bool(audit_metadata.get("external_tool")),
                 "tool_source": audit_metadata.get("tool_source"),
                 "tool_name": tool_name,
                 "tool_id": audit_metadata.get("tool_id") or audit_metadata.get("capability_id"),
@@ -323,7 +322,6 @@ class ExecutionBus:
                 {
                     "tool_name": tool_name,
                     "tool_metadata": tool_metadata,
-                    "external_tool": tool_metadata["external_tool"],
                     "mutation": tool_metadata["mutation"],
                     "risk_level": tool_metadata["risk_level"],
                     "blocked_by_governance": True,
@@ -742,7 +740,6 @@ def _normalize_tool_execution_outcome(
             tool_metadata["policy_tags"] = capability.get("policy_tags")
         payload["tool_metadata"] = tool_metadata
         payload["tool_source"] = tool_metadata.get("tool_source")
-        payload["external_tool"] = tool_metadata.get("external_tool")
         payload["mutation"] = tool_metadata.get("mutation")
         payload["risk_level"] = tool_metadata.get("risk_level")
         payload["governance_checked"] = tool_metadata.get("governance_checked")
@@ -784,7 +781,7 @@ def _build_tool_governance_runtime_event(*, request: ExecutionRequest, task_id: 
         return None
     interesting = any(
         tool_metadata.get(k) is not None
-        for k in ("external_tool", "mutation", "risk_level", "governance_checked", "blocked_by_governance", "governance_rule")
+        for k in ("mutation", "risk_level", "governance_checked", "blocked_by_governance", "governance_rule")
     )
     if not interesting:
         return None
@@ -805,7 +802,6 @@ def _build_tool_governance_runtime_event(*, request: ExecutionRequest, task_id: 
             "tool_id": tool_metadata.get("tool_id"),
             "capability_id": tool_metadata.get("capability_id"),
             "tool_source": tool_metadata.get("tool_source"),
-            "external_tool": tool_metadata.get("external_tool"),
             "mutation": tool_metadata.get("mutation"),
             "risk_level": tool_metadata.get("risk_level"),
             "policy_tags": tool_metadata.get("policy_tags") or [],

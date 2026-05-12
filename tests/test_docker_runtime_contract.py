@@ -20,7 +20,7 @@ def test_dockerfile_uses_ubuntu_base_and_installs_python_311_runtime():
 def test_dockerfile_keeps_native_runtime_asset_dirs_and_port():
     text = Path("Dockerfile").read_text(encoding="utf-8")
     assert "/app/skills" in text
-    assert "/app/tools" in text
+    assert "/app/tools" not in text
     assert "/root/.efp/workspace" in text
     assert "/root/.efp/skills" in text
     assert "EXPOSE 8000" in text

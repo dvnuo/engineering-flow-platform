@@ -3,7 +3,6 @@
 ## Scope
 
 This document defines the native Engineering Flow Platform (EFP) runtime contract exposed to Portal and integration smoke suites.
-Opencode runtime is a separate runtime implementation, but Portal's unified runtime ingress remains the runtime service on `:8000`.
 
 ## Required HTTP Surface
 
@@ -25,23 +24,20 @@ Native runtime must support:
 
 ## Runtime Asset Directories
 
-- External tools directory resolves from `EFP_TOOLS_DIR` first, then `/app/tools`.
 - External skills directory resolves from `EFP_SKILLS_DIR` first, then `/app/skills`.
 - Default workspace directory is `~/.efp/workspace`.
-- Docker image provisioning creates `/app/skills`, `/app/tools`, `/root/.efp/workspace`, and `/root/.efp/skills`.
+- Docker image provisioning creates `/app/skills`, `/root/.efp/workspace`, and `/root/.efp/skills`.
 
-## External Tools Surface
+## Tool Surface
 
-- Primary external tool implementation lives in `src.tools_external.*`.
-- `src/runtime/external_tools.py` remains a compatibility wrapper surface.
-- `src.__init__.get_tools_schema()` merges legacy tools with external tools.
-- For same-name collisions, external tool replaces a legacy tool only when the external descriptor sets `metadata.allow_override=true`.
-- Strict mode environment switch is `EFP_EXTERNAL_TOOLS_STRICT=true`.
-- Capability metadata fields include `tool_source`, `schema_source`, `execution_source`, `external_shadowed_by_legacy`, and `external_shadow_reason`.
+- EFP native runtime **does not support External tools subsystem**.
+- Runtime tool surface comes from built-in/native tools only (`src.__init__.get_tools_schema()`).
+- Legacy external-tools envs (`EFP_TOOLS_DIR`, `EFP_EXTERNAL_TOOLS_*`) are ignored by native runtime.
 
 ## External Skills Surface
 
 - Business skills are not stored in this repository and come from `engineering-flow-platform-skills`.
+- Portal is responsible for skills repo/branch provisioning only.
 - Native runtime loads skills from `EFP_SKILLS_DIR` or `/app/skills`.
 - Canonical skill file path is `<skill>/skill.md`.
 
@@ -71,4 +67,4 @@ Each capability item includes at least:
 
 ## Test Fixture
 
-`tests/fixtures/runtime_contract` is the deterministic fixture used by native runtime contract tests and as the EFP baseline for future cross-repo smoke validation.
+`tests/fixtures/runtime_contract` is the deterministic fixture used by native runtime contract tests.

@@ -5,9 +5,8 @@ version: 1.0.0
 owner: runtime-contract
 triggers:
   - /smoke-skill
-tools:
-  - contract_echo
+tools: []
 risk_level: low
 ---
 
-Use `contract_echo` to verify that the native runtime can see a mounted external tools repo and a mounted external skills repo.
+Use this skill to verify mounted external skills assets are discoverable by native runtime.
